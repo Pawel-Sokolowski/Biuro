@@ -6,15 +6,39 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView,
                              QPushButton, QLineEdit, QFormLayout,
                              QSplitter, QComboBox, QMessageBox, QFileDialog,
-                             QDialog, QDialogButtonBox, QProgressDialog)
-from PyQt6.QtCore import Qt, QTimer
+                             QDialog, QDialogButtonBox, QProgressDialog, QTextEdit,
+                             QTabWidget, QCheckBox, QSpinBox)
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 import openpyxl
 import bcrypt
 import requests
 import json
+import imaplib
+import smtplib
+import email
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from cryptography.fernet import Fernet
+import base64
 
 DB_NAME = "biuro.db"
+
+# Klucz szyfrowania haseł (powinien być w zmiennych środowiskowych w produkcji)
+# Generuje się za pomocą: Fernet.generate_key()
+ENCRYPTION_KEY = b'Qa6bILYFSFYxYL2wAskbJN29N3FOnJb0zcqMwXrgtXM='
+cipher_suite = Fernet(ENCRYPTION_KEY)
+
+
+# --- FUNKCJE SZYFROWANIA HASEŁ EMAIL ---
+def encrypt_password(password):
+    """Zaszyfruj hasło email"""
+    return cipher_suite.encrypt(password.encode()).decode()
+
+
+def decrypt_password(encrypted_password):
+    """Odszyfruj hasło email"""
+    return cipher_suite.decrypt(encrypted_password.encode()).decode()
 
 
 # --- FUNKCJE AUTENTYKACJI ---
@@ -179,6 +203,142 @@ def search_ceidg_by_name(nazwa):
     except Exception as e:
         print(f"Błąd podczas parsowania CEIDG: {e}")
         return []
+
+
+# --- FUNKCJE OBSŁUGI EMAIL (IMAP/SMTP) ---
+
+class EmailSyncer:
+    """Klasa do synchronizacji emaili z serwera IMAP"""
+    
+    @staticmethod
+    def connect_imap(serwer_imap, port_imap, email_address, encrypted_password):
+        """Połącz się z serwerem IMAP"""
+        try:
+            password = decrypt_password(encrypted_password)
+            if port_imap == 993:
+                server = imaplib.IMAP4_SSL(serwer_imap, port_imap)
+            else:
+                server = imaplib.IMAP4(serwer_imap, port_imap)
+            server.login(email_address, password)
+            return server
+        except Exception as e:
+            print(f"Błąd połączenia IMAP: {e}")
+            return None
+    
+    @staticmethod
+    def sync_emails(konto_id, pracownik_id):
+        """Synchronizuj emaile z IMAP do bazy"""
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        try:
+            # Pobierz dane konta email
+            cursor.execute("""
+                SELECT email, serwer_imap, port_imap, haslo_enc FROM konta_email WHERE id = ?
+            """, (konto_id,))
+            account = cursor.fetchone()
+            
+            if not account:
+                print(f"Konto email {konto_id} nie znalezione")
+                return False
+            
+            email_addr, imap_server, imap_port, encrypted_pwd = account
+            
+            # Połącz się z IMAP
+            imap = EmailSyncer.connect_imap(imap_server, imap_port, email_addr, encrypted_pwd)
+            if not imap:
+                return False
+            
+            # Listuj foldery
+            status, mailboxes = imap.list()
+            for mailbox in mailboxes:
+                folder_name = mailbox.decode().split('"')[-2]
+                
+                # Wybierz folder
+                status, count = imap.select(folder_name)
+                
+                # Pobierz wiadomości
+                status, message_nums = imap.search(None, 'ALL')
+                
+                for num in message_nums[0].split()[-50:]:  # Ostatnie 50 wiadomości
+                    status, msg_data = imap.fetch(num, '(RFC822)')
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    
+                    message_id = msg.get('Message-ID', f"unknown_{num}_{datetime.datetime.now().timestamp()}")
+                    od = msg.get('From', 'Unknown')
+                    do = msg.get('To', '')
+                    cc = msg.get('Cc', '')
+                    temat = msg.get('Subject', '(brak tematu)')
+                    data = msg.get('Date', datetime.datetime.now().isoformat())
+                    
+                    # Pobierz treść
+                    tresc = ""
+                    if msg.is_multipart():
+                        for part in msg.get_payload():
+                            if part.get_content_type() == 'text/plain':
+                                tresc = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                                break
+                    else:
+                        tresc = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+                    
+                    # Dodaj do bazy (ignoruj duplikaty)
+                    try:
+                        cursor.execute("""
+                            INSERT INTO wiadomosci 
+                            (konto_id, message_id, od, do, cc, temat, tresc, data_otrzymania, folder)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (konto_id, message_id, od, do, cc, temat, tresc[:500], data, folder_name))
+                    except sqlite3.IntegrityError:
+                        pass  # Wiadomość już istnieje
+            
+            imap.close()
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            print(f"Błąd synchronizacji email: {e}")
+            return False
+        finally:
+            conn.close()
+    
+    @staticmethod
+    def send_email(konto_id, do, temat, tresc):
+        """Wyślij email"""
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        try:
+            # Pobierz dane konta
+            cursor.execute("""
+                SELECT email, serwer_smtp, port_smtp, haslo_enc FROM konta_email WHERE id = ?
+            """, (konto_id,))
+            account = cursor.fetchone()
+            
+            if not account:
+                return False, "Konto nie znalezione"
+            
+            email_addr, smtp_server, smtp_port, encrypted_pwd = account
+            password = decrypt_password(encrypted_pwd)
+            
+            # Utwórz wiadomość
+            msg = MIMEMultipart()
+            msg['From'] = email_addr
+            msg['To'] = do
+            msg['Subject'] = temat
+            msg.attach(MIMEText(tresc, 'plain'))
+            
+            # Wyślij przez SMTP
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(email_addr, password)
+                server.send_message(msg)
+            
+            return True, "Wiadomość wysłana"
+            
+        except Exception as e:
+            return False, f"Błąd wysyłania: {str(e)}"
+        finally:
+            conn.close()
 
 
 # --- STRUKTURA BAZY DANYCH ---
@@ -523,7 +683,7 @@ class OfficeManagerApp(QMainWindow):
             QListWidget::item:selected { background-color: #3498db; color: white; font-weight: bold; }
             QListWidget::item:hover { background-color: #34495e; }
         """)
-        self.sidebar.addItems(["Widok Miesięczny", "Klienci i Pracownicy", "Pracownicy i Uprawnienia", "CEIDG Import", "Eksport Saldeo"])
+        self.sidebar.addItems(["Widok Miesięczny", "Klienci i Pracownicy", "Pracownicy i Uprawnienia", "Email", "CEIDG Import", "Eksport Saldeo"])
         main_layout.addWidget(self.sidebar)
 
         # 2. SEKCJA STRONY (STACKED WIDGET)
@@ -534,6 +694,7 @@ class OfficeManagerApp(QMainWindow):
         self.create_monthly_view_page()
         self.create_companies_page()
         self.create_employees_page()
+        self.create_email_page()
         self.create_ceidg_page()
         self.create_saldeo_page()
 
@@ -550,6 +711,9 @@ class OfficeManagerApp(QMainWindow):
         elif index == 2:
             self.refresh_employees_table()
         elif index == 3:
+            # Email page - refresh accounts
+            self.refresh_email_accounts()
+        elif index == 4:
             # CEIDG page - nothing to refresh
             pass
 
@@ -1205,6 +1369,326 @@ class OfficeManagerApp(QMainWindow):
             QMessageBox.warning(self, "Błąd", "Firma z tym NIP już istnieje w bazie danych")
         finally:
             conn.close()
+
+    # =========================================================================
+    # WIDOK 4B: EMAIL CLIENT
+    # =========================================================================
+    def create_email_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Tytuł
+        lbl_title = QLabel("Zarządzanie kontami Email")
+        lbl_title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        layout.addWidget(lbl_title)
+        
+        # Karty - zarządzanie kontami i czytanie emaili
+        self.email_tabs = QTabWidget()
+        
+        # === KARTA 1: ZARZĄDZANIE KONTAMI ===
+        accounts_tab = self._create_email_accounts_tab()
+        self.email_tabs.addTab(accounts_tab, "Konta Email")
+        
+        # === KARTA 2: CZYTANIE EMAILI ===
+        reader_tab = self._create_email_reader_tab()
+        self.email_tabs.addTab(reader_tab, "Przegląd Emaili")
+        
+        layout.addWidget(self.email_tabs)
+        self.pages.addWidget(page)
+    
+    def _create_email_accounts_tab(self):
+        """Tab do zarządzania kontami email"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+        
+        # Splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # === LEWA STRONA - LISTA KONT ===
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.addWidget(QLabel("Moje konta email:"))
+        
+        self.table_email_accounts = QTableWidget()
+        self.table_email_accounts.setColumnCount(5)
+        self.table_email_accounts.setHorizontalHeaderLabels(["ID", "Email", "Serwer IMAP", "Aktywne", "Akcje"])
+        self.table_email_accounts.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_email_accounts.hideColumn(0)
+        left_layout.addWidget(self.table_email_accounts)
+        
+        # === PRAWA STRONA - DODAWANIE KONTA ===
+        right_widget = QWidget()
+        right_widget.setFixedWidth(380)
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.addWidget(QLabel("Dodaj nowe konto"))
+        
+        form = QFormLayout()
+        self.email_input = QLineEdit()
+        self.imap_server = QLineEdit()
+        self.imap_port = QSpinBox()
+        self.imap_port.setValue(993)
+        self.smtp_server = QLineEdit()
+        self.smtp_port = QSpinBox()
+        self.smtp_port.setValue(587)
+        self.email_password = QLineEdit()
+        self.email_password.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        form.addRow("Email:", self.email_input)
+        form.addRow("Serwer IMAP:", self.imap_server)
+        form.addRow("Port IMAP:", self.imap_port)
+        form.addRow("Serwer SMTP:", self.smtp_server)
+        form.addRow("Port SMTP:", self.smtp_port)
+        form.addRow("Hasło:", self.email_password)
+        
+        right_layout.addLayout(form)
+        
+        btn_add_account = QPushButton("Dodaj konto")
+        btn_add_account.setStyleSheet("background-color: #3498db; color: white; font-weight: bold;")
+        btn_add_account.clicked.connect(self.add_email_account)
+        right_layout.addWidget(btn_add_account)
+        
+        btn_sync = QPushButton("🔄 Synchronizuj emaile")
+        btn_sync.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
+        btn_sync.clicked.connect(self.sync_all_emails)
+        right_layout.addWidget(btn_sync)
+        
+        right_layout.addStretch()
+        
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        layout.addWidget(splitter)
+        
+        # Refresh tabeli
+        self.refresh_email_accounts()
+        
+        return tab_widget
+    
+    def _create_email_reader_tab(self):
+        """Tab do czytania emaili"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+        
+        # Pasek narzędzi
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Folder:"))
+        self.email_folder_combo = QComboBox()
+        self.email_folder_combo.addItems(["INBOX", "Sent", "Drafts", "Trash"])
+        toolbar.addWidget(self.email_folder_combo)
+        
+        toolbar.addWidget(QLabel("Konto:"))
+        self.email_account_combo = QComboBox()
+        toolbar.addWidget(self.email_account_combo)
+        
+        btn_refresh = QPushButton("Odśwież")
+        btn_refresh.clicked.connect(self.refresh_email_list)
+        toolbar.addWidget(btn_refresh)
+        
+        layout.addLayout(toolbar)
+        
+        # Tabela emaili
+        self.table_email_list = QTableWidget()
+        self.table_email_list.setColumnCount(5)
+        self.table_email_list.setHorizontalHeaderLabels(["ID", "Od", "Temat", "Data", "Przeczytana"])
+        self.table_email_list.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_email_list.hideColumn(0)
+        self.table_email_list.itemClicked.connect(self.on_email_selected)
+        layout.addWidget(self.table_email_list)
+        
+        # Panel treści emaila
+        layout.addWidget(QLabel("Treść wiadomości:"))
+        self.email_content = QTextEdit()
+        self.email_content.setReadOnly(True)
+        layout.addWidget(self.email_content)
+        
+        # Przyciski akcji
+        action_layout = QHBoxLayout()
+        btn_reply = QPushButton("Odpowiedź")
+        btn_reply.clicked.connect(self.reply_to_email)
+        action_layout.addWidget(btn_reply)
+        
+        btn_forward = QPushButton("Prześlij dalej")
+        btn_forward.clicked.connect(self.forward_email)
+        action_layout.addWidget(btn_forward)
+        
+        btn_delete = QPushButton("Usuń")
+        btn_delete.setStyleSheet("background-color: #e74c3c; color: white;")
+        action_layout.addWidget(btn_delete)
+        
+        layout.addLayout(action_layout)
+        
+        return tab_widget
+    
+    def refresh_email_accounts(self):
+        """Odśwież listę kont email"""
+        self.table_email_accounts.setRowCount(0)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, email, serwer_imap, aktywna FROM konta_email WHERE pracownik_id = ?
+        """, (self.pracownik_id,))
+        
+        for row_idx, row in enumerate(cursor.fetchall()):
+            self.table_email_accounts.insertRow(row_idx)
+            konto_id, email_addr, imap_server, aktywna = row
+            
+            self.table_email_accounts.setItem(row_idx, 0, QTableWidgetItem(str(konto_id)))
+            self.table_email_accounts.setItem(row_idx, 1, QTableWidgetItem(email_addr))
+            self.table_email_accounts.setItem(row_idx, 2, QTableWidgetItem(imap_server))
+            self.table_email_accounts.setItem(row_idx, 3, QTableWidgetItem("Tak" if aktywna else "Nie"))
+            
+            # Przycisk usuwania
+            btn_delete = QPushButton("Usuń")
+            btn_delete.setStyleSheet("background-color: #e74c3c; color: white;")
+            btn_delete.clicked.connect(lambda checked, kid=konto_id: self.delete_email_account(kid))
+            self.table_email_accounts.setCellWidget(row_idx, 4, btn_delete)
+        
+        # Odśwież combo boxy
+        self._refresh_email_account_combos()
+        conn.close()
+    
+    def _refresh_email_account_combos(self):
+        """Odśwież combo boxy kont email"""
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, email FROM konta_email WHERE pracownik_id = ?", (self.pracownik_id,))
+        accounts = cursor.fetchall()
+        
+        self.email_account_combo.clear()
+        for kid, email_addr in accounts:
+            self.email_account_combo.addItem(email_addr, kid)
+        
+        conn.close()
+    
+    def add_email_account(self):
+        """Dodaj nowe konto email"""
+        email_addr = self.email_input.text().strip()
+        imap_srv = self.imap_server.text().strip()
+        imap_p = self.imap_port.value()
+        smtp_srv = self.smtp_server.text().strip()
+        smtp_p = self.smtp_port.value()
+        password = self.email_password.text()
+        
+        if not all([email_addr, imap_srv, smtp_srv, password]):
+            QMessageBox.warning(self, "Błąd", "Uzupełnij wszystkie pola")
+            return
+        
+        # Zaszyfruj hasło
+        encrypted_pwd = encrypt_password(password)
+        
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO konta_email 
+                (pracownik_id, email, serwer_imap, port_imap, serwer_smtp, port_smtp, haslo_enc)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (self.pracownik_id, email_addr, imap_srv, imap_p, smtp_srv, smtp_p, encrypted_pwd))
+            conn.commit()
+            QMessageBox.information(self, "Sukces", "Konto email zostało dodane!")
+            
+            # Czyszczenie formularza
+            self.email_input.clear()
+            self.imap_server.clear()
+            self.smtp_server.clear()
+            self.email_password.clear()
+            
+            self.refresh_email_accounts()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Błąd dodawania konta: {str(e)}")
+        finally:
+            conn.close()
+    
+    def delete_email_account(self, konto_id):
+        """Usuń konto email"""
+        reply = QMessageBox.question(self, "Potwierdzenie", "Usunąć to konto?", 
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM konta_email WHERE id = ?", (konto_id,))
+            conn.commit()
+            conn.close()
+            self.refresh_email_accounts()
+    
+    def sync_all_emails(self):
+        """Synchronizuj wszystkie emaile"""
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM konta_email WHERE pracownik_id = ?", (self.pracownik_id,))
+        accounts = cursor.fetchall()
+        conn.close()
+        
+        if not accounts:
+            QMessageBox.warning(self, "Błąd", "Brak kont email do synchronizacji")
+            return
+        
+        # Synchronizuj każde konto
+        for (konto_id,) in accounts:
+            success = EmailSyncer.sync_emails(konto_id, self.pracownik_id)
+            if success:
+                QMessageBox.information(self, "Sukces", f"Synchronizacja konta {konto_id} zakończona")
+            else:
+                QMessageBox.warning(self, "Błąd", f"Błąd synchronizacji konta {konto_id}")
+        
+        self.refresh_email_list()
+    
+    def refresh_email_list(self):
+        """Odśwież listę emaili"""
+        konto_id = self.email_account_combo.currentData()
+        folder = self.email_folder_combo.currentText()
+        
+        if not konto_id:
+            return
+        
+        self.table_email_list.setRowCount(0)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, od, temat, data_otrzymania, przeczytana 
+            FROM wiadomosci 
+            WHERE konto_id = ? AND folder = ?
+            ORDER BY data_otrzymania DESC
+        """, (konto_id, folder))
+        
+        for row_idx, row in enumerate(cursor.fetchall()):
+            self.table_email_list.insertRow(row_idx)
+            msg_id, od, temat, data, przeczytana = row
+            
+            self.table_email_list.setItem(row_idx, 0, QTableWidgetItem(str(msg_id)))
+            self.table_email_list.setItem(row_idx, 1, QTableWidgetItem(od[:50]))
+            self.table_email_list.setItem(row_idx, 2, QTableWidgetItem(temat[:60]))
+            self.table_email_list.setItem(row_idx, 3, QTableWidgetItem(str(data)))
+            self.table_email_list.setItem(row_idx, 4, QTableWidgetItem("✓" if przeczytana else ""))
+        
+        conn.close()
+    
+    def on_email_selected(self, item):
+        """Pokaż treść wybranego emaila"""
+        row = item.row()
+        msg_id_item = self.table_email_list.item(row, 0)
+        msg_id = int(msg_id_item.text())
+        
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT od, temat, tresc FROM wiadomosci WHERE id = ?", (msg_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            od, temat, tresc = result
+            self.email_content.setText(f"Od: {od}\nTemat: {temat}\n\n{tresc}")
+    
+    def reply_to_email(self):
+        """Odpowiedź na emaila"""
+        QMessageBox.information(self, "Info", "Funkcja odpowiedzi - będzie zaimplementowana")
+    
+    def forward_email(self):
+        """Prześlij dalej emaila"""
+        QMessageBox.information(self, "Info", "Funkcja przesyłania - będzie zaimplementowana")
 
     # =========================================================================
     # WIDOK 5: EKSPORT DO PLIKU EXCEL (SALDEOSMART - 56 KOLUMN)

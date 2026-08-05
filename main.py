@@ -281,13 +281,25 @@ class EmailSyncer:
                     else:
                         tresc = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
                     
+                    # Stosuj filtry
+                    final_folder = folder_name
+                    cursor.execute("""
+                        SELECT folder_docelowy FROM reguly_filtrow
+                        WHERE konto_id = ? AND aktywna = 1
+                        AND (od IS NULL OR od LIKE ?)
+                        AND (temat_zawiera IS NULL OR ? LIKE '%' || temat_zawiera || '%')
+                    """, (konto_id, od, temat))
+                    filter_result = cursor.fetchone()
+                    if filter_result:
+                        final_folder = filter_result[0]
+                    
                     # Dodaj do bazy (ignoruj duplikaty)
                     try:
                         cursor.execute("""
                             INSERT INTO wiadomosci 
                             (konto_id, message_id, od, do, cc, temat, tresc, data_otrzymania, folder)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (konto_id, message_id, od, do, cc, temat, tresc[:500], data, folder_name))
+                        """, (konto_id, message_id, od, do, cc, temat, tresc[:500], data, final_folder))
                     except sqlite3.IntegrityError:
                         pass  # Wiadomość już istnieje
             
@@ -1394,6 +1406,10 @@ class OfficeManagerApp(QMainWindow):
         reader_tab = self._create_email_reader_tab()
         self.email_tabs.addTab(reader_tab, "Przegląd Emaili")
         
+        # === KARTA 3: FILTRY EMAILI ===
+        filters_tab = self._create_email_filters_tab()
+        self.email_tabs.addTab(filters_tab, "Filtry")
+        
         layout.addWidget(self.email_tabs)
         self.pages.addWidget(page)
     
@@ -1518,6 +1534,148 @@ class OfficeManagerApp(QMainWindow):
         layout.addLayout(action_layout)
         
         return tab_widget
+    
+    def _create_email_filters_tab(self):
+        """Tab do zarządzania filtrami emaili"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+        
+        layout.addWidget(QLabel("Automatyczne filtry dla emaili"))
+        
+        # Splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # === LEWA STRONA - LISTA FILTRÓW ===
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.addWidget(QLabel("Aktywne filtry:"))
+        
+        self.table_email_filters = QTableWidget()
+        self.table_email_filters.setColumnCount(5)
+        self.table_email_filters.setHorizontalHeaderLabels(["ID", "Od", "Temat zawiera", "Folder docelowy", "Akcje"])
+        self.table_email_filters.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_email_filters.hideColumn(0)
+        left_layout.addWidget(self.table_email_filters)
+        
+        # === PRAWA STRONA - DODAWANIE FILTRU ===
+        right_widget = QWidget()
+        right_widget.setFixedWidth(350)
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.addWidget(QLabel("Dodaj nowy filtr"))
+        
+        form = QFormLayout()
+        
+        self.filter_konto_combo = QComboBox()
+        self.filter_od = QLineEdit()
+        self.filter_od.setPlaceholderText("np: boss@firma.pl")
+        self.filter_temat = QLineEdit()
+        self.filter_temat.setPlaceholderText("np: Faktura")
+        self.filter_folder = QLineEdit()
+        self.filter_folder.setPlaceholderText("np: Faktury")
+        
+        form.addRow("Konto:", self.filter_konto_combo)
+        form.addRow("Od:", self.filter_od)
+        form.addRow("Temat zawiera:", self.filter_temat)
+        form.addRow("Folder docelowy:", self.filter_folder)
+        
+        right_layout.addLayout(form)
+        
+        # Info
+        info_label = QLabel("Uwaga: Jeśli pola 'Od' i 'Temat' są puste, filtr stosuje się do wszystkich emaili\nFiltry są stosowane automatycznie przy synchronizacji")
+        info_label.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+        right_layout.addWidget(info_label)
+        
+        btn_add_filter = QPushButton("Dodaj filtr")
+        btn_add_filter.setStyleSheet("background-color: #3498db; color: white; font-weight: bold;")
+        btn_add_filter.clicked.connect(self.add_email_filter)
+        right_layout.addWidget(btn_add_filter)
+        
+        right_layout.addStretch()
+        
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        layout.addWidget(splitter)
+        
+        # Refresh tabeli
+        self._refresh_email_account_combos()
+        self.refresh_email_filters()
+        
+        return tab_widget
+    
+    def refresh_email_filters(self):
+        """Odśwież listę filtrów"""
+        self.table_email_filters.setRowCount(0)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # Pobierz filtry dla kont tego użytkownika
+        cursor.execute("""
+            SELECT rf.id, rf.od, rf.temat_zawiera, rf.folder_docelowy
+            FROM reguly_filtrow rf
+            JOIN konta_email ke ON rf.konto_id = ke.id
+            WHERE ke.pracownik_id = ?
+        """, (self.pracownik_id,))
+        
+        for row_idx, row in enumerate(cursor.fetchall()):
+            self.table_email_filters.insertRow(row_idx)
+            filter_id, od, temat, folder = row
+            
+            self.table_email_filters.setItem(row_idx, 0, QTableWidgetItem(str(filter_id)))
+            self.table_email_filters.setItem(row_idx, 1, QTableWidgetItem(od or "Dowolny"))
+            self.table_email_filters.setItem(row_idx, 2, QTableWidgetItem(temat or "Dowolny"))
+            self.table_email_filters.setItem(row_idx, 3, QTableWidgetItem(folder or "N/A"))
+            
+            btn_delete = QPushButton("Usuń")
+            btn_delete.setStyleSheet("background-color: #e74c3c; color: white;")
+            btn_delete.clicked.connect(lambda checked, fid=filter_id: self.delete_email_filter(fid))
+            self.table_email_filters.setCellWidget(row_idx, 4, btn_delete)
+        
+        conn.close()
+    
+    def add_email_filter(self):
+        """Dodaj nowy filtr emaili"""
+        konto_id = self.filter_konto_combo.currentData()
+        od = self.filter_od.text().strip() or None
+        temat = self.filter_temat.text().strip() or None
+        folder = self.filter_folder.text().strip()
+        
+        if not konto_id or not folder:
+            QMessageBox.warning(self, "Błąd", "Wybierz konto i folder docelowy")
+            return
+        
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO reguly_filtrow (konto_id, od, temat_zawiera, folder_docelowy, aktywna)
+                VALUES (?, ?, ?, ?, 1)
+            """, (konto_id, od, temat, folder))
+            conn.commit()
+            QMessageBox.information(self, "Sukces", "Filtr został dodany")
+            
+            # Czyszczenie
+            self.filter_od.clear()
+            self.filter_temat.clear()
+            self.filter_folder.clear()
+            
+            self.refresh_email_filters()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Błąd dodawania filtru: {str(e)}")
+        finally:
+            conn.close()
+    
+    def delete_email_filter(self, filter_id):
+        """Usuń filtr"""
+        reply = QMessageBox.question(self, "Potwierdzenie", "Usunąć ten filtr?",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM reguly_filtrow WHERE id = ?", (filter_id,))
+            conn.commit()
+            conn.close()
+            self.refresh_email_filters()
     
     def refresh_email_accounts(self):
         """Odśwież listę kont email"""

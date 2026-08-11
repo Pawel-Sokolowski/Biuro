@@ -1,9 +1,10 @@
+# --- INTEGRACJA CEIDG API ---
 import requests
+
+from app.companies.importers import _get_cell, parse_num
 
 CEIDG_API_KEY = "TWÓJ_KLUCZ_API"
 CEIDG_BASE_URL = "https://api-prod.ceidg.gov.pl/api/v2"
-
-
 def search_ceidg_by_nip(nip):
     """Szukaj firmy w CEIDG po NIP – API v2"""
     try:

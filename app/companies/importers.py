@@ -1,9 +1,17 @@
+# app/companies/importers.py
 import openpyxl
 import sqlite3
 import time
-from app.utils.parsing import normalize_identifier, resolve_employee_ids
+from typing import Dict, Any
 
-def import_companies_from_excel_file(filepath, db_path):
+from app.utils.parsing import normalize_identifier, resolve_employee_ids
+from app.companies.helpers import _get_cell, parse_num
+
+def import_companies_from_excel_file(filepath: str, db_path: str) -> Dict[str, Any]:
+    """
+    Importuje listę firm z pliku Excel do bazy SQLite.
+    Zwraca słownik z liczbą utworzonych i zaktualizowanych rekordów oraz listą ostrzeżeń.
+    """
     workbook = openpyxl.load_workbook(filepath, data_only=True)
     worksheet = workbook.active
     header_cells = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
@@ -23,7 +31,7 @@ def import_companies_from_excel_file(filepath, db_path):
             if not any(value not in (None, "") for value in row_values):
                 continue
 
-            payload = {
+            payload: Dict[str, Any] = {
                 "uop": 0,
                 "uz": 0,
                 "uod": 0,
@@ -73,10 +81,16 @@ def import_companies_from_excel_file(filepath, db_path):
                 company_id = existing_row[0] if existing_row else None
 
             if company_id:
-                cursor.execute("UPDATE firmy SET nazwa = ?, glowny_cennik = ? WHERE id = ?", (company_name, payload["glowny_cennik"], company_id))
+                cursor.execute(
+                    "UPDATE firmy SET nazwa = ?, glowny_cennik = ? WHERE id = ?",
+                    (company_name, payload["glowny_cennik"], company_id)
+                )
                 updated_count += 1
             else:
-                cursor.execute("INSERT INTO firmy (nazwa, nip, glowny_cennik) VALUES (?, ?, ?)", (company_name, normalized_nip, payload["glowny_cennik"]))
+                cursor.execute(
+                    "INSERT INTO firmy (nazwa, nip, glowny_cennik) VALUES (?, ?, ?)",
+                    (company_name, normalized_nip, payload["glowny_cennik"])
+                )
                 created_count += 1
 
         conn.commit()
@@ -85,7 +99,10 @@ def import_companies_from_excel_file(filepath, db_path):
         conn.close()
 
 
-def import_cennik_from_excel(filepath, db_path):
+def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
+    """
+    Import cennika z pliku Excel. Zwraca statystyki importu i listę błędów.
+    """
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active
     header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
@@ -108,7 +125,8 @@ def import_cennik_from_excel(filepath, db_path):
     updated = 0
     errors = []
 
-    def _get_cell(row, name_variants):
+    def _get_cell_local(row: tuple, name_variants: list):
+        # lokalny wrapper, używa indeksów z idx
         for name in name_variants:
             i = idx.get(name)
             if i is not None and i < len(row):
@@ -135,21 +153,14 @@ def import_cennik_from_excel(filepath, db_path):
                 continue
             key = str(key_cell).strip()
 
-            def parse_num(val):
-                if val is None or (isinstance(val, str) and val.strip() == ""):
-                    return None
-                try:
-                    return float(str(val).replace(",", "."))
-                except Exception:
-                    return None
-
-            cena_netto_2024 = parse_num(_get_cell(row, map_variants["cena_netto_2024"]))
-            wzrost = parse_num(_get_cell(row, map_variants["wzrost"]))
-            cena_za_dokument = parse_num(_get_cell(row, map_variants["cena_za_dokument"]))
-            za_przekroczenie = parse_num(_get_cell(row, map_variants["za_przekroczenie"]))
-            zdrowotna = parse_num(_get_cell(row, map_variants["zdrowotna"]))
-            netto = parse_num(_get_cell(row, map_variants["netto"]))
-            brutto = parse_num(_get_cell(row, map_variants["brutto"]))
+            # używamy globalnego parse_num z helpers (bez zagnieżdżonej definicji)
+            cena_netto_2024 = parse_num(_get_cell_local(row, map_variants["cena_netto_2024"]))
+            wzrost = parse_num(_get_cell_local(row, map_variants["wzrost"]))
+            cena_za_dokument = parse_num(_get_cell_local(row, map_variants["cena_za_dokument"]))
+            za_przekroczenie = parse_num(_get_cell_local(row, map_variants["za_przekroczenie"]))
+            zdrowotna = parse_num(_get_cell_local(row, map_variants["zdrowotna"]))
+            netto = parse_num(_get_cell_local(row, map_variants["netto"]))
+            brutto = parse_num(_get_cell_local(row, map_variants["brutto"]))
 
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             cur.execute("SELECT id FROM cenniki WHERE klucz = ?", (key,))
@@ -176,4 +187,3 @@ def import_cennik_from_excel(filepath, db_path):
     conn.commit()
     conn.close()
     return {"imported": imported, "updated": updated, "errors": errors}
-

@@ -1,12 +1,11 @@
 # Auto-generated company model functions extracted from main.py
 
 import sqlite3
-import time
-import openpyxl
-import datetime
 
-from app.companies.constants import COMPANY_EXTRA_COLUMNS, COMPANY_FIELD_ORDER
-from app.utils.parsing import normalize_identifier, normalize_pkd_codes, parse_date_value, parse_int_value, resolve_employee_ids, split_multi_value
+from app.companies.constants import COMPANY_FIELD_ORDER
+from app.utils.parsing import normalize_identifier, normalize_pkd_codes, parse_date_value, parse_int_value
+from config import DB_NAME
+
 
 def ensure_columns(cursor, table_name, columns):
     cursor.execute(f"PRAGMA table_info({table_name})")

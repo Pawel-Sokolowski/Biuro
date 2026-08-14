@@ -4,7 +4,7 @@ import bcrypt
 from app.companies.companies_model import ensure_columns
 from app.companies.constants import COMPANY_EXTRA_COLUMNS
 
-DB_NAME = "biuro.db"
+from config import DB_NAME
 
 def _column_exists(cursor, table: str, column: str) -> bool:
     cursor.execute(f"PRAGMA table_info({table})")

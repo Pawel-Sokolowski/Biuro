@@ -1,9 +1,9 @@
 # app/db/dao_companies.py
 import sqlite3
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple
 
-DB_NAME = "biuro.db"
+from config import DB_NAME
 
 _SCHEMA_SQL = """PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS firmy (

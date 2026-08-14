@@ -21,24 +21,25 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
 # Lokalny DAO i serwisy
-from app.db.dao_companies import get_conn, DB_NAME
+from app.db.dao_companies import get_conn
 from app.email.email_actions import SyncRunnable
 from app.email.email_sync import EmailSyncer
 from app.utils.crypto import login_user, register_user, get_employee_info, is_admin
 from app.utils.parsing import parse_int_value, normalize_identifier
 from app.companies.companies_model import apply_default_main_pricing, save_company, get_company_assigned_employee_ids
 from app.companies.constants import COMPANY_STAGE_OPTIONS
+from app.companies.ceidg_api import search_ceidg_by_nip
 
-# Email UI mixin i Chat widget (jeśli istnieją)
+
 try:
     from app.email.email_ui import EmailUIMixin
 except Exception:
     EmailUIMixin = None
 
 try:
-    from app.chat.chat import ChatWidget
+    from app.chat.chat import ChatPage
 except Exception:
-    ChatWidget = None
+    ChatPage = None
 
 # Opcjonalny serwis Saldeo
 try:
@@ -119,6 +120,7 @@ class LoginWindow(QDialog):
         success = False
         message = "Nieprawidłowy email lub hasło"
 
+        # Obsługa różnych formatów zwrotu z login_user
         if isinstance(result, tuple) and len(result) >= 2:
             if isinstance(result[0], bool):
                 success = result[0]
@@ -195,9 +197,6 @@ class LoginWindow(QDialog):
                 QMessageBox.critical(self, "Błąd", "Rejestracja nie powiodła się.")
 
 
-# -------------------------
-# CompanyDialog (jasny motyw, CEIDG button, udziałowcy)
-# -------------------------
 class CompanyDialog(QDialog):
     def __init__(self, pracownik_id: int, company_data: Optional[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
@@ -205,28 +204,33 @@ class CompanyDialog(QDialog):
         self.pracownik_id = pracownik_id
         self.employee_items: List[QListWidgetItem] = []
         self.shareholders: List[Dict[str, Any]] = list(self.company_data.get("udzialowcy", []))
+
         self.setWindowTitle("Dodaj firmę" if not company_data else "Edytuj firmę")
         self.resize(980, 820)
         self.setMinimumSize(900, 720)
+
         self.inputs: Dict[str, QWidget] = {}
+
         self._build_ui()
         self._load_employees()
         self._toggle_main_price_mode(bool(self.company_data.get("glowny_cennik_manualny", 0)))
-        # jeśli edycja istniejącej firmy, załaduj notatki
+
         try:
             self._load_company_notes()
         except Exception:
             pass
 
     def _build_ui(self):
-        # Jasny, czytelny motyw
         self.setStyleSheet("""
             QDialog { background-color: #ffffff; color: #222222; }
             QGroupBox { border: 1px solid #d0d7de; border-radius: 6px; margin-top: 10px; padding: 12px; }
             QGroupBox::title { color: #0b5fff; font-weight: bold; }
             QLabel[sectionHint="true"] { color: #6b7280; font-size: 11px; }
             QLabel[fieldLabel="true"] { color: #374151; font-size: 12px; }
-            QLineEdit, QSpinBox, QListWidget, QComboBox { background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 8px; color: #111827; }
+            QLineEdit, QSpinBox, QListWidget, QComboBox {
+                background-color: #ffffff; border: 1px solid #cbd5e1;
+                border-radius: 4px; padding: 6px 8px; color: #111827;
+            }
             QPushButton { padding: 6px 10px; border-radius: 4px; }
             QPushButton.primary { background-color: #0b5fff; color: white; font-weight: 600; }
             QPushButton.positive { background-color: #16a34a; color: white; }
@@ -253,7 +257,7 @@ class CompanyDialog(QDialog):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(12)
 
-        # IDENTYFIKATORY (NIP z przyciskiem CEIDG)
+        # IDENTYFIKATORY
         identifiers_group, identifiers_grid = self._create_section("Identyfikatory", "Kluczowe numery rejestrowe firmy.")
         nip_container = QWidget()
         nip_layout = QHBoxLayout(nip_container)
@@ -317,7 +321,6 @@ class CompanyDialog(QDialog):
         self.main_price_manual_checkbox.toggled.connect(self._toggle_main_price_mode)
         business_grid.addWidget(self.main_price_manual_checkbox, 3, 0, 1, 2)
 
-        # Zamiast jednej liczby pracowników: UoP, UZ, UoD
         self._add_grid_spin_box(business_grid, 4, 0, "Pracownicy UoP", "uop")
         self._add_grid_spin_box(business_grid, 4, 1, "Umowy zlecenia (UZ)", "uz")
         self._add_grid_spin_box(business_grid, 5, 0, "Umowy o dzieło (UoD)", "uod")
@@ -357,7 +360,7 @@ class CompanyDialog(QDialog):
         shareholders_grid.addWidget(sh_form, 1, 0, 1, 2)
         content_layout.addWidget(shareholders_group)
 
-        # Ostatnie notatki (fragmenty)
+        # NOTES
         notes_group, notes_grid = self._create_section("Ostatnie notatki", "Ostatnie notatki dotyczące firmy")
         self.notes_list_widget = QListWidget()
         self.notes_list_widget.setMinimumHeight(120)
@@ -375,49 +378,110 @@ class CompanyDialog(QDialog):
 
         self._refresh_shareholders_list()
 
-    # CEIDG fetch
     def _on_fetch_ceidg_by_nip(self):
-        nip = self.inputs.get("nip").text().strip() if self.inputs.get("nip") else ""
+        nip_widget = self.inputs.get("nip")
+        nip = nip_widget.text().strip() if nip_widget else ""
         if not nip:
             QMessageBox.warning(self, "Brak NIP", "Wprowadź NIP przed pobraniem z CEIDG.")
             return
+
+        # dynamic import to avoid hard dependency if integration missing
         try:
             from app.companies.ceidg_api import search_ceidg_by_nip
+            from config import CEIDG_API_KEY, CEIDG_BASE_URL
         except Exception:
-            search_ceidg_by_nip = None
-
-        if not search_ceidg_by_nip:
             QMessageBox.information(self, "Brak integracji", "Funkcja CEIDG nie jest dostępna w tej instalacji.")
             return
 
+        # show busy cursor
+        from PyQt6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result = search_ceidg_by_nip(nip)
+            result = search_ceidg_by_nip(nip, api_key=CEIDG_API_KEY, base_url=CEIDG_BASE_URL, limit=25)
         except Exception as e:
+            QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Błąd CEIDG", f"Nie udało się pobrać danych: {e}")
             return
+        finally:
+            QApplication.restoreOverrideCursor()
 
         if not result:
             QMessageBox.information(self, "Brak danych", "Nie znaleziono firmy o podanym NIP w CEIDG.")
             return
 
+        # If raw owner info exists, build contact name
+        if "raw" in result and isinstance(result["raw"], dict):
+            raw = result["raw"]
+            wl = raw.get("wlasciciel") or raw.get("wlascicielDzialalnosci") or {}
+            if wl:
+                imie = wl.get("imie") or wl.get("firstName") or ""
+                nazwisko = wl.get("nazwisko") or wl.get("lastName") or ""
+                if imie or nazwisko:
+                    result.setdefault("wlasciciel_imie_nazwisko", f"{imie} {nazwisko}".strip())
+
+        # mapping form field -> possible keys in result
         mapping = {
-            "nazwa": ["nazwa", "nazwa_firmy", "company_name"],
+            "nazwa": ["nazwa", "company_name", "name"],
+            "nazwa_skrocona": ["nazwa_skrocona", "nazwaSkrócona", "shortName"],
+            "osoba_kontaktowa": ["wlasciciel_imie_nazwisko", "osoba_kontaktowa", "kontakt_imie_nazwisko"],
+            "adres_email": ["email", "adres_email"],
+            "nr_telefonu": ["telefon", "phone"],
             "miasto": ["miasto", "city"],
-            "ulica": ["ulica", "street"],
-            "kod_pocztowy": ["kod_pocztowy", "postal_code", "postcode"],
-            "adres_email": ["email", "adres_email"]
+            "kod_pocztowy": ["kod_pocztowy", "kodPocztowy", "postal_code", "kod"],
+            "ulica": ["adres_ulica", "ulica", "street"],
+            "regon": ["regon"],
+            "kody_pkd": ["pkd", "kody_pkd", "kodyPKD", "kody"],
+            "data_rozpoczecia_dg": ["data_rozpoczecia", "data_rozpoczecia_dg"]
         }
-        for field, keys in mapping.items():
+
+        def get_first_present(d: dict, keys: list):
             for k in keys:
-                if k in result and result[k]:
-                    widget = self.inputs.get(field)
-                    if widget and (not widget.text().strip()):
-                        widget.setText(str(result[k]))
-                    break
+                if k in d and d[k] not in (None, "", [], {}):
+                    return d[k]
+            return None
+
+        # Fill only empty fields
+        for field, keys in mapping.items():
+            widget = self.inputs.get(field)
+            if not widget:
+                continue
+
+            # check existing value
+            existing = ""
+            if isinstance(widget, QLineEdit):
+                existing = widget.text().strip()
+            elif isinstance(widget, QSpinBox):
+                existing = str(widget.value())
+            else:
+                existing = ""
+
+            if existing:
+                continue
+
+            val = get_first_present(result, keys)
+            if val is None:
+                continue
+
+            if field == "kody_pkd":
+                if isinstance(val, list):
+                    val_str = ", ".join(map(str, val))
+                else:
+                    val_str = str(val)
+                if isinstance(widget, QLineEdit):
+                    widget.setText(val_str)
+                continue
+
+            if field == "data_rozpoczecia_dg":
+                if isinstance(val, str) and val:
+                    if isinstance(widget, QLineEdit):
+                        widget.setText(val)
+                continue
+
+            if isinstance(widget, QLineEdit):
+                widget.setText(str(val))
 
         QMessageBox.information(self, "Pobrano z CEIDG", "Dane zostały pobrane i wstawione do formularza (tam gdzie pola były puste).")
 
-    # Shareholders helpers
     def _add_shareholder_from_form(self):
         name = self.sh_name_input.text().strip()
         share = self.sh_share_input.text().strip()
@@ -447,7 +511,6 @@ class CompanyDialog(QDialog):
         del self.shareholders[sel]
         self._refresh_shareholders_list()
 
-    # UI helpers
     def _create_section(self, title: str, description: str = "") -> Tuple[QGroupBox, QGridLayout]:
         section = QGroupBox(title)
         layout = QVBoxLayout(section)
@@ -493,12 +556,14 @@ class CompanyDialog(QDialog):
         layout.addWidget(widget)
         return container
 
-    def _add_grid_line_edit(self, grid_layout: QGridLayout, row: int, column: int, label_text: str, field_name: str, placeholder: str = "", required: bool = False, col_span: int = 1):
+    def _add_grid_line_edit(self, grid_layout: QGridLayout, row: int, column: int, label_text: str,
+                            field_name: str, placeholder: str = "", required: bool = False, col_span: int = 1):
         input_widget = self._create_text_input(field_name, placeholder=placeholder, required=required)
         field_container = self._create_field_container(label_text, input_widget)
         grid_layout.addWidget(field_container, row, column, 1, col_span)
 
-    def _add_grid_spin_box(self, grid_layout: QGridLayout, row: int, column: int, label_text: str, field_name: str, col_span: int = 1):
+    def _add_grid_spin_box(self, grid_layout: QGridLayout, row: int, column: int, label_text: str,
+                           field_name: str, col_span: int = 1):
         spin_box = self._create_spin_input(field_name)
         field_container = self._create_field_container(label_text, spin_box)
         grid_layout.addWidget(field_container, row, column, 1, col_span)
@@ -507,13 +572,15 @@ class CompanyDialog(QDialog):
         widget = self.inputs.get("glowny_cennik")
         if widget:
             widget.setReadOnly(not manual_enabled)
-            if not manual_enabled and not widget.text().strip():
+            if not manual_enabled and isinstance(widget, QLineEdit) and not widget.text().strip():
                 widget.setPlaceholderText("Zostanie dobrany po przekroczeniu limitu dokumentów")
             else:
                 widget.setPlaceholderText("")
 
     def _load_employees(self):
         selected_ids = set(self.company_data.get("assigned_employee_ids", []))
+        if not get_conn:
+            return
         conn = get_conn()
         cur = conn.cursor()
         try:
@@ -539,7 +606,6 @@ class CompanyDialog(QDialog):
                 QMessageBox.warning(self, "Błąd", "NIP powinien zawierać 10 cyfr.")
                 return
 
-        # Save shareholders into company_data for save_company to handle
         self.company_data["udzialowcy"] = self.shareholders
         self.accept()
 
@@ -564,6 +630,8 @@ class CompanyDialog(QDialog):
         self.notes_list_widget.clear()
         if not fid:
             return
+        if not get_conn:
+            return
         conn = get_conn()
         cur = conn.cursor()
         try:
@@ -575,9 +643,6 @@ class CompanyDialog(QDialog):
             conn.close()
 
 
-# -------------------------
-# OfficeManagerApp (główny window) - integruje Email i Chat
-# -------------------------
 BaseClasses = (QMainWindow, EmailUIMixin) if EmailUIMixin else (QMainWindow,)
 
 class OfficeManagerApp(*BaseClasses):  # type: ignore
@@ -607,6 +672,9 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
         self.global_timer.timeout.connect(self.aktualizuj_stoper_gui)
         self.global_timer.start(1000)
 
+    # -------------------------
+    # UI construction
+    # -------------------------
     def _build_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -623,7 +691,15 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
             QListWidget::item:selected { background-color: #3498db; color: white; font-weight: bold; }
             QListWidget::item:hover { background-color: #34495e; }
         """)
-        self.sidebar.addItems(["Widok Miesięczny", "Klienci i Pracownicy", "Pracownicy i Uprawnienia", "Email", "Chat", "Eksport Saldeo"])
+        self.sidebar.addItems([
+            "Widok Miesięczny",
+            "Klienci i Pracownicy",
+            "Pracownicy i Uprawnienia",
+            "Email",
+            "Chat",
+            "Eksport Saldeo"
+        ])
+        self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
         main_layout.addWidget(self.sidebar)
 
         # Content
@@ -669,199 +745,349 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
 
         # Email page from mixin if available
         if EmailUIMixin:
-            self.create_email_page()
-            # ensure email auto-sync timer exists
             try:
-                self._init_email_auto_sync(interval_minutes=5, start_immediately=False)
+                self.create_email_page()
+                # ensure email auto-sync timer exists
+                try:
+                    self._init_email_auto_sync(interval_minutes=5, start_immediately=False)
+                except Exception:
+                    pass
             except Exception:
-                pass
+                self.create_email_placeholder()
         else:
             self.create_email_placeholder()
 
-        # Chat page if available
-        if ChatWidget:
+        # Chat page created lazily (not as base class)
+        try:
             self.create_chat_page()
+        except Exception:
+            placeholder = QWidget()
+            placeholder_layout = QVBoxLayout(placeholder)
+            placeholder_layout.addWidget(QLabel("Chat niedostępny"))
+            self.pages.addWidget(placeholder)
+
+        # Saldeo export page (if service available)
+        if SaldeoService:
+            try:
+                self.create_saldeo_page()
+            except Exception:
+                placeholder = QWidget()
+                placeholder_layout = QVBoxLayout(placeholder)
+                placeholder_layout.addWidget(QLabel("Eksport Saldeo niedostępny"))
+                self.pages.addWidget(placeholder)
         else:
-            self.create_chat_placeholder()
+            self.create_saldeo_page()
 
-        self.create_saldeo_page()
-
-        # Navigation
-        self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
+        # default to first page
+        self.pages.setCurrentIndex(0)
         self.sidebar.setCurrentRow(0)
 
-    def zmien_zakladke(self, index: int):
-        self.pages.setCurrentIndex(index)
-        if index == 0:
-            self.refresh_monthly_table()
-        elif index == 1:
-            self.refresh_firms_table()
-        elif index == 2:
-            self.refresh_employees_table()
-        elif index == 3:
-            if EmailUIMixin:
-                try:
-                    self.refresh_email_accounts()
-                except Exception:
-                    pass
-        elif index == 4:
-            if ChatWidget:
-                try:
-                    self.refresh_chat_conversations()
-                except Exception:
-                    pass
-
     # -------------------------
-    # Monthly view (stoper, notatki)
+    # Page creators
     # -------------------------
     def create_monthly_view_page(self):
-        page_ksiegowosc = QWidget()
-        layout = QVBoxLayout(page_ksiegowosc)
-        layout.setContentsMargins(20, 20, 20, 20)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
 
-        header = QHBoxLayout()
-        lbl_month = QLabel("Miesiąc rozliczeniowy:")
-        lbl_month.setFont(QFont("Arial", 14))
-        header.addWidget(lbl_month)
+        title = QLabel("Widok Miesięczny")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        layout.addWidget(title)
 
-        from datetime import datetime, timedelta
-        today = datetime.today()
-        previous_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-        self.aktualny_miesiac = previous_month
+        # Simple monthly table placeholder
+        self.monthly_table = QTableWidget(0, 4)
+        self.monthly_table.setHorizontalHeaderLabels(["Firma", "Miesiąc", "Etap", "Ilość dokumentów"])
+        self.monthly_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.monthly_table)
 
-        self.month_selector = QComboBox()
-        for i in range(12):
-            d = today.replace(day=1) - timedelta(days=30 * i)
-            self.month_selector.addItem(d.strftime("%Y-%m"))
+        self.pages.addWidget(page)
 
-        self.month_selector.setCurrentText(previous_month)
-        self.month_selector.currentTextChanged.connect(self._change_month)
-        header.addWidget(self.month_selector)
-        layout.addLayout(header)
+    def create_companies_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
 
-        self.table_monthly = QTableWidget()
-        self.table_monthly.setColumnCount(9)
-        self.table_monthly.setHorizontalHeaderLabels([
-            "ID", "Nazwa Firmy", "Ilość dokumentów", "Etap pracy",
-            "Czas pracy (Suma)", "Stoper", "Notatka", "Akcja Saldeo", "Akcje"
-        ])
-        self.table_monthly.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table_monthly.hideColumn(0)
-        layout.addWidget(self.table_monthly)
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.addWidget(QLabel("<b>Klienci i Pracownicy</b>"))
+        btn_add = QPushButton("Dodaj firmę")
+        btn_add.setProperty("class", "primary")
+        btn_add.clicked.connect(self._on_add_company)
+        header_layout.addWidget(btn_add, alignment=Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(header)
 
-        page_kadry = QWidget()
-        kadry_layout = QVBoxLayout(page_kadry)
-        kadry_layout.addWidget(QLabel("Widok Kadrowy — w przygotowaniu"))
+        self.companies_table = QTableWidget(0, 6)
+        self.companies_table.setHorizontalHeaderLabels(["ID", "Nazwa", "NIP", "Miasto", "Limit dok.", "Przypisani"])
+        self.companies_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.companies_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.companies_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.companies_table.doubleClicked.connect(self._on_edit_company_from_table)
+        layout.addWidget(self.companies_table)
 
-        self.month_tabs = QTabWidget()
-        self.month_tabs.addTab(page_ksiegowosc, "Księgowość")
-        self.month_tabs.addTab(page_kadry, "Kadry")
+        refresh_btn = QPushButton("Odśwież listę")
+        refresh_btn.clicked.connect(self.refresh_firms_table)
+        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self.pages.addWidget(self.month_tabs)
-        self.refresh_monthly_table()
+        self.pages.addWidget(page)
+        # initial load
+        self.refresh_firms_table()
 
-    def refresh_monthly_table(self):
-        self.table_monthly.setRowCount(0)
+    def create_employees_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        title = QLabel("Pracownicy i uprawnienia")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        self.employees_table = QTableWidget(0, 5)
+        self.employees_table.setHorizontalHeaderLabels(["ID", "Email", "Imię", "Nazwisko", "Aktywny"])
+        self.employees_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.employees_table)
+
+        refresh_btn = QPushButton("Odśwież pracowników")
+        refresh_btn.clicked.connect(self.refresh_employees_table)
+        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.pages.addWidget(page)
+        self.refresh_employees_table()
+
+    def create_email_page(self):
+        # EmailUIMixin provides create_email_page method; call it if present
+        if EmailUIMixin and hasattr(self, "create_email_page"):
+            return  # mixin already added methods to class
+        # If mixin not applied, create placeholder
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Email (integracja nieaktywna)"))
+        self.pages.addWidget(page)
+
+    def create_email_placeholder(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Email (integracja nieaktywna)"))
+        self.pages.addWidget(page)
+
+    def create_chat_page(self):
+        # Import locally to avoid import-time side effects
+        try:
+            from app.chat.chat import ChatPage
+        except Exception:
+            ChatPage = None
+
+        if not ChatPage:
+            # add placeholder page
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.addWidget(QLabel("Chat niedostępny"))
+            self.pages.addWidget(page)
+            return
+
+        # Create chat page instance; handle missing DB tables defensively
+        try:
+            chat_page = ChatPage(self.pracownik_id)
+        except sqlite3.OperationalError as e:
+            # try to initialize DB schema and retry once
+            try:
+                from app.db.schema import init_db
+                init_db()
+                chat_page = ChatPage(self.pracownik_id)
+            except Exception:
+                page = QWidget()
+                layout = QVBoxLayout(page)
+                layout.addWidget(QLabel("Chat chwilowo niedostępny (błąd bazy danych)"))
+                self.pages.addWidget(page)
+                return
+        except Exception:
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.addWidget(QLabel("Chat niedostępny"))
+            self.pages.addWidget(page)
+            return
+
+        self.pages.addWidget(chat_page)
+
+    def create_saldeo_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("Eksport Saldeo"))
+        self.pages.addWidget(page)
+
+    # -------------------------
+    # Actions: companies
+    # -------------------------
+    def _on_add_company(self):
+        dialog = CompanyDialog(self.pracownik_id, company_data={})
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.get_payload()
+            try:
+                save_company(payload)
+                QMessageBox.information(self, "Sukces", "Firma została dodana.")
+                self.refresh_firms_table()
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać firmy: {e}")
+
+    def _on_edit_company_from_table(self):
+        row = self.companies_table.currentRow()
+        if row < 0:
+            return
+        try:
+            company_id = int(self.companies_table.item(row, 0).text())
+        except Exception:
+            return
+        # load company data from DB
         conn = get_conn()
         cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, nazwa, nip, miasto, limit_dokumentow, glowny_cennik FROM firmy WHERE id = ?", (company_id,))
+            r = cur.fetchone()
+            if not r:
+                QMessageBox.warning(self, "Brak", "Nie znaleziono firmy w bazie.")
+                return
+            company_data = {
+                "id": r[0],
+                "nazwa": r[1],
+                "nip": r[2],
+                "miasto": r[3],
+                "limit_dokumentow": r[4],
+                "glowny_cennik": r[5]
+            }
+        finally:
+            conn.close()
 
-        if is_admin(self.pracownik_id):
-            cur.execute("""
-                SELECT f.id, f.nazwa, f.sekundy_pracy, sm.etap, sm.ilosc_dok 
-                FROM firmy f
-                LEFT JOIN statusy_miesieczne sm ON f.id = sm.firma_id AND sm.miesiac = ?
-                ORDER BY f.nazwa
-            """, (self.aktualny_miesiac,))
+        dialog = CompanyDialog(self.pracownik_id, company_data=company_data)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.get_payload()
+            try:
+                save_company(payload)
+                QMessageBox.information(self, "Sukces", "Zmiany zapisane.")
+                self.refresh_firms_table()
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać zmian: {e}")
+
+    def refresh_firms_table(self):
+        # load companies from DB
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, nazwa, nip, miasto, limit_dokumentow FROM firmy ORDER BY nazwa")
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        self.companies_table.setRowCount(0)
+        for r in rows:
+            row_idx = self.companies_table.rowCount()
+            self.companies_table.insertRow(row_idx)
+            for col_idx, val in enumerate(r):
+                item = QTableWidgetItem(str(val) if val is not None else "")
+                self.companies_table.setItem(row_idx, col_idx, item)
+
+    def refresh_employees_table(self):
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, email, imie, nazwisko, aktywny FROM pracownicy ORDER BY imie, nazwisko")
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        self.employees_table.setRowCount(0)
+        for r in rows:
+            row_idx = self.employees_table.rowCount()
+            self.employees_table.insertRow(row_idx)
+            for col_idx, val in enumerate(r):
+                item = QTableWidgetItem(str(val) if val is not None else "")
+                self.employees_table.setItem(row_idx, col_idx, item)
+
+    # -------------------------
+    # Timer / stoper
+    # -------------------------
+    def aktualizuj_stoper_gui(self):
+        if self.czas_start:
+            elapsed = datetime.datetime.now() - self.czas_start
+            seconds = int(elapsed.total_seconds())
+            h, rem = divmod(seconds, 3600)
+            m, s = divmod(rem, 60)
+            self.lbl_global_timer_status.setText(f"Timer: {self.aktywna_firma_stoper_nazwa} — {h:02d}:{m:02d}:{s:02d}")
         else:
-            cur.execute("""
-                SELECT f.id, f.nazwa, f.sekundy_pracy, sm.etap, sm.ilosc_dok 
-                FROM firmy f
-                LEFT JOIN statusy_miesieczne sm ON f.id = sm.firma_id AND sm.miesiac = ?
-                WHERE f.id IN (
-                    SELECT DISTINCT firma_id FROM pracownik_firma WHERE pracownik_id = ?
-                )
-                ORDER BY f.nazwa
-            """, (self.aktualny_miesiac, self.pracownik_id))
+            self.lbl_global_timer_status.setText("Timer: brak aktywnej firmy")
 
-        dane = cur.fetchall()
-        conn.close()
+    # -------------------------
+    # Navigation
+    # -------------------------
+    def zmien_zakladke(self, index: int):
+        # index corresponds to sidebar order
+        # ensure pages count matches sidebar items; guard against out-of-range
+        if index < 0 or index >= self.pages.count():
+            return
+        self.pages.setCurrentIndex(index)
+        # refresh page-specific data
+        try:
+            if index == 0:
+                self.refresh_monthly_table()
+            elif index == 1:
+                self.refresh_firms_table()
+            elif index == 2:
+                self.refresh_employees_table()
+            elif index == 3:
+                # Email page refresh if mixin provides method
+                if EmailUIMixin and hasattr(self, "refresh_email_accounts"):
+                    try:
+                        self.refresh_email_accounts()
+                    except Exception:
+                        pass
+            elif index == 4:
+                # Chat page refresh if page has method
+                try:
+                    current_page = self.pages.widget(index)
+                    if hasattr(current_page, "refresh_chat_conversations"):
+                        current_page.refresh_chat_conversations()
+                except Exception:
+                    pass
+            elif index == 5:
+                # Saldeo export page - placeholder
+                pass
+        except Exception:
+            # swallow refresh errors to avoid crashing UI
+            pass
 
-        self.status_widgets = {}
+    # -------------------------
+    # Monthly view helpers (simple placeholders)
+    # -------------------------
+    def refresh_monthly_table(self):
+        # placeholder: populate with sample or real data from DB
+        self.monthly_table.setRowCount(0)
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT f.nazwa, sm.miesiac, sm.etap, sm.ilosc_dok FROM statusy_miesieczne sm JOIN firmy f ON sm.firma_id = f.id ORDER BY sm.miesiac DESC")
+            rows = cur.fetchall()
+        finally:
+            conn.close()
 
-        for row_idx, row in enumerate(dane):
-            f_id, nazwa, sekundy, etap, ilosc_dok = row
-            etap = etap or "Brak"
-            ilosc_dok = ilosc_dok or 0
+        for r in rows:
+            row_idx = self.monthly_table.rowCount()
+            self.monthly_table.insertRow(row_idx)
+            for col_idx, val in enumerate(r):
+                self.monthly_table.setItem(row_idx, col_idx, QTableWidgetItem(str(val) if val is not None else ""))
 
-            self.table_monthly.insertRow(row_idx)
-            self.table_monthly.setItem(row_idx, 0, QTableWidgetItem(str(f_id)))
-            self.table_monthly.setItem(row_idx, 1, QTableWidgetItem(nazwa))
+    # -------------------------
+    # Cleanup / close
+    # -------------------------
+    def closeEvent(self, event):
+        # perform any cleanup (stop timers, threads)
+        try:
+            self.global_timer.stop()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
-            # Ilość dokumentów (edytowalne pole)
-            txt_docs = QLineEdit(str(ilosc_dok))
-            txt_docs.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            txt_docs.setFixedWidth(70)
-            txt_docs.textChanged.connect(lambda _txt, fid=f_id: self.schedule_status_autosave(fid))
-            self.table_monthly.setCellWidget(row_idx, 2, txt_docs)
-
-            # Etap (combo)
-            cb_etap = QComboBox()
-            cb_etap.blockSignals(True)
-            cb_etap.addItems(COMPANY_STAGE_OPTIONS)
-            cb_etap.setCurrentText(etap)
-            cb_etap.setStyleSheet(f"padding: 3px;")
-            cb_etap.blockSignals(False)
-            cb_etap.currentTextChanged.connect(lambda _txt, fid=f_id: self.schedule_status_autosave(fid))
-            self.table_monthly.setCellWidget(row_idx, 3, cb_etap)
-            self.status_widgets[f_id] = (txt_docs, cb_etap)
-
-            # Czas pracy (suma)
-            czas_format = str(datetime.timedelta(seconds=sekundy or 0))
-            lbl_time = QLabel(czas_format)
-            lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table_monthly.setCellWidget(row_idx, 4, lbl_time)
-
-            # Mały przycisk stoper (ikonka ▶ / ⏸)
-            btn_stoper = QPushButton("▶")
-            btn_stoper.setFixedSize(36, 28)
-            btn_stoper.setToolTip("Start / Stop")
-            btn_stoper.setStyleSheet("font-weight: bold;")
-            if self.aktywna_firma_stoper == f_id:
-                btn_stoper.setText("⏸")
-                btn_stoper.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold;")
-            else:
-                btn_stoper.setText("▶")
-                btn_stoper.setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold;")
-            btn_stoper.clicked.connect(lambda checked, fid=f_id, btn=btn_stoper: self._toggle_stoper_button(fid, btn))
-            self.table_monthly.setCellWidget(row_idx, 5, btn_stoper)
-
-            # Notatka - pobierz ostatnią notatkę i pokaż fragment (np. 120 znaków)
-            conn2 = get_conn()
-            cur2 = conn2.cursor()
-            cur2.execute("SELECT tresc, data_utworzenia FROM company_notes WHERE firma_id = ? ORDER BY data_utworzenia DESC LIMIT 1", (f_id,))
-            note_row = cur2.fetchone()
-            conn2.close()
-            if note_row:
-                tresc, dt = note_row
-                snippet = (tresc[:120] + "…") if len(tresc) > 120 else tresc
-                lbl_note = QLabel(snippet)
-                lbl_note.setToolTip(f"{dt}")
-            else:
-                lbl_note = QLabel("")
-            lbl_note.setWordWrap(True)
-            self.table_monthly.setCellWidget(row_idx, 6, lbl_note)
-
-            # +Faktura
-            btn_add_faktura = QPushButton("+Faktura")
-            btn_add_faktura.setStyleSheet("background-color: #9b59b6; color: white;")
-            btn_add_faktura.clicked.connect(lambda checked, fid=f_id: self.dodaj_fakture_okno(fid))
-            self.table_monthly.setCellWidget(row_idx, 7, btn_add_faktura)
-
-            # Akcje (Edytuj)
-            btn_actions = QPushButton("Edytuj")
-            btn_actions.clicked.connect(lambda checked, fid=f_id: self.open_edit_company_dialog(fid))
-            self.table_monthly.setCellWidget(row_idx, 8, btn_actions)
-
+    # -------------------------
+    # Additional helpers used elsewhere in the class
+    # -------------------------
     def _toggle_stoper_button(self, firma_id: int, btn: QPushButton):
         if self.aktywna_firma_stoper is None:
             self.obsluga_stopera(firma_id, None)
@@ -918,15 +1144,6 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
 
         conn.close()
         self.refresh_monthly_table()
-
-    def aktualizuj_stoper_gui(self):
-        if self.aktywna_firma_stoper is not None and self.czas_start is not None:
-            roznica = int((datetime.datetime.now() - self.czas_start).total_seconds())
-            self.lbl_global_timer_status.setText(
-                f"Timer: {self.aktywna_firma_stoper_nazwa or f'firma #{self.aktywna_firma_stoper}'} od {roznica} sek."
-            )
-        else:
-            self.lbl_global_timer_status.setText("Timer: brak aktywnej firmy")
 
     def schedule_status_autosave(self, firma_id: int):
         timer = self.status_autosave_timers.get(firma_id)
@@ -1240,388 +1457,85 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
         self.table_employees.setRowCount(0)
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT id, email, imie, nazwisko, aktywny FROM pracownicy")
+        cur.execute("SELECT id, email, imie, nazwisko, aktywny FROM pracownicy ORDER BY imie, nazwisko")
         rows = cur.fetchall()
         conn.close()
 
-        for row_idx, row in enumerate(rows):
+        for row_idx, r in enumerate(rows):
             self.table_employees.insertRow(row_idx)
-            emp_id, email, imie, nazwisko, aktywny = row
-            self.table_employees.setItem(row_idx, 0, QTableWidgetItem(str(emp_id)))
-            self.table_employees.setItem(row_idx, 1, QTableWidgetItem(email or ""))
-            self.table_employees.setItem(row_idx, 2, QTableWidgetItem(imie or ""))
-            self.table_employees.setItem(row_idx, 3, QTableWidgetItem(nazwisko or ""))
-            self.table_employees.setItem(row_idx, 4, QTableWidgetItem("Tak" if aktywny else "Nie"))
+            for col_idx, val in enumerate(r):
+                self.table_employees.setItem(row_idx, col_idx, QTableWidgetItem(str(val) if val is not None else ""))
 
-            btn_delete = QPushButton("Usuń")
-            btn_delete.setStyleSheet("background-color: #e74c3c; color: white;")
-            btn_delete.clicked.connect(lambda checked, eid=emp_id: self.delete_employee(eid))
-            self.table_employees.setCellWidget(row_idx, 5, btn_delete)
-
-        try:
-            self.refresh_employee_combos()
-        except Exception:
-            pass
-
-    def refresh_employee_combos(self):
-        self.assign_employee_combo.clear()
-        self.assign_firma_combo.clear()
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT id, imie || ' ' || nazwisko FROM pracownicy WHERE aktywny = 1")
-        for emp_id, name in cur.fetchall():
-            self.assign_employee_combo.addItem(f"{name} ({emp_id})", emp_id)
-
-        cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
-        for cid, cname in cur.fetchall():
-            self.assign_firma_combo.addItem(cname, cid)
-        conn.close()
-
+    # -------------------------
+    # Minimal implementations for missing helpers to keep class self-contained
+    # -------------------------
     def add_employee(self):
         email = self.emp_email.text().strip()
         imie = self.emp_imie.text().strip()
         nazwisko = self.emp_nazwisko.text().strip()
         haslo = self.emp_haslo.text()
-        if not email or not haslo:
-            QMessageBox.warning(self, "Błąd", "Email i hasło są wymagane.")
+        if not all([email, imie, nazwisko, haslo]):
+            QMessageBox.warning(self, "Błąd", "Uzupełnij wszystkie pola pracownika.")
             return
-        result = register_user(email, haslo, imie=imie, nazwisko=nazwisko, is_admin_flag=False)
-        ok = bool(result[0]) if isinstance(result, tuple) else bool(result)
-        if ok:
-            QMessageBox.information(self, "Dodano", "Pracownik został dodany.")
-            self.refresh_employees_table()
-        else:
-            QMessageBox.warning(self, "Błąd", "Nie udało się dodać pracownika.")
+        try:
+            res = register_user(email, haslo, imie=imie, nazwisko=nazwisko, is_admin_flag=False)
+            if isinstance(res, tuple):
+                ok = bool(res[0])
+            else:
+                ok = bool(res)
+            if ok:
+                QMessageBox.information(self, "Sukces", "Pracownik dodany.")
+                self.refresh_employees_table()
+                try:
+                    self.refresh_employee_combos()
+                except Exception:
+                    pass
+            else:
+                QMessageBox.critical(self, "Błąd", "Nie udało się dodać pracownika.")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się dodać pracownika: {e}")
 
     def assign_employee_to_company(self):
-        emp_id = self.assign_employee_combo.currentData()
-        firma_id = self.assign_firma_combo.currentData()
+        emp_text = self.assign_employee_combo.currentText()
+        firma_text = self.assign_firma_combo.currentText()
         rola = self.assign_rola_combo.currentText()
-        if not emp_id or not firma_id:
+        if not emp_text or not firma_text:
             QMessageBox.warning(self, "Błąd", "Wybierz pracownika i firmę.")
             return
+        # naive parsing: assume combo items store id as "Name (email) [id]" or similar
+        # better approach: populate combos with userData containing IDs
+        emp_id = self.assign_employee_combo.currentData()
+        firma_id = self.assign_firma_combo.currentData()
+        if emp_id is None or firma_id is None:
+            QMessageBox.warning(self, "Błąd", "Brak identyfikatorów pracownika lub firmy.")
+            return
         conn = get_conn()
         cur = conn.cursor()
         try:
-            cur.execute("SELECT id FROM role WHERE nazwa = ?", (rola,))
-            r = cur.fetchone()
-            if r:
-                rola_id = r[0]
-                cur.execute("INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id) VALUES (?, ?, ?)", (emp_id, firma_id, rola_id))
-            else:
-                cur.execute("INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola) VALUES (?, ?, ?)", (emp_id, firma_id, rola))
+            cur.execute("INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola) VALUES (?, ?, ?)", (emp_id, firma_id, rola))
             conn.commit()
-            QMessageBox.information(self, "Przypisano", "Pracownik przypisany do firmy.")
-            self.refresh_employees_table()
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się przypisać pracownika: {e}")
-        finally:
-            conn.close()
-
-    def delete_employee(self, emp_id: int):
-        confirm = QMessageBox.question(self, "Usuń pracownika", "Czy na pewno chcesz usunąć pracownika?")
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM pracownicy WHERE id = ?", (emp_id,))
-        conn.commit()
-        conn.close()
-        self.refresh_employees_table()
-
-    # -------------------------
-    # Email / Chat placeholders and integration
-    # -------------------------
-    def create_email_placeholder(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(QLabel("Email - integracja niedostępna"))
-        self.pages.addWidget(page)
-
-    def create_chat_placeholder(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(QLabel("Chat - integracja niedostępna"))
-        self.pages.addWidget(page)
-
-    # Chat page (uses provided ChatWidget if available)
-    def create_chat_page(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(20, 20, 20, 20)
-
-        lbl_title = QLabel("Chat wewnętrzny")
-        lbl_title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        layout.addWidget(lbl_title)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Left: conversations
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.addWidget(QLabel("Konwersacje:"))
-
-        self.chat_conversations = QListWidget()
-        self.chat_conversations.itemSelectionChanged.connect(self.on_chat_selected)
-        left_layout.addWidget(self.chat_conversations)
-
-        btn_new_chat = QPushButton("➕ Nowa konwersacja")
-        btn_new_chat.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
-        btn_new_chat.clicked.connect(self.create_new_conversation)
-        left_layout.addWidget(btn_new_chat)
-
-        left_widget.setFixedWidth(300)
-        splitter.addWidget(left_widget)
-
-        # Right: messages
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.addWidget(QLabel("Wiadomości:"))
-
-        self.chat_messages = QTextEdit()
-        self.chat_messages.setReadOnly(True)
-        right_layout.addWidget(self.chat_messages)
-
-        bottom_layout = QHBoxLayout()
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Wpisz wiadomość...")
-        bottom_layout.addWidget(self.chat_input)
-
-        btn_send = QPushButton("Wyślij")
-        btn_send.setStyleSheet("background-color: #3498db; color: white; font-weight: bold;")
-        btn_send.clicked.connect(self.send_chat_message)
-        bottom_layout.addWidget(btn_send)
-
-        right_layout.addLayout(bottom_layout)
-        splitter.addWidget(right_widget)
-
-        layout.addWidget(splitter)
-        self.pages.addWidget(page)
-
-        # Odśwież co 2 sekundy
-        self.chat_timer = QTimer()
-        self.chat_timer.timeout.connect(self.refresh_chat_display)
-        self.chat_timer.start(2000)
-
-    # Chat helper methods (refresh_chat_conversations, refresh_chat_display, on_chat_selected,
-    # send_chat_message, create_new_conversation) are expected to be present (from earlier code).
-    # If ChatWidget is used instead, it will be integrated automatically.
-
-    # -------------------------
-    # Saldeo export
-    # -------------------------
-    def create_saldeo_page(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.addWidget(QLabel("Generator struktury arkusza integracyjnego SaldeoSMART"))
-        btn_export = QPushButton("📁 Wygeneruj i zapisz plik Excel (*.xlsx)")
-        btn_export.setStyleSheet("background-color: #2ecc71; color: white; font-size: 15px; padding: 15px; font-weight: bold;")
-        btn_export.clicked.connect(self.on_export_saldeo)
-        layout.addWidget(btn_export)
-        layout.addStretch()
-        self.pages.addWidget(page)
-
-    def on_export_saldeo(self):
-        filepath, _ = QFileDialog.getSaveFileName(self, "Wskaż miejsce zapisu szablonu Saldeo", "", "Pliki Excel (*.xlsx)")
-        if not filepath:
-            return
-        try:
-            if SaldeoService:
-                SaldeoService.export_monthly_report(filepath)
-                QMessageBox.information(self, "Sukces eksportu", f"Plik integracyjny został wygenerowany poprawnie.\nŚcieżka: {filepath}")
-                return
-
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("SELECT id, nazwa, nip, miasto, uop, uz, uod FROM firmy ORDER BY nazwa")
-            firms = cur.fetchall()
-
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "SaldeoExport"
-            ws.append(["Firma / dokument", "Typ", "Cena netto", "Data wystawienia", "Dodatkowe pozycje"])
-
-            for f in firms:
-                fid, fname, fnip, fcity, uop, uz, uod = f
-                ws.append([f"Firma: {fname} (NIP: {fnip})", "", "", "", ""])
-                cur.execute("SELECT numer, typ, cena_netto, data_wyst FROM dokumenty WHERE firma_id = ? ORDER BY data_wyst", (fid,))
-                docs = cur.fetchall()
-                for d in docs:
-                    numer, typ, cena_netto, data_wyst = d
-                    positions = []
-                    if uop and int(uop) > 0:
-                        positions.append(f"UoP x{uop}")
-                    if uz and int(uz) > 0:
-                        positions.append(f"UZ x{uz}")
-                    if uod and int(uod) > 0:
-                        positions.append(f"UoD x{uod}")
-                    positions_text = "; ".join(positions)
-                    ws.append([f"  {numer}", typ, cena_netto, data_wyst, positions_text])
-                ws.append(["", "", "", "", ""])
-
-            wb.save(filepath)
-            conn.close()
-            QMessageBox.information(self, "Sukces eksportu", f"Plik integracyjny został wygenerowany poprawnie.\nŚcieżka: {filepath}")
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd zapisu", f"Nie można było utworzyć pliku Excel. Powód:\n{str(e)}")
-
-    # -------------------------
-    # Email helpers (required by EmailUIMixin)
-    # -------------------------
-    def _init_email_auto_sync(self, interval_minutes: int = 5, start_immediately: bool = False):
-        if not hasattr(self, "email_auto_sync_timer") or self.email_auto_sync_timer is None:
-            self.email_auto_sync_timer = QTimer(self)
-            self.email_auto_sync_timer.timeout.connect(lambda: self._trigger_email_sync())
-            self.email_auto_sync_timer.setInterval(max(1, interval_minutes) * 60 * 1000)
-        if start_immediately:
-            self._trigger_email_sync()
-        self.email_auto_sync_timer.start()
-
-    def _trigger_email_sync(self):
-        if not hasattr(self, "thread_pool") or self.thread_pool is None:
-            from PyQt6.QtCore import QThreadPool
-            self.thread_pool = QThreadPool.globalInstance()
-        runnable = SyncRunnable(self)
-        runnable.signals.progress.connect(lambda p: self.statusBar().showMessage(f"Synchronizacja: {p}%"))
-        runnable.signals.error.connect(lambda msg: QMessageBox.critical(self, "Błąd synchronizacji", msg))
-        runnable.signals.finished.connect(lambda ok: (
-            self.statusBar().showMessage("Synchronizacja zakończona" if ok else "Synchronizacja nie powiodła się", 3000),
-            self.refresh_email_list() if ok else None
-        ))
-        self.thread_pool.start(runnable)
-
-    def refresh_email_list(self):
-        try:
-            konto_id = self.email_account_combo.currentData()
-            folder = self.email_folder_combo.currentText() if hasattr(self, "email_folder_combo") else "INBOX"
-        except Exception:
-            konto_id = None
-            folder = "INBOX"
-
-        self.table_email_list.setRowCount(0)
-        if not konto_id:
-            return
-
-        conn = get_conn()
-        cur = conn.cursor()
-        try:
-            cur.execute("""
-                SELECT id, od, temat, data_otrzymania, przeczytana
-                FROM wiadomosci
-                WHERE konto_id = ? AND folder = ?
-                ORDER BY data_otrzymania DESC
-                LIMIT 500
-            """, (konto_id, folder))
-            rows = cur.fetchall()
-        finally:
-            conn.close()
-
-        for row_idx, row in enumerate(rows):
-            msg_id, od, temat, data_otrzymania, przeczytana = row
-            self.table_email_list.insertRow(row_idx)
-            self.table_email_list.setItem(row_idx, 0, QTableWidgetItem(str(msg_id)))
-            self.table_email_list.setItem(row_idx, 1, QTableWidgetItem(od or ""))
-            self.table_email_list.setItem(row_idx, 2, QTableWidgetItem(temat or ""))
-            self.table_email_list.setItem(row_idx, 3, QTableWidgetItem(str(data_otrzymania or "")))
-            self.table_email_list.setItem(row_idx, 4, QTableWidgetItem("Tak" if przeczytana else "Nie"))
-        try:
-            self.table_email_list.resizeColumnsToContents()
-        except Exception:
-            pass
-
-    def reply_to_email(self):
-        row = self.table_email_list.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość do odpowiedzi.")
-            return
-        msg_id_item = self.table_email_list.item(row, 0)
-        if not msg_id_item:
-            QMessageBox.warning(self, "Błąd", "Brak identyfikatora wiadomości.")
-            return
-        msg_id = int(msg_id_item.text())
-
-        conn = get_conn()
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT konto_id, od, temat FROM wiadomosci WHERE id = ?", (msg_id,))
-            row = cur.fetchone()
-        finally:
-            conn.close()
-        if not row:
-            QMessageBox.critical(self, "Błąd", "Nie można pobrać wiadomości.")
-            return
-        konto_id, od, temat = row
-
-        from PyQt6.QtWidgets import QInputDialog
-        tresc, ok = QInputDialog.getMultiLineText(self, "Odpowiedź", f"Odpowiedź do: {od}\nTemat: Re: {temat}", "")
-        if not ok or not tresc.strip():
-            return
-
-        ok_send, msg = EmailSyncer.send_email(konto_id, od, f"Re: {temat}", tresc)
-        if ok_send:
-            QMessageBox.information(self, "Wysłano", "Odpowiedź została wysłana.")
-        else:
-            QMessageBox.critical(self, "Błąd wysyłki", f"Nie udało się wysłać: {msg}")
-
-    def forward_email(self):
-        row = self.table_email_list.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość do przesłania.")
-            return
-        msg_id_item = self.table_email_list.item(row, 0)
-        if not msg_id_item:
-            QMessageBox.warning(self, "Błąd", "Brak identyfikatora wiadomości.")
-            return
-        msg_id = int(msg_id_item.text())
-
-        conn = get_conn()
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT konto_id, od, temat, tresc, raw_msg FROM wiadomosci WHERE id = ?", (msg_id,))
-            row = cur.fetchone()
-        finally:
-            conn.close()
-        if not row:
-            QMessageBox.critical(self, "Błąd", "Nie można pobrać wiadomości.")
-            return
-        konto_id, od, temat, tresc, raw = row
-
-        from PyQt6.QtWidgets import QInputDialog
-        to_addr, ok = QInputDialog.getText(self, "Prześlij dalej", "Adres odbiorcy:")
-        if not ok or not to_addr.strip():
-            return
-
-        body = f"Przesyłam wiadomość od: {od}\nTemat: {temat}\n\n{tresc or ''}"
-        ok_send, msg = EmailSyncer.send_email(konto_id, to_addr.strip(), f"Fwd: {temat}", body)
-        if ok_send:
-            QMessageBox.information(self, "Wysłano", "Wiadomość została przesłana.")
-        else:
-            QMessageBox.critical(self, "Błąd wysyłki", f"Nie udało się wysłać: {msg}")
-
-    def sync_all_emails(self):
-        try:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM konta_email WHERE pracownik_id = ? AND aktywna = 1", (self.pracownik_id,))
-            accounts = [r[0] for r in cur.fetchall()]
-            conn.close()
-
-            if not accounts:
-                return True
-
-            all_ok = True
-            for konto_id in accounts:
-                ok = EmailSyncer.sync_emails(konto_id, self.pracownik_id)
-                if not ok:
-                    all_ok = False
+            QMessageBox.information(self, "Sukces", "Przypisano pracownika do firmy.")
             try:
-                self.refresh_email_list()
-                self.refresh_email_accounts()
-                self.refresh_email_filters()
+                self.refresh_employee_combos()
             except Exception:
                 pass
-            return all_ok
         except Exception as e:
-            raise
+            QMessageBox.critical(self, "Błąd", f"Nie udało się przypisać: {e}")
+        finally:
+            conn.close()
+
+    def refresh_employee_combos(self):
+        # populate assign_employee_combo and assign_firma_combo with id in userData
+        self.assign_employee_combo.clear()
+        self.assign_firma_combo.clear()
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, imie, nazwisko FROM pracownicy WHERE aktywny = 1 ORDER BY imie, nazwisko")
+            for _id, imie, nazwisko in cur.fetchall():
+                self.assign_employee_combo.addItem(f"{imie} {nazwisko}", _id)
+            cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
+            for _id, nazwa in cur.fetchall():
+                self.assign_firma_combo.addItem(nazwa, _id)
+        finally:
+            conn.close()

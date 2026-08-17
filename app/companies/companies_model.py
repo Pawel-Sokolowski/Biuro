@@ -4,7 +4,7 @@ import sqlite3
 
 from app.companies.constants import COMPANY_FIELD_ORDER
 from app.utils.parsing import normalize_identifier, normalize_pkd_codes, parse_date_value, parse_int_value
-from config import DB_NAME
+from app.config import DB_NAME
 
 
 def ensure_columns(cursor, table_name, columns):

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QTimer
-from config import DB_NAME
+from app.config import DB_NAME
 
 class ChatPage(QWidget):
     def __init__(self, pracownik_id):

@@ -4,12 +4,14 @@ import bcrypt
 from app.companies.companies_model import ensure_columns
 from app.companies.constants import COMPANY_EXTRA_COLUMNS
 
-from config import DB_NAME
+from app.config import DB_NAME
+
 
 def _column_exists(cursor, table: str, column: str) -> bool:
     cursor.execute(f"PRAGMA table_info({table})")
     cols = [r[1] for r in cursor.fetchall()]
     return column in cols
+
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -117,18 +119,19 @@ def init_db():
         )
     """)
 
-    # Tabela wiadomości email (dodano raw_msg BLOB opcjonalnie)
+    # Tabela wiadomości email
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS wiadomosci (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             konto_id INTEGER NOT NULL,
+            uid TEXT,
             message_id TEXT UNIQUE,
             od TEXT NOT NULL,
             do TEXT NOT NULL,
             cc TEXT,
             temat TEXT,
             tresc TEXT,
-            data_otrzymania TEXT,
+            data TEXT,
             folder TEXT DEFAULT 'INBOX',
             przeczytana INTEGER DEFAULT 0,
             flaga INTEGER DEFAULT 0,
@@ -136,6 +139,12 @@ def init_db():
             FOREIGN KEY(konto_id) REFERENCES konta_email(id)
         )
     """)
+
+    # Upewnij się, że stare bazy mają brakujące kolumny
+    if not _column_exists(cursor, "wiadomosci", "uid"):
+        cursor.execute("ALTER TABLE wiadomosci ADD COLUMN uid TEXT")
+    if not _column_exists(cursor, "wiadomosci", "data"):
+        cursor.execute("ALTER TABLE wiadomosci ADD COLUMN data TEXT")
 
     # Tabela folderów email
     cursor.execute("""
@@ -165,7 +174,6 @@ def init_db():
 
     # === NOWE TABELE: CHAT ===
 
-    # Tabela konwersacji
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS konwersacje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +184,6 @@ def init_db():
         )
     """)
 
-    # Tabela uczestników konwersacji
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS uczestnicy_chat (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,7 +195,6 @@ def init_db():
         )
     """)
 
-    # Tabela wiadomości czatu
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS wiadomosci_chat (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -232,7 +238,6 @@ def init_db():
             VALUES (1, 'admin@biuro.pl', ?, 'Glowny', 'Administrator', 1)
         """, (domyslne_haslo_hash,))
 
-        # upewnij się, że istnieje firma o id=1 (może być pusta)
         cursor.execute("INSERT OR IGNORE INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma')")
 
         cursor.execute("""

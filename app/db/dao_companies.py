@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, List, Tuple
 
-from config import DB_NAME
+from app.config import DB_NAME
 
 _SCHEMA_SQL = """PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS firmy (

@@ -1,4 +1,3 @@
-# app/db/schema.py
 import sqlite3
 import bcrypt
 from app.companies.companies_model import ensure_columns
@@ -17,7 +16,10 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    # Tabela firm z kadrami i stoperem
+    # ============================================================
+    # TABELA FIRMY — pełna wersja z cennikiem, VAT, typem rozliczenia
+    # ============================================================
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS firmy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,12 +29,38 @@ def init_db():
             uop INTEGER DEFAULT 0,
             uz INTEGER DEFAULT 0,
             uod INTEGER DEFAULT 0,
-            sekundy_pracy INTEGER DEFAULT 0
+            sekundy_pracy INTEGER DEFAULT 0,
+            glowny_cennik TEXT,
+            limit_dokumentow INTEGER DEFAULT 0,
+            typ_rozliczenia TEXT DEFAULT 'Ryczałt',
+            vat_czynny INTEGER DEFAULT 0,
+            glowny_cennik_manualny INTEGER DEFAULT 0
         )
     """)
+
+    # dodatkowe kolumny z COMPANY_EXTRA_COLUMNS
     ensure_columns(cursor, "firmy", COMPANY_EXTRA_COLUMNS)
 
-    # Tabela statusów miesięcznych
+    # MIGRACJE — jeśli baza jest stara
+    if not _column_exists(cursor, "firmy", "typ_rozliczenia"):
+        cursor.execute("ALTER TABLE firmy ADD COLUMN typ_rozliczenia TEXT DEFAULT 'Ryczałt'")
+
+    if not _column_exists(cursor, "firmy", "vat_czynny"):
+        cursor.execute("ALTER TABLE firmy ADD COLUMN vat_czynny INTEGER DEFAULT 0")
+
+    if not _column_exists(cursor, "firmy", "glowny_cennik_manualny"):
+        cursor.execute("ALTER TABLE firmy ADD COLUMN glowny_cennik_manualny INTEGER DEFAULT 0")
+
+    if not _column_exists(cursor, "firmy", "glowny_cennik"):
+        cursor.execute("ALTER TABLE firmy ADD COLUMN glowny_cennik TEXT")
+
+    if not _column_exists(cursor, "firmy", "limit_dokumentow"):
+        cursor.execute("ALTER TABLE firmy ADD COLUMN limit_dokumentow INTEGER DEFAULT 0")
+
+    # ============================================================
+    # STATUSY MIESIĘCZNE
+    # ============================================================
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
             firma_id INTEGER,
@@ -43,7 +71,10 @@ def init_db():
         )
     """)
 
-    # Tabela dokumentów pod eksport Saldeo
+    # ============================================================
+    # DOKUMENTY (pod eksport Saldeo)
+    # ============================================================
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS dokumenty (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,9 +87,56 @@ def init_db():
         )
     """)
 
-    # === NOWE TABELE: SYSTEM PRACOWNIKÓW ===
+    # ============================================================
+    # CENNIKI GLOBALNE
+    # ============================================================
 
-    # Tabela pracowników
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cenniki (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            klucz TEXT UNIQUE,
+            cena_netto_2024 REAL,
+            wzrost_ilosci_dokumentow REAL,
+            cena_za_dokument REAL,
+            za_przekroczenie_limitu_netto REAL,
+            zdrowotna REAL,
+            netto REAL,
+            brutto REAL,
+            updated_at TEXT
+        )
+    """)
+
+    # ============================================================
+    # CENA ZA DOKUMENT PONAD LIMIT (Ryczałt/KPIR/KH + VAT)
+    # ============================================================
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS globalne_ceny_za_dokument (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            typ TEXT NOT NULL,
+            vat INTEGER NOT NULL,
+            cena REAL NOT NULL,
+            UNIQUE(typ, vat)
+        )
+    """)
+
+    # ============================================================
+    # USŁUGI DODATKOWE
+    # ============================================================
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS uslugi_dodatkowe (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nazwa TEXT NOT NULL,
+            cena_netto REAL NOT NULL,
+            stawka_vat TEXT NOT NULL
+        )
+    """)
+
+    # ============================================================
+    # SYSTEM PRACOWNIKÓW
+    # ============================================================
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pracownicy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +149,6 @@ def init_db():
         )
     """)
 
-    # Tabela ról
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS role (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,14 +156,12 @@ def init_db():
         )
     """)
 
-    # Wstaw domyślne role (jeśli nie istnieją)
     cursor.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (1, 'księgowa')")
     cursor.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (2, 'kadrowa')")
     cursor.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (3, 'manager')")
     cursor.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (4, 'admin')")
     cursor.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (5, 'opiekun')")
 
-    # Tabela przypisania pracownika do firmy z rolą
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pracownik_firma (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,9 +176,10 @@ def init_db():
         )
     """)
 
-    # === NOWE TABELE: EMAIL SYSTEM ===
+    # ============================================================
+    # EMAIL SYSTEM
+    # ============================================================
 
-    # Tabela kont email
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS konta_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +195,6 @@ def init_db():
         )
     """)
 
-    # Tabela wiadomości email
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS wiadomosci (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,13 +215,12 @@ def init_db():
         )
     """)
 
-    # Upewnij się, że stare bazy mają brakujące kolumny
     if not _column_exists(cursor, "wiadomosci", "uid"):
         cursor.execute("ALTER TABLE wiadomosci ADD COLUMN uid TEXT")
+
     if not _column_exists(cursor, "wiadomosci", "data"):
         cursor.execute("ALTER TABLE wiadomosci ADD COLUMN data TEXT")
 
-    # Tabela folderów email
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS foldery_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +232,6 @@ def init_db():
         )
     """)
 
-    # Tabela reguł filtrów email
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reguly_filtrow (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,7 +245,9 @@ def init_db():
         )
     """)
 
-    # === NOWE TABELE: CHAT ===
+    # ============================================================
+    # CHAT
+    # ============================================================
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS konwersacje (
@@ -207,7 +282,9 @@ def init_db():
         )
     """)
 
-    # === DODATKOWE TABELLE: NOTATKI I UDZIAŁOWCY ===
+    # ============================================================
+    # NOTATKI I UDZIAŁOWCY
+    # ============================================================
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS company_notes (
@@ -229,7 +306,10 @@ def init_db():
         )
     """)
 
-    # === AUTOMATYCZNE TWORZENIE PIERWSZEGO ADMINISTRATORA ===
+    # ============================================================
+    # PIERWSZY ADMIN
+    # ============================================================
+
     cursor.execute("SELECT COUNT(*) FROM pracownicy")
     if cursor.fetchone()[0] == 0:
         domyslne_haslo_hash = bcrypt.hashpw("admin123".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')

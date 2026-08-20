@@ -3,6 +3,15 @@ from PyQt6.QtWidgets import (QApplication, QDialog)
 
 from app.companies.companies_ui import LoginWindow, OfficeManagerApp
 from app.db.schema import init_db
+import sys
+import traceback
+
+def excepthook(type, value, tb):
+    print("=== PYQT EXCEPTION CAUGHT ===")
+    traceback.print_exception(type, value, tb)
+    sys.__excepthook__(type, value, tb)
+
+sys.excepthook = excepthook
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

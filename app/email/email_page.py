@@ -39,9 +39,6 @@ class EmailPage(QWidget):
 
         self._build_ui()
 
-    # ---------------------------------------------------------
-    # UI
-    # ---------------------------------------------------------
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -56,9 +53,6 @@ class EmailPage(QWidget):
         self.email_tabs.addTab(self._create_filters_tab(), "Filtry")
         layout.addWidget(self.email_tabs)
 
-    # ---------------------------------------------------------
-    # TAB: READER
-    # ---------------------------------------------------------
     def _create_reader_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -109,9 +103,6 @@ class EmailPage(QWidget):
         layout.addLayout(actions)
         return tab
 
-    # ---------------------------------------------------------
-    # TAB: ACCOUNTS
-    # ---------------------------------------------------------
     def _create_accounts_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -143,7 +134,7 @@ class EmailPage(QWidget):
         self.smtp_server = QLineEdit()
         self.smtp_port = QSpinBox()
         self.smtp_port.setMaximum(9999)
-        self.smtp_port.setValue(587)
+        self.smtp_port.setValue(465)
         self.email_password = QLineEdit()
         self.email_password.setEchoMode(QLineEdit.EchoMode.Password)
 
@@ -176,9 +167,6 @@ class EmailPage(QWidget):
         refresh_email_accounts(self)
         return tab
 
-    # ---------------------------------------------------------
-    # TAB: FILTERS
-    # ---------------------------------------------------------
     def _create_filters_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -216,7 +204,6 @@ class EmailPage(QWidget):
 
         btn_add = QPushButton("Dodaj filtr")
         btn_add.clicked.connect(lambda: add_email_filter(self))
-        # po dodaniu filtru możesz od razu zsynchronizować, żeby filtr się zastosował
         btn_add.clicked.connect(lambda: self._trigger_email_sync())
         right_layout.addWidget(btn_add)
 

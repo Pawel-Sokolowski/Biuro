@@ -6,6 +6,7 @@ from typing import Dict, Any
 
 from app.utils.parsing import normalize_identifier, resolve_employee_ids
 from app.companies.helpers import _get_cell, parse_num
+from app.config import DB_NAME
 
 
 # ============================================================
@@ -195,16 +196,22 @@ def import_companies_from_excel_file(filepath: str, db_path: str) -> Dict[str, A
     finally:
         conn.close()
 
+def parse_num(val):
+    if val is None or val == "":
+        return None
+    try:
+        return float(str(val).replace(",", "."))
+    except:
+        return None
 
-# ============================================================
-#  IMPORT GLOBALNYCH CENNIKÓW (tabela cenniki)
-# ============================================================
 
-def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
+def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME):
     """
-    Importuje globalny cennik (Ryczałt_N_0, Ryczałt_T_20, KPIR_N_50, KH_T_100 itd.)
-    do tabeli cenniki, zgodnie z istniejącym schematem.
+    Importuje cennik zgodnie z kolumnami:
+    Klucz, cena netto 2024, wzrost ilości dokumentów, cena za dokument,
+    za przekroczenie limitu netto, zdrowotna, Netto, Brutto
     """
+
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active
 
@@ -215,8 +222,20 @@ def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
     headers = [str(h).strip().lower() if h else "" for h in header]
     idx = {h: i for i, h in enumerate(headers)}
 
-    if "klucz" not in idx:
-        return {"imported": 0, "updated": 0, "errors": ["Brakuje kolumny 'Klucz'."]}
+    required = [
+        "klucz",
+        "cena netto 2024",
+        "wzrost ilości dokumentów",
+        "cena za dokument",
+        "za przekroczenie limitu netto",
+        "zdrowotna",
+        "netto",
+        "brutto"
+    ]
+
+    for col in required:
+        if col not in idx:
+            return {"imported": 0, "updated": 0, "errors": [f"Brakuje kolumny '{col}'."]}
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -231,19 +250,25 @@ def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
             continue
 
         try:
-            key = str(row[idx["klucz"]]).strip()
+            klucz = str(row[idx["klucz"]]).strip()
 
-            cena_netto_2024 = parse_num(row[idx.get("ryczałt", idx["klucz"])])
-            wzrost = parse_num(row[idx.get("wzrost", idx["klucz"])])
-            cena_za_dokument = parse_num(row[idx.get("cena za dokument", idx["klucz"])])
-            za_przekroczenie = parse_num(row[idx.get("za przekroczenie", idx["klucz"])])
-            zdrowotna = parse_num(row[idx.get("zdrowotna", idx["klucz"])])
-            netto = parse_num(row[idx.get("netto", idx["klucz"])])
-            brutto = parse_num(row[idx.get("brutto", idx["klucz"])])
+            # Rozbijamy klucz: np. Ryczałt_N_10 → typ=Ryczałt, vat=N, limit=10
+            parts = klucz.split("_")
+            typ = parts[0]
+            vat = parts[1]
+            limit = int(parts[2]) if len(parts) > 2 else 0
+
+            cena_netto_2024 = parse_num(row[idx["cena netto 2024"]])
+            wzrost = parse_num(row[idx["wzrost ilości dokumentów"]])
+            cena_za_dokument = parse_num(row[idx["cena za dokument"]])
+            za_przekroczenie = parse_num(row[idx["za przekroczenie limitu netto"]])
+            zdrowotna = parse_num(row[idx["zdrowotna"]])
+            netto = parse_num(row[idx["netto"]])
+            brutto = parse_num(row[idx["brutto"]])
 
             now = time.strftime("%Y-%m-%d %H:%M:%S")
 
-            cur.execute("SELECT id FROM cenniki WHERE klucz = ?", (key,))
+            cur.execute("SELECT id FROM cenniki WHERE klucz = ?", (klucz,))
             existing = cur.fetchone()
 
             if existing:
@@ -252,8 +277,10 @@ def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
                         cena_netto_2024 = ?, wzrost_ilosci_dokumentow = ?, cena_za_dokument = ?,
                         za_przekroczenie_limitu_netto = ?, zdrowotna = ?, netto = ?, brutto = ?, updated_at = ?
                     WHERE klucz = ?
-                """, (cena_netto_2024, wzrost, cena_za_dokument, za_przekroczenie,
-                      zdrowotna, netto, brutto, now, key))
+                """, (
+                    cena_netto_2024, wzrost, cena_za_dokument,
+                    za_przekroczenie, zdrowotna, netto, brutto, now, klucz
+                ))
                 updated += 1
 
             else:
@@ -262,8 +289,10 @@ def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
                         klucz, cena_netto_2024, wzrost_ilosci_dokumentow, cena_za_dokument,
                         za_przekroczenie_limitu_netto, zdrowotna, netto, brutto, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (key, cena_netto_2024, wzrost, cena_za_dokument,
-                      za_przekroczenie, zdrowotna, netto, brutto, now))
+                """, (
+                    klucz, cena_netto_2024, wzrost, cena_za_dokument,
+                    za_przekroczenie, zdrowotna, netto, brutto, now
+                ))
                 imported += 1
 
         except Exception as e:
@@ -274,23 +303,7 @@ def import_cennik_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
 
     return {"imported": imported, "updated": updated, "errors": errors}
 
-
-# ============================================================
-#  IMPORT CEN ZA DOKUMENT PONAD LIMIT (druga tabela)
-# ============================================================
-
 def import_ceny_za_dokument_from_excel(filepath: str, db_path: str) -> Dict[str, Any]:
-    """
-    Importuje tabelę:
-    Klucz | Cena
-    Ryczałt_N | 5
-    Ryczałt_T | 5,5
-    KPIR_N    | 5
-    KPIR_T    | 5,5
-    KH_N      | 10
-    KH_T      | 10
-    do tabeli globalne_ceny_za_dokument.
-    """
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active
 

@@ -8,8 +8,8 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QLabel, QVBoxLayout,
     QMessageBox, QMainWindow, QWidget, QHBoxLayout, QListWidget, QStackedWidget,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QSpinBox, QSplitter, QGroupBox, QScrollArea,
-    QListWidgetItem, QGridLayout, QAbstractItemView, QCheckBox, QTabWidget
+    QSpinBox, QGroupBox, QScrollArea,
+    QListWidgetItem, QGridLayout, QAbstractItemView, QTabWidget
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
@@ -19,11 +19,10 @@ from app.companies.constants import COMPANY_STAGE_OPTIONS
 from app.db.dao_companies import get_conn
 from app.utils.crypto import login_user, register_user, get_employee_info, is_admin
 from app.utils.parsing import parse_int_value, normalize_identifier
-from app.companies.companies_model import apply_default_main_pricing, save_company, get_company_assigned_employee_ids
+from app.companies.companies_model import apply_default_main_pricing, save_company
 from app.email.email_ui import EmailUIMixin
-from app.chat.chat import ChatPage
 from app.db.dao_companies import wybierz_cennik, pobierz_cene_za_dokument
-from app.utils.saldeo_exporter import export_saldeo_csv
+from app.config import DB_NAME
 
 # -------------------------
 # LoginWindow
@@ -298,9 +297,13 @@ class CompanyDialog(QDialog):
 
         # BUSINESS / PRICING
         business_group, business_grid = self._create_section("PKD, cenniki i zatrudnienie")
-        self._add_grid_line_edit(business_grid, 0, 0, "Kody PKD", "kody_pkd", placeholder="62.01.Z, 69.20.Z", col_span=2)
+        self._add_grid_line_edit(business_grid, 0, 0, "Kody PKD", "kody_pkd", placeholder="62.01.Z, 69.20.Z",
+                                 col_span=2)
 
-        # Typ rozliczenia + VAT
+        # ============================
+        #  TYP ROZLICZENIA + VAT
+        # ============================
+
         self.typ_rozliczenia_combo = QComboBox()
         self.typ_rozliczenia_combo.addItems(["Ryczałt", "KPIR", "KH"])
         current_typ = str(self.company_data.get("typ_rozliczenia", "Ryczałt"))
@@ -315,32 +318,61 @@ class CompanyDialog(QDialog):
         self.vat_checkbox.setChecked(bool(self.company_data.get("vat_czynny", 0)))
         business_grid.addWidget(self._create_field_container("VAT", self.vat_checkbox), 1, 1, 1, 1)
 
-        self._add_grid_line_edit(business_grid, 2, 0, "Cennik usług księgowych", "cennik_ksiegowy")
-        self._add_grid_line_edit(business_grid, 2, 1, "Cennik usług kadrowych", "cennik_kadrowy")
-        self._add_grid_line_edit(business_grid, 3, 0, "Cennik czasowy", "cennik_czasowy")
-        self._add_grid_line_edit(business_grid, 3, 1, "Główny cennik (klucz)", "glowny_cennik")
+        # ============================
+        #  LIMIT DOKUMENTÓW
+        # ============================
 
-        try:
-            from PyQt6.QtWidgets import QCheckBox
-            self.main_price_manual_checkbox = QCheckBox("Ręcznie nadpisz główny cennik")
-            self.main_price_manual_checkbox.setChecked(bool(self.company_data.get("glowny_cennik_manualny", 0)))
-            self.main_price_manual_checkbox.toggled.connect(self._toggle_main_price_mode)
-            business_grid.addWidget(self.main_price_manual_checkbox, 4, 0, 1, 2)
-        except Exception:
-            btn = QPushButton("Ręcznie nadpisz główny cennik")
-            business_grid.addWidget(btn, 4, 0, 1, 2)
-
-        self._add_grid_spin_box(business_grid, 5, 0, "Pracownicy UoP", "uop")
-        self._add_grid_spin_box(business_grid, 5, 1, "Umowy zlecenia (UZ)", "uz")
-        self._add_grid_spin_box(business_grid, 6, 0, "Umowy o dzieło (UoD)", "uod")
-
-        # Limit dokumentów z automatycznym doborem cennika
         self.limit_spin = self._create_spin_input("limit_dokumentow")
         limit_container = self._create_field_container("Limit dokumentów", self.limit_spin)
-        business_grid.addWidget(limit_container, 6, 1, 1, 1)
-        self.limit_spin.valueChanged.connect(self._on_limit_changed)
+        business_grid.addWidget(limit_container, 2, 0, 1, 1)
+
+        # ============================
+        #  AUTOMATYCZNY DOBÓR CENNIKA
+        # ============================
+
+        self.cennik_combo = QComboBox()
+        self.cennik_combo.setEditable(False)
+        self.inputs["glowny_cennik"] = self.cennik_combo
+        business_grid.addWidget(self._create_field_container("Główny cennik (automatyczny)", self.cennik_combo), 3, 0,
+                                1, 2)
+
+        # ============================
+        #  RĘCZNE NADPISANIE CENNIKA
+        # ============================
+
+        self.main_price_manual_checkbox = QCheckBox("Ręcznie nadpisz główny cennik")
+        self.main_price_manual_checkbox.setChecked(bool(self.company_data.get("glowny_cennik_manualny", 0)))
+        business_grid.addWidget(self.main_price_manual_checkbox, 4, 0, 1, 2)
+
+        self.manual_price_edit = QLineEdit()
+        self.manual_price_edit.setPlaceholderText("Cena netto (ręczna)")
+        self.manual_price_edit.setEnabled(self.main_price_manual_checkbox.isChecked())
+        business_grid.addWidget(self._create_field_container("Cena ręczna", self.manual_price_edit), 5, 0, 1, 2)
+
+        def toggle_manual_price():
+            manual = self.main_price_manual_checkbox.isChecked()
+            self.manual_price_edit.setEnabled(manual)
+            self.cennik_combo.setEnabled(not manual)
+
+        self.main_price_manual_checkbox.toggled.connect(toggle_manual_price)
+
+        # ============================
+        #  PRACOWNICY / ZATRUDNIENIE
+        # ============================
+
+        self._add_grid_spin_box(business_grid, 6, 0, "Pracownicy UoP", "uop")
+        self._add_grid_spin_box(business_grid, 6, 1, "Umowy zlecenia (UZ)", "uz")
+        self._add_grid_spin_box(business_grid, 7, 0, "Umowy o dzieło (UoD)", "uod")
 
         content_layout.addWidget(business_group)
+
+        # ============================
+        #  PODPIĘCIE AUTOMATYCZNEGO DOBIERANIA
+        # ============================
+
+        self.typ_rozliczenia_combo.currentTextChanged.connect(self._load_matching_cenniki)
+        self.vat_checkbox.stateChanged.connect(self._load_matching_cenniki)
+        self.limit_spin.valueChanged.connect(self._load_matching_cenniki)
 
         # ASSIGNED EMPLOYEES
         employee_group, employee_grid = self._create_section("Przypisani pracownicy", "Wybierz osoby odpowiedzialne za obsługę tej firmy.")
@@ -392,6 +424,46 @@ class CompanyDialog(QDialog):
         main_layout.addWidget(buttons)
 
         self._refresh_shareholders_list()
+
+    def _load_matching_cenniki(self):
+        """
+        Automatyczne dobieranie cennika po typie rozliczenia, VAT i limicie dokumentów.
+        """
+        typ = self.typ_rozliczenia_combo.currentText()  # Ryczałt / KPIR / KH
+        vat = "N" if self.vat_checkbox.isChecked() is False else "T"
+        limit = str(self.inputs["limit_dokumentow"].value())
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # pobieramy tylko pasujące cenniki
+        cur.execute("""
+            SELECT klucz, za_przekroczenie_limitu_netto, zdrowotna, netto, brutto
+            FROM cenniki
+            WHERE klucz LIKE ? AND klucz LIKE ?
+            ORDER BY wzrost_ilosci_dokumentow ASC
+        """, (f"{typ}%", f"%_{vat}_%"))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        self.cennik_combo.clear()
+
+        for r in rows:
+            klucz = r["klucz"]
+            parts = klucz.split("_")
+            limit_klucz = parts[2] if len(parts) > 2 else "0"
+
+            # filtr po limicie
+            if limit_klucz != limit:
+                continue
+
+            label = f"{typ} | VAT {vat} | Limit {limit_klucz} | Netto {r['netto']} zł"
+            self.cennik_combo.addItem(label, klucz)
+
+        # jeśli jest dokładne dopasowanie → ustaw automatycznie
+        if self.cennik_combo.count() > 0:
+            self.cennik_combo.setCurrentIndex(0)
 
     def _on_fetch_ceidg_by_nip(self):
         nip_widget = self.inputs.get("nip")
@@ -685,7 +757,6 @@ class CompanyDialog(QDialog):
                 self.notes_list_widget.addItem(f"[{dt}] {snippet}")
         finally:
             conn.close()
-
 
 
 BaseClasses = (QMainWindow, EmailUIMixin) if EmailUIMixin else (QMainWindow,)
@@ -1252,15 +1323,374 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
 
     def _import_global_cennik(self):
         """
-        Importuje globalny cennik z Excela do tabeli 'cenniki'.
-        Funkcja musi znajdować się wewnątrz klasy OfficeManagerApp.
+        Otwiera okno wyboru pliku Excela i wywołuje import_cennik_from_excel(filepath).
         """
+        from PyQt6.QtWidgets import QFileDialog
+        from app.utils.importers import import_cennik_from_excel
+
+        # wybór pliku
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plik cennika",
+            "",
+            "Excel Files (*.xlsx *.xls)"
+        )
+
+        if not filepath:
+            return  # użytkownik anulował
+
         try:
-            from app.db.import_cennik import import_cennik_excel
-            import_cennik_excel()
-            QMessageBox.information(self, "Sukces", "Globalny cennik został zaimportowany.")
+            # importer sam pobiera DB_NAME wewnątrz funkcji
+            result = import_cennik_from_excel(filepath)
         except Exception as e:
             QMessageBox.critical(self, "Błąd importu", f"Import nie powiódł się:\n{e}")
+            return
+
+        imported = result.get("imported", 0)
+        updated = result.get("updated", 0)
+        errors = result.get("errors", [])
+
+        msg = f"Zaimportowano: {imported}\nZaktualizowano: {updated}"
+        if errors:
+            msg += "\nBłędy:\n" + "\n".join(errors[:5])
+
+        QMessageBox.information(self, "Import cennika", msg)
+
+    def _show_global_cennik(self):
+        """
+        Podgląd globalnego cennika z filtrami i sortowaniem:
+        Rodzaj księgowości | VAT | Limit dokumentów | Cena ponad limit | Zdrowotna | Netto | Brutto
+        """
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Globalny cennik — filtrowanie i sortowanie")
+        dialog.resize(1100, 650)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # --- FILTRY ---
+        filter_box = QHBoxLayout()
+
+        rodzaj_filter = QComboBox()
+        rodzaj_filter.addItem("Wszystkie")
+        rodzaj_filter.addItems(["Ryczałt", "KPIR", "KH"])
+        filter_box.addWidget(QLabel("Rodzaj księgowości:"))
+        filter_box.addWidget(rodzaj_filter)
+
+        vat_filter = QComboBox()
+        vat_filter.addItem("Wszystkie")
+        vat_filter.addItems(["N", "T"])
+        filter_box.addWidget(QLabel("VAT:"))
+        filter_box.addWidget(vat_filter)
+
+        limit_filter = QComboBox()
+        limit_filter.addItem("Wszystkie")
+        limit_filter.addItems(["0", "5", "10", "20", "50", "100"])
+        filter_box.addWidget(QLabel("Limit dokumentów:"))
+        filter_box.addWidget(limit_filter)
+
+        main_layout.addLayout(filter_box)
+
+        # --- TABELA ---
+        table = QTableWidget(0, 7)
+        table.setHorizontalHeaderLabels([
+            "Rodzaj księgowości",
+            "VAT",
+            "Limit dokumentów",
+            "Cena ponad limit (szt)",
+            "Zdrowotna",
+            "Netto",
+            "Brutto"
+        ])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        main_layout.addWidget(table)
+
+        # --- ŁADOWANIE DANYCH ---
+        def load_data():
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT klucz, za_przekroczenie_limitu_netto,
+                       zdrowotna, netto, brutto
+                FROM cenniki
+                ORDER BY za_przekroczenie_limitu_netto ASC
+            """)
+            rows = cur.fetchall()
+            conn.close()
+
+            table.setRowCount(0)
+
+            for r in rows:
+                klucz = r["klucz"]
+                parts = klucz.split("_")
+
+                rodzaj = parts[0]
+                vat = parts[1]
+                limit = parts[2] if len(parts) > 2 else "0"
+
+                # --- FILTRY ---
+                if rodzaj_filter.currentText() != "Wszystkie" and rodzaj_filter.currentText() != rodzaj:
+                    continue
+
+                if vat_filter.currentText() != "Wszystkie" and vat_filter.currentText() != vat:
+                    continue
+
+                if limit_filter.currentText() != "Wszystkie" and limit_filter.currentText() != limit:
+                    continue
+
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+
+                table.setItem(row_idx, 0, QTableWidgetItem(rodzaj))
+                table.setItem(row_idx, 1, QTableWidgetItem(vat))
+                table.setItem(row_idx, 2, QTableWidgetItem(limit))
+                table.setItem(row_idx, 3, QTableWidgetItem(str(r["za_przekroczenie_limitu_netto"])))
+                table.setItem(row_idx, 4, QTableWidgetItem(str(r["zdrowotna"])))
+                table.setItem(row_idx, 5, QTableWidgetItem(str(r["netto"])))
+                table.setItem(row_idx, 6, QTableWidgetItem(str(r["brutto"])))
+
+        rodzaj_filter.currentTextChanged.connect(load_data)
+        vat_filter.currentTextChanged.connect(load_data)
+        limit_filter.currentTextChanged.connect(load_data)
+
+        load_data()
+        dialog.exec()
+
+    def _edit_global_cennik(self):
+        """
+        Edycja globalnego cennika:
+        Rodzaj księgowości | VAT | Limit dokumentów | Cena ponad limit | Zdrowotna | Netto | Brutto
+        + filtry + sortowanie + dodawanie + usuwanie + zapis
+        """
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edytuj globalny cennik — filtrowanie i sortowanie")
+        dialog.resize(1200, 700)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # --- FILTRY ---
+        filter_box = QHBoxLayout()
+
+        rodzaj_filter = QComboBox()
+        rodzaj_filter.addItem("Wszystkie")
+        rodzaj_filter.addItems(["Ryczałt", "KPIR", "KH"])
+        filter_box.addWidget(QLabel("Rodzaj księgowości:"))
+        filter_box.addWidget(rodzaj_filter)
+
+        vat_filter = QComboBox()
+        vat_filter.addItem("Wszystkie")
+        vat_filter.addItems(["N", "T"])
+        filter_box.addWidget(QLabel("VAT:"))
+        filter_box.addWidget(vat_filter)
+
+        limit_filter = QComboBox()
+        limit_filter.addItem("Wszystkie")
+        limit_filter.addItems(["0", "5", "10", "20", "50", "100"])
+        filter_box.addWidget(QLabel("Limit dokumentów:"))
+        filter_box.addWidget(limit_filter)
+
+        main_layout.addLayout(filter_box)
+
+        # --- TABELA ---
+        table = QTableWidget(0, 7)
+        table.setHorizontalHeaderLabels([
+            "Rodzaj księgowości",
+            "VAT",
+            "Limit dokumentów",
+            "Cena ponad limit (szt)",
+            "Zdrowotna",
+            "Netto",
+            "Brutto"
+        ])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        main_layout.addWidget(table)
+
+        # --- ŁADOWANIE DANYCH ---
+        def load_data():
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT klucz, za_przekroczenie_limitu_netto,
+                       zdrowotna, netto, brutto
+                FROM cenniki
+                ORDER BY za_przekroczenie_limitu_netto ASC
+            """)
+            rows = cur.fetchall()
+            conn.close()
+
+            table.setRowCount(0)
+
+            for r in rows:
+                klucz = r["klucz"]
+                parts = klucz.split("_")
+
+                rodzaj = parts[0]
+                vat = parts[1]
+                limit = parts[2] if len(parts) > 2 else "0"
+
+                # --- FILTRY ---
+                if rodzaj_filter.currentText() != "Wszystkie" and rodzaj_filter.currentText() != rodzaj:
+                    continue
+
+                if vat_filter.currentText() != "Wszystkie" and vat_filter.currentText() != vat:
+                    continue
+
+                if limit_filter.currentText() != "Wszystkie" and limit_filter.currentText() != limit:
+                    continue
+
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+
+                table.setItem(row_idx, 0, QTableWidgetItem(rodzaj))
+                table.setItem(row_idx, 1, QTableWidgetItem(vat))
+                table.setItem(row_idx, 2, QTableWidgetItem(limit))
+                table.setItem(row_idx, 3, QTableWidgetItem(str(r["za_przekroczenie_limitu_netto"])))
+                table.setItem(row_idx, 4, QTableWidgetItem(str(r["zdrowotna"])))
+                table.setItem(row_idx, 5, QTableWidgetItem(str(r["netto"])))
+                table.setItem(row_idx, 6, QTableWidgetItem(str(r["brutto"])))
+
+        rodzaj_filter.currentTextChanged.connect(load_data)
+        vat_filter.currentTextChanged.connect(load_data)
+        limit_filter.currentTextChanged.connect(load_data)
+
+        load_data()
+
+        # --- PRZYCISKI ---
+        btn_row = QHBoxLayout()
+
+        btn_add = QPushButton("Dodaj nowy")
+        btn_add.setStyleSheet("background-color: #2ecc71; color: white; padding: 8px; border-radius: 4px;")
+        btn_row.addWidget(btn_add)
+
+        btn_delete = QPushButton("Usuń zaznaczony")
+        btn_delete.setStyleSheet("background-color: #e74c3c; color: white; padding: 8px; border-radius: 4px;")
+        btn_row.addWidget(btn_delete)
+
+        btn_save = QPushButton("Zapisz zmiany")
+        btn_save.setStyleSheet("background-color: #3498db; color: white; padding: 8px; border-radius: 4px;")
+        btn_row.addWidget(btn_save)
+
+        main_layout.addLayout(btn_row)
+
+        # --- LOGIKA PRZYCISKÓW ---
+        def add_row():
+            r = table.rowCount()
+            table.insertRow(r)
+            for col in range(7):
+                table.setItem(r, col, QTableWidgetItem(""))
+
+        def delete_row():
+            row = table.currentRow()
+            if row >= 0:
+                table.removeRow(row)
+
+        def save_all():
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cenniki")
+
+            for r in range(table.rowCount()):
+                rodzaj = table.item(r, 0).text().strip()
+                vat = table.item(r, 1).text().strip()
+                limit = table.item(r, 2).text().strip()
+
+                if not rodzaj or not vat:
+                    continue
+
+                klucz = f"{rodzaj}_{vat}_{limit}"
+
+                def num(col):
+                    item = table.item(r, col)
+                    if not item:
+                        return None
+                    txt = item.text().replace(",", ".").strip()
+                    return float(txt) if txt else None
+
+                cur.execute("""
+                    INSERT INTO cenniki (
+                        klucz, cena_netto_2024, wzrost_ilosci_dokumentow,
+                        cena_za_dokument, za_przekroczenie_limitu_netto,
+                        zdrowotna, netto, brutto
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    klucz,
+                    None,
+                    int(limit) if limit else 0,
+                    None,
+                    num(3),
+                    num(4),
+                    num(5),
+                    num(6)
+                ))
+
+            conn.commit()
+            conn.close()
+            QMessageBox.information(self, "Sukces", "Cennik został zapisany.")
+            dialog.accept()
+
+        btn_add.clicked.connect(add_row)
+        btn_delete.clicked.connect(delete_row)
+        btn_save.clicked.connect(save_all)
+
+        dialog.exec()
+
+    def _add_cennik_row(self, table: QTableWidget):
+        r = table.rowCount()
+        table.insertRow(r)
+        for col in range(9):
+            table.setItem(r, col, QTableWidgetItem(""))
+
+    def _delete_cennik_row(self, table: QTableWidget):
+        row = table.currentRow()
+        if row < 0:
+            return
+
+        table.removeRow(row)
+
+    def _save_global_cennik(self, table: QTableWidget, dialog: QDialog):
+        conn = get_conn()
+        cur = conn.cursor()
+
+        try:
+            # Czyścimy tabelę i zapisujemy od nowa
+            cur.execute("DELETE FROM cenniki")
+
+            for r in range(table.rowCount()):
+                klucz = table.item(r, 1).text().strip()
+                if not klucz:
+                    continue  # pomijamy puste wiersze
+
+                def num(col):
+                    item = table.item(r, col)
+                    if not item:
+                        return None
+                    txt = item.text().replace(",", ".").strip()
+                    return float(txt) if txt else None
+
+                cur.execute("""
+                    INSERT INTO cenniki (
+                        klucz, cena_za_dokument, za_przekroczenie_limitu_netto,
+                        zdrowotna, netto, brutto
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    klucz,
+                    num(2),
+                    num(3),
+                    num(4),
+                    num(5),
+                    num(6)
+                ))
+
+            conn.commit()
+            QMessageBox.information(self, "Sukces", "Cennik został zapisany.")
+            dialog.accept()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać zmian:\n{e}")
+
+        finally:
+            conn.close()
 
     def _open_saldeo_preview(self):
         dialog = QDialog(self)

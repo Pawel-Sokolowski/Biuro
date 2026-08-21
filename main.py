@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (QApplication, QDialog)
 
-from app.ui.companies_ui import LoginWindow, OfficeManagerApp
+from app.companies.companies_ui import LoginWindow, OfficeManagerApp
 from app.db.schema import init_db
 import sys
 import traceback

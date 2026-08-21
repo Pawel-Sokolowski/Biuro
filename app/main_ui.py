@@ -10,15 +10,15 @@ from PyQt6.QtGui import QFont
 from app.db.dao_companies import get_conn
 from app.db.schema import init_db
 
-from app.global.settings import is_admin
+from app.global_utils.settings import is_admin
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
-from app.companies.companies_ui import CompaniesPage
+from app.companies.companies_ui import CompanyDialog
 from app.email.email_ui import EmailPage
 from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage   # jeśli masz
-from app.ui.settings_ui import SettingsPage      # jeśli masz
-from app.ui.saldeo_ui import SaldeoPage          # jeśli masz
+from app.db.dao_companies import
+
 
 # --- UTILS ---
 from app.utils.saldeo_exporter import export_saldeo_csv

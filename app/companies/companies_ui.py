@@ -409,20 +409,29 @@ class CompanyDialog(QDialog):
     def _load_matching_cenniki(self):
         """
         Automatyczne dobieranie cennika po typie rozliczenia, VAT i limicie dokumentów.
+        Zgodne z NOWYM formatem tabeli cenniki:
+            klucz
+            cena_netto_ksiegowosc
+            cena_za_dokument_ponad_limit
+            zdrowotna
+            netto
+            brutto
         """
+
         typ = self.typ_rozliczenia_combo.currentText()  # Ryczałt / KPIR / KH
-        vat = "N" if self.vat_checkbox.isChecked() is False else "T"
-        limit = str(self.inputs["limit_dokumentow"].value())
+        vat = "T" if self.vat_checkbox.isChecked() else "N"
+        limit = self.limit_spin.value()
 
         conn = get_conn()
         cur = conn.cursor()
 
         # pobieramy tylko pasujące cenniki
         cur.execute("""
-            SELECT klucz, za_przekroczenie_limitu_netto, zdrowotna, netto, brutto
+            SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
+                   zdrowotna, netto, brutto
             FROM cenniki
             WHERE klucz LIKE ? AND klucz LIKE ?
-            ORDER BY wzrost_ilosci_dokumentow ASC
+            ORDER BY klucz ASC
         """, (f"{typ}%", f"%_{vat}_%"))
 
         rows = cur.fetchall()
@@ -433,13 +442,18 @@ class CompanyDialog(QDialog):
         for r in rows:
             klucz = r["klucz"]
             parts = klucz.split("_")
-            limit_klucz = parts[2] if len(parts) > 2 else "0"
+            limit_klucz = int(parts[2]) if len(parts) > 2 else 0
 
             # filtr po limicie
             if limit_klucz != limit:
                 continue
 
-            label = f"{typ} | VAT {vat} | Limit {limit_klucz} | Netto {r['netto']} zł"
+            label = (
+                f"{typ} | VAT {vat} | Limit {limit_klucz} | "
+                f"Księgowość netto: {r['cena_netto_ksiegowosc']} zł | "
+                f"Kadry: {r['zdrowotna']} zł"
+            )
+
             self.cennik_combo.addItem(label, klucz)
 
         # jeśli jest dokładne dopasowanie → ustaw automatycznie

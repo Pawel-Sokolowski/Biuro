@@ -1,5 +1,5 @@
 # app/reports/reports_ui.py
-from app.ui.ui_imports import *
+from app.utils.ui_imports import *
 from PyQt6.QtCharts import QChart, QChartView, QLineSeries
 from PyQt6.QtGui import QPainter
 

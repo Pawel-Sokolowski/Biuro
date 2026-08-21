@@ -72,7 +72,6 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             klucz TEXT UNIQUE NOT NULL,
 
-            -- NOWY FORMAT
             cena_netto_ksiegowosc REAL NOT NULL,
             cena_za_dokument_ponad_limit REAL NOT NULL,
             zdrowotna REAL NOT NULL,
@@ -156,7 +155,7 @@ def init_db():
     """)
 
     # ============================================================
-    # EMAIL
+    # EMAIL — KONTA
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS konta_email (
@@ -173,6 +172,9 @@ def init_db():
         )
     """)
 
+    # ============================================================
+    # EMAIL — WIADOMOŚCI
+    # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS wiadomosci (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +193,28 @@ def init_db():
             raw_msg BLOB,
             FOREIGN KEY(konto_id) REFERENCES konta_email(id)
         )
+    """)
+
+    # ============================================================
+    # EMAIL — FILTRY (NOWA TABELA)
+    # ============================================================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS reguly_filtrow (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            -- powiązanie z kontem email
+            konto_id INTEGER NOT NULL,
+
+            -- warunki filtra
+            od TEXT,                 -- filtr nadawcy
+            temat_zawiera TEXT,      -- filtr tematu
+            folder_docelowy TEXT,    -- docelowy folder (np. INBOX, Faktury)
+
+            -- meta
+            aktywna INTEGER NOT NULL DEFAULT 1,
+
+            FOREIGN KEY(konto_id) REFERENCES konta_email(id)
+        );
     """)
 
     # ============================================================

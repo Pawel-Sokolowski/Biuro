@@ -116,10 +116,10 @@ class OfficeManagerApp(QMainWindow):
         # -------------------------
         self.create_monthly_view_page()
         self.create_companies_page()
-        self.create_employees_page()
+        # self.create_employees_page()
         self.create_email_page()
         self.create_chat_page()
-        self.create_saldeo_page()
+        # self.create_saldeo_page()
         self.create_raporty_page()
         self.create_settings_page()
 

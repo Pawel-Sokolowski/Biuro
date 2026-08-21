@@ -59,19 +59,21 @@ class ReportsPage(QWidget):
 
         self.year_combo.addItems([str(y) for y in range(2024, now.year + 1)])
 
-        # --- dynamiczne UI ---
-        self.month_box = QHBoxLayout()
+        # --- wybór miesięcy ---
+        self.month_box_container = QWidget()
+        self.month_box = QHBoxLayout(self.month_box_container)
         self.month_box.addWidget(QLabel("Od:"))
         self.month_box.addWidget(self.month_start)
         self.month_box.addWidget(QLabel("Do:"))
         self.month_box.addWidget(self.month_end)
+        layout.addWidget(self.month_box_container)
 
-        self.year_box = QHBoxLayout()
+        # --- wybór roku ---
+        self.year_box_container = QWidget()
+        self.year_box = QHBoxLayout(self.year_box_container)
         self.year_box.addWidget(QLabel("Rok:"))
         self.year_box.addWidget(self.year_combo)
-
-        layout.addLayout(self.month_box)
-        layout.addLayout(self.year_box)
+        layout.addWidget(self.year_box_container)
 
         self.mode_combo.currentTextChanged.connect(self._update_mode_ui)
         self._update_mode_ui(self.mode_combo.currentText())
@@ -93,8 +95,8 @@ class ReportsPage(QWidget):
         layout.addWidget(self.chart_bottom)
 
     def _update_mode_ui(self, mode):
-        self.month_box.setVisible(mode == "Raport miesięczny")
-        self.year_box.setVisible(mode == "Raport roczny")
+        self.month_box_container.setVisible(mode == "Raport miesięczny")
+        self.year_box_container.setVisible(mode == "Raport roczny")
 
     def _generate_report(self):
         selected = []

@@ -31,13 +31,14 @@ from app.email.email_sync import (
 
 class EmailPage(QWidget):
 
-    def __init__(self, parent, pracownik_id):
+    def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.current_attachments = {}
         self.current_attachment_meta = None
         self.thread_pool = QThreadPool.globalInstance()
         self._build_ui()
+
 
     def _build_ui(self):
         layout = QVBoxLayout(self)

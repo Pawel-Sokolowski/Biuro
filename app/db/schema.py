@@ -2,14 +2,12 @@ import sqlite3
 import bcrypt
 from app.companies.companies_model import ensure_columns
 from app.companies.constants import COMPANY_EXTRA_COLUMNS
-
 from app.config import DB_NAME
 
 
 def _column_exists(cursor, table: str, column: str) -> bool:
     cursor.execute(f"PRAGMA table_info({table})")
-    cols = [r[1] for r in cursor.fetchall()]
-    return column in cols
+    return column in {r[1] for r in cursor.fetchall()}
 
 
 def init_db():
@@ -17,9 +15,8 @@ def init_db():
     cursor = conn.cursor()
 
     # ============================================================
-    # TABELA FIRMY — pełna wersja z cennikiem, VAT, typem rozliczenia
+    # FIRMY
     # ============================================================
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS firmy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,43 +35,44 @@ def init_db():
         )
     """)
 
-    # dodatkowe kolumny z COMPANY_EXTRA_COLUMNS
     ensure_columns(cursor, "firmy", COMPANY_EXTRA_COLUMNS)
 
-    # MIGRACJE — jeśli baza jest stara
+    # MIGRACJE
     if not _column_exists(cursor, "firmy", "typ_rozliczenia"):
         cursor.execute("ALTER TABLE firmy ADD COLUMN typ_rozliczenia TEXT DEFAULT 'Ryczałt'")
-
     if not _column_exists(cursor, "firmy", "vat_czynny"):
         cursor.execute("ALTER TABLE firmy ADD COLUMN vat_czynny INTEGER DEFAULT 0")
-
     if not _column_exists(cursor, "firmy", "glowny_cennik_manualny"):
         cursor.execute("ALTER TABLE firmy ADD COLUMN glowny_cennik_manualny INTEGER DEFAULT 0")
-
     if not _column_exists(cursor, "firmy", "glowny_cennik"):
         cursor.execute("ALTER TABLE firmy ADD COLUMN glowny_cennik TEXT")
-
     if not _column_exists(cursor, "firmy", "limit_dokumentow"):
         cursor.execute("ALTER TABLE firmy ADD COLUMN limit_dokumentow INTEGER DEFAULT 0")
 
     # ============================================================
-    # STATUSY MIESIĘCZNE
+    # STATUSY MIESIĘCZNE — rozszerzone
     # ============================================================
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
             firma_id INTEGER,
             miesiac TEXT,
             etap TEXT DEFAULT 'Brak',
             ilosc_dok INTEGER DEFAULT 0,
+            sekundy_pracy INTEGER DEFAULT 0,
+            wartosc_uslug REAL DEFAULT 0,
             PRIMARY KEY(firma_id, miesiac)
         )
     """)
 
-    # ============================================================
-    # DOKUMENTY (pod eksport Saldeo)
-    # ============================================================
+    # MIGRACJE
+    if not _column_exists(cursor, "statusy_miesieczne", "sekundy_pracy"):
+        cursor.execute("ALTER TABLE statusy_miesieczne ADD COLUMN sekundy_pracy INTEGER DEFAULT 0")
+    if not _column_exists(cursor, "statusy_miesieczne", "wartosc_uslug"):
+        cursor.execute("ALTER TABLE statusy_miesieczne ADD COLUMN wartosc_uslug REAL DEFAULT 0")
 
+    # ============================================================
+    # DOKUMENTY
+    # ============================================================
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS dokumenty (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,7 +88,6 @@ def init_db():
     # ============================================================
     # CENNIKI GLOBALNE
     # ============================================================
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,9 +104,8 @@ def init_db():
     """)
 
     # ============================================================
-    # CENA ZA DOKUMENT PONAD LIMIT (Ryczałt/KPIR/KH + VAT)
+    # GLOBALNE CENY ZA DOKUMENT
     # ============================================================
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS globalne_ceny_za_dokument (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,15 +117,30 @@ def init_db():
     """)
 
     # ============================================================
-    # USŁUGI DODATKOWE
+    # USŁUGI DODATKOWE — globalny cennik
     # ============================================================
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS uslugi_dodatkowe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nazwa TEXT NOT NULL,
             cena_netto REAL NOT NULL,
             stawka_vat TEXT NOT NULL
+        )
+    """)
+
+    # ============================================================
+    # USŁUGI DODATKOWE — miesięczne
+    # ============================================================
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS uslugi_dodatkowe_firma (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firma_id INTEGER NOT NULL,
+            miesiac TEXT NOT NULL,
+            usluga_id INTEGER NOT NULL,
+            ilosc INTEGER NOT NULL,
+            cena_netto REAL NOT NULL,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id),
+            FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id)
         )
     """)
 

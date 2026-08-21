@@ -1,3 +1,4 @@
 biuro.db
 *.db
 app/config.py
+*.csv

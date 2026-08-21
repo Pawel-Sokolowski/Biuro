@@ -1,32 +1,18 @@
 # app/companies/companies_ui.py
+from app.ui.ui_imports import *
 
 from typing import Optional, Dict, Any, List, Tuple
 import datetime
 import sqlite3
 
-from PyQt6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QLabel, QVBoxLayout,
-    QMessageBox, QMainWindow, QWidget, QHBoxLayout, QListWidget, QStackedWidget,
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QSpinBox, QGroupBox, QScrollArea,
-    QListWidgetItem, QGridLayout, QAbstractItemView, QTabWidget
-)
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
-
 from app.companies.constants import COMPANY_STAGE_OPTIONS
-# Lokalny DAO i serwisy
-from app.db.dao_companies import get_conn
+from app.db.dao_companies import get_conn, wybierz_cennik, pobierz_cene_za_dokument
 from app.utils.crypto import login_user, register_user, get_employee_info, is_admin
 from app.utils.parsing import parse_int_value, normalize_identifier
 from app.companies.companies_model import apply_default_main_pricing, save_company
-from app.email.email_ui import EmailUIMixin
-from app.db.dao_companies import wybierz_cennik, pobierz_cene_za_dokument
-from app.config import DB_NAME
 
-# -------------------------
-# LoginWindow
-# -------------------------
+from app.ui.email_ui import EmailPage
+
 class LoginWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -759,10 +745,9 @@ class CompanyDialog(QDialog):
             conn.close()
 
 
-BaseClasses = (QMainWindow, EmailUIMixin) if EmailUIMixin else (QMainWindow,)
 
 #class office manager app
-class OfficeManagerApp(*BaseClasses):  # type: ignore
+class OfficeManagerApp(QMainWindow):
     def __init__(self, pracownik_id: Optional[int] = None):
         super().__init__()
         self.employees_table = None
@@ -1198,7 +1183,7 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
 
     def create_email_page(self):
         try:
-            from app.email.email_page import EmailPage
+            from app.ui.email_ui import EmailPage
             print("EMAILPAGE IMPORT OK")
         except Exception as e:
             print("EMAILPAGE IMPORT ERROR:", e)
@@ -1240,7 +1225,7 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
 
     def create_chat_page(self):
         try:
-            from app.chat.chat import ChatPage
+            from app.ui.chat_ui import ChatPage
         except Exception:
             ChatPage = None
 
@@ -1898,7 +1883,7 @@ class OfficeManagerApp(*BaseClasses):  # type: ignore
                 except Exception:
                     pass
             elif index == 3:
-                if EmailUIMixin and hasattr(self, "refresh_email_accounts"):
+                if EmailPage and hasattr(self, "refresh_email_accounts"):
                     try:
                         self.refresh_email_accounts()
                     except Exception:

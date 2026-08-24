@@ -65,7 +65,6 @@ class OfficeManagerApp(QMainWindow):
         self.sidebar.addItems([
             "Widok Miesięczny",
             "Klienci",
-            "Pracownicy",
             "Email",
             "Chat",
             "Eksport Saldeo",
@@ -116,7 +115,6 @@ class OfficeManagerApp(QMainWindow):
         # -------------------------
         self.create_monthly_view_page()
         self.create_companies_page()
-        # self.create_employees_page()
         self.create_email_page()
         self.create_chat_page()
         # self.create_saldeo_page()
@@ -146,12 +144,6 @@ class OfficeManagerApp(QMainWindow):
         self.pages.addWidget(page)
         if hasattr(page, "refresh_firms_table"):
             self.refresh_firms_table = page.refresh_firms_table
-
-    # def create_employees_page(self):
-    #     page = EmployeesPage(self.pracownik_id)
-    #     self.pages.addWidget(page)
-    #     if hasattr(page, "refresh_employees_table"):
-    #         self.refresh_employees_table = page.refresh_employees_table
 
     def create_email_page(self):
         page = EmailPage(self.pracownik_id)

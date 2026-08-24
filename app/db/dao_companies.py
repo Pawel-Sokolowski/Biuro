@@ -2,7 +2,6 @@
 from typing import Optional, Dict, Any, List
 from app.db.dao_conn import get_conn
 
-
 # ============================================================
 #  FIRMY
 # ============================================================
@@ -102,7 +101,7 @@ def save_company_shareholders(firma_id: int, shareholders: List[Dict[str, Any]])
 
 
 # ============================================================
-#  STATUSY MIESIĘCZNE
+#  STATUSY MIESIĘCZNE — zgodne z nowym schema.py
 # ============================================================
 
 def get_month_status(firma_id: int, miesiac: str):
@@ -121,23 +120,32 @@ def get_month_status(firma_id: int, miesiac: str):
 def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> None:
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
-        INSERT INTO statusy_miesieczne (firma_id, miesiac, etap, ilosc_dok, sekundy_pracy, wartosc_uslug)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO statusy_miesieczne (
+            firma_id, miesiac,
+            etap, ilosc_dok,
+            sekundy_ksiegowosc, sekundy_kadry,
+            wartosc_uslug
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(firma_id, miesiac)
         DO UPDATE SET
             etap = excluded.etap,
             ilosc_dok = excluded.ilosc_dok,
-            sekundy_pracy = excluded.sekundy_pracy,
+            sekundy_ksiegowosc = excluded.sekundy_ksiegowosc,
+            sekundy_kadry = excluded.sekundy_kadry,
             wartosc_uslug = excluded.wartosc_uslug
     """, (
         firma_id,
         miesiac,
         payload.get("etap", "Brak"),
         payload.get("ilosc_dok", 0),
-        payload.get("sekundy_pracy", 0),
+        payload.get("sekundy_ksiegowosc", 0),
+        payload.get("sekundy_kadry", 0),
         payload.get("wartosc_uslug", 0.0),
     ))
+
     conn.commit()
     conn.close()
 

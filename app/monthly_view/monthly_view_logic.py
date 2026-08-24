@@ -1,91 +1,67 @@
-# app/logic/monthly_view_logic.py
+# app/monthly_view/monthly_view_logic.py
 import datetime
-from typing import Optional, List, Dict, Any
-
-from PyQt6.QtCore import QTimer
-
+from typing import Optional, Dict, Any, List
 from app.db.dao_conn import get_conn
-from app.global_utils.settings import is_admin
+from app.db.dao_companies import get_month_status, save_month_status
+from app.global_utils.calculator import oblicz_miesieczny_koszt
 
 
 class MonthlyViewLogic:
     def __init__(self, pracownik_id: int):
         self.pracownik_id = pracownik_id
-
-        # aktualny miesiąc
         self.aktualny_miesiac = datetime.datetime.now().strftime("%Y-%m")
 
-        # stoper
-        self.aktywna_firma_stoper: Optional[int] = None
-        self.aktywna_firma_stoper_nazwa: str = ""
-        self.czas_start: Optional[datetime.datetime] = None
+        # STOPERY
+        self.aktywna_firma_stoper_ks = None
+        self.aktywna_firma_stoper_kadry = None
 
-        # autosave
-        self.status_autosave_timers: Dict[int, QTimer] = {}
-        self.status_widgets: Dict[int, tuple] = {}
+        self.czas_start_ks = None
+        self.czas_start_kadry = None
+
+        # UI helpers
+        self.status_widgets = {}
 
     # ============================================================
-    # EMPLOYEE FILTER
+    # MONTH SETTER
     # ============================================================
-    def get_employee_filter_list(self) -> List[tuple]:
+    def set_month(self, new_month: str):
+        self.aktualny_miesiac = new_month
+
+    # ============================================================
+    # EMPLOYEE FILTER LIST
+    # ============================================================
+    def get_employee_filter_list(self) -> List:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, imie, nazwisko
+            SELECT id, imie || ' ' || nazwisko AS label
             FROM pracownicy
             WHERE aktywny = 1
             ORDER BY nazwisko, imie
         """)
         rows = cur.fetchall()
         conn.close()
-
-        return [(r["id"], f"{r['imie']} {r['nazwisko']}") for r in rows]
-
-    # ============================================================
-    # MONTH
-    # ============================================================
-    def set_month(self, new_month: str):
-        self.aktualny_miesiac = new_month
+        return [(r["id"], r["label"]) for r in rows]
 
     # ============================================================
-    # MAIN TABLE DATA
+    # MONTHLY ROWS
     # ============================================================
     def get_monthly_rows(self, selected_month: str, selected_employee: Optional[int]) -> List[Dict[str, Any]]:
         conn = get_conn()
         cur = conn.cursor()
 
-        # ADMIN
-        if is_admin(self.pracownik_id):
-            if selected_employee:
-                cur.execute("""
-                    SELECT f.id, f.nazwa, COALESCE(sm.etap, 'Brak'),
-                           COALESCE(sm.ilosc_dok, 0), COALESCE(f.sekundy_pracy, 0)
-                    FROM firmy f
-                    JOIN pracownik_firma pf ON pf.firma_id = f.id
-                    LEFT JOIN statusy_miesieczne sm ON sm.firma_id = f.id AND sm.miesiac = ?
-                    WHERE pf.pracownik_id = ?
-                    GROUP BY f.id
-                    ORDER BY f.nazwa
-                """, (selected_month, selected_employee))
-            else:
-                cur.execute("""
-                    SELECT f.id, f.nazwa, COALESCE(sm.etap, 'Brak'),
-                           COALESCE(sm.ilosc_dok, 0), COALESCE(f.sekundy_pracy, 0)
-                    FROM firmy f
-                    LEFT JOIN statusy_miesieczne sm ON sm.firma_id = f.id AND sm.miesiac = ?
-                    ORDER BY f.nazwa
-                """, (selected_month,))
-        else:
-            cur.execute("""
-                SELECT f.id, f.nazwa, COALESCE(sm.etap, 'Brak'),
-                       COALESCE(sm.ilosc_dok, 0), COALESCE(f.sekundy_pracy, 0)
-                FROM firmy f
-                JOIN pracownik_firma pf ON pf.firma_id = f.id
-                LEFT JOIN statusy_miesieczne sm ON sm.firma_id = f.id AND sm.miesiac = ?
-                WHERE pf.pracownik_id = ?
-                GROUP BY f.id
-                ORDER BY f.nazwa
-            """, (selected_month, self.pracownik_id))
+        # ADMIN widzi wszystko
+        cur.execute("""
+            SELECT f.id, f.nazwa,
+                   COALESCE(sm.etap, 'Brak') AS etap,
+                   COALESCE(sm.ilosc_dok, 0) AS ilosc_dok,
+                   COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
+                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
+            FROM firmy f
+            LEFT JOIN statusy_miesieczne sm
+                ON sm.firma_id = f.id AND sm.miesiac = ?
+            ORDER BY f.nazwa
+        """, (selected_month,))
 
         rows = cur.fetchall()
         conn.close()
@@ -93,7 +69,7 @@ class MonthlyViewLogic:
         # notatki
         result = []
         for r in rows:
-            f_id, nazwa, etap, ilosc_dok, sekundy = r
+            f_id = r["id"]
 
             conn2 = get_conn()
             cur2 = conn2.cursor()
@@ -114,10 +90,11 @@ class MonthlyViewLogic:
 
             result.append({
                 "id": f_id,
-                "nazwa": nazwa,
-                "etap": etap,
-                "ilosc_dok": ilosc_dok,
-                "sekundy": sekundy,
+                "nazwa": r["nazwa"],
+                "etap": r["etap"],
+                "ilosc_dok": r["ilosc_dok"],
+                "sekundy_ksiegowosc": r["sekundy_ksiegowosc"],
+                "sekundy_kadry": r["sekundy_kadry"],
                 "note_snippet": snippet
             })
 
@@ -130,112 +107,144 @@ class MonthlyViewLogic:
         return str(datetime.timedelta(seconds=sekundy or 0))
 
     # ============================================================
-    # STOPER
-    # ============================================================
-    def toggle_stoper(self, firma_id: int, btn):
-        conn = get_conn()
-        cur = conn.cursor()
-
-        # start
-        if self.aktywna_firma_stoper is None:
-            self.aktywna_firma_stoper = firma_id
-            self.czas_start = datetime.datetime.now()
-
-            cur.execute("SELECT nazwa FROM firmy WHERE id=?", (firma_id,))
-            res = cur.fetchone()
-            self.aktywna_firma_stoper_nazwa = res["nazwa"] if res else str(firma_id)
-
-            btn.setText("⏸")
-            btn.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold;")
-
-            conn.close()
-            return
-
-        # stop
-        if self.aktywna_firma_stoper == firma_id:
-            delta = int((datetime.datetime.now() - self.czas_start).total_seconds())
-            cur.execute("UPDATE firmy SET sekundy_pracy = sekundy_pracy + ? WHERE id = ?", (delta, firma_id))
-            conn.commit()
-            conn.close()
-
-            self.aktywna_firma_stoper = None
-            self.aktywna_firma_stoper_nazwa = ""
-            self.czas_start = None
-
-            btn.setText("▶")
-            btn.setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold;")
-            return
-
-        # switch company
-        prev_id = self.aktywna_firma_stoper
-        delta_prev = int((datetime.datetime.now() - self.czas_start).total_seconds())
-        cur.execute("UPDATE firmy SET sekundy_pracy = sekundy_pracy + ? WHERE id = ?", (delta_prev, prev_id))
-
-        self.aktywna_firma_stoper = firma_id
-        self.czas_start = datetime.datetime.now()
-
-        cur.execute("SELECT nazwa FROM firmy WHERE id=?", (firma_id,))
-        res = cur.fetchone()
-        self.aktywna_firma_stoper_nazwa = res["nazwa"] if res else str(firma_id)
-
-        conn.commit()
-        conn.close()
-
-    # ============================================================
-    # NOTES
-    # ============================================================
-    def open_notes_window(self, firma_id: int):
-        from app.main_ui import NotesWindow
-        dlg = NotesWindow(firma_id)
-        dlg.exec()
-
-    # ============================================================
-    # EXTRA SERVICES
-    # ============================================================
-    def open_extra_service_window(self, firma_id: int):
-        from app.services.extra_service_ui import ExtraServiceWindow
-        dlg = ExtraServiceWindow(firma_id, self.aktualny_miesiac)
-        dlg.exec()
-
-    # ============================================================
-    # COMPANY EDIT
-    # ============================================================
-    def open_company_edit_window(self, firma_id: int):
-        from app.companies.companies_ui import CompanyDialog
-        dlg = CompanyDialog(firma_id)
-        dlg.exec()
-
-    # ============================================================
-    # AUTOSAVE
+    # AUTO-SAVE STATUS
     # ============================================================
     def schedule_status_autosave(self, firma_id: int):
-        timer = self.status_autosave_timers.get(firma_id)
-        if timer is None:
-            timer = QTimer()
-            timer.setSingleShot(True)
-            timer.timeout.connect(lambda fid=firma_id: self.save_status_row(fid))
-            self.status_autosave_timers[firma_id] = timer
+        docs_widget, etap_widget = self.status_widgets[firma_id]
 
-        timer.start(700)
+        payload = {
+            "etap": etap_widget.currentText(),
+            "ilosc_dok": int(docs_widget.text()) if docs_widget.text().isdigit() else 0,
+        }
 
-    def save_status_row(self, firma_id: int):
-        txt_widget, cb_widget = self.status_widgets.get(firma_id, (None, None))
+        save_month_status(firma_id, self.aktualny_miesiac, payload)
 
-        ilosc_dok = txt_widget.text() if txt_widget else "0"
-        etap = cb_widget.currentText() if cb_widget else "Brak"
+    # ============================================================
+    # ENSURE MONTH STATUS EXISTS
+    # ============================================================
+    def _ensure_month_status(self, firma_id: int):
+        row = get_month_status(firma_id, self.aktualny_miesiac)
+        if row is None:
+            save_month_status(firma_id, self.aktualny_miesiac, {
+                "etap": "Brak",
+                "ilosc_dok": 0,
+                "sekundy_ksiegowosc": 0,
+                "sekundy_kadry": 0,
+                "wartosc_uslug": 0.0
+            })
 
-        try:
-            ilosc_dok = int(ilosc_dok)
-        except ValueError:
-            return
+    # ============================================================
+    # STOPER — unified handler
+    # ============================================================
+    def toggle_stoper(self, firma_id: int, typ: str):
+        now = datetime.datetime.now()
+        self._ensure_month_status(firma_id)
 
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO statusy_miesieczne (firma_id, miesiac, etap, ilosc_dok)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(firma_id, miesiac)
-            DO UPDATE SET etap = excluded.etap, ilosc_dok = excluded.ilosc_dok
-        """, (firma_id, self.aktualny_miesiac, etap, ilosc_dok))
-        conn.commit()
-        conn.close()
+
+        # ============================
+        # KSIĘGOWOŚĆ
+        # ============================
+        if typ == "ksiegowosc":
+
+            # start
+            if self.aktywna_firma_stoper_ks is None:
+                self.aktywna_firma_stoper_ks = firma_id
+                self.czas_start_ks = now
+                conn.close()
+                return
+
+            # stop
+            if self.aktywna_firma_stoper_ks == firma_id:
+                delta = int((now - self.czas_start_ks).total_seconds())
+
+                cur.execute("""
+                    UPDATE statusy_miesieczne
+                    SET sekundy_ksiegowosc = sekundy_ksiegowosc + ?
+                    WHERE firma_id = ? AND miesiac = ?
+                """, (delta, firma_id, self.aktualny_miesiac))
+
+                conn.commit()
+                conn.close()
+
+                self.aktywna_firma_stoper_ks = None
+                self.czas_start_ks = None
+                return
+
+            # switch
+            prev = self.aktywna_firma_stoper_ks
+            delta_prev = int((now - self.czas_start_ks).total_seconds())
+
+            cur.execute("""
+                UPDATE statusy_miesieczne
+                SET sekundy_ksiegowosc = sekundy_ksiegowosc + ?
+                WHERE firma_id = ? AND miesiac = ?
+            """, (delta_prev, prev, self.aktualny_miesiac))
+
+            self.aktywna_firma_stoper_ks = firma_id
+            self.czas_start_ks = now
+
+            conn.commit()
+            conn.close()
+            return
+
+        # ============================
+        # KADRY
+        # ============================
+        if typ == "kadry":
+
+            # start
+            if self.aktywna_firma_stoper_kadry is None:
+                self.aktywna_firma_stoper_kadry = firma_id
+                self.czas_start_kadry = now
+                conn.close()
+                return
+
+            # stop
+            if self.aktywna_firma_stoper_kadry == firma_id:
+                delta = int((now - self.czas_start_kadry).total_seconds())
+
+                cur.execute("""
+                    UPDATE statusy_miesieczne
+                    SET sekundy_kadry = sekundy_kadry + ?
+                    WHERE firma_id = ? AND miesiac = ?
+                """, (delta, firma_id, self.aktualny_miesiac))
+
+                conn.commit()
+                conn.close()
+
+                self.aktywna_firma_stoper_kadry = None
+                self.czas_start_kadry = None
+                return
+
+            # switch
+            prev = self.aktywna_firma_stoper_kadry
+            delta_prev = int((now - self.czas_start_kadry).total_seconds())
+
+            cur.execute("""
+                UPDATE statusy_miesieczne
+                SET sekundy_kadry = sekundy_kadry + ?
+                WHERE firma_id = ? AND miesiac = ?
+            """, (delta_prev, prev, self.aktualny_miesiac))
+
+            self.aktywna_firma_stoper_kadry = firma_id
+            self.czas_start_kadry = now
+
+            conn.commit()
+            conn.close()
+            return
+
+    def open_notes_window(self, firma_id: int):
+        from app.monthly_view.monthly_view_ui import InlineNotesWindow
+        InlineNotesWindow(firma_id).exec()
+
+    def open_extra_service_window(self, firma_id: int):
+        from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
+        InlineExtraServiceWindow(firma_id, self.aktualny_miesiac).exec()
+
+    def open_company_edit_window(self, firma_id: int):
+        from app.companies.companies_ui import CompanyDialog
+        dlg = CompanyDialog(self.pracownik_id, company_data=self._get_company_data(firma_id))
+        if dlg.exec():
+            self._save_company_data(firma_id, dlg.get_payload())

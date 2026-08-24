@@ -2,7 +2,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QSpinBox, QComboBox, QTableWidget,
     QHeaderView, QPushButton, QTextEdit, QTabWidget, QSplitter,
-    QMessageBox, QInputDialog, QTableWidgetItem
+    QMessageBox, QInputDialog, QTableWidgetItem, QTreeWidget,
+    QTreeWidgetItem, QMenu, QDialog
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QThreadPool
@@ -10,16 +11,12 @@ from PyQt6.QtCore import Qt, QThreadPool
 import imaplib
 
 from app.db.dao_companies import get_conn
-from app.utils.crypto import encrypt_password, decrypt_password
+from app.utils.crypto import decrypt_password
 
 from app.email.email_actions import SyncRunnable
 from app.email.email_storage import (
-    refresh_email_accounts,
     refresh_email_filters,
     add_email_filter,
-    delete_email_filter,
-    add_email_account,
-    delete_email_account,
 )
 from app.email.email_sync import (
     sync_emails,
@@ -28,6 +25,7 @@ from app.email.email_sync import (
     download_attachment,
     move_email_to_folder
 )
+
 
 class EmailPage(QWidget):
 
@@ -39,48 +37,81 @@ class EmailPage(QWidget):
         self.thread_pool = QThreadPool.globalInstance()
         self._build_ui()
 
+    # ============================================================
+    #  SYNC API DLA SyncRunnable
+    # ============================================================
+
+    def sync_all_emails(self) -> bool:
+        # pełna synchronizacja dla pracownika
+        return sync_emails(self.pracownik_id)
+
+    # ============================================================
+    #  BUDOWA UI
+    # ============================================================
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        title = QLabel("Zarządzanie kontami Email")
+        title = QLabel("Email")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         layout.addWidget(title)
 
         self.email_tabs = QTabWidget()
         self.email_tabs.addTab(self._create_reader_tab(), "Przegląd Emaili")
-        self.email_tabs.addTab(self._create_accounts_tab(), "Konta Email")
         self.email_tabs.addTab(self._create_filters_tab(), "Filtry")
         layout.addWidget(self.email_tabs)
 
+    # ============================================================
+    #  THUNDERBIRD‑STYLE READER
+    # ============================================================
+
     def _create_reader_tab(self):
         tab = QWidget()
-        layout = QVBoxLayout(tab)
+        layout = QHBoxLayout(tab)
+
+        # LEWA STRONA — FOLDERY
+        self.folder_tree = QTreeWidget()
+        self.folder_tree.setHeaderHidden(True)
+        self.folder_tree.itemClicked.connect(self._on_folder_selected)
+        layout.addWidget(self.folder_tree, 1)
+
+        # PRAWA STRONA — WIADOMOŚCI
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+
         toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("Folder:"))
-        self.email_folder_combo = QComboBox()
-        toolbar.addWidget(self.email_folder_combo)
         toolbar.addWidget(QLabel("Konto:"))
         self.email_account_combo = QComboBox()
-        self.email_account_combo.currentIndexChanged.connect(self._load_imap_folders)
+        self.email_account_combo.currentIndexChanged.connect(self._load_folders)
         toolbar.addWidget(self.email_account_combo)
-        btn_refresh = QPushButton("Odśwież")
+
+        btn_refresh = QPushButton("🔄 Odśwież")
         btn_refresh.clicked.connect(self.refresh_email_list)
         toolbar.addWidget(btn_refresh)
-        layout.addLayout(toolbar)
+
+        btn_sync = QPushButton("Synchronizuj")
+        btn_sync.clicked.connect(self._trigger_email_sync)
+        toolbar.addWidget(btn_sync)
+
+        right_layout.addLayout(toolbar)
 
         self.table_email_list = QTableWidget()
-        self.table_email_list.setColumnCount(5)
-        self.table_email_list.setHorizontalHeaderLabels(["UID", "Od", "Temat", "Data", "Przeczytana"])
+        self.table_email_list.setColumnCount(6)
+        self.table_email_list.setHorizontalHeaderLabels(
+            ["UID", "Od", "Temat", "Data", "Przeczytana", "Pracownik"]
+        )
         self.table_email_list.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_email_list.hideColumn(0)
         self.table_email_list.itemClicked.connect(self.on_email_selected)
-        layout.addWidget(self.table_email_list)
+        self.table_email_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_email_list.customContextMenuRequested.connect(self._show_context_menu)
+        right_layout.addWidget(self.table_email_list)
 
-        layout.addWidget(QLabel("Treść wiadomości:"))
+        right_layout.addWidget(QLabel("Treść wiadomości:"))
         self.email_content = QTextEdit()
         self.email_content.setReadOnly(True)
-        layout.addWidget(self.email_content)
+        right_layout.addWidget(self.email_content)
+
         actions = QHBoxLayout()
         btn_move = QPushButton("Przenieś")
         btn_move.clicked.connect(self.move_selected_email)
@@ -93,71 +124,23 @@ class EmailPage(QWidget):
         btn_download = QPushButton("Pobierz załącznik")
         btn_download.clicked.connect(self._prompt_attachment_download)
         actions.addWidget(btn_download)
-        layout.addLayout(actions)
+
+        right_layout.addLayout(actions)
+
+        layout.addWidget(right, 3)
+
+        self._refresh_email_account_combos()
         return tab
 
-    def _create_accounts_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        # LEWA STRONA — lista kont
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("Moje konta email:"))
-        self.table_email_accounts = QTableWidget()
-        self.table_email_accounts.setColumnCount(5)
-        self.table_email_accounts.setHorizontalHeaderLabels(["ID", "Email", "IMAP", "Aktywne", "Akcje"])
-        self.table_email_accounts.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table_email_accounts.hideColumn(0)
-        left_layout.addWidget(self.table_email_accounts)
-        # PRAWA STRONA — dodawanie konta
-        right = QWidget()
-        right.setFixedWidth(380)
-        right_layout = QVBoxLayout(right)
-        right_layout.addWidget(QLabel("Dodaj nowe konto"))
-
-        form = QFormLayout()
-        self.email_input = QLineEdit()
-        self.imap_server = QLineEdit()
-        self.imap_port = QSpinBox()
-        self.imap_port.setMaximum(9999)
-        self.imap_port.setValue(993)
-        self.smtp_server = QLineEdit()
-        self.smtp_port = QSpinBox()
-        self.smtp_port.setMaximum(9999)
-        self.smtp_port.setValue(465)
-        self.email_password = QLineEdit()
-        self.email_password.setEchoMode(QLineEdit.EchoMode.Password)
-
-        form.addRow("Email:", self.email_input)
-        form.addRow("IMAP:", self.imap_server)
-        form.addRow("Port IMAP:", self.imap_port)
-        form.addRow("SMTP:", self.smtp_server)
-        form.addRow("Port SMTP:", self.smtp_port)
-        form.addRow("Hasło:", self.email_password)
-        right_layout.addLayout(form)
-
-        btn_add = QPushButton("Dodaj konto")
-        btn_add.clicked.connect(lambda: add_email_account(self, encrypt_password))
-        btn_add.clicked.connect(self._refresh_email_account_combos)
-        btn_add.clicked.connect(self._trigger_email_sync)
-        right_layout.addWidget(btn_add)
-
-        btn_sync = QPushButton("🔄 Synchronizuj")
-        btn_sync.clicked.connect(self._trigger_email_sync)
-        right_layout.addWidget(btn_sync)
-        right_layout.addStretch()
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        layout.addWidget(splitter)
-        refresh_email_accounts(self)
-        return tab
+    # ============================================================
+    #  FILTRY
+    # ============================================================
 
     def _create_filters_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        # LEWA — lista filtrów
+
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(QLabel("Aktywne filtry:"))
@@ -167,7 +150,7 @@ class EmailPage(QWidget):
         self.table_email_filters.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_email_filters.hideColumn(0)
         left_layout.addWidget(self.table_email_filters)
-        # PRAWA — dodawanie filtra
+
         right = QWidget()
         right.setFixedWidth(350)
         right_layout = QVBoxLayout(right)
@@ -200,6 +183,11 @@ class EmailPage(QWidget):
         self._refresh_email_account_combos()
         refresh_email_filters(self)
         return tab
+
+    # ============================================================
+    #  KONTA I FOLDERY
+    # ============================================================
+
     def _refresh_email_account_combos(self):
         conn = get_conn()
         cur = conn.cursor()
@@ -213,9 +201,10 @@ class EmailPage(QWidget):
         for kid, email_addr in accounts:
             self.email_account_combo.addItem(email_addr, kid)
             self.filter_konto_combo.addItem(email_addr, kid)
-        self._load_imap_folders()
 
-    def _load_imap_folders(self):
+        self._load_folders()
+
+    def _load_folders(self):
         konto_id = self.email_account_combo.currentData()
         if not konto_id:
             return
@@ -241,18 +230,29 @@ class EmailPage(QWidget):
             if status != "OK":
                 return
 
-            self.email_folder_combo.clear()
+            self.folder_tree.clear()
             for f in folders:
                 parts = f.decode().split(' "/" ')
                 if len(parts) == 2:
-                    self.email_folder_combo.addItem(parts[1].strip('"'))
+                    folder_name = parts[1].strip('"')
+                    item = QTreeWidgetItem([folder_name])
+                    self.folder_tree.addTopLevelItem(item)
 
         except Exception:
             pass
 
-    def refresh_email_list(self):
+    def _on_folder_selected(self, item):
+        folder = item.text(0)
+        self.refresh_email_list(folder_override=folder)
+
+    # ============================================================
+    #  LISTA WIADOMOŚCI
+    # ============================================================
+
+    def refresh_email_list(self, folder_override=None):
         konto_id = self.email_account_combo.currentData()
-        folder = self.email_folder_combo.currentText()
+        folder_item = self.folder_tree.currentItem()
+        folder = folder_override or (folder_item.text(0) if folder_item else "")
 
         if not konto_id or not folder:
             self.table_email_list.setRowCount(0)
@@ -261,34 +261,46 @@ class EmailPage(QWidget):
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT uid, od, temat, data, przeczytana
-            FROM wiadomosci
-            WHERE konto_id = ? AND folder = ?
-            ORDER BY data DESC
+            SELECT w.uid, w.od, w.temat, w.data, w.przeczytana,
+                   p.imie || ' ' || p.nazwisko AS pracownik
+            FROM wiadomosci w
+            LEFT JOIN pracownicy p ON w.pracownik_id = p.id
+            WHERE w.konto_id = ? AND w.folder = ?
+            ORDER BY w.data DESC
         """, (konto_id, folder))
         rows = cur.fetchall()
         conn.close()
 
         self.table_email_list.setRowCount(0)
-        for r, (uid, od, temat, data, read) in enumerate(rows):
+        for r, row in enumerate(rows):
             self.table_email_list.insertRow(r)
-            self.table_email_list.setItem(r, 0, QTableWidgetItem(str(uid)))
-            self.table_email_list.setItem(r, 1, QTableWidgetItem(od or ""))
-            self.table_email_list.setItem(r, 2, QTableWidgetItem(temat or ""))
-            self.table_email_list.setItem(r, 3, QTableWidgetItem(data or ""))
-            self.table_email_list.setItem(r, 4, QTableWidgetItem("Tak" if read else "Nie"))
+            self.table_email_list.setItem(r, 0, QTableWidgetItem(str(row["uid"])))
+            self.table_email_list.setItem(r, 1, QTableWidgetItem(row["od"] or ""))
+            self.table_email_list.setItem(r, 2, QTableWidgetItem(row["temat"] or ""))
+            self.table_email_list.setItem(r, 3, QTableWidgetItem(row["data"] or ""))
+            self.table_email_list.setItem(r, 4, QTableWidgetItem("Tak" if row["przeczytana"] else "Nie"))
+            self.table_email_list.setItem(r, 5, QTableWidgetItem(row["pracownik"] or ""))
+
+    # ============================================================
+    #  WYBÓR WIADOMOŚCI
+    # ============================================================
 
     def on_email_selected(self, item):
         row = item.row()
         uid = self.table_email_list.item(row, 0).text()
         konto_id = self.email_account_combo.currentData()
-        folder = self.email_folder_combo.currentText()
+
+        folder_item = self.folder_tree.currentItem()
+        if not folder_item:
+            return
+        folder = folder_item.text(0)
 
         msg = load_email_message(konto_id, folder, uid)
         if not msg:
             self.email_content.setPlainText("Nie udało się pobrać wiadomości")
             return
 
+        # tu możesz wstawić realny parsing treści
         self.email_content.setPlainText("Treść wiadomości pobrana z IMAP")
 
         attachments = list_attachments(msg)
@@ -298,6 +310,126 @@ class EmailPage(QWidget):
             "folder": folder,
             "email_uid": uid
         }
+
+    # ============================================================
+    #  MENU KONTEKSTOWE (PPM)
+    # ============================================================
+
+    def _show_context_menu(self, pos):
+        menu = QMenu(self)
+
+        act_reply = menu.addAction("Odpowiedz")
+        act_forward = menu.addAction("Prześlij dalej")
+        act_spam = menu.addAction("Oznacz jako niechciane")
+        act_delete = menu.addAction("Usuń")
+        act_move = menu.addAction("Przenieś do folderu…")
+        act_download = menu.addAction("Pobierz załączniki")
+        act_source = menu.addAction("Pokaż źródło wiadomości")
+        act_mark_read = menu.addAction("Oznacz jako przeczytane")
+        act_mark_unread = menu.addAction("Oznacz jako nieprzeczytane")
+
+        action = menu.exec(self.table_email_list.mapToGlobal(pos))
+        if not action:
+            return
+
+        row = self.table_email_list.currentRow()
+        if row < 0:
+            return
+
+        uid = self.table_email_list.item(row, 0).text()
+        konto_id = self.email_account_combo.currentData()
+        folder_item = self.folder_tree.currentItem()
+        if not folder_item:
+            return
+        folder = folder_item.text(0)
+
+        if action == act_reply:
+            self._reply_email(uid, konto_id, folder)
+        elif action == act_forward:
+            self._forward_email(uid, konto_id, folder)
+        elif action == act_spam:
+            self._mark_as_spam(uid, konto_id, folder)
+        elif action == act_delete:
+            self.delete_selected_email()
+        elif action == act_move:
+            self._move_to_folder(uid, konto_id)
+        elif action == act_download:
+            self._prompt_attachment_download()
+        elif action == act_source:
+            self._show_source(uid, konto_id, folder)
+        elif action == act_mark_read:
+            self._mark_read(uid, konto_id, folder)
+        elif action == act_mark_unread:
+            self._mark_unread(uid, konto_id, folder)
+
+    # ============================================================
+    #  AKCJE NA WIADOMOŚCIACH
+    # ============================================================
+
+    def _reply_email(self, uid, konto_id, folder):
+        QMessageBox.information(self, "Odpowiedz", "Obsługa odpowiedzi do zaimplementowania.")
+
+    def _forward_email(self, uid, konto_id, folder):
+        QMessageBox.information(self, "Prześlij dalej", "Obsługa przesyłania dalej do zaimplementowania.")
+
+    def _mark_as_spam(self, uid, konto_id, folder):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE wiadomosci SET folder = 'Spam' WHERE uid = ? AND konto_id = ?", (uid, konto_id))
+        conn.commit()
+        conn.close()
+        self.refresh_email_list(folder_override="Spam")
+
+    def _move_to_folder(self, uid, konto_id):
+        folders = []
+        root = self.folder_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            folders.append(root.child(i).text(0))
+
+        folder, ok = QInputDialog.getItem(self, "Przenieś", "Wybierz folder:", folders, 0, False)
+        if not ok:
+            return
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE wiadomosci SET folder = ? WHERE uid = ? AND konto_id = ?", (folder, uid, konto_id))
+        conn.commit()
+        conn.close()
+
+        self.refresh_email_list(folder_override=folder)
+
+    def _show_source(self, uid, konto_id, folder):
+        msg = load_email_message(konto_id, folder, uid)
+        if not msg:
+            QMessageBox.warning(self, "Błąd", "Nie udało się pobrać źródła.")
+            return
+
+        raw = msg.as_string()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Źródło wiadomości")
+        lay = QVBoxLayout(dlg)
+        txt = QTextEdit()
+        txt.setPlainText(raw)
+        lay.addWidget(txt)
+        dlg.resize(800, 600)
+        dlg.exec()
+
+    def _mark_read(self, uid, konto_id, folder):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE wiadomosci SET przeczytana = 1 WHERE uid = ? AND konto_id = ?", (uid, konto_id))
+        conn.commit()
+        conn.close()
+        self.refresh_email_list(folder_override=folder)
+
+    def _mark_unread(self, uid, konto_id, folder):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE wiadomosci SET przeczytana = 0 WHERE uid = ? AND konto_id = ?", (uid, konto_id))
+        conn.commit()
+        conn.close()
+        self.refresh_email_list(folder_override=folder)
+
     def move_selected_email(self):
         row = self.table_email_list.currentRow()
         if row < 0:
@@ -305,7 +437,10 @@ class EmailPage(QWidget):
 
         uid = self.table_email_list.item(row, 0).text()
         konto_id = self.email_account_combo.currentData()
-        folder = self.email_folder_combo.currentText()
+        folder_item = self.folder_tree.currentItem()
+        if not folder_item:
+            return
+        folder = folder_item.text(0)
 
         conn = get_conn()
         cur = conn.cursor()
@@ -326,7 +461,8 @@ class EmailPage(QWidget):
         imap.logout()
 
         if ok:
-            self.refresh_email_list()
+            self.refresh_email_list(folder_override=folder)
+
     def delete_selected_email(self):
         row = self.table_email_list.currentRow()
         if row < 0:
@@ -334,6 +470,10 @@ class EmailPage(QWidget):
 
         uid = self.table_email_list.item(row, 0).text()
         konto_id = self.email_account_combo.currentData()
+        folder_item = self.folder_tree.currentItem()
+        if not folder_item:
+            return
+        folder = folder_item.text(0)
 
         conn = get_conn()
         cur = conn.cursor()
@@ -354,7 +494,12 @@ class EmailPage(QWidget):
         imap.logout()
 
         if ok:
-            self.refresh_email_list()
+            self.refresh_email_list(folder_override=folder)
+
+    # ============================================================
+    #  ZAŁĄCZNIKI
+    # ============================================================
+
     def _prompt_attachment_download(self):
         if not self.current_attachments:
             return
@@ -377,12 +522,17 @@ class EmailPage(QWidget):
 
         with open(save_path, "wb") as f:
             f.write(raw)
+
+    # ============================================================
+    #  SYNC W TLE
+    # ============================================================
+
     def _trigger_email_sync(self):
         runnable = SyncRunnable(self)
 
         runnable.signals.finished.connect(
             lambda ok: (
-                self._load_imap_folders(),
+                self._load_folders(),
                 self.refresh_email_list()
             )
         )
@@ -391,9 +541,3 @@ class EmailPage(QWidget):
         )
 
         self.thread_pool.start(runnable)
-
-
-
-
-
-

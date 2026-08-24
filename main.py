@@ -14,13 +14,10 @@ def excepthook(type, value, tb):
 sys.excepthook = excepthook
 
 if __name__ == "__main__":
+
+    init_db()
     app = QApplication(sys.argv)
 
-    # KROK 1: Wymuszenie natychmiastowej inicjalizacji bazy danych
-    # zanim okno logowania w ogóle zapyta o użytkowników!
-    init_db()
-
-    # Pokaż okno logowania
     login_window = LoginWindow()
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id

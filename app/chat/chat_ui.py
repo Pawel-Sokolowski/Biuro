@@ -1,20 +1,16 @@
-# app/chat_ui/chat_ui.py
+# app/chat/chat_ui.py
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QTextEdit, QLineEdit, QMessageBox, QSplitter, QDialog,
-    QFormLayout, QInputDialog
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 import sqlite3
-from app.chat.chat_model import (
-    get_conversations, get_messages, add_message, edit_message
-)
-from app.chat.chat_notifications import ChatNotifier
 from app.config import DB_NAME
 
+
 class ChatPage(QWidget):
-    def __init__(self, pracownik_id):
+    def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
         self.current_konwersacja = None
@@ -31,15 +27,9 @@ class ChatPage(QWidget):
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(8)
-
-        # LEWY PANEL
+        # LEFT: conversations
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
-
         left_layout.addWidget(QLabel("Konwersacje:"))
 
         self.chat_conversations = QListWidget()
@@ -50,12 +40,9 @@ class ChatPage(QWidget):
         btn_new.clicked.connect(self.create_new_conversation)
         left_layout.addWidget(btn_new)
 
-        splitter.addWidget(left)
-
+        # RIGHT: messages
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
 
         self.chat_messages = QTextEdit()
         self.chat_messages.setReadOnly(True)
@@ -75,23 +62,36 @@ class ChatPage(QWidget):
 
         right_layout.addLayout(bottom)
 
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([400, 800])
+        # Layout
+        container = QHBoxLayout()
+        container.addWidget(left, 1)
+        container.addWidget(right, 3)
+        layout.addLayout(container)
 
-        left.setMinimumWidth(350)
-        right.setMinimumWidth(600)
-
-        layout.addWidget(splitter)
-
+    # ============================================================
+    # LOAD CONVERSATIONS
+    # ============================================================
     def refresh_chat_conversations(self):
         self.chat_conversations.clear()
-        for konwersacja_id, nazwa in get_conversations(self.pracownik_id):
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, nazwa
+            FROM konwersacje
+            ORDER BY data_utworzenia DESC
+        """)
+
+        for konwersacja_id, nazwa in cur.fetchall():
             item = QListWidgetItem(nazwa)
             item.setData(Qt.ItemDataRole.UserRole, konwersacja_id)
             self.chat_conversations.addItem(item)
 
+        conn.close()
+
+    # ============================================================
+    # SELECT CONVERSATION
+    # ============================================================
     def on_chat_selected(self):
         item = self.chat_conversations.currentItem()
         if not item:
@@ -101,17 +101,31 @@ class ChatPage(QWidget):
         self.offset = 0
         self.load_messages()
 
-        self.notifier = ChatNotifier(self.current_konwersacja)
-        self.notifier.new_message.connect(self.load_messages)
-        self.notifier.start()
-
+    # ============================================================
+    # LOAD MESSAGES
+    # ============================================================
     def load_messages(self):
-        rows = get_messages(self.current_konwersacja, limit=100, offset=self.offset)
-        html = ""
+        if not self.current_konwersacja:
+            return
 
-        for msg_id, imie, nazwisko, tresc, data, edytowano in rows:
-            edit_tag = " <i>(edytowano)</i>" if edytowano else ""
-            html += f"<b>{imie} {nazwisko}</b> ({data}){edit_tag}:<br>{tresc}<br><br>"
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT w.id, p.imie, p.nazwisko, w.tresc, w.data_wysylki
+            FROM wiadomosci_chat w
+            JOIN pracownicy p ON p.id = w.pracownik_id
+            WHERE w.konwersacja_id = ?
+            ORDER BY w.data_wysylki DESC
+            LIMIT 100 OFFSET ?
+        """, (self.current_konwersacja, self.offset))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        html = ""
+        for msg_id, imie, nazwisko, tresc, data in rows:
+            html += f"<b>{imie} {nazwisko}</b> ({data}):<br>{tresc}<br><br>"
 
         self.chat_messages.setHtml(html)
 
@@ -119,68 +133,47 @@ class ChatPage(QWidget):
         self.offset += 100
         self.load_messages()
 
+    # ============================================================
+    # SEND MESSAGE
+    # ============================================================
     def send_message(self):
         text = self.chat_input.text().strip()
         if not text:
             return
 
-        add_message(self.current_konwersacja, self.pracownik_id, text)
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO wiadomosci_chat (konwersacja_id, pracownik_id, tresc)
+            VALUES (?, ?, ?)
+        """, (self.current_konwersacja, self.pracownik_id, text))
+
+        conn.commit()
+        conn.close()
+
         self.chat_input.clear()
         self.load_messages()
 
-    def edit_message_dialog(self, message_id):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Edytuj wiadomość")
-
-        layout = QVBoxLayout(dialog)
-        field = QLineEdit()
-        layout.addWidget(field)
-
-        btn = QPushButton("Zapisz")
-        layout.addWidget(btn)
-
-        def save():
-            new_text = field.text().strip()
-            if new_text:
-                edit_message(message_id, new_text)
-                self.load_messages()
-                dialog.accept()
-
-        btn.clicked.connect(save)
-        dialog.exec()
-
+    # ============================================================
+    # CREATE NEW CONVERSATION
+    # ============================================================
     def create_new_conversation(self):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, QMessageBox
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Nowa konwersacja")
-        dialog.setFixedSize(400, 250)
+        dialog.setFixedSize(400, 200)
 
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
 
         nazwa_field = QLineEdit()
-        nazwa_field.setPlaceholderText("np: Projekt X - Team")
         form.addRow("Nazwa:", nazwa_field)
-
-        uczestnicy_list = QListWidget()
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, imie, nazwisko FROM pracownicy WHERE aktywny = 1 ORDER BY imie")
-
-        for emp_id, imie, nazwisko in cursor.fetchall():
-            item = QListWidgetItem(f"{imie} {nazwisko}")
-            item.setData(Qt.ItemDataRole.UserRole, emp_id)
-            uczestnicy_list.addItem(item)
-
-        conn.close()
-        form.addRow("Uczestnicy:", uczestnicy_list)
         layout.addLayout(form)
 
-        btn_layout = QHBoxLayout()
         btn_create = QPushButton("Utwórz")
-        btn_cancel = QPushButton("Anuluj")
-        btn_layout.addWidget(btn_create)
-        btn_layout.addWidget(btn_cancel)
-        layout.addLayout(btn_layout)
+        layout.addWidget(btn_create)
 
         def on_create():
             nazwa = nazwa_field.text().strip()
@@ -188,43 +181,19 @@ class ChatPage(QWidget):
                 QMessageBox.warning(dialog, "Błąd", "Wpisz nazwę konwersacji")
                 return
 
-            if uczestnicy_list.selectedItems() == []:
-                QMessageBox.warning(dialog, "Błąd", "Wybierz co najmniej jednego uczestnika")
-                return
+            conn = sqlite3.connect(DB_NAME)
+            cur = conn.cursor()
 
-            conn2 = sqlite3.connect(DB_NAME)
-            cursor2 = conn2.cursor()
+            cur.execute("""
+                INSERT INTO konwersacje (nazwa, pracownik_creator_id)
+                VALUES (?, ?)
+            """, (nazwa, self.pracownik_id))
 
-            try:
-                cursor2.execute("""
-                       INSERT INTO konwersacje (nazwa, pracownik_creator_id)
-                       VALUES (?, ?)
-                   """, (nazwa, self.pracownik_id))
-                konwersacja_id = cursor2.lastrowid
+            conn.commit()
+            conn.close()
 
-                cursor2.execute("""
-                       INSERT INTO uczestnicy_chat (konwersacja_id, pracownik_id)
-                       VALUES (?, ?)
-                   """, (konwersacja_id, self.pracownik_id))
-
-                for item in uczestnicy_list.selectedItems():
-                    emp_id = item.data(Qt.ItemDataRole.UserRole)
-                    if emp_id != self.pracownik_id:
-                        cursor2.execute("""
-                               INSERT OR IGNORE INTO uczestnicy_chat (konwersacja_id, pracownik_id)
-                               VALUES (?, ?)
-                           """, (konwersacja_id, emp_id))
-
-                conn2.commit()
-                QMessageBox.information(dialog, "Sukces", "Konwersacja została utworzona")
-                dialog.accept()
-                self.refresh_chat_conversations()
-            except Exception as e:
-                QMessageBox.critical(dialog, "Błąd", f"Błąd: {str(e)}")
-            finally:
-                conn2.close()
+            dialog.accept()
+            self.refresh_chat_conversations()
 
         btn_create.clicked.connect(on_create)
-        btn_cancel.clicked.connect(dialog.reject)
-
         dialog.exec()

@@ -1,4 +1,4 @@
-# app/db/init_db.py
+# app/db/schema.py
 import sqlite3
 import bcrypt
 from app.config import DB_NAME
@@ -34,16 +34,21 @@ def init_db():
     """)
 
     # ============================================================
-    # STATUSY MIESIĘCZNE
+    # STATUSY MIESIĘCZNE — dwa stopery
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
             firma_id INTEGER NOT NULL,
             miesiac TEXT NOT NULL,
+
             etap TEXT DEFAULT 'Brak',
             ilosc_dok INTEGER DEFAULT 0,
-            sekundy_pracy INTEGER DEFAULT 0,
+
+            sekundy_ksiegowosc INTEGER DEFAULT 0,
+            sekundy_kadry INTEGER DEFAULT 0,
+
             wartosc_uslug REAL DEFAULT 0,
+
             PRIMARY KEY(firma_id, miesiac),
             FOREIGN KEY(firma_id) REFERENCES firmy(id)
         )
@@ -65,7 +70,7 @@ def init_db():
     """)
 
     # ============================================================
-    # CENNIKI — NOWY FORMAT
+    # CENNIKI
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
@@ -173,6 +178,21 @@ def init_db():
     """)
 
     # ============================================================
+    # EMAIL — FILTRY (BRAKOWAŁO!)
+    # ============================================================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS reguly_filtrow (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            konto_id INTEGER NOT NULL,
+            od TEXT,
+            temat_zawiera TEXT,
+            folder_docelowy TEXT NOT NULL,
+            aktywna INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY(konto_id) REFERENCES konta_email(id)
+        )
+    """)
+
+    # ============================================================
     # EMAIL — WIADOMOŚCI
     # ============================================================
     cur.execute("""
@@ -193,28 +213,6 @@ def init_db():
             raw_msg BLOB,
             FOREIGN KEY(konto_id) REFERENCES konta_email(id)
         )
-    """)
-
-    # ============================================================
-    # EMAIL — FILTRY (NOWA TABELA)
-    # ============================================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS reguly_filtrow (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            -- powiązanie z kontem email
-            konto_id INTEGER NOT NULL,
-
-            -- warunki filtra
-            od TEXT,                 -- filtr nadawcy
-            temat_zawiera TEXT,      -- filtr tematu
-            folder_docelowy TEXT,    -- docelowy folder (np. INBOX, Faktury)
-
-            -- meta
-            aktywna INTEGER NOT NULL DEFAULT 1,
-
-            FOREIGN KEY(konto_id) REFERENCES konta_email(id)
-        );
     """)
 
     # ============================================================

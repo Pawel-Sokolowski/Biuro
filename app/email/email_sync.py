@@ -1,10 +1,8 @@
-import sqlite3
+# app/email/email_sync.py
 import imaplib
-import smtplib
-import email
+import sqlite3
 import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import email
 from email.header import decode_header
 
 from app.db.dao_companies import get_conn
@@ -14,30 +12,149 @@ from app.utils.crypto import decrypt_password
 # ============================================================
 #  DEKODOWANIE NAGŁÓWKÓW
 # ============================================================
+
 def _decode_header_value(value):
     if not value:
-        return ""
-    parts = decode_header(value)
-    decoded = ""
-    for part, enc in parts:
-        if isinstance(part, bytes):
-            try:
-                decoded += part.decode(enc or "utf-8", errors="ignore")
-            except Exception:
-                decoded += part.decode("utf-8", errors="ignore")
-        else:
-            decoded += str(part)
-    return decoded
+        return None
+    try:
+        decoded_parts = decode_header(value)
+        result = ""
+        for part, enc in decoded_parts:
+            if isinstance(part, bytes):
+                result += part.decode(enc or "utf-8", errors="ignore")
+            else:
+                result += part
+        return result
+    except Exception:
+        return value
+
+
+# ============================================================
+#  LISTA ZAŁĄCZNIKÓW
+# ============================================================
+
+def list_attachments(msg):
+    attachments = []
+    index = 1
+
+    for part in msg.walk():
+        content_disposition = part.get_content_disposition()
+        filename = part.get_filename()
+
+        if content_disposition == "attachment" and filename:
+            payload = part.get_payload(decode=True) or b""
+            attachments.append({
+                "index": index,
+                "filename": _decode_header_value(filename),
+                "content_type": part.get_content_type(),
+                "size": len(payload)
+            })
+
+        index += 1
+
+    return attachments
+
+
+# ============================================================
+#  DOWNLOAD ATTACHMENT
+# ============================================================
+
+def download_attachment(konto_id, folder, email_uid, part_index):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT serwer_imap, port_imap, haslo_enc, email
+            FROM konta_email WHERE id = ?
+        """, (konto_id,))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        imap_srv, imap_port, haslo_enc, email_addr = row
+        password = decrypt_password(haslo_enc)
+
+        imap = imaplib.IMAP4_SSL(imap_srv, imap_port)
+        imap.login(email_addr, password)
+        imap.select(folder or "INBOX")
+
+        status, data = imap.uid("fetch", email_uid, f"BODY.PEEK[{part_index}]")
+        if status != "OK" or not data or not data[0]:
+            imap.logout()
+            return None
+
+        raw = data[0][1]
+        imap.logout()
+        return raw
+
+    except Exception as e:
+        print("[ATTACHMENT] ERROR:", e)
+        return None
+
+
+# ============================================================
+#  MOVE EMAIL
+# ============================================================
+
+def move_email_to_folder(imap, email_uid, target_folder):
+    try:
+        imap.uid("COPY", email_uid, target_folder)
+        imap.uid("STORE", email_uid, "+FLAGS", r"(\Deleted)")
+        imap.expunge()
+        return True
+    except Exception as e:
+        print("[MOVE] ERROR:", e)
+        return False
+
+
+# ============================================================
+#  LOAD EMAIL MESSAGE (UID)
+# ============================================================
+
+def load_email_message(konto_id, folder, email_uid):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT serwer_imap, port_imap, haslo_enc, email
+            FROM konta_email WHERE id = ?
+        """, (konto_id,))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        imap_srv, imap_port, haslo_enc, email_addr = row
+        password = decrypt_password(haslo_enc)
+
+        imap = imaplib.IMAP4_SSL(imap_srv, imap_port)
+        imap.login(email_addr, password)
+        imap.select(folder or "INBOX")
+
+        status, data = imap.uid("fetch", email_uid, "(RFC822)")
+        if status != "OK" or not data or not data[0]:
+            imap.logout()
+            return None
+
+        raw = data[0][1]
+        msg = email.message_from_bytes(raw)
+        imap.logout()
+        return msg
+
+    except Exception as e:
+        print("[LOAD] ERROR:", e)
+        return None
 
 
 # ============================================================
 #  GŁÓWNA KLASA SYNC
 # ============================================================
+
 class EmailSyncer:
 
-    # --------------------------------------------------------
-    #  CONNECT IMAP
-    # --------------------------------------------------------
     @staticmethod
     def connect_imap(serwer_imap, port_imap, email_address, encrypted_password, timeout=30):
         try:
@@ -49,16 +166,8 @@ class EmailSyncer:
             print(f"[IMAP] Błąd połączenia: {e}")
             return None
 
-    # --------------------------------------------------------
-    #  SYNC EMAILS
-    # --------------------------------------------------------
     @staticmethod
     def sync_emails(konto_id, pracownik_id, max_messages=50):
-        """
-        Pobiera wiadomości z IMAP, stosuje filtry, zapisuje do bazy.
-        Zapisuje raw_msg, UID, folder, treść, nagłówki.
-        """
-
         conn = get_conn()
         cursor = conn.cursor()
 
@@ -95,7 +204,6 @@ class EmailSyncer:
 
             for num in target_nums:
                 try:
-                    # Pobranie wiadomości
                     status, msg_data = imap.fetch(num, "(RFC822)")
                     if status != "OK" or not msg_data or not msg_data[0]:
                         continue
@@ -103,7 +211,6 @@ class EmailSyncer:
                     raw_bytes = msg_data[0][1]
                     msg = email.message_from_bytes(raw_bytes)
 
-                    # UID
                     status_uid, uid_data = imap.fetch(num, "(UID)")
                     uid = None
                     if status_uid == "OK" and uid_data and uid_data[0]:
@@ -112,7 +219,6 @@ class EmailSyncer:
                         except Exception:
                             uid = None
 
-                    # Nagłówki
                     message_id = _decode_header_value(msg.get("Message-ID")) or f"unknown_{num.decode()}_{datetime.datetime.now().timestamp()}"
                     od = _decode_header_value(msg.get("From"))
                     do = _decode_header_value(msg.get("To"))
@@ -120,7 +226,6 @@ class EmailSyncer:
                     temat = _decode_header_value(msg.get("Subject"))
                     data = _decode_header_value(msg.get("Date")) or datetime.datetime.now().isoformat()
 
-                    # Treść
                     tresc = ""
                     if msg.is_multipart():
                         for part in msg.walk():
@@ -140,7 +245,6 @@ class EmailSyncer:
                         payload = msg.get_payload(decode=True) or b""
                         tresc = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
 
-                    # Filtry
                     final_folder = "INBOX"
                     cursor.execute("""
                         SELECT folder_docelowy FROM reguly_filtrow
@@ -153,7 +257,6 @@ class EmailSyncer:
                     if filter_result and filter_result[0]:
                         final_folder = filter_result[0]
 
-                    # Zapis do bazy
                     try:
                         cursor.execute("""
                             INSERT INTO wiadomosci
@@ -196,127 +299,12 @@ class EmailSyncer:
 
 
 # ============================================================
-#  MODULE-LEVEL WRAPPER (WYMAGANY PRZEZ EmailPage)
+#  MODULE WRAPPER
 # ============================================================
+
 def sync_emails(konto_id, pracownik_id, max_messages=50):
     try:
         return EmailSyncer.sync_emails(konto_id, pracownik_id, max_messages)
     except Exception as e:
         print("[SYNC WRAPPER] ERROR:", e)
         return False
-
-
-# ============================================================
-#  LOAD EMAIL MESSAGE (UID)
-# ============================================================
-def load_email_message(konto_id, folder, email_uid):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT serwer_imap, port_imap, haslo_enc, email
-            FROM konta_email WHERE id = ?
-        """, (konto_id,))
-        row = cur.fetchone()
-        conn.close()
-
-        if not row:
-            return None
-
-        imap_srv, imap_port, haslo_enc, email_addr = row
-        password = decrypt_password(haslo_enc)
-
-        imap = imaplib.IMAP4_SSL(imap_srv, imap_port)
-        imap.login(email_addr, password)
-        imap.select(folder or "INBOX")
-
-        status, data = imap.uid("fetch", email_uid, "(RFC822)")
-        if status != "OK" or not data or not data[0]:
-            imap.logout()
-            return None
-
-        raw = data[0][1]
-        msg = email.message_from_bytes(raw)
-        imap.logout()
-        return msg
-
-    except Exception as e:
-        print("[LOAD] ERROR:", e)
-        return None
-
-
-# ============================================================
-#  MOVE EMAIL
-# ============================================================
-def move_email_to_folder(imap, email_uid, target_folder):
-    try:
-        imap.uid("COPY", email_uid, target_folder)
-        imap.uid("STORE", email_uid, "+FLAGS", r"(\Deleted)")
-        imap.expunge()
-        return True
-    except Exception as e:
-        print("[MOVE] ERROR:", e)
-        return False
-
-
-# ============================================================
-#  LIST ATTACHMENTS
-# ============================================================
-def list_attachments(msg):
-    attachments = []
-    index = 1
-
-    for part in msg.walk():
-        content_disposition = part.get_content_disposition()
-        filename = part.get_filename()
-
-        if content_disposition == "attachment" and filename:
-            payload = part.get_payload(decode=True) or b""
-            attachments.append({
-                "index": index,
-                "filename": filename,
-                "content_type": part.get_content_type(),
-                "size": len(payload)
-            })
-
-        index += 1
-
-    return attachments
-
-
-# ============================================================
-#  DOWNLOAD ATTACHMENT
-# ============================================================
-def download_attachment(konto_id, folder, email_uid, part_index):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT serwer_imap, port_imap, haslo_enc, email
-            FROM konta_email WHERE id = ?
-        """, (konto_id,))
-        row = cur.fetchone()
-        conn.close()
-
-        if not row:
-            return None
-
-        imap_srv, imap_port, haslo_enc, email_addr = row
-        password = decrypt_password(haslo_enc)
-
-        imap = imaplib.IMAP4_SSL(imap_srv, imap_port)
-        imap.login(email_addr, password)
-        imap.select(folder or "INBOX")
-
-        status, data = imap.uid("fetch", email_uid, f"BODY.PEEK[{part_index}]")
-        if status != "OK" or not data or not data[0]:
-            imap.logout()
-            return None
-
-        raw = data[0][1]
-        imap.logout()
-        return raw
-
-    except Exception as e:
-        print("[ATTACHMENT] ERROR:", e)
-        return None

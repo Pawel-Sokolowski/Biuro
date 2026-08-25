@@ -1,4 +1,3 @@
-# app/ui/global_settings_dialog.py
 from typing import Optional
 
 from PyQt6.QtCore import Qt
@@ -6,7 +5,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QTabWidget, QWidget, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QMessageBox,
-    QLineEdit, QSpinBox
+    QLineEdit, QSpinBox, QComboBox, QFileDialog
 )
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
@@ -27,7 +26,8 @@ class GlobalSettingsDialog(QDialog):
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         main_layout.addWidget(title)
 
-        if not self.is_admin:
+        perms = self.logic.get_user_permissions(self.pracownik_id)
+        if not perms["can_access_admin_settings"]:
             main_layout.addWidget(QLabel("Brak uprawnień administratora."))
             return
 
@@ -43,9 +43,7 @@ class GlobalSettingsDialog(QDialog):
         self._create_logs_tab()
         self._create_system_tab()
 
-    # ==========================
     # UŻYTKOWNICY
-    # ==========================
 
     def _create_users_tab(self):
         page = QWidget()
@@ -170,27 +168,30 @@ class GlobalSettingsDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć użytkownika: {e}")
 
-    # ==========================
     # ROLE
-    # ==========================
 
     def _create_roles_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self.roles_table = QTableWidget(0, 2)
-        self.roles_table.setHorizontalHeaderLabels(["ID", "Nazwa roli"])
+        self.roles_table = QTableWidget(0, 5)
+        self.roles_table.setHorizontalHeaderLabels([
+            "ID", "Nazwa roli", "Faktury", "Panel admina", "Użytkownicy"
+        ])
         self.roles_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.roles_table)
 
         btn_row = QHBoxLayout()
         btn_add = QPushButton("Dodaj rolę")
         btn_add.clicked.connect(self._add_role_dialog)
+        btn_edit = QPushButton("Edytuj uprawnienia")
+        btn_edit.clicked.connect(self._edit_role_permissions)
         btn_delete = QPushButton("Usuń rolę")
         btn_delete.clicked.connect(self._delete_role)
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self._refresh_roles)
         btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_edit)
         btn_row.addWidget(btn_delete)
         btn_row.addWidget(btn_refresh)
         btn_row.addStretch(1)
@@ -207,6 +208,9 @@ class GlobalSettingsDialog(QDialog):
             self.roles_table.insertRow(row_idx)
             self.roles_table.setItem(row_idx, 0, QTableWidgetItem(str(r["id"])))
             self.roles_table.setItem(row_idx, 1, QTableWidgetItem(r["nazwa"]))
+            self.roles_table.setItem(row_idx, 2, QTableWidgetItem("TAK" if r["can_view_invoices"] else "NIE"))
+            self.roles_table.setItem(row_idx, 3, QTableWidgetItem("TAK" if r["can_access_admin_settings"] else "NIE"))
+            self.roles_table.setItem(row_idx, 4, QTableWidgetItem("TAK" if r["can_manage_users"] else "NIE"))
 
     def _add_role_dialog(self):
         dlg = QDialog(self)
@@ -216,6 +220,17 @@ class GlobalSettingsDialog(QDialog):
         name = QLineEdit()
         name.setPlaceholderText("Nazwa roli")
         lay.addWidget(name)
+
+        cb_invoices = QComboBox()
+        cb_invoices.addItems(["Brak dostępu do faktur", "Dostęp do faktur"])
+        cb_admin = QComboBox()
+        cb_admin.addItems(["Brak dostępu do panelu admina", "Dostęp do panelu admina"])
+        cb_users = QComboBox()
+        cb_users.addItems(["Brak zarządzania użytkownikami", "Może zarządzać użytkownikami"])
+
+        lay.addWidget(cb_invoices)
+        lay.addWidget(cb_admin)
+        lay.addWidget(cb_users)
 
         btns = QHBoxLayout()
         btn_ok = QPushButton("Zapisz")
@@ -228,22 +243,85 @@ class GlobalSettingsDialog(QDialog):
 
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
-                self.logic.add_role(name.text().strip())
+                self.logic.add_role(
+                    nazwa=name.text().strip(),
+                    can_view_invoices=cb_invoices.currentIndex() == 1,
+                    can_access_admin_settings=cb_admin.currentIndex() == 1,
+                    can_manage_users=cb_users.currentIndex() == 1,
+                )
                 self._refresh_roles()
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się dodać roli: {e}")
 
-    def _delete_role(self):
+    def _get_selected_role_id(self) -> Optional[int]:
         row = self.roles_table.currentRow()
         if row < 0:
-            QMessageBox.information(self, "Role", "Wybierz rolę.")
-            return
+            return None
         item = self.roles_table.item(row, 0)
         if not item:
-            return
+            return None
         try:
-            rid = int(item.text())
+            return int(item.text())
         except ValueError:
+            return None
+
+    def _edit_role_permissions(self):
+        rid = self._get_selected_role_id()
+        if rid is None:
+            QMessageBox.information(self, "Role", "Wybierz rolę.")
+            return
+
+        row = self.roles_table.currentRow()
+        name_item = self.roles_table.item(row, 1)
+        inv_item = self.roles_table.item(row, 2)
+        adm_item = self.roles_table.item(row, 3)
+        usr_item = self.roles_table.item(row, 4)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Uprawnienia roli: {name_item.text()}")
+        lay = QVBoxLayout(dlg)
+
+        cb_invoices = QComboBox()
+        cb_invoices.addItems(["Brak dostępu do faktur", "Dostęp do faktur"])
+        cb_invoices.setCurrentIndex(1 if inv_item.text() == "TAK" else 0)
+
+        cb_admin = QComboBox()
+        cb_admin.addItems(["Brak dostępu do panelu admina", "Dostęp do panelu admina"])
+        cb_admin.setCurrentIndex(1 if adm_item.text() == "TAK" else 0)
+
+        cb_users = QComboBox()
+        cb_users.addItems(["Brak zarządzania użytkownikami", "Może zarządzać użytkownikami"])
+        cb_users.setCurrentIndex(1 if usr_item.text() == "TAK" else 0)
+
+        lay.addWidget(cb_invoices)
+        lay.addWidget(cb_admin)
+        lay.addWidget(cb_users)
+
+        btns = QHBoxLayout()
+        btn_ok = QPushButton("Zapisz")
+        btn_cancel = QPushButton("Anuluj")
+        btn_ok.clicked.connect(dlg.accept)
+        btn_cancel.clicked.connect(dlg.reject)
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        lay.addLayout(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                self.logic.update_role_permissions(
+                    rola_id=rid,
+                    can_view_invoices=cb_invoices.currentIndex() == 1,
+                    can_access_admin_settings=cb_admin.currentIndex() == 1,
+                    can_manage_users=cb_users.currentIndex() == 1,
+                )
+                self._refresh_roles()
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Nie udało się zaktualizować roli: {e}")
+
+    def _delete_role(self):
+        rid = self._get_selected_role_id()
+        if rid is None:
+            QMessageBox.information(self, "Role", "Wybierz rolę.")
             return
         if QMessageBox.question(self, "Usuń rolę",
                                 "Czy na pewno chcesz usunąć tę rolę?",
@@ -255,9 +333,7 @@ class GlobalSettingsDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć roli: {e}")
 
-    # ==========================
-    # KONTA EMAIL
-    # ==========================
+    # KONTA EMAIL + PRZYPISANIA
 
     def _create_email_tab(self):
         page = QWidget()
@@ -268,15 +344,26 @@ class GlobalSettingsDialog(QDialog):
         self.email_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.email_table)
 
+        self.assign_table = QTableWidget(0, 4)
+        self.assign_table.setHorizontalHeaderLabels(["Konto ID", "Email konta", "Pracownik ID", "Email pracownika"])
+        self.assign_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.assign_table)
+
         btn_row = QHBoxLayout()
         btn_add = QPushButton("Dodaj konto email")
         btn_add.clicked.connect(self._add_email_dialog)
         btn_delete = QPushButton("Usuń konto")
         btn_delete.clicked.connect(self._delete_email_account)
+        btn_assign = QPushButton("Przypisz konto do użytkownika")
+        btn_assign.clicked.connect(self._assign_email_dialog)
+        btn_unassign = QPushButton("Usuń przypisanie")
+        btn_unassign.clicked.connect(self._unassign_email)
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self._refresh_email)
         btn_row.addWidget(btn_add)
         btn_row.addWidget(btn_delete)
+        btn_row.addWidget(btn_assign)
+        btn_row.addWidget(btn_unassign)
         btn_row.addWidget(btn_refresh)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
@@ -293,6 +380,16 @@ class GlobalSettingsDialog(QDialog):
             for col_idx, key in enumerate(["id", "pracownik_id", "email", "serwer_imap", "serwer_smtp"]):
                 self.email_table.setItem(row_idx, col_idx, QTableWidgetItem(str(r[key])))
 
+        assigns = self.logic.get_email_assignments()
+        self.assign_table.setRowCount(0)
+        for r in assigns:
+            row_idx = self.assign_table.rowCount()
+            self.assign_table.insertRow(row_idx)
+            self.assign_table.setItem(row_idx, 0, QTableWidgetItem(str(r["konto_id"])))
+            self.assign_table.setItem(row_idx, 1, QTableWidgetItem(r["email"]))
+            self.assign_table.setItem(row_idx, 2, QTableWidgetItem(str(r["pracownik_id"])))
+            self.assign_table.setItem(row_idx, 3, QTableWidgetItem(r["pracownik_email"]))
+
     def _add_email_dialog(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Dodaj konto email")
@@ -307,7 +404,7 @@ class GlobalSettingsDialog(QDialog):
         smtp = QLineEdit()
         smtp.setPlaceholderText("Serwer SMTP")
 
-        lay.addWidget(QLabel("ID pracownika"))
+        lay.addWidget(QLabel("ID pracownika (właściciel konta)"))
         lay.addWidget(pracownik_id_input)
         lay.addWidget(email)
         lay.addWidget(imap)
@@ -356,9 +453,65 @@ class GlobalSettingsDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć konta email: {e}")
 
-    # ==========================
+    def _assign_email_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Przypisz konto email do użytkownika")
+        lay = QVBoxLayout(dlg)
+
+        konto_id_spin = QSpinBox()
+        konto_id_spin.setMaximum(999999)
+        pracownik_id_spin = QSpinBox()
+        pracownik_id_spin.setMaximum(999999)
+
+        lay.addWidget(QLabel("ID konta email"))
+        lay.addWidget(konto_id_spin)
+        lay.addWidget(QLabel("ID pracownika"))
+        lay.addWidget(pracownik_id_spin)
+
+        btns = QHBoxLayout()
+        btn_ok = QPushButton("Zapisz")
+        btn_cancel = QPushButton("Anuluj")
+        btn_ok.clicked.connect(dlg.accept)
+        btn_cancel.clicked.connect(dlg.reject)
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        lay.addLayout(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                self.logic.assign_email_to_employee(
+                    konto_id_spin.value(),
+                    pracownik_id_spin.value(),
+                )
+                self._refresh_email()
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Nie udało się przypisać konta: {e}")
+
+    def _unassign_email(self):
+        row = self.assign_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Przypisania", "Wybierz przypisanie.")
+            return
+        konto_item = self.assign_table.item(row, 0)
+        prac_item = self.assign_table.item(row, 2)
+        if not konto_item or not prac_item:
+            return
+        try:
+            kid = int(konto_item.text())
+            pid = int(prac_item.text())
+        except ValueError:
+            return
+        if QMessageBox.question(self, "Usuń przypisanie",
+                                "Czy na pewno chcesz usunąć to przypisanie?",
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                                ) == QMessageBox.StandardButton.Yes:
+            try:
+                self.logic.remove_email_assignment(kid, pid)
+                self._refresh_email()
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć przypisania: {e}")
+
     # CENNIK GLOBALNY
-    # ==========================
 
     def _create_pricing_tab(self):
         page = QWidget()
@@ -375,7 +528,10 @@ class GlobalSettingsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self._refresh_pricing)
+        btn_import = QPushButton("Importuj cennik z CSV")
+        btn_import.clicked.connect(self._import_pricing)
         btn_row.addWidget(btn_refresh)
+        btn_row.addWidget(btn_import)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
@@ -394,16 +550,25 @@ class GlobalSettingsDialog(QDialog):
             ]):
                 self.pricing_table.setItem(row_idx, col_idx, QTableWidgetItem(str(r[key])))
 
-    # ==========================
+    def _import_pricing(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Wybierz plik CSV cennika", "", "CSV (*.csv);;Wszystkie pliki (*)")
+        if not path:
+            return
+        try:
+            self.logic.import_global_pricing_from_csv(path)
+            self._refresh_pricing()
+            QMessageBox.information(self, "Cennik", "Cennik został zaimportowany.")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zaimportować cennika: {e}")
+
     # USŁUGI DODATKOWE
-    # ==========================
 
     def _create_extra_services_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self.extra_table = QTableWidget(0, 4)
-        self.extra_table.setHorizontalHeaderLabels(["ID", "Nazwa usługi", "Cena netto", "Stawka VAT"])
+        self.extra_table = QTableWidget(0, 5)
+        self.extra_table.setHorizontalHeaderLabels(["ID", "Nazwa usługi", "Cena netto", "Stawka VAT", "Kategoria"])
         self.extra_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.extra_table)
 
@@ -429,7 +594,7 @@ class GlobalSettingsDialog(QDialog):
         for r in rows:
             row_idx = self.extra_table.rowCount()
             self.extra_table.insertRow(row_idx)
-            for col_idx, key in enumerate(["id", "nazwa", "cena_netto", "stawka_vat"]):
+            for col_idx, key in enumerate(["id", "nazwa", "cena_netto", "stawka_vat", "kategoria"]):
                 self.extra_table.setItem(row_idx, col_idx, QTableWidgetItem(str(r[key])))
 
     def _add_extra_service_dialog(self):
@@ -443,10 +608,14 @@ class GlobalSettingsDialog(QDialog):
         price.setPlaceholderText("Cena netto")
         vat = QLineEdit()
         vat.setPlaceholderText("Stawka VAT (np. 23%)")
+        category = QComboBox()
+        category.addItems(["księgowość", "kadry"])
 
         lay.addWidget(name)
         lay.addWidget(price)
         lay.addWidget(vat)
+        lay.addWidget(QLabel("Kategoria (do raportów)"))
+        lay.addWidget(category)
 
         btns = QHBoxLayout()
         btn_ok = QPushButton("Zapisz")
@@ -468,6 +637,7 @@ class GlobalSettingsDialog(QDialog):
                     nazwa=name.text().strip(),
                     cena_netto=cena_val,
                     stawka_vat=vat.text().strip(),
+                    kategoria=category.currentText(),
                 )
                 self._refresh_extra_services()
             except Exception as e:
@@ -495,9 +665,7 @@ class GlobalSettingsDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć usługi: {e}")
 
-    # ==========================
     # FIRMY
-    # ==========================
 
     def _create_companies_tab(self):
         page = QWidget()
@@ -552,9 +720,7 @@ class GlobalSettingsDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć firmy: {e}")
 
-    # ==========================
     # LOGI
-    # ==========================
 
     def _create_logs_tab(self):
         page = QWidget()
@@ -583,9 +749,7 @@ class GlobalSettingsDialog(QDialog):
             self.logs_table.insertRow(row_idx)
             self.logs_table.setItem(row_idx, 0, QTableWidgetItem(str(r)))
 
-    # ==========================
     # SYSTEM
-    # ==========================
 
     def _create_system_tab(self):
         page = QWidget()
@@ -610,3 +774,68 @@ class GlobalSettingsDialog(QDialog):
 
     def _cleanup_emails_stub(self):
         QMessageBox.information(self, "Czyszczenie", "Tu będzie czyszczenie starych emaili (do zaimplementowania).")
+
+    def _create_saldeo_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        # ==========================
+        # FILTRY
+        # ==========================
+        filter_row = QHBoxLayout()
+
+        # Firma (autouzupełnianie)
+        self.saldeo_firma = QComboBox()
+        self.saldeo_firma.setEditable(True)
+        companies = self.logic.get_all_companies()
+        for c in companies:
+            self.saldeo_firma.addItem(c["nazwa"], c["id"])
+        filter_row.addWidget(QLabel("Firma:"))
+        filter_row.addWidget(self.saldeo_firma)
+
+        # Miesiąc
+        from datetime import datetime
+        current_month = datetime.now().strftime("%Y-%m")
+
+        self.saldeo_miesiac = QLineEdit(current_month)
+        filter_row.addWidget(QLabel("Miesiąc (YYYY-MM):"))
+        filter_row.addWidget(self.saldeo_miesiac)
+
+        # Przycisk odśwież
+        btn_refresh = QPushButton("Odśwież")
+        btn_refresh.clicked.connect(self._refresh_saldeo_tables)
+        filter_row.addWidget(btn_refresh)
+
+        # Eksport
+        btn_export = QPushButton("Eksport do Saldeo")
+        btn_export.clicked.connect(self._export_saldeo)
+        filter_row.addWidget(btn_export)
+
+        filter_row.addStretch(1)
+        layout.addLayout(filter_row)
+
+        # ==========================
+        # TABELA FAKTUR
+        # ==========================
+        self.saldeo_fv_table = QTableWidget(0, 5)
+        self.saldeo_fv_table.setHorizontalHeaderLabels([
+            "Firma", "Numer", "Typ", "Cena netto", "Data wystawienia"
+        ])
+        self.saldeo_fv_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(QLabel("Faktury"))
+        layout.addWidget(self.saldeo_fv_table)
+
+        # ==========================
+        # TABELA USŁUG DODATKOWYCH
+        # ==========================
+        self.saldeo_extra_table = QTableWidget(0, 5)
+        self.saldeo_extra_table.setHorizontalHeaderLabels([
+            "Firma", "Usługa", "Ilość", "Cena netto", "Kategoria"
+        ])
+        self.saldeo_extra_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(QLabel("Usługi dodatkowe"))
+        layout.addWidget(self.saldeo_extra_table)
+
+        self.tabs.addTab(page, "Faktury / Saldeo")
+        self._refresh_saldeo_tables()
+

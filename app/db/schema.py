@@ -34,7 +34,7 @@ def init_db():
     """)
 
     # ============================================================
-    # STATUSY MIESIĘCZNE — dwa stopery
+    # STATUSY MIESIĘCZNE
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
@@ -70,7 +70,7 @@ def init_db():
     """)
 
     # ============================================================
-    # CENNIKI
+    # CENNIKI GLOBALNE
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
@@ -88,19 +88,20 @@ def init_db():
     """)
 
     # ============================================================
-    # USŁUGI DODATKOWE — globalne
+    # USŁUGI DODATKOWE — GLOBALNE
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS uslugi_dodatkowe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nazwa TEXT NOT NULL,
             cena_netto REAL NOT NULL,
-            stawka_vat TEXT NOT NULL
+            stawka_vat TEXT NOT NULL,
+            kategoria TEXT DEFAULT 'księgowość'
         )
     """)
 
     # ============================================================
-    # USŁUGI DODATKOWE — miesięczne
+    # USŁUGI DODATKOWE — MIESIĘCZNE
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS uslugi_dodatkowe_firma (
@@ -130,7 +131,9 @@ def init_db():
         )
     """)
 
-    # ROLE
+    # ============================================================
+    # ROLE + UPRAWNIENIA
+    # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS role (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,13 +141,29 @@ def init_db():
         )
     """)
 
+    # Dodanie brakujących kolumn uprawnień
+    cur.execute("PRAGMA table_info(role)")
+    cols = [row[1] for row in cur.fetchall()]
+
+    if "can_view_invoices" not in cols:
+        cur.execute("ALTER TABLE role ADD COLUMN can_view_invoices INTEGER DEFAULT 0")
+
+    if "can_access_admin_settings" not in cols:
+        cur.execute("ALTER TABLE role ADD COLUMN can_access_admin_settings INTEGER DEFAULT 0")
+
+    if "can_manage_users" not in cols:
+        cur.execute("ALTER TABLE role ADD COLUMN can_manage_users INTEGER DEFAULT 0")
+
+    # Wstępne role
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (1, 'księgowa')")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (2, 'kadrowa')")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (3, 'manager')")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (4, 'admin')")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (5, 'opiekun')")
 
-    # PRACOWNIK-FIRMA
+    # ============================================================
+    # PRACOWNIK-FIRMA (rola per firma)
+    # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownik_firma (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,7 +197,20 @@ def init_db():
     """)
 
     # ============================================================
-    # EMAIL — FILTRY (BRAKOWAŁO!)
+    # EMAIL — przypisania many-to-many
+    # ============================================================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pracownik_konto_email (
+            konto_id INTEGER NOT NULL,
+            pracownik_id INTEGER NOT NULL,
+            PRIMARY KEY(konto_id, pracownik_id),
+            FOREIGN KEY(konto_id) REFERENCES konta_email(id),
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id)
+        )
+    """)
+
+    # ============================================================
+    # EMAIL — FILTRY
     # ============================================================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS reguly_filtrow (
@@ -271,6 +303,23 @@ def init_db():
             imie_nazwisko TEXT NOT NULL,
             procent REAL NOT NULL,
             FOREIGN KEY(firma_id) REFERENCES firmy(id)
+        )
+    """)
+
+    # ============================================================
+    # FAKTURY MIESIĘCZNE — NOWA TABELA
+    # ============================================================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS faktury (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firma_id INTEGER NOT NULL,
+            miesiac TEXT NOT NULL,                 -- 'YYYY-MM'
+            kwota_netto REAL NOT NULL,
+            kwota_brutto REAL NOT NULL,
+            pozycje_json TEXT NOT NULL,            -- lista pozycji faktury w JSON
+            data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id),
+            UNIQUE(firma_id, miesiac)              -- jedna faktura miesięczna per firma
         )
     """)
 

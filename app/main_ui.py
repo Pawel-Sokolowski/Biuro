@@ -67,7 +67,7 @@ class OfficeManagerApp(QMainWindow):
             "Klienci",
             "Email",
             "Chat",
-            "Eksport Saldeo",
+            "Faktury",
             "Raporty",
             "Ustawienia"
         ])
@@ -117,7 +117,7 @@ class OfficeManagerApp(QMainWindow):
         self.create_companies_page()
         self.create_email_page()
         self.create_chat_page()
-        # self.create_saldeo_page()
+        self.create_faktury_page()
         self.create_raporty_page()
         self.create_settings_page()
 
@@ -155,10 +155,10 @@ class OfficeManagerApp(QMainWindow):
         page = ChatPage(self.pracownik_id)
         self.pages.addWidget(page)
 
-    # def create_saldeo_page(self):
-    #     from app.saldeo.saldeo_ui import SaldeoPage
-    #     page = SaldeoPage(self.pracownik_id)
-    #     self.pages.addWidget(page)
+    def create_invoices_page(self):
+        from app.invoices.faktury_ui import InvoicesPage
+        page = InvoicesPage(self.pracownik_id)
+        self.pages.addWidget(page)
 
     def create_raporty_page(self):
         page = ReportsPage(self.pracownik_id)

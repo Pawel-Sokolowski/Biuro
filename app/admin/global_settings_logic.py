@@ -129,7 +129,12 @@ class GlobalSettingsLogic:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, pracownik_id, email, serwer_imap, serwer_smtp
+            SELECT
+                id,
+                email,
+                serwer_imap, port_imap, ssl_imap,
+                serwer_smtp, port_smtp, ssl_smtp,
+                haslo_enc
             FROM konta_email
             ORDER BY id
         """)
@@ -137,15 +142,46 @@ class GlobalSettingsLogic:
         conn.close()
         return rows
 
-    def add_email_account(self, pracownik_id: int, email: str, imap: str, smtp: str):
+    def add_email_account(
+            self,
+            email: str,
+            imap_server: str,
+            smtp_server: str,
+            password: str,
+            imap_port: int,
+            smtp_port: int,
+            imap_ssl: str,
+            smtp_ssl: str
+    ) -> int:
+        """Dodaje konto email i zwraca jego ID."""
+
+        from app.utils.crypto import encrypt_password
+        encrypted_pwd = encrypt_password(password)
+
         conn = get_conn()
         cur = conn.cursor()
+
         cur.execute("""
-            INSERT INTO konta_email (pracownik_id, email, serwer_imap, serwer_smtp, haslo_enc)
-            VALUES (?, ?, ?, ?, '')
-        """, (pracownik_id, email, imap, smtp))
+            INSERT INTO konta_email (
+                email,
+                haslo_enc,
+                serwer_imap, port_imap, ssl_imap,
+                serwer_smtp, port_smtp, ssl_smtp,
+                aktywne
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """, (
+            email,
+            encrypted_pwd,
+            imap_server, imap_port, imap_ssl,
+            smtp_server, smtp_port, smtp_ssl
+        ))
+
+        konto_id = cur.lastrowid
         conn.commit()
         conn.close()
+
+        return konto_id
 
     def delete_email_account(self, konto_id: int):
         conn = get_conn()

@@ -1,69 +1,192 @@
-# app/main_ui.py
 import datetime
 from typing import Optional
-
+from PyQt6.QtWidgets import QApplication
 from app.utils.ui_imports import *
 
-# --- DAO ---
 from app.db.dao_employees import get_employee_info
 
-# --- PAGES ---
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
-from app.companies.companies_ui import CompanyDialog
+from app.companies.companies_ui import CompaniesPage
 from app.email.email_ui import EmailPage
 from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage
-from app.admin.global_settings_ui import GlobalSettingsDialog
+from app.admin.global_settings_ui import GlobalSettingsPage
+from app.invoices.faktury_ui import FakturyPage
+
+
+class LoginWindow(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Logowanie")
+        self.setFixedSize(420, 320)
+        self.pracownik_id: Optional[int] = None
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setStyleSheet("""
+            QDialog { background-color: #eae0d5; }
+            QLabel { color: #1c70b7; font-weight: bold; }
+            QLineEdit {
+                padding: 8px;
+                border-radius: 6px;
+                border: 1px solid #b8b1a8;
+                background-color: white;
+            }
+            QPushButton {
+                background-color: #1c70b7;
+                color: white;
+                padding: 8px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #155a8a; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        lbl_title = QLabel("Zaloguj się")
+        lbl_title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        layout.addWidget(lbl_title)
+
+        form = QFormLayout()
+        self.email_input = QLineEdit()
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Email:", self.email_input)
+        form.addRow("Hasło:", self.password_input)
+        layout.addLayout(form)
+
+        row = QHBoxLayout()
+        btn_login = QPushButton("Zaloguj")
+        btn_login.clicked.connect(self._on_login)
+        btn_register = QPushButton("Zarejestruj")
+        btn_register.clicked.connect(self._on_register)
+        row.addWidget(btn_login)
+        row.addWidget(btn_register)
+        layout.addLayout(row)
+
+    def _on_login(self):
+        from app.utils.crypto import login_user
+        email = self.email_input.text().strip()
+        password = self.password_input.text()
+        if not email or not password:
+            QMessageBox.warning(self, "Błąd", "Uzupełnij email i hasło")
+            return
+        try:
+            result = login_user(email, password)
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", str(e))
+            return
+        if isinstance(result, tuple):
+            ok, user_id = result[0], result[1]
+        else:
+            ok, user_id = bool(result), result
+        if ok:
+            self.pracownik_id = user_id
+            self.accept()
+        else:
+            QMessageBox.critical(self, "Błąd", "Nieprawidłowy email lub hasło")
+
+    def _on_register(self):
+        from app.utils.crypto import register_user
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Rejestracja")
+        dlg.setFixedSize(420, 320)
+        dlg.setStyleSheet(self.styleSheet())
+
+        form = QFormLayout()
+        email = QLineEdit()
+        imie = QLineEdit()
+        nazwisko = QLineEdit()
+        haslo = QLineEdit()
+        haslo.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Email:", email)
+        form.addRow("Imię:", imie)
+        form.addRow("Nazwisko:", nazwisko)
+        form.addRow("Hasło:", haslo)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+
+        layout = QVBoxLayout(dlg)
+        layout.addLayout(form)
+        layout.addWidget(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                ok = register_user(email.text(), haslo.text(),
+                                   imie=imie.text(), nazwisko=nazwisko.text(),
+                                   is_admin_flag=False)
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", str(e))
+                return
+            if isinstance(ok, tuple):
+                ok = ok[0]
+            if ok:
+                QMessageBox.information(self, "OK", "Rejestracja udana.")
+            else:
+                QMessageBox.critical(self, "Błąd", "Rejestracja nie powiodła się.")
 
 
 class OfficeManagerApp(QMainWindow):
     def __init__(self, pracownik_id: Optional[int] = None):
         super().__init__()
-        self.pracownik_id = pracownik_id
+        if pracownik_id is None:
+            self.pracownik_id = self._show_login_dialog()
+            if not self.pracownik_id:
+                QApplication.instance().quit()
+                return
+        else:
+            self.pracownik_id = pracownik_id
 
-        self.setWindowTitle("System Zarządzania Biurem Rachunkowego v1.1")
-        self.resize(1250, 750)
-
-        # Stoper
-        self.aktywna_firma_stoper: Optional[int] = None
-        self.aktywna_firma_stoper_nazwa: str = ""
-        self.czas_start: Optional[datetime.datetime] = None
-        self.aktualny_miesiac: str = datetime.datetime.now().strftime("%Y-%m")
-        self.status_autosave_timers = {}
-        self.status_widgets = {}
-
-        # Build UI
+        self.setWindowTitle("System Zarządzania Biurem Rachunkowego")
+        self.resize(1400, 850)
         self._build_ui()
 
-        # Global timer
-        self.global_timer = QTimer(self)
-        self.global_timer.timeout.connect(self.aktualizuj_stoper_gui)
-        self.global_timer.start(1000)
+    def _show_login_dialog(self):
+        dlg = LoginWindow(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            return dlg.pracownik_id
+        return None
 
-    # ============================================================
-    # BUILD UI
-    # ============================================================
     def _build_ui(self):
+        self.setStyleSheet("""
+            QWidget { background-color: #eae0d5; font-family: Arial; }
+            QLabel { color: #2c3e50; }
+            QPushButton {
+                background-color: #1c70b7;
+                color: white;
+                padding: 8px 14px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #155a8a; }
+        """)
+
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QHBoxLayout(main_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
 
-        # -------------------------
-        # SIDEBAR
-        # -------------------------
         self.sidebar = QListWidget()
-        self.sidebar.setFixedWidth(220)
+        self.sidebar.setFixedWidth(240)
         self.sidebar.setStyleSheet("""
-            QListWidget { background-color: #2c3e50; color: #ecf0f1; font-size: 14px; border: none; }
-            QListWidget::item { padding: 15px 10px; border-bottom: 1px solid #34495e; }
-            QListWidget::item:selected { background-color: #3498db; color: white; font-weight: bold; }
-            QListWidget::item:hover { background-color: #34495e; }
+            QListWidget {
+                background-color: #1c70b7;
+                color: white;
+                border: none;
+                font-size: 16px;
+            }
+            QListWidget::item { padding: 18px; }
+            QListWidget::item:selected { background-color: #155a8a; font-weight: bold; }
+            QListWidget::item:hover { background-color: #1668a3; }
         """)
 
         self.sidebar.addItems([
-            "Widok Miesięczny",
+            "Widok miesięczny",
             "Klienci",
             "Email",
             "Chat",
@@ -74,145 +197,50 @@ class OfficeManagerApp(QMainWindow):
         self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
         main_layout.addWidget(self.sidebar)
 
-        # -------------------------
-        # CONTENT
-        # -------------------------
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
 
-        # HEADER
-        global_header = QWidget()
-        global_header.setStyleSheet("background-color: #f5f7fa; border-bottom: 1px solid #dfe6e9;")
-        global_header_layout = QHBoxLayout(global_header)
-        global_header_layout.setContentsMargins(16, 10, 16, 10)
+        header = QWidget()
+        header.setStyleSheet("background-color: #ffffff; border-bottom: 2px solid #d0c7bd;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 12, 20, 12)
 
-        emp_info = get_employee_info(self.pracownik_id)
-        if emp_info:
-            employee_name = f"{emp_info['imie']} {emp_info['nazwisko']}"
-        else:
-            employee_name = "Nieznany"
+        emp = get_employee_info(self.pracownik_id)
+        name = f"{emp['imie']} {emp['nazwisko']}" if emp else "Nieznany"
+        lbl_user = QLabel(f"<b>Zalogowany:</b> {name}")
+        lbl_user.setStyleSheet("font-size: 16px;")
+        header_layout.addWidget(lbl_user)
+        header_layout.addStretch()
 
-        self.lbl_global_user = QLabel(f"<b>Zalogowany:</b> {employee_name}")
-        self.lbl_global_user.setStyleSheet("color: #2c3e50;")
-        global_header_layout.addWidget(self.lbl_global_user)
+        content_layout.addWidget(header)
 
-        self.lbl_global_timer_status = QLabel("Timer: brak aktywnej firmy")
-        self.lbl_global_timer_status.setStyleSheet(
-            "color: #2c3e50; font-weight: bold; background-color: #ecf0f1; padding: 6px 10px; border-radius: 4px;"
-        )
-        global_header_layout.addWidget(self.lbl_global_timer_status, alignment=Qt.AlignmentFlag.AlignRight)
-        content_layout.addWidget(global_header)
-
-        # STACK
         self.pages = QStackedWidget()
         content_layout.addWidget(self.pages)
-        main_layout.addWidget(content_widget)
+        main_layout.addWidget(content)
 
-        # -------------------------
-        # CREATE PAGES
-        # -------------------------
-        self.create_monthly_view_page()
-        self.create_companies_page()
-        self.create_email_page()
-        self.create_chat_page()
-        self.create_faktury_page()
-        self.create_raporty_page()
-        self.create_settings_page()
+        self.page_monthly = MonthlyViewPage(self.pracownik_id)
+        self.page_companies = CompaniesPage(self.pracownik_id)
+        self.page_email = EmailPage(self.pracownik_id)
+        self.page_chat = ChatPage(self.pracownik_id)
+        self.page_faktury = FakturyPage(self.pracownik_id)
+        self.page_raporty = ReportsPage(self.pracownik_id)
+        self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
 
-        # Default
-        self.pages.setCurrentIndex(0)
+        self.pages.addWidget(self.page_monthly)
+        self.pages.addWidget(self.page_companies)
+        self.pages.addWidget(self.page_email)
+        self.pages.addWidget(self.page_chat)
+        self.pages.addWidget(self.page_faktury)
+        self.pages.addWidget(self.page_raporty)
+        self.pages.addWidget(self.page_settings)
+
         self.sidebar.setCurrentRow(0)
+        self.pages.setCurrentIndex(0)
 
-    # ============================================================
-    # PAGE CREATORS
-    # ============================================================
+    def zmien_zakladke(self, index):
+        if 0 <= index < self.pages.count():
+            self.pages.setCurrentIndex(index)
 
-    def create_monthly_view_page(self):
-        page = MonthlyViewPage(self.pracownik_id)
-        self.pages.addWidget(page)
-
-        # Delegacja metod do sidebar refresh
-        if hasattr(page, "refresh_monthly_filters"):
-            self.refresh_monthly_filters = page.refresh_monthly_filters
-        if hasattr(page, "refresh_monthly_table"):
-            self.refresh_monthly_table = page.refresh_monthly_table
-
-    def create_companies_page(self):
-        page = CompanyDialog(self.pracownik_id)
-        self.pages.addWidget(page)
-        if hasattr(page, "refresh_firms_table"):
-            self.refresh_firms_table = page.refresh_firms_table
-
-    def create_email_page(self):
-        page = EmailPage(self.pracownik_id)
-        self.pages.addWidget(page)
-        if hasattr(page, "refresh_email_accounts"):
-            self.refresh_email_accounts = page.refresh_email_accounts
-
-    def create_chat_page(self):
-        page = ChatPage(self.pracownik_id)
-        self.pages.addWidget(page)
-
-    def create_invoices_page(self):
-        from app.invoices.faktury_ui import InvoicesPage
-        page = InvoicesPage(self.pracownik_id)
-        self.pages.addWidget(page)
-
-    def create_raporty_page(self):
-        page = ReportsPage(self.pracownik_id)
-        self.pages.addWidget(page)
-
-    def create_settings_page(self):
-        # Panel admina jako osobny dialog otwierany z zakładki
-        page = QWidget()
-        layout = QVBoxLayout(page)
-
-        btn = QPushButton("Otwórz panel administratora")
-        btn.clicked.connect(self.open_admin_panel)
-        layout.addWidget(btn)
-
-        self.pages.addWidget(page)
-
-    def open_admin_panel(self):
-        dlg = GlobalSettingsDialog(self.pracownik_id, True, self)
-        dlg.exec()
-
-    # ============================================================
-    # NAVIGATION
-    # ============================================================
-    def zmien_zakladke(self, index: int):
-        if index < 0 or index >= self.pages.count():
-            return
-
-        self.pages.setCurrentIndex(index)
-
-        try:
-            if index == 0:
-                self.refresh_monthly_filters()
-                self.refresh_monthly_table()
-            elif index == 1:
-                self.refresh_firms_table()
-            elif index == 2:
-                self.refresh_employees_table()
-            elif index == 3:
-                self.refresh_email_accounts()
-        except Exception:
-            pass
-
-    # ============================================================
-    # STOPER
-    # ============================================================
-    def aktualizuj_stoper_gui(self):
-        pass
-
-    # ============================================================
-    # CLOSE
-    # ============================================================
     def closeEvent(self, event):
-        try:
-            self.global_timer.stop()
-        except Exception:
-            pass
         super().closeEvent(event)

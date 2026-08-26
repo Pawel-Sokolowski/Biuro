@@ -1,3 +1,4 @@
+# app/companies/companies_model.py
 import sqlite3
 from app.config import DB_NAME
 from app.companies.constants import COMPANY_FIELD_ORDER, COMPANY_EXTRA_COLUMNS
@@ -8,10 +9,6 @@ from app.utils.parsing import (
     parse_int_value
 )
 
-# ============================================================
-#  DYNAMICZNE DODAWANIE KOLUMN
-# ============================================================
-
 def ensure_columns(cursor, table_name, columns):
     cursor.execute(f"PRAGMA table_info({table_name})")
     existing = {r[1] for r in cursor.fetchall()}
@@ -19,14 +16,25 @@ def ensure_columns(cursor, table_name, columns):
         if col not in existing:
             cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col} {definition}")
 
-# ============================================================
-#  SERIALIZACJA FIRM
-# ============================================================
-
 def serialize_company_payload(payload):
+    """
+    Zwraca słownik danych zgodny z COMPANY_FIELD_ORDER.
+    Obsługuje:
+      - identyfikatory
+      - daty
+      - PKD
+      - limity
+      - cenniki
+      - zatrudnienie
+      - wszystkie pola z COMPANY_EXTRA_COLUMNS
+    """
+
     data = {}
+
     for field in COMPANY_FIELD_ORDER:
         raw = payload.get(field, "")
+
+        # identyfikatory
         if field in {"nip", "regon", "krs", "pesel"}:
             data[field] = normalize_identifier(raw, {
                 "nip": {10},
@@ -34,6 +42,8 @@ def serialize_company_payload(payload):
                 "krs": {10},
                 "pesel": {11}
             }.get(field))
+
+        # daty
         elif field in {
             "data_rozpoczecia_dg", "data_rozpoczecia_sprzedazy",
             "data_koniec_zus_start", "data_koniec_zus_pref",
@@ -41,26 +51,34 @@ def serialize_company_payload(payload):
             "data_rozpoczecia_obslugi", "data_zakonczenia_obslugi"
         }:
             data[field] = parse_date_value(raw)
+
+        # PKD
         elif field == "kody_pkd":
             data[field] = normalize_pkd_codes(raw)
-        elif field in {"limit_dokumentow", "uop", "uz", "uod", "glowny_cennik_manualny"}:
+
+        # liczby
+        elif field in {
+            "limit_dokumentow", "uop", "uz", "uod",
+            "glowny_cennik_manualny", "liczba_pracownikow"
+        }:
             data[field] = parse_int_value(raw, 0)
+
+        # tekst
         else:
             data[field] = str(raw).strip() if raw else ""
-    return data
 
-# ============================================================
-#  PRACOWNICY PRZYPISANI DO FIRMY
-# ============================================================
+    return data
 
 def get_role_id(cursor, role_name):
     cursor.execute("SELECT id FROM role WHERE nazwa=?", (role_name,))
     row = cursor.fetchone()
     return row[0] if row else None
 
+
 def get_company_assigned_employee_ids(cursor, company_id):
     cursor.execute("SELECT pracownik_id FROM pracownik_firma WHERE firma_id=?", (company_id,))
     return [r[0] for r in cursor.fetchall()]
+
 
 def update_company_employee_assignments(cursor, company_id, employee_ids):
     role_id = get_role_id(cursor, "opiekun")
@@ -70,21 +88,19 @@ def update_company_employee_assignments(cursor, company_id, employee_ids):
     current = set(get_company_assigned_employee_ids(cursor, company_id))
     desired = set(employee_ids)
 
+    # dodawanie
     for add_id in desired - current:
         cursor.execute("""
             INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
             VALUES (?, ?, ?)
         """, (add_id, company_id, role_id))
 
+    # usuwanie
     for del_id in current - desired:
         cursor.execute("""
             DELETE FROM pracownik_firma
             WHERE pracownik_id=? AND firma_id=? AND rola_id=?
         """, (del_id, company_id, role_id))
-
-# ============================================================
-#  AUTOMATYCZNY DOBÓR CENNIKA
-# ============================================================
 
 def apply_default_main_pricing(cursor, company_id, document_count):
     cursor.execute("""
@@ -109,10 +125,6 @@ def apply_default_main_pricing(cursor, company_id, document_count):
         return cennik_ksiegowy
 
     return glowny
-
-# ============================================================
-#  ZAPIS FIRMY
-# ============================================================
 
 def save_company(cursor, payload, company_id=None):
     data = serialize_company_payload(payload)

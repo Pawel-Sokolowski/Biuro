@@ -2,7 +2,12 @@
 import datetime
 from typing import Optional, Dict, Any, List
 from app.db.dao_conn import get_conn
-from app.db.dao_companies import get_month_status, save_month_status
+from app.db.dao_companies import (
+    get_month_status,
+    save_month_status,
+    get_company,
+    save_company
+)
 from app.global_utils.calculator import oblicz_miesieczny_koszt
 
 
@@ -31,6 +36,10 @@ class MonthlyViewLogic:
     # EMPLOYEE FILTER LIST
     # ============================================================
     def get_employee_filter_list(self) -> List:
+        """
+        Zwraca listę pracowników w formacie [(id, label), ...].
+        Pierwszy element to opcja 'Wszystkie' z id = 0.
+        """
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -41,28 +50,55 @@ class MonthlyViewLogic:
         """)
         rows = cur.fetchall()
         conn.close()
-        return [(r["id"], r["label"]) for r in rows]
+
+        result = [(0, "Wszystkie")]
+        result.extend([(r["id"], r["label"]) for r in rows])
+        return result
 
     # ============================================================
     # MONTHLY ROWS
     # ============================================================
     def get_monthly_rows(self, selected_month: str, selected_employee: Optional[int]) -> List[Dict[str, Any]]:
+        """
+        Zwraca wiersze miesięczne. Jeśli selected_employee jest podany i != 0,
+        filtruje firmy przypisane do tego pracownika (pracownik_firma).
+        Jeśli selected_employee == 0 lub None, zwraca wszystkie firmy.
+        """
         conn = get_conn()
         cur = conn.cursor()
 
-        # ADMIN widzi wszystko
-        cur.execute("""
-            SELECT f.id, f.nazwa,
-                   COALESCE(sm.etap, 'Brak') AS etap,
-                   COALESCE(sm.ilosc_dok, 0) AS ilosc_dok,
-                   COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
-                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
-            FROM firmy f
-            LEFT JOIN statusy_miesieczne sm
-                ON sm.firma_id = f.id AND sm.miesiac = ?
-            ORDER BY f.nazwa
-        """, (selected_month,))
+        params = [selected_month]
+        if selected_employee and selected_employee != 0:
+            # filtruj tylko firmy przypisane do pracownika
+            query = """
+                SELECT f.id, f.nazwa,
+                       COALESCE(sm.etap, 'Brak') AS etap,
+                       COALESCE(sm.ilosc_dok, 0) AS ilosc_dok,
+                       COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
+                       COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
+                FROM firmy f
+                JOIN pracownik_firma pf ON pf.firma_id = f.id AND pf.pracownik_id = ?
+                LEFT JOIN statusy_miesieczne sm
+                    ON sm.firma_id = f.id AND sm.miesiac = ?
+                ORDER BY f.nazwa
+            """
+            # note: params order must match placeholders: pracownik_id, miesiac
+            params = [selected_employee, selected_month]
+        else:
+            # bez filtra pracownika — wszystkie firmy
+            query = """
+                SELECT f.id, f.nazwa,
+                       COALESCE(sm.etap, 'Brak') AS etap,
+                       COALESCE(sm.ilosc_dok, 0) AS ilosc_dok,
+                       COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
+                       COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
+                FROM firmy f
+                LEFT JOIN statusy_miesieczne sm
+                    ON sm.firma_id = f.id AND sm.miesiac = ?
+                ORDER BY f.nazwa
+            """
 
+        cur.execute(query, tuple(params))
         rows = cur.fetchall()
         conn.close()
 
@@ -243,8 +279,64 @@ class MonthlyViewLogic:
         from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
         InlineExtraServiceWindow(firma_id, self.aktualny_miesiac).exec()
 
+    # ============================================================
+    # COMPANY DATA HELPERS (added to fix AttributeError)
+    # ============================================================
+    def _get_company_data(self, firma_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Pobiera rekord firmy przez DAO i zwraca go jako zwykły słownik.
+        Zwraca None jeśli firma nie istnieje.
+        """
+        row = get_company(firma_id)
+        if not row:
+            return None
+
+        # Konwertuj sqlite3.Row na zwykły dict
+        data = {k: row[k] for k in row.keys()}
+        return data
+
+    def _save_company_data(self, firma_id: Optional[int], payload: Dict[str, Any]) -> None:
+        """
+        Zapisuje zmiany firmy. Korzysta z funkcji save_company z dao_companies,
+        która obsługuje zarówno INSERT jak i UPDATE oraz przypisania pracowników.
+        Jeśli firma_id jest None, save_company wykona INSERT.
+        """
+        payload_to_save = dict(payload)
+        if firma_id:
+            payload_to_save["id"] = firma_id
+        # Deleguj zapis do DAO
+        save_company(payload_to_save)
+
     def open_company_edit_window(self, firma_id: int):
-        from app.companies.companies_ui import CompanyDialog
-        dlg = CompanyDialog(self.pracownik_id, company_data=self._get_company_data(firma_id))
-        if dlg.exec():
-            self._save_company_data(firma_id, dlg.get_payload())
+        """
+        Otwiera modalny dialog z formularzem edycji firmy (CompanyForm).
+        CompanyForm sam zapisuje zmiany do bazy, więc tutaj tylko uruchamiamy dialog.
+        """
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout
+        from app.companies.companies_ui import CompanyForm
+        # pobierz dane firmy (opcjonalnie, CompanyForm potrafi działać bez pełnego payloadu)
+        company_data = self._get_company_data(firma_id)
+
+        dialog = QDialog()
+        dialog.setWindowTitle("Edycja firmy")
+        dialog.setModal(True)
+        dialog.resize(700, 600)
+
+        layout = QVBoxLayout(dialog)
+        # przekaż company_data jako dict (CompanyForm oczekuje dict lub None)
+        form = CompanyForm(self.pracownik_id, company_data, parent=dialog)
+
+        # gdy formularz zapisze, zamykamy dialog i odświeżamy ewentualne widoki
+        def _on_saved():
+            dialog.accept()
+
+        form.on_saved = _on_saved
+
+        layout.addWidget(form)
+        dialog.setLayout(layout)
+
+        # uruchom modalnie; CompanyForm wykona zapis samodzielnie
+        if dialog.exec():
+            # po zaakceptowaniu możesz odświeżyć widoki lub wykonać dodatkowe akcje
+            # np. odświeżenie miesięcznego widoku, jeśli jest taka potrzeba
+            pass

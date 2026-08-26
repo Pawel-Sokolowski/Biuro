@@ -2,10 +2,10 @@
 import sqlite3
 from typing import List, Dict, Any, Optional
 import json
+from datetime import datetime, timedelta
 
 from app.db.dao_conn import get_conn
 from app.db.dao_faktury import create_or_update_invoice
-from app.utils.saldeo_exporter import SALDEO_HEADERS
 
 
 class FakturyLogic:
@@ -92,12 +92,18 @@ class FakturyLogic:
         if company["glowny_cennik"]:
             pricing = self._get_main_pricing(company["glowny_cennik"])
             if pricing:
+                netto = float(pricing["cena_netto_ksiegowosc"])
+                vat = 23
+                brutto = netto * (1 + vat / 100)
+
                 pozycje.append({
                     "nazwa": "Usługa księgowa",
                     "ilosc": 1,
                     "jednostka": "mc",
-                    "netto": float(pricing["cena_netto_ksiegowosc"]),
-                    "vat": 23
+                    "netto": netto,
+                    "vat": vat,
+                    "brutto": brutto,
+                    "kategoria": "księgowość"
                 })
 
         # ------------------------------------------------------------
@@ -112,13 +118,18 @@ class FakturyLogic:
                 pricing = self._get_main_pricing(company["glowny_cennik"])
                 if pricing:
                     cena = float(pricing["cena_za_dokument_ponad_limit"])
+                    netto = ponad * cena
+                    vat = 23
+                    brutto = netto * (1 + vat / 100)
+
                     pozycje.append({
                         "nazwa": "Dokumenty ponad limit",
                         "ilosc": ponad,
                         "jednostka": "szt.",
-                        "cena_jedn": cena,
-                        "netto": ponad * cena,
-                        "vat": 23
+                        "netto": netto,
+                        "vat": vat,
+                        "brutto": brutto,
+                        "kategoria": "księgowość"
                     })
 
         # ------------------------------------------------------------
@@ -127,30 +138,38 @@ class FakturyLogic:
         if company["glowny_cennik"]:
             pricing = self._get_main_pricing(company["glowny_cennik"])
             if pricing and pricing["zdrowotna"] > 0:
+                netto = float(pricing["zdrowotna"])
+                vat = 0
+                brutto = netto
+
                 pozycje.append({
                     "nazwa": "Zdrowotna",
                     "ilosc": 1,
                     "jednostka": "mc",
-                    "netto": float(pricing["zdrowotna"]),
-                    "vat": 0
+                    "netto": netto,
+                    "vat": vat,
+                    "brutto": brutto,
+                    "kategoria": "księgowość"
                 })
 
         # ------------------------------------------------------------
         # 4. Usługi dodatkowe
         # ------------------------------------------------------------
         for u in extra:
-            netto = float(u["cena_netto"])
-            vat = int(u["stawka_vat"].replace("%", ""))
-
             if u["ilosc"] == 0:
                 continue
+
+            netto = float(u["cena_netto"]) * u["ilosc"]
+            vat = int(u["stawka_vat"].replace("%", ""))
+            brutto = netto * (1 + vat / 100)
 
             pozycje.append({
                 "nazwa": u["nazwa"],
                 "ilosc": u["ilosc"],
                 "jednostka": "szt.",
-                "netto": netto * u["ilosc"],
+                "netto": netto,
                 "vat": vat,
+                "brutto": brutto,
                 "kategoria": u["kategoria"]
             })
 
@@ -161,23 +180,35 @@ class FakturyLogic:
             # księgowość
             if status["sekundy_ksiegowosc"] > 0:
                 godz = status["sekundy_ksiegowosc"] / 3600
+                netto = round(godz * 150, 2)
+                vat = 23
+                brutto = netto * (1 + vat / 100)
+
                 pozycje.append({
                     "nazwa": "Praca księgowa",
                     "ilosc": round(godz, 2),
                     "jednostka": "godz.",
-                    "netto": round(godz * 150, 2),  # stawka 150 zł/h
-                    "vat": 23
+                    "netto": netto,
+                    "vat": vat,
+                    "brutto": brutto,
+                    "kategoria": "księgowość"
                 })
 
             # kadry
             if status["sekundy_kadry"] > 0:
                 godz = status["sekundy_kadry"] / 3600
+                netto = round(godz * 120, 2)
+                vat = 23
+                brutto = netto * (1 + vat / 100)
+
                 pozycje.append({
                     "nazwa": "Praca kadrowa",
                     "ilosc": round(godz, 2),
                     "jednostka": "godz.",
-                    "netto": round(godz * 120, 2),  # stawka 120 zł/h
-                    "vat": 23
+                    "netto": netto,
+                    "vat": vat,
+                    "brutto": brutto,
+                    "kategoria": "kadry"
                 })
 
         return pozycje
@@ -189,10 +220,7 @@ class FakturyLogic:
         pozycje = self.generate_invoice_positions(firma_id, miesiac)
 
         kwota_netto = sum(p["netto"] for p in pozycje)
-        kwota_brutto = sum(
-            p["netto"] * (1 + (p["vat"] / 100))
-            for p in pozycje
-        )
+        kwota_brutto = sum(p["brutto"] for p in pozycje)
 
         invoice_id = create_or_update_invoice(
             firma_id=firma_id,

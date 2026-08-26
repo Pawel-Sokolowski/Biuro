@@ -1,16 +1,22 @@
 # app/db/dao_companies.py
 from typing import Optional, Dict, Any, List
 from app.db.dao_conn import get_conn
+from app.companies.constants import COMPANY_FIELD_ORDER
+from app.companies.companies_model import (
+    serialize_company_payload,
+    update_company_employee_assignments,
+    get_company_assigned_employee_ids
+)
 
 # ============================================================
-#  FIRMY
+#  LISTA FIRM
 # ============================================================
 
 def list_companies() -> List:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, nazwa, nip, miasto,
+        SELECT id, nazwa, nip, miasto, status,
                glowny_cennik, limit_dokumentow,
                typ_rozliczenia, vat_czynny
         FROM firmy
@@ -20,6 +26,9 @@ def list_companies() -> List:
     conn.close()
     return rows
 
+# ============================================================
+#  POBIERANIE FIRMY
+# ============================================================
 
 def get_company(firma_id: int):
     conn = get_conn()
@@ -29,42 +38,50 @@ def get_company(firma_id: int):
     conn.close()
     return row
 
+# ============================================================
+#  ZAPIS FIRMY (FULL)
+# ============================================================
 
 def save_company(payload: Dict[str, Any]) -> int:
     """
-    payload może zawierać:
-      id (opcjonalnie przy update),
-      nazwa, nip, miasto, uop, uz, uod,
-      glowny_cennik, limit_dokumentow,
-      typ_rozliczenia, vat_czynny, glowny_cennik_manualny
+    Pełny zapis firmy zgodny z COMPANY_FIELD_ORDER.
+    Obsługuje:
+      - insert
+      - update
+      - przypisania pracowników
+      - udziałowców (osobno)
     """
+
     conn = get_conn()
     cur = conn.cursor()
 
-    fields = [k for k in payload.keys() if k != "id"]
-    values = [payload[f] for f in fields]
+    data = serialize_company_payload(payload)
+    employee_ids = payload.get("assigned_employee_ids", [])
 
     if "id" in payload and payload["id"]:
-        set_clause = ", ".join([f"{f} = ?" for f in fields])
-        cur.execute(f"""
-            UPDATE firmy
-            SET {set_clause}
-            WHERE id = ?
-        """, values + [payload["id"]])
+        # UPDATE
         firma_id = payload["id"]
+        set_clause = ", ".join([f"{f} = ?" for f in COMPANY_FIELD_ORDER])
+        cur.execute(
+            f"UPDATE firmy SET {set_clause} WHERE id = ?",
+            [data[f] for f in COMPANY_FIELD_ORDER] + [firma_id]
+        )
     else:
-        cols = ", ".join(fields)
-        placeholders = ", ".join(["?"] * len(fields))
-        cur.execute(f"""
-            INSERT INTO firmy ({cols})
-            VALUES ({placeholders})
-        """, values)
+        # INSERT
+        cols = ", ".join(COMPANY_FIELD_ORDER)
+        placeholders = ", ".join(["?"] * len(COMPANY_FIELD_ORDER))
+        cur.execute(
+            f"INSERT INTO firmy ({cols}) VALUES ({placeholders})",
+            [data[f] for f in COMPANY_FIELD_ORDER]
+        )
         firma_id = cur.lastrowid
+
+    # Przypisania pracowników
+    update_company_employee_assignments(cur, firma_id, employee_ids)
 
     conn.commit()
     conn.close()
     return firma_id
-
 
 # ============================================================
 #  UDZIAŁOWCY
@@ -83,7 +100,6 @@ def get_company_shareholders(firma_id: int) -> List:
     conn.close()
     return rows
 
-
 def save_company_shareholders(firma_id: int, shareholders: List[Dict[str, Any]]) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -99,9 +115,36 @@ def save_company_shareholders(firma_id: int, shareholders: List[Dict[str, Any]])
     conn.commit()
     conn.close()
 
+# ============================================================
+#  NOTATKI
+# ============================================================
+
+def get_company_notes(firma_id: int) -> List:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, tresc, data_utworzenia
+        FROM company_notes
+        WHERE firma_id = ?
+        ORDER BY data_utworzenia DESC
+        LIMIT 50
+    """, (firma_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def add_company_note(firma_id: int, tresc: str) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO company_notes (firma_id, tresc)
+        VALUES (?, ?)
+    """, (firma_id, tresc))
+    conn.commit()
+    conn.close()
 
 # ============================================================
-#  STATUSY MIESIĘCZNE — zgodne z nowym schema.py
+#  STATUSY MIESIĘCZNE
 # ============================================================
 
 def get_month_status(firma_id: int, miesiac: str):
@@ -115,7 +158,6 @@ def get_month_status(firma_id: int, miesiac: str):
     row = cur.fetchone()
     conn.close()
     return row
-
 
 def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> None:
     conn = get_conn()
@@ -149,7 +191,6 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
     conn.commit()
     conn.close()
 
-
 # ============================================================
 #  DOKUMENTY
 # ============================================================
@@ -167,7 +208,6 @@ def count_documents_for_month(firma_id: int, miesiac: str) -> int:
     conn.close()
     return int(row["cnt"] or 0)
 
-
 # ============================================================
 #  CENNIKI
 # ============================================================
@@ -177,7 +217,6 @@ def _extract_limit_from_key(klucz: str) -> Optional[int]:
         return int(klucz.split("_")[-1])
     except Exception:
         return None
-
 
 def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int):
     """

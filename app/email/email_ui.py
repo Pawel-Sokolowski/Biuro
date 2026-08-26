@@ -10,7 +10,29 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QThreadPool, QUrl
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from app.db.dao_conn import get_conn
-from app.email.email_actions import email_actions, SyncRunnable
+from app.email.email_actions import email_actions
+from PyQt6.QtCore import QRunnable, QObject, pyqtSignal
+
+class SyncWorkerSignals(QObject):
+    finished = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+class SyncRunnable(QRunnable):
+    def __init__(self, parent, pracownik_id):
+        super().__init__()
+        self.parent = parent
+        self.pracownik_id = pracownik_id
+        self.signals = SyncWorkerSignals()
+        self.setAutoDelete(True)
+
+    def run(self):
+        try:
+            ok = email_actions.sync_all_emails(self.pracownik_id)
+            self.signals.finished.emit(ok)
+        except Exception as e:
+            self.signals.error.emit(str(e))
+            self.signals.finished.emit(False)
+
 
 
 class EmailPage(QWidget):
@@ -550,7 +572,8 @@ class EmailPage(QWidget):
                 SELECT rf.id, rf.od, rf.temat_zawiera, rf.folder_docelowy
                 FROM reguly_filtrow rf
                 JOIN konta_email ke ON rf.konto_id = ke.id
-                WHERE ke.pracownik_id = ?
+                JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
+                WHERE pke.pracownik_id = ?
             """, (self.pracownik_id,))
             rows = cur.fetchall()
         finally:

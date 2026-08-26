@@ -5,13 +5,13 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QTabWidget, QWidget, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QMessageBox,
-    QLineEdit, QSpinBox, QComboBox, QFileDialog
+    QLineEdit, QSpinBox, QComboBox, QFileDialog, QListWidget, QListWidgetItem
 )
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 
 
-class GlobalSettingsDialog(QDialog):
+class GlobalSettingsPage(QWidget):
     def __init__(self, pracownik_id: int, is_admin: bool, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
@@ -395,21 +395,63 @@ class GlobalSettingsDialog(QDialog):
         dlg.setWindowTitle("Dodaj konto email")
         lay = QVBoxLayout(dlg)
 
-        pracownik_id_input = QSpinBox()
-        pracownik_id_input.setMaximum(999999)
+        # --- Użytkownicy (multi-select) ---
+        lay.addWidget(QLabel("Wybierz użytkowników (możesz zaznaczyć wielu):"))
+
+        users_list = QListWidget()
+        users_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+
+        users = self.logic.get_users()
+        for u in users:
+            item = QListWidgetItem(f"{u['id']} – {u['email']}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, u["id"])
+            users_list.addItem(item)
+
+        lay.addWidget(users_list)
+
+        # --- Email + hasło ---
         email = QLineEdit()
-        email.setPlaceholderText("Email")
-        imap = QLineEdit()
-        imap.setPlaceholderText("Serwer IMAP")
-        smtp = QLineEdit()
-        smtp.setPlaceholderText("Serwer SMTP")
+        email.setPlaceholderText("Adres email")
+        haslo = QLineEdit()
+        haslo.setPlaceholderText("Hasło")
+        haslo.setEchoMode(QLineEdit.EchoMode.Password)
 
-        lay.addWidget(QLabel("ID pracownika (właściciel konta)"))
-        lay.addWidget(pracownik_id_input)
         lay.addWidget(email)
-        lay.addWidget(imap)
-        lay.addWidget(smtp)
+        lay.addWidget(haslo)
 
+        # --- IMAP ---
+        lay.addWidget(QLabel("Serwer przychodzący (IMAP)"))
+        imap_server = QLineEdit()
+        imap_server.setPlaceholderText("np. imap.gmail.com")
+        lay.addWidget(imap_server)
+
+        imap_ssl = QComboBox()
+        imap_ssl.addItems(["SSL/TLS", "STARTTLS", "Brak"])
+        lay.addWidget(imap_ssl)
+
+        imap_port = QSpinBox()
+        imap_port.setMaximum(99999)
+        imap_port.setValue(993)  # domyślny SSL
+        lay.addWidget(imap_port)
+
+        # --- SMTP ---
+        lay.addWidget(QLabel("Serwer wychodzący (SMTP)"))
+        smtp_server = QLineEdit()
+        smtp_server.setPlaceholderText("np. smtp.gmail.com")
+        lay.addWidget(smtp_server)
+
+        smtp_ssl = QComboBox()
+        smtp_ssl.addItems(["SSL/TLS", "STARTTLS", "Brak"])
+        lay.addWidget(smtp_ssl)
+
+        smtp_port = QSpinBox()
+        smtp_port.setMaximum(99999)
+        smtp_port.setValue(465)  # domyślny SSL
+        lay.addWidget(smtp_port)
+
+        # --- Przyciski ---
         btns = QHBoxLayout()
         btn_ok = QPushButton("Zapisz")
         btn_cancel = QPushButton("Anuluj")
@@ -420,14 +462,36 @@ class GlobalSettingsDialog(QDialog):
         lay.addLayout(btns)
 
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            # Pobranie zaznaczonych użytkowników
+            selected_users = []
+            for i in range(users_list.count()):
+                item = users_list.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    selected_users.append(item.data(Qt.ItemDataRole.UserRole))
+
+            if not selected_users:
+                QMessageBox.warning(self, "Błąd", "Musisz wybrać co najmniej jednego użytkownika.")
+                return
+
             try:
-                self.logic.add_email_account(
-                    pracownik_id_input.value(),
+                # Dodajemy konto email
+                konto_id = self.logic.add_email_account(
                     email.text().strip(),
-                    imap.text().strip(),
-                    smtp.text().strip(),
+                    imap_server.text().strip(),
+                    smtp_server.text().strip(),
+                    haslo.text().strip(),
+                    imap_port.value(),
+                    smtp_port.value(),
+                    imap_ssl.currentText(),
+                    smtp_ssl.currentText(),
                 )
+
+                # Przypisujemy konto do wielu użytkowników
+                for uid in selected_users:
+                    self.logic.assign_email_to_employee(konto_id, uid)
+
                 self._refresh_email()
+                QMessageBox.information(self, "Sukces", "Konto email zostało dodane i przypisane.")
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się dodać konta email: {e}")
 

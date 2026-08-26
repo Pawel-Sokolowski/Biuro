@@ -1,9 +1,6 @@
-# app/email/email_actions.py
 import os
 import tempfile
 from PyQt6.QtWidgets import QFileDialog
-from PyQt6.QtCore import QRunnable, QObject, pyqtSignal
-
 from app.db.dao_companies import get_conn
 from app.email.email_sync import (
     EmailSyncer,
@@ -17,30 +14,31 @@ from app.email.email_sync import (
 class email_actions:
 
     # ============================================================
-    # SYNC — wywołuje EmailSyncer
+    # SYNC — synchronizacja wszystkich kont użytkownika
     # ============================================================
     @staticmethod
     def sync_all_emails(pracownik_id: int):
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM konta_email WHERE pracownik_id = ?", (pracownik_id,))
-        accounts = cur.fetchall()
-        conn.close()
-
+        accounts = email_actions.load_accounts(pracownik_id)
         ok = True
-        for (konto_id,) in accounts:
+        for konto_id, _email in accounts:
             if not EmailSyncer.sync_emails(konto_id, pracownik_id):
                 ok = False
         return ok
 
     # ============================================================
-    # KONT
+    # KONT — pobieranie kont przypisanych do użytkownika
     # ============================================================
     @staticmethod
     def load_accounts(pracownik_id: int):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT id, email FROM konta_email WHERE pracownik_id = ?", (pracownik_id,))
+        cur.execute("""
+            SELECT ke.id, ke.email
+            FROM konta_email ke
+            JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
+            WHERE pke.pracownik_id = ?
+            ORDER BY ke.email
+        """, (pracownik_id,))
         rows = cur.fetchall()
         conn.close()
         return rows
@@ -52,14 +50,31 @@ class email_actions:
     def load_folders(konto_id: int):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT serwer_imap, port_imap, haslo_enc, email FROM konta_email WHERE id = ?", (konto_id,))
+        cur.execute("""
+            SELECT serwer_imap, port_imap, haslo_enc, email, ssl_imap
+            FROM konta_email
+            WHERE id = ?
+        """, (konto_id,))
         row = cur.fetchone()
         conn.close()
 
         if not row:
             return []
 
-        imap = EmailSyncer.connect_imap(row[1], row[2], row[3], row[2])
+        serwer_imap = row["serwer_imap"]
+        port_imap = row["port_imap"]
+        haslo = row["haslo_enc"]
+        email_addr = row["email"]
+        ssl_mode = row["ssl_imap"]
+
+        imap = EmailSyncer.connect_imap(
+            serwer_imap,
+            port_imap,
+            email_addr,
+            haslo,
+            ssl_mode
+        )
+
         if not imap:
             return []
 
@@ -87,17 +102,17 @@ class email_actions:
     # LISTA WIADOMOŚCI
     # ============================================================
     @staticmethod
-    def refresh_email_list(konto_id: int, folder: str):
+    def refresh_email_list(konto_id: int, folder_id: int):
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT w.uid, w.od, w.temat, w.data, w.przeczytana,
+            SELECT w.uid, w.nadawca AS od, w.temat, w.data, w.przeczytana,
                    p.imie || ' ' || p.nazwisko AS pracownik
-            FROM wiadomosci w
+            FROM wiadomosci_email w
             LEFT JOIN pracownicy p ON w.pracownik_id = p.id
-            WHERE w.konto_id = ? AND w.folder = ?
+            WHERE w.konto_id = ? AND w.folder_id = ?
             ORDER BY w.data DESC
-        """, (konto_id, folder))
+        """, (konto_id, folder_id))
         rows = cur.fetchall()
         conn.close()
         return rows
@@ -106,21 +121,21 @@ class email_actions:
     # WYSZUKIWARKA
     # ============================================================
     @staticmethod
-    def search_messages(konto_id: int, folder: str, query: str):
+    def search_messages(konto_id: int, folder_id: int, query: str):
         query = f"%{query.lower()}%"
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT w.uid, w.od, w.temat, w.data, w.przeczytana,
+            SELECT w.uid, w.nadawca AS od, w.temat, w.data, w.przeczytana,
                    p.imie || ' ' || p.nazwisko AS pracownik
-            FROM wiadomosci w
+            FROM wiadomosci_email w
             LEFT JOIN pracownicy p ON w.pracownik_id = p.id
-            WHERE w.konto_id = ? AND w.folder = ?
-              AND (LOWER(w.od) LIKE ?
+            WHERE w.konto_id = ? AND w.folder_id = ?
+              AND (LOWER(w.nadawca) LIKE ?
                    OR LOWER(w.temat) LIKE ?
                    OR LOWER(w.data) LIKE ?)
             ORDER BY w.data DESC
-        """, (konto_id, folder, query, query, query))
+        """, (konto_id, folder_id, query, query, query))
         rows = cur.fetchall()
         conn.close()
         return rows
@@ -129,8 +144,8 @@ class email_actions:
     # TREŚĆ WIADOMOŚCI
     # ============================================================
     @staticmethod
-    def load_message(konto_id: int, folder: str, uid: str):
-        return load_email_message(konto_id, folder, uid)
+    def load_message(konto_id: int, folder_id: int, uid: str):
+        return load_email_message(konto_id, folder_id, uid)
 
     @staticmethod
     def extract_html(msg):
@@ -152,8 +167,8 @@ class email_actions:
         return list_attachments(msg)
 
     @staticmethod
-    def open_attachment(konto_id, folder, uid, part_index):
-        raw = download_attachment(konto_id, folder, uid, part_index)
+    def open_attachment(konto_id, folder_id, uid, part_index):
+        raw = download_attachment(konto_id, folder_id, uid, part_index)
         if not raw:
             return None
 
@@ -166,13 +181,13 @@ class email_actions:
         return path
 
     @staticmethod
-    def download_all_attachments(konto_id, folder, uid, attachments):
+    def download_all_attachments(konto_id, folder_id, uid, attachments):
         target_dir = QFileDialog.getExistingDirectory(None, "Wybierz folder do zapisania załączników")
         if not target_dir:
             return False
 
         for att in attachments:
-            raw = download_attachment(konto_id, folder, uid, att["index"])
+            raw = download_attachment(konto_id, folder_id, uid, att["index"])
             if not raw:
                 continue
 
@@ -186,40 +201,51 @@ class email_actions:
     # PRZENOSZENIE / USUWANIE
     # ============================================================
     @staticmethod
-    def move_email(konto_id: int, uid: str, target_folder: str):
+    def move_email(konto_id: int, uid: str, target_folder_id: int):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT serwer_imap, port_imap, haslo_enc, email FROM konta_email WHERE id = ?", (konto_id,))
+        cur.execute("""
+            SELECT serwer_imap, port_imap, haslo_enc, email, ssl_imap
+            FROM konta_email WHERE id = ?
+        """, (konto_id,))
         row = cur.fetchone()
         conn.close()
 
         if not row:
             return False
 
-        imap = EmailSyncer.connect_imap(row[1], row[2], row[0], row[3])
+        imap = EmailSyncer.connect_imap(
+            row["serwer_imap"],
+            row["port_imap"],
+            row["email"],
+            row["haslo_enc"],
+            row["ssl_imap"]
+        )
+
         if not imap:
             return False
 
-        ok = move_email_to_folder(imap, uid, target_folder)
+        ok = move_email_to_folder(imap, uid, target_folder_id)
         imap.logout()
         return ok
 
     @staticmethod
-    def move_email_and_get_sender(konto_id: int, uid: str, target_folder: str):
+    def delete_email(konto_id: int, uid: str):
+        # folder "Trash" musi być ID folderu, nie tekstem
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT od FROM wiadomosci WHERE konto_id = ? AND uid = ?", (konto_id, uid))
+        cur.execute("""
+            SELECT id FROM foldery_email
+            WHERE konto_id = ? AND LOWER(nazwa) = 'trash'
+        """, (konto_id,))
         row = cur.fetchone()
         conn.close()
 
-        sender = row[0] if row else None
+        if not row:
+            return False
 
-        ok = email_actions.move_email(konto_id, uid, target_folder)
-        return ok, sender
-
-    @staticmethod
-    def delete_email(konto_id: int, uid: str):
-        return email_actions.move_email(konto_id, uid, "Trash")
+        trash_id = row["id"]
+        return email_actions.move_email(konto_id, uid, trash_id)
 
     # ============================================================
     # OZNACZANIE
@@ -228,7 +254,11 @@ class email_actions:
     def mark_read(konto_id: int, uid: str):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("UPDATE wiadomosci SET przeczytana = 1 WHERE uid = ? AND konto_id = ?", (uid, konto_id))
+        cur.execute("""
+            UPDATE wiadomosci_email
+            SET przeczytana = 1
+            WHERE uid = ? AND konto_id = ?
+        """, (uid, konto_id))
         conn.commit()
         conn.close()
 
@@ -236,7 +266,11 @@ class email_actions:
     def mark_unread(konto_id: int, uid: str):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("UPDATE wiadomosci SET przeczytana = 0 WHERE uid = ? AND konto_id = ?", (uid, konto_id))
+        cur.execute("""
+            UPDATE wiadomosci_email
+            SET przeczytana = 0
+            WHERE uid = ? AND konto_id = ?
+        """, (uid, konto_id))
         conn.commit()
         conn.close()
 
@@ -244,45 +278,22 @@ class email_actions:
     def mark_spam(konto_id: int, uid: str):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("UPDATE wiadomosci SET folder = 'Spam' WHERE uid = ? AND konto_id = ?", (uid, konto_id))
-        conn.commit()
-        conn.close()
-
-    # ============================================================
-    # FILTRY
-    # ============================================================
-    @staticmethod
-    def add_filter(konto_id: int, sender: str, folder: str):
-        conn = get_conn()
-        cur = conn.cursor()
         cur.execute("""
-            INSERT INTO reguly_filtrow (konto_id, od, temat_zawiera, folder_docelowy, aktywna)
-            VALUES (?, ?, NULL, ?, 1)
-        """, (konto_id, sender, folder))
+            SELECT id FROM foldery_email
+            WHERE konto_id = ? AND LOWER(nazwa) = 'spam'
+        """, (konto_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        spam_id = row["id"]
+
+        cur.execute("""
+            UPDATE wiadomosci_email
+            SET folder_id = ?
+            WHERE uid = ? AND konto_id = ?
+        """, (spam_id, uid, konto_id))
         conn.commit()
         conn.close()
-
-
-# ============================================================
-#  SYNC WORKER (QThreadPool)
-# ============================================================
-
-class SyncWorkerSignals(QObject):
-    finished = pyqtSignal(bool)
-    error = pyqtSignal(str)
-
-
-class SyncRunnable(QRunnable):
-    def __init__(self, parent):
-        super().__init__()
-        self.parent = parent
-        self.signals = SyncWorkerSignals()
-        self.setAutoDelete(True)
-
-    def run(self):
-        try:
-            ok = email_actions.sync_all_emails(self.parent.pracownik_id)
-            self.signals.finished.emit(ok)
-        except Exception as e:
-            self.signals.error.emit(str(e))
-            self.signals.finished.emit(False)
+        return True

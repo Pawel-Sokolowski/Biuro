@@ -1,34 +1,65 @@
 # app/faktury/faktury_ui.py
+import json
+from datetime import datetime
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QMessageBox
+    QMessageBox, QTabWidget
 )
 from PyQt6.QtCore import Qt
 
-from app.faktury.faktury_logic import FakturyLogic
+from app.invoices.faktury_logic import FakturyLogic
 from app.db.dao_conn import get_conn
-from app.db.dao_faktury import get_invoice_for_company_month
+from app.db.dao_faktury import (
+    get_invoice_for_company_month,
+    get_invoices_for_company,
+    get_exported_invoices,
+    mark_exported
+)
 from app.utils.saldeo_exporter import export_saldeo_csv
 
 
 class FakturyPage(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, pracownik_id, parent=None):
         super().__init__(parent)
-
+        self.pracownik_id = pracownik_id
         self.logic = FakturyLogic()
 
         layout = QVBoxLayout(self)
 
         # ============================================================
-        # FILTRY
+        #  ZAKŁADKI
         # ============================================================
+        self.tabs = QTabWidget()
+        self.tab_faktury = QWidget()
+        self.tab_exportowane = QWidget()
+
+        self.tabs.addTab(self.tab_faktury, "Faktury")
+        self.tabs.addTab(self.tab_exportowane, "Eksportowane")
+
+        layout.addWidget(self.tabs)
+
+        # ============================================================
+        #  BUDOWANIE ZAKŁADEK
+        # ============================================================
+        self._build_tab_faktury()
+        self._build_tab_exportowane()
+
+        self._refresh_faktury()
+        self._refresh_exportowane()
+
+    # ============================================================
+    #  ZAKŁADKA FAKTURY
+    # ============================================================
+    def _build_tab_faktury(self):
+        layout = QVBoxLayout(self.tab_faktury)
+
+        # FILTRY
         filter_row = QHBoxLayout()
 
-        # Firma (autouzupełnianie)
+        # Firma
         self.firma_combo = QComboBox()
-        self.firma_combo.setEditable(True)
-
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
@@ -39,122 +70,163 @@ class FakturyPage(QWidget):
         filter_row.addWidget(QLabel("Firma:"))
         filter_row.addWidget(self.firma_combo)
 
-        # Miesiąc
+        # Miesiąc (domyślnie bieżący)
         self.miesiac_edit = QLineEdit()
-        self.miesiac_edit.setPlaceholderText("YYYY-MM")
+        self.miesiac_edit.setText(datetime.now().strftime("%Y-%m"))
         filter_row.addWidget(QLabel("Miesiąc:"))
         filter_row.addWidget(self.miesiac_edit)
 
-        # Odśwież
         btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self.refresh_tables)
+        btn_refresh.clicked.connect(self._refresh_faktury)
         filter_row.addWidget(btn_refresh)
 
-        # Generuj fakturę
         btn_generate = QPushButton("Generuj fakturę")
-        btn_generate.clicked.connect(self.generate_invoice)
+        btn_generate.clicked.connect(self._generate_invoice)
         filter_row.addWidget(btn_generate)
 
-        # Eksport do Saldeo
-        btn_export = QPushButton("Eksport do Saldeo")
-        btn_export.clicked.connect(self.export_saldeo)
-        filter_row.addWidget(btn_export)
+        btn_export_selected = QPushButton("Eksportuj zaznaczone")
+        btn_export_selected.clicked.connect(self._export_selected)
+        filter_row.addWidget(btn_export_selected)
 
-        filter_row.addStretch(1)
         layout.addLayout(filter_row)
 
-        # ============================================================
-        # TABELA POZYCJI FAKTURY
-        # ============================================================
-        self.positions_table = QTableWidget(0, 5)
+        # Tabela faktur
+        self.faktury_table = QTableWidget(0, 5)
+        self.faktury_table.setHorizontalHeaderLabels([
+            "ID", "Firma", "Data wystawienia", "Data sprzedaży", "Termin płatności"
+        ])
+        self.faktury_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.faktury_table.itemClicked.connect(self._show_invoice_positions)
+
+        layout.addWidget(self.faktury_table)
+
+        # Pozycje faktury (pod fakturą)
+        self.positions_table = QTableWidget(0, 6)
         self.positions_table.setHorizontalHeaderLabels([
-            "Nazwa pozycji", "Ilość", "Jednostka", "Netto", "VAT"
+            "Nazwa", "Ilość", "Jednostka", "Netto", "VAT", "Kategoria"
         ])
         self.positions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         layout.addWidget(QLabel("Pozycje faktury"))
         layout.addWidget(self.positions_table)
 
-        # ============================================================
-        # TABELA FAKTUR (zapisane)
-        # ============================================================
-        self.invoices_table = QTableWidget(0, 4)
-        self.invoices_table.setHorizontalHeaderLabels([
-            "ID", "Miesiąc", "Netto", "Brutto"
+    # ============================================================
+    #  ZAKŁADKA EKSPORTOWANE
+    # ============================================================
+    def _build_tab_exportowane(self):
+        layout = QVBoxLayout(self.tab_exportowane)
+
+        self.exported_table = QTableWidget(0, 5)
+        self.exported_table.setHorizontalHeaderLabels([
+            "ID", "Firma", "Data wystawienia", "Data sprzedaży", "Termin płatności"
         ])
-        self.invoices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.exported_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
-        layout.addWidget(QLabel("Zapisane faktury"))
-        layout.addWidget(self.invoices_table)
+        layout.addWidget(self.exported_table)
 
     # ============================================================
-    # Odświeżanie tabel
+    #  ODSWIEŻANIE FAKTUR
     # ============================================================
-    def refresh_tables(self):
+    def _refresh_faktury(self):
         firma_id = self.firma_combo.currentData()
         miesiac = self.miesiac_edit.text().strip()
 
         if not firma_id or not miesiac:
             return
 
-        # Pozycje faktury (generowane)
-        pozycje = self.logic.generate_invoice_positions(firma_id, miesiac)
+        invoices = get_invoices_for_company(firma_id)
 
-        self.positions_table.setRowCount(0)
-        for p in pozycje:
-            row = self.positions_table.rowCount()
-            self.positions_table.insertRow(row)
+        self.faktury_table.setRowCount(0)
 
-            self.positions_table.setItem(row, 0, QTableWidgetItem(p["nazwa"]))
-            self.positions_table.setItem(row, 1, QTableWidgetItem(str(p["ilosc"])))
-            self.positions_table.setItem(row, 2, QTableWidgetItem(p["jednostka"]))
-            self.positions_table.setItem(row, 3, QTableWidgetItem(f"{p['netto']:.2f}"))
-            self.positions_table.setItem(row, 4, QTableWidgetItem(f"{p['vat']}%"))
+        for inv in invoices:
+            row = self.faktury_table.rowCount()
+            self.faktury_table.insertRow(row)
 
-        # Zapisana faktura
-        invoice = get_invoice_for_company_month(firma_id, miesiac)
-
-        self.invoices_table.setRowCount(0)
-        if invoice:
-            row = self.invoices_table.rowCount()
-            self.invoices_table.insertRow(row)
-
-            self.invoices_table.setItem(row, 0, QTableWidgetItem(str(invoice["id"])))
-            self.invoices_table.setItem(row, 1, QTableWidgetItem(invoice["miesiac"]))
-            self.invoices_table.setItem(row, 2, QTableWidgetItem(f"{invoice['kwota_netto']:.2f}"))
-            self.invoices_table.setItem(row, 3, QTableWidgetItem(f"{invoice['kwota_brutto']:.2f}"))
+            self.faktury_table.setItem(row, 0, QTableWidgetItem(str(inv["id"])))
+            self.faktury_table.setItem(row, 1, QTableWidgetItem(inv["firma_nazwa"]))
+            self.faktury_table.setItem(row, 2, QTableWidgetItem(inv["data_wystawienia"]))
+            self.faktury_table.setItem(row, 3, QTableWidgetItem(inv["data_sprzedazy"]))
+            self.faktury_table.setItem(row, 4, QTableWidgetItem(inv["termin_platnosci"]))
 
     # ============================================================
-    # Generowanie faktury
+    #  ODSWIEŻANIE EKSPORTOWANYCH
     # ============================================================
-    def generate_invoice(self):
+    def _refresh_exportowane(self):
+        invoices = get_exported_invoices()
+
+        self.exported_table.setRowCount(0)
+
+        for inv in invoices:
+            row = self.exported_table.rowCount()
+            self.exported_table.insertRow(row)
+
+            self.exported_table.setItem(row, 0, QTableWidgetItem(str(inv["id"])))
+            self.exported_table.setItem(row, 1, QTableWidgetItem(inv["firma_nazwa"]))
+            self.exported_table.setItem(row, 2, QTableWidgetItem(inv["data_wystawienia"]))
+            self.exported_table.setItem(row, 3, QTableWidgetItem(inv["data_sprzedazy"]))
+            self.exported_table.setItem(row, 4, QTableWidgetItem(inv["termin_platnosci"]))
+
+    # ============================================================
+    #  GENEROWANIE FAKTURY
+    # ============================================================
+    def _generate_invoice(self):
         firma_id = self.firma_combo.currentData()
         miesiac = self.miesiac_edit.text().strip()
-
-        if not firma_id or not miesiac:
-            QMessageBox.warning(self, "Błąd", "Wybierz firmę i miesiąc.")
-            return
 
         invoice = self.logic.generate_and_save_invoice(firma_id, miesiac)
-
         QMessageBox.information(self, "OK", f"Faktura wygenerowana (ID: {invoice['id']}).")
-        self.refresh_tables()
+
+        self._refresh_faktury()
 
     # ============================================================
-    # Eksport do Saldeo
+    #  WYŚWIETLANIE POZYCJI POD FAKTURĄ
     # ============================================================
-    def export_saldeo(self):
-        miesiac = self.miesiac_edit.text().strip()
-        if not miesiac:
-            QMessageBox.warning(self, "Błąd", "Podaj miesiąc.")
+    def _show_invoice_positions(self, item):
+        row = item.row()
+        inv_id = int(self.faktury_table.item(row, 0).text())
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT pozycje_json FROM faktury WHERE id = ?", (inv_id,))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
             return
+
+        pozycje = json.loads(row["pozycje_json"])
+
+        self.positions_table.setRowCount(0)
+
+        for p in pozycje:
+            r = self.positions_table.rowCount()
+            self.positions_table.insertRow(r)
+
+            self.positions_table.setItem(r, 0, QTableWidgetItem(p.get("nazwa", "")))
+            self.positions_table.setItem(r, 1, QTableWidgetItem(str(p.get("ilosc", ""))))
+            self.positions_table.setItem(r, 2, QTableWidgetItem(p.get("jednostka", "")))
+            self.positions_table.setItem(r, 3, QTableWidgetItem(f"{p.get('netto', 0):.2f}"))
+            self.positions_table.setItem(r, 4, QTableWidgetItem(str(p.get("vat", ""))))
+            self.positions_table.setItem(r, 5, QTableWidgetItem(p.get("kategoria", "")))
+
+    # ============================================================
+    #  EKSPORT ZAZNACZONYCH
+    # ============================================================
+    def _export_selected(self):
+        firma_id = self.firma_combo.currentData()
+        miesiac = self.miesiac_edit.text().strip()
+
+        invoices = get_invoices_for_company(firma_id)
+        ids = [inv["id"] for inv in invoices]
 
         path, _ = QFileDialog.getSaveFileName(self, "Zapisz CSV", "", "CSV (*.csv)")
         if not path:
             return
 
-        try:
-            export_saldeo_csv(None, path, miesiac)
-            QMessageBox.information(self, "OK", "Eksport zakończony.")
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", str(e))
+        export_saldeo_csv(None, path, miesiac)
+        mark_exported(ids)
+
+        QMessageBox.information(self, "OK", "Wybrane faktury wyeksportowano.")
+
+        self._refresh_faktury()
+        self._refresh_exportowane()

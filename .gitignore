@@ -2,3 +2,6 @@ biuro.db
 *.db
 app/config.py
 *.csv
+script
+test_imap.py
+

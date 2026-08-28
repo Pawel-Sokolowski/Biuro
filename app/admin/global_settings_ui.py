@@ -378,7 +378,8 @@ class GlobalSettingsPage(QWidget):
             row_idx = self.email_table.rowCount()
             self.email_table.insertRow(row_idx)
             for col_idx, key in enumerate(["id", "pracownik_id", "email", "serwer_imap", "serwer_smtp"]):
-                self.email_table.setItem(row_idx, col_idx, QTableWidgetItem(str(r[key])))
+                value = r[key] if key in r.keys() else ""
+                self.email_table.setItem(row_idx, col_idx, QTableWidgetItem(str(value)))
 
         assigns = self.logic.get_email_assignments()
         self.assign_table.setRowCount(0)

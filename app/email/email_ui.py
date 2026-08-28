@@ -1,619 +1,752 @@
-# app/email/email_ui.py
+# app/email/email_page.py
+
+from __future__ import annotations
+
+import imaplib
+import email
+import email.header
+from typing import List, Dict, Any, Optional
+
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QLineEdit, QComboBox, QTableWidget,
-    QHeaderView, QPushButton, QTextEdit, QTabWidget,
-    QSplitter, QMessageBox, QInputDialog, QTableWidgetItem,
-    QTreeWidget, QTreeWidgetItem, QMenu, QDialog
+    QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton
 )
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QThreadPool, QUrl
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from app.db.dao_conn import get_conn
-from app.email.email_actions import email_actions
-from PyQt6.QtCore import QRunnable, QObject, pyqtSignal
+from PyQt6.QtWidgets import QTextBrowser
+from PyQt6.QtCore import Qt
 
-class SyncWorkerSignals(QObject):
-    finished = pyqtSignal(bool)
-    error = pyqtSignal(str)
+from app.email.email_storage import (
+    get_email_accounts_for_employee,
+    get_folders_for_account,
+    add_folder_for_account,
+    remove_folder_for_account
+)
+from app.utils.crypto import decrypt_password
 
-class SyncRunnable(QRunnable):
-    def __init__(self, parent, pracownik_id):
-        super().__init__()
-        self.parent = parent
-        self.pracownik_id = pracownik_id
-        self.signals = SyncWorkerSignals()
-        self.setAutoDelete(True)
-
-    def run(self):
-        try:
-            ok = email_actions.sync_all_emails(self.pracownik_id)
-            self.signals.finished.emit(ok)
-        except Exception as e:
-            self.signals.error.emit(str(e))
-            self.signals.finished.emit(False)
-
+# NOWY SYNC — ZERO PARSOWANIA
+from app.email.email_sync import (
+    extract_folder_name,
+    safe_header,
+    sync_folders
+)
 
 
 class EmailPage(QWidget):
-    def __init__(self, pracownik_id: int, parent=None):
-        super().__init__(parent)
+    """
+    Główna strona mailowa — IMAP-only.
+    Układ jak w Thunderbirdzie:
+    - pasek narzędzi (synchronizacja)
+    - lewa kolumna: foldery
+    - środkowa kolumna: lista wiadomości
+    - prawa kolumna: podgląd treści + załączniki
+    """
+
+    def __init__(self, pracownik_id: int):
+        super().__init__()
+
         self.pracownik_id = pracownik_id
+        self.accounts = get_email_accounts_for_employee(pracownik_id)
 
-        self.filter_konto_combo = None
-        self.filter_od = None
-        self.filter_temat = None
-        self.filter_folder = None
+        self.current_account: Optional[Dict[str, Any]] = None
+        self.current_folder_server: Optional[str] = None
+        self.current_uid: Optional[str] = None
 
-        self.current_attachments = []
-        self.current_attachment_meta = None
-        self.thread_pool = QThreadPool.globalInstance()
-        self._build_ui()
+        # -----------------------------
+        # GŁÓWNY LAYOUT
+        # -----------------------------
+        main_layout = QVBoxLayout()
+        self.setLayout(main_layout)
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-
-        title = QLabel("Email")
-        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        layout.addWidget(title)
-
-        self.email_tabs = QTabWidget()
-        self.email_tabs.addTab(self._create_reader_tab(), "Przegląd Emaili")
-        self.email_tabs.addTab(self._create_filters_tab(), "Filtry")
-        layout.addWidget(self.email_tabs)
-
-    def _create_reader_tab(self):
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(8)
-
-        panel_folders = QWidget()
-        folders_layout = QVBoxLayout(panel_folders)
-        folders_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.folder_tree = QTreeWidget()
-        self.folder_tree.setHeaderHidden(True)
-        self.folder_tree.itemClicked.connect(self._on_folder_selected)
-        self.folder_tree.setAcceptDrops(True)
-        self.folder_tree.setDragDropMode(QTreeWidget.DragDropMode.DropOnly)
-        self.folder_tree.dragEnterEvent = self._folder_drag_enter
-        self.folder_tree.dropEvent = self._folder_drop_event
-
-        folders_layout.addWidget(self.folder_tree)
-        splitter.addWidget(panel_folders)
-
-        panel_list = QWidget()
-        list_layout = QVBoxLayout(panel_list)
-        list_layout.setContentsMargins(0, 0, 0, 0)
-
+        # -----------------------------
+        # PASEK NARZĘDZI
+        # -----------------------------
         toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("Konto:"))
-        self.email_account_combo = QComboBox()
-        self.email_account_combo.currentIndexChanged.connect(self._load_folders)
-        toolbar.addWidget(self.email_account_combo)
 
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Szukaj wiadomości…")
-        self.search_box.textChanged.connect(self._search_messages)
-        toolbar.addWidget(self.search_box)
-
-        btn_refresh = QPushButton("🔄 Odśwież")
-        btn_refresh.clicked.connect(self.refresh_email_list)
-        toolbar.addWidget(btn_refresh)
-
-        btn_sync = QPushButton("Synchronizuj")
-        btn_sync.clicked.connect(self._trigger_email_sync)
+        btn_sync = QPushButton("Synchronizacja wiadomości")
+        btn_sync.clicked.connect(self.on_manual_sync)
         toolbar.addWidget(btn_sync)
 
-        list_layout.addLayout(toolbar)
+        toolbar.addStretch()
 
-        self.table_email_list = QTableWidget()
-        self.table_email_list.setColumnCount(6)
-        self.table_email_list.setHorizontalHeaderLabels(
-            ["UID", "Od", "Temat", "Data", "Przeczytana", "Pracownik"]
-        )
-        self.table_email_list.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table_email_list.hideColumn(0)
-        self.table_email_list.itemClicked.connect(self.on_email_selected)
+        main_layout.addLayout(toolbar)
 
-        self.table_email_list.setDragEnabled(True)
-        self.table_email_list.setAcceptDrops(False)
-        self.table_email_list.setDragDropMode(QTableWidget.DragDropMode.DragOnly)
+        # -----------------------------
+        # SPLITTER — 3 kolumny
+        # -----------------------------
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(splitter)
 
-        self.table_email_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table_email_list.customContextMenuRequested.connect(self._show_context_menu)
+        # LEWA: FOLDERY
+        self.folder_tree = QTreeWidget()
+        self.folder_tree.setHeaderLabel("Foldery")
+        self.folder_tree.itemClicked.connect(self.on_folder_clicked)
+        splitter.addWidget(self.folder_tree)
 
-        list_layout.addWidget(self.table_email_list)
-        splitter.addWidget(panel_list)
+        # ŚRODKOWA: LISTA WIADOMOŚCI
+        self.mail_list = QListWidget()
+        self.mail_list.itemClicked.connect(self.on_mail_clicked)
+        splitter.addWidget(self.mail_list)
 
-        panel_content = QWidget()
-        content_layout = QVBoxLayout(panel_content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        # PRAWA: PODGLĄD TREŚCI
+        self.mail_view = QTextBrowser()
+        self.mail_view.setOpenLinks(False)
+        self.mail_view.anchorClicked.connect(self.on_attachment_clicked)
+        splitter.addWidget(self.mail_view)
 
-        content_layout.addWidget(QLabel("Treść wiadomości:"))
-
-        self.email_content = QTextEdit()
-        self.email_content.setReadOnly(True)
-        content_layout.addWidget(self.email_content)
-
-        self.html_viewer = QWebEngineView()
-        self.html_viewer.hide()
-        content_layout.addWidget(self.html_viewer)
-
-        actions = QHBoxLayout()
-        btn_move = QPushButton("Przenieś")
-        btn_move.clicked.connect(self.move_selected_email)
-        actions.addWidget(btn_move)
-
-        btn_delete = QPushButton("Usuń")
-        btn_delete.clicked.connect(self.delete_selected_email)
-        actions.addWidget(btn_delete)
-
-        btn_download_all = QPushButton("Pobierz wszystkie załączniki")
-        btn_download_all.clicked.connect(self._download_all_attachments)
-        actions.addWidget(btn_download_all)
-
-        actions.addStretch()
-        content_layout.addLayout(actions)
-        splitter.addWidget(panel_content)
-
-        splitter.setSizes([300, 600, 700])
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
 
-        layout.addWidget(splitter)
+        # -----------------------------
+        # ŁADOWANIE KONTA
+        # -----------------------------
+        if self.accounts:
+            self.current_account = self.accounts[0]
 
-        self._refresh_email_account_combos()
-        return tab
+            # automatyczna synchronizacja folderów
+            self.synchronize_folders()
 
-    def _create_filters_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+            # załaduj foldery do UI
+            self.load_folders_from_imap()
+        else:
+            QMessageBox.warning(self, "Brak kont", "Nie znaleziono żadnych kont email.")
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("Aktywne filtry:"))
-        self.table_email_filters = QTableWidget()
-        self.table_email_filters.setColumnCount(5)
-        self.table_email_filters.setHorizontalHeaderLabels(["ID", "Od", "Temat", "Folder", "Akcje"])
-        self.table_email_filters.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table_email_filters.hideColumn(0)
-        left_layout.addWidget(self.table_email_filters)
 
-        right = QWidget()
-        right.setFixedWidth(350)
-        right_layout = QVBoxLayout(right)
-        right_layout.addWidget(QLabel("Dodaj filtr"))
+    # =====================================================================
+    # IMAP LOGIN
+    # =====================================================================
 
-        form = QFormLayout()
+    def open_imap(self) -> Optional[imaplib.IMAP4_SSL]:
+        if not self.current_account:
+            return None
 
-        self.filter_konto_combo = QComboBox()
-        self.filter_od = QLineEdit()
-        self.filter_temat = QLineEdit()
-        self.filter_folder = QLineEdit()
+        email_addr = self.current_account.get("email")
+        host = self.current_account.get("serwer_imap")
+        port = int(self.current_account.get("port_imap") or 993)
+        enc = self.current_account.get("haslo_enc")
 
-        form.addRow("Konto:", self.filter_konto_combo)
-        form.addRow("Od:", self.filter_od)
-        form.addRow("Temat:", self.filter_temat)
-        form.addRow("Folder:", self.filter_folder)
+        try:
+            pwd = decrypt_password(enc)
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie można odszyfrować hasła:\n{e}")
+            return None
 
-        right_layout.addLayout(form)
+        try:
+            imap = imaplib.IMAP4_SSL(host, port)
+            imap.login(email_addr, pwd)
+            return imap
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd IMAP", f"Nie można połączyć z serwerem:\n{e}")
+            return None
 
-        btn_add = QPushButton("Dodaj filtr")
-        btn_add.clicked.connect(self._add_filter_from_ui)
-        btn_add.clicked.connect(self._trigger_email_sync)
-        right_layout.addWidget(btn_add)
 
-        right_layout.addStretch()
+    # =====================================================================
+    # BEZPIECZNY SELECT
+    # =====================================================================
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        layout.addWidget(splitter)
+    def safe_select(self, imap) -> bool:
+        """
+        Stabilny select folderu IMAP — 3 próby:
+        readonly=True, readonly=False, bez readonly.
+        """
+        for args in [
+            (self.current_folder_server, True),
+            (self.current_folder_server, False),
+            (self.current_folder_server, None)
+        ]:
+            folder, readonly = args
+            try:
+                if readonly is None:
+                    status, _ = imap.select(folder)
+                else:
+                    status, _ = imap.select(folder, readonly=readonly)
 
-        self._refresh_email_account_combos()
-        self._refresh_email_filters()
-        return tab
+                if status == "OK":
+                    return True
+            except:
+                pass
 
-    def _refresh_email_account_combos(self):
-        accounts = email_actions.load_accounts(self.pracownik_id)
+        return False
 
-        self.email_account_combo.clear()
-        if self.filter_konto_combo is not None:
-            self.filter_konto_combo.clear()
-
-        for kid, email_addr in accounts:
-            self.email_account_combo.addItem(email_addr, kid)
-            if self.filter_konto_combo is not None:
-                self.filter_konto_combo.addItem(email_addr, kid)
-
-        self._load_folders()
-
-    def _load_folders(self):
-        accounts_folders = email_actions.load_all_accounts_folders(self.pracownik_id)
+    def load_folders_from_imap(self) -> None:
+        """
+        Pobiera foldery IMAP i buduje PRAWDZIWE drzewo folderów.
+        Zero parsowania — nazwy 1:1 jak na serwerze.
+        """
         self.folder_tree.clear()
 
-        for kid, email_addr, folders in accounts_folders:
-            root_item = QTreeWidgetItem([email_addr])
-            root_item.setForeground(0, Qt.GlobalColor.blue)
-            root_item.setFont(0, QFont("Arial", 11, QFont.Weight.Bold))
-
-            for f in folders:
-                child = QTreeWidgetItem([f])
-                child.setData(0, Qt.ItemDataRole.UserRole, kid)
-                root_item.addChild(child)
-
-            self.folder_tree.addTopLevelItem(root_item)
-
-            separator = QTreeWidgetItem([" "])
-            separator.setDisabled(True)
-            self.folder_tree.addTopLevelItem(separator)
-
-    def _on_folder_selected(self, item):
-        folder = item.text(0)
-        konto_id = item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
-        self.refresh_email_list(folder_override=folder, konto_override=konto_id)
-
-    def refresh_email_list(self, folder_override=None, konto_override=None):
-        konto_id = konto_override or self.email_account_combo.currentData()
-        folder_item = self.folder_tree.currentItem()
-        folder = folder_override or (folder_item.text(0) if folder_item else "")
-
-        if not konto_id or not folder:
-            self.table_email_list.setRowCount(0)
+        imap = self.open_imap()
+        if not imap:
             return
 
-        rows = email_actions.refresh_email_list(konto_id, folder)
-        self._populate_table(rows)
+        mailboxes = []
 
-    def _search_messages(self):
-        query = self.search_box.text().strip().lower()
-        if not query:
-            self.refresh_email_list()
+        # stabilne próby LIST
+        for args in [
+            ("INBOX", "*"),
+            ("INBOX", "%"),
+            ("", "*"),
+            ("", "%"),
+        ]:
+            try:
+                typ, boxes = imap.list(*args)
+                if typ == "OK" and boxes:
+                    mailboxes = boxes
+                    break
+            except:
+                pass
+
+        if not mailboxes:
+            QMessageBox.warning(self, "IMAP", "Serwer nie zwrócił żadnych folderów.")
             return
 
-        folder_item = self.folder_tree.currentItem()
-        if not folder_item:
+        # root node = email użytkownika
+        root = QTreeWidgetItem([self.current_account["email"]])
+        self.folder_tree.addTopLevelItem(root)
+
+        # mapa: pełna ścieżka → QTreeWidgetItem
+        nodes = {}
+
+        for raw in mailboxes:
+            folder_server = raw.decode().split('"')[-2] if '"' in raw.decode() else raw.decode().split()[-1]
+            parts = folder_server.split(".")
+
+            parent = root
+            path = ""
+
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+
+                # budujemy ścieżkę
+                path = path + "." + part if path else part
+
+                # jeśli węzeł nie istnieje — tworzymy
+                if path not in nodes:
+                    item = QTreeWidgetItem([part])
+                    item.setData(0, Qt.ItemDataRole.UserRole, path)
+                    parent.addChild(item)
+                    nodes[path] = item
+
+                # schodzimy poziom niżej
+                parent = nodes[path]
+
+        self.folder_tree.expandAll()
+
+        try:
+            imap.logout()
+        except:
+            pass
+
+    # =====================================================================
+    # KLIK FOLDERU
+    # =====================================================================
+
+    def on_folder_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        server_name = item.data(0, Qt.ItemDataRole.UserRole)
+        if not server_name:
             return
 
-        folder = folder_item.text(0)
-        konto_id = folder_item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
+        self.current_folder_server = server_name
+        self.load_mail_list_from_imap()
 
-        rows = email_actions.search_messages(konto_id, folder, query)
-        self._populate_table(rows)
+    # =====================================================================
+    # LISTA WIADOMOŚCI
+    # =====================================================================
 
-    def _populate_table(self, rows):
-        self.table_email_list.setRowCount(0)
-        for r, row in enumerate(rows):
-            self.table_email_list.insertRow(r)
-            self.table_email_list.setItem(r, 0, QTableWidgetItem(str(row["uid"])))
-            self.table_email_list.setItem(r, 1, QTableWidgetItem(row["od"] or ""))
-            self.table_email_list.setItem(r, 2, QTableWidgetItem(row["temat"] or ""))
-            self.table_email_list.setItem(r, 3, QTableWidgetItem(row["data"] or ""))
-            self.table_email_list.setItem(r, 4, QTableWidgetItem("Tak" if row["przeczytana"] else "Nie"))
-            self.table_email_list.setItem(r, 5, QTableWidgetItem(row["pracownik"] or ""))
+    def load_mail_list_from_imap(self) -> None:
+        """
+        Pobiera listę wiadomości z IMAP dla aktualnego folderu
+        i wyświetla je w QListWidget.
+        """
+        self.mail_list.clear()
+        self.mail_view.clear()
 
-    def on_email_selected(self, item):
-        row = item.row()
-        uid = self.table_email_list.item(row, 0).text()
-
-        folder_item = self.folder_tree.currentItem()
-        if not folder_item:
-            return
-        folder = folder_item.text(0)
-        konto_id = folder_item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
-
-        msg = email_actions.load_message(konto_id, folder, uid)
-        if not msg:
-            self.email_content.setPlainText("Nie udało się pobrać wiadomości")
-            self.html_viewer.hide()
-            self.email_content.show()
+        if not self.current_folder_server:
             return
 
-        html = email_actions.extract_html(msg)
-        if html:
-            self.email_content.hide()
-            self.html_viewer.show()
-            self.html_viewer.setHtml(html)
+        imap = self.open_imap()
+        if not imap:
+            return
+
+        # BEZPIECZNY SELECT
+        if not self.safe_select(imap):
+            QMessageBox.warning(self, "IMAP",
+                                f"Nie można wybrać folderu:\n{self.current_folder_server}")
+            return
+
+        try:
+            typ, data = imap.search(None, "ALL")
+            if typ != "OK":
+                QMessageBox.warning(self, "IMAP", "Nie można pobrać listy wiadomości.")
+                return
+
+            uids = data[0].split()
+            uids = uids[-300:]  # ostatnie 300 wiadomości
+
+            for uid in reversed(uids):  # najnowsze na górze
+                uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
+
+                typ, msg_data = imap.fetch(uid, "(BODY.PEEK[HEADER])")
+                if typ != "OK" or not msg_data or not msg_data[0]:
+                    continue
+
+                raw = msg_data[0][1]
+                msg = email.message_from_bytes(raw)
+
+                sender = safe_header(msg.get("From", ""))
+                subject = safe_header(msg.get("Subject", ""))
+                date = safe_header(msg.get("Date", ""))
+
+                item_text = f"{sender}\n{subject}\n{date}"
+
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, uid_str)
+
+                self.mail_list.addItem(item)
+
+        except Exception as e:
+            QMessageBox.critical(self, "IMAP", f"Nie można pobrać wiadomości:\n{e}")
+
+        finally:
+            try:
+                imap.logout()
+            except:
+                pass
+
+    # =====================================================================
+    # KLIKNIĘCIE WIADOMOŚCI — POBIERANIE TREŚCI
+    # =====================================================================
+
+    def on_mail_clicked(self, item: QListWidgetItem) -> None:
+        """
+        Po kliknięciu wiadomości pobieramy pełną treść z IMAP + załączniki.
+        """
+        uid = item.data(Qt.ItemDataRole.UserRole)
+        self.current_uid = uid
+
+        if not uid:
+            return
+
+        imap = self.open_imap()
+        if not imap:
+            return
+
+        # BEZPIECZNY SELECT
+        if not self.safe_select(imap):
+            QMessageBox.warning(self, "IMAP",
+                                f"Nie można wybrać folderu:\n{self.current_folder_server}")
+            return
+
+        try:
+            typ, msg_data = imap.fetch(uid, "(RFC822)")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                QMessageBox.warning(self, "IMAP", "Nie można pobrać treści wiadomości.")
+                return
+
+            raw = msg_data[0][1]
+            msg = email.message_from_bytes(raw)
+
+            html = self.extract_html(msg)
+            if html:
+                self.mail_view.setHtml(html)
+            else:
+                text = self.extract_text(msg)
+                self.mail_view.setPlainText(text)
+
+            # załączniki
+            attachments = self.get_attachments(msg)
+            self.show_attachments(attachments)
+
+        except Exception as e:
+            QMessageBox.critical(self, "IMAP", f"Nie można pobrać treści wiadomości:\n{e}")
+
+        finally:
+            try:
+                imap.logout()
+            except:
+                pass
+
+    # =====================================================================
+    # EKSTRAKCJA HTML / TEXT
+    # =====================================================================
+
+    def extract_html(self, msg: email.message.Message) -> Optional[str]:
+        """
+        Zwraca treść HTML z wiadomości.
+        """
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/html":
+                    try:
+                        return part.get_payload(decode=True).decode(
+                            part.get_content_charset() or "utf-8",
+                            errors="replace"
+                        )
+                    except Exception:
+                        return None
         else:
-            self.html_viewer.hide()
-            self.email_content.show()
-            self.email_content.setPlainText("Treść wiadomości pobrana z IMAP")
+            if msg.get_content_type() == "text/html":
+                try:
+                    return msg.get_payload(decode=True).decode(
+                        msg.get_content_charset() or "utf-8",
+                        errors="replace"
+                    )
+                except Exception:
+                    return None
+        return None
 
-        attachments = email_actions.get_attachments(msg)
-        self.current_attachments = attachments
-        self.current_attachment_meta = {
-            "konto_id": konto_id,
-            "folder": folder,
-            "email_uid": uid
-        }
+    def extract_text(self, msg: email.message.Message) -> str:
+        """
+        Zwraca treść tekstową wiadomości.
+        """
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    try:
+                        return part.get_payload(decode=True).decode(
+                            part.get_content_charset() or "utf-8",
+                            errors="replace"
+                        )
+                    except Exception:
+                        return ""
+        else:
+            if msg.get_content_type() == "text/plain":
+                try:
+                    return msg.get_payload(decode=True).decode(
+                        msg.get_content_charset() or "utf-8",
+                        errors="replace"
+                    )
+                except Exception:
+                    return ""
+        return ""
+    # =====================================================================
+    # ZAŁĄCZNIKI — WYKRYWANIE
+    # =====================================================================
 
-    def _show_context_menu(self, pos):
-        menu = QMenu(self)
+    def get_attachments(self, msg: email.message.Message) -> List[Dict[str, Any]]:
+        """
+        Zwraca listę załączników:
+        [
+            {"index": 0, "filename": "...", "part": <email part>},
+            ...
+        ]
+        """
+        attachments = []
+        idx = 0
 
-        act_open_att = menu.addAction("Otwórz załącznik")
-        act_download_all = menu.addAction("Pobierz wszystkie załączniki")
-        act_source = menu.addAction("Pokaż źródło wiadomości")
-        act_mark_read = menu.addAction("Oznacz jako przeczytane")
-        act_mark_unread = menu.addAction("Oznacz jako nieprzeczytane")
-        act_spam = menu.addAction("Oznacz jako niechciane")
-        act_delete = menu.addAction("Usuń")
-        act_move = menu.addAction("Przenieś do folderu…")
-
-        action = menu.exec(self.table_email_list.mapToGlobal(pos))
-        if not action:
-            return
-
-        row = self.table_email_list.currentRow()
-        if row < 0:
-            return
-
-        uid = self.table_email_list.item(row, 0).text()
-        folder_item = self.folder_tree.currentItem()
-        if not folder_item:
-            return
-        folder = folder_item.text(0)
-        konto_id = folder_item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
-
-        if action == act_open_att:
-            self._open_attachment()
-        elif action == act_download_all:
-            self._download_all_attachments()
-        elif action == act_spam:
-            email_actions.mark_spam(konto_id, uid)
-            self.refresh_email_list(folder_override="Spam", konto_override=konto_id)
-        elif action == act_delete:
-            self.delete_selected_email()
-        elif action == act_move:
-            self.move_selected_email()
-        elif action == act_source:
-            self._show_source()
-        elif action == act_mark_read:
-            email_actions.mark_read(konto_id, uid)
-            self.refresh_email_list(folder_override=folder, konto_override=konto_id)
-        elif action == act_mark_unread:
-            email_actions.mark_unread(konto_id, uid)
-            self.refresh_email_list(folder_override=folder, konto_override=konto_id)
-
-    def _open_attachment(self):
-        if not self.current_attachments:
-            return
-
-        items = [att["filename"] for att in self.current_attachments]
-        filename, ok = QInputDialog.getItem(self, "Załączniki", "Wybierz:", items, 0, False)
-        if not ok:
-            return
-
-        att = next(a for a in self.current_attachments if a["filename"] == filename)
-
-        pdf_path = email_actions.open_attachment(
-            self.current_attachment_meta["konto_id"],
-            self.current_attachment_meta["folder"],
-            self.current_attachment_meta["email_uid"],
-            att["index"]
-        )
-
-        if not pdf_path:
-            QMessageBox.warning(self, "Błąd", "Nie udało się otworzyć załącznika.")
-            return
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(filename)
-        dlg.resize(900, 700)
-
-        layout = QVBoxLayout(dlg)
-        viewer = QWebEngineView()
-        viewer.load(QUrl.fromLocalFile(pdf_path))
-        layout.addWidget(viewer)
-
-        dlg.exec()
-
-    def _download_all_attachments(self):
-        if not self.current_attachments:
-            return
-
-        email_actions.download_all_attachments(
-            self.current_attachment_meta["konto_id"],
-            self.current_attachment_meta["folder"],
-            self.current_attachment_meta["email_uid"],
-            self.current_attachments
-        )
-
-    def move_selected_email(self):
-        row = self.table_email_list.currentRow()
-        if row < 0:
-            return
-
-        uid = self.table_email_list.item(row, 0).text()
-        folder_item = self.folder_tree.currentItem()
-        if not folder_item:
-            return
-        current_folder = folder_item.text(0)
-        konto_id = folder_item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
-
-        folders = []
-        root = self.folder_tree.invisibleRootItem()
-        for i in range(root.childCount()):
-            item = root.child(i)
-            if item.childCount() == 0:
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
                 continue
-            for j in range(item.childCount()):
-                folders.append(item.child(j).text(0))
 
-        folder, ok = QInputDialog.getItem(self, "Przenieś", "Wybierz folder:", folders, 0, False)
-        if not ok:
+            cd = part.get("Content-Disposition")
+            if cd is None:
+                continue
+
+            if "attachment" in cd.lower() or "inline" in cd.lower():
+                filename = part.get_filename()
+                if filename:
+                    attachments.append({
+                        "index": idx,
+                        "filename": safe_header(filename),
+                        "part": part
+                    })
+                    idx += 1
+
+        return attachments
+
+    # =====================================================================
+    # ZAŁĄCZNIKI — WYŚWIETLANIE LISTY
+    # =====================================================================
+
+    def show_attachments(self, attachments: List[Dict[str, Any]]) -> None:
+        """
+        Wyświetla listę załączników pod treścią wiadomości.
+        """
+        if not attachments:
+            self.mail_view.append("\n\nBrak załączników.")
             return
 
-        ok, sender = email_actions.move_email_and_get_sender(konto_id, uid, folder)
-        if not ok:
-            QMessageBox.warning(self, "Błąd", "Nie udało się przenieść wiadomości.")
+        self.mail_view.append("\n\n<b>Załączniki:</b>")
+
+        for att in attachments:
+            fname = att["filename"]
+            idx = att["index"]
+            self.mail_view.append(f'<a href="attachment:{idx}">{fname}</a>')
+
+    # =====================================================================
+    # ZAŁĄCZNIKI — POBIERANIE NA DYSK
+    # =====================================================================
+
+    def on_attachment_clicked(self, url) -> None:
+        """
+        Kliknięcie załącznika — zapis na dysk.
+        """
+        href = url.toString()
+        if not href.startswith("attachment:"):
             return
 
-        if sender:
-            self._ask_add_filter(konto_id, sender, folder)
+        idx = int(href.split(":")[1])
 
-        self.refresh_email_list(folder_override=folder, konto_override=konto_id)
-
-    def delete_selected_email(self):
-        row = self.table_email_list.currentRow()
-        if row < 0:
+        # ponownie pobieramy wiadomość z IMAP
+        imap = self.open_imap()
+        if not imap:
             return
 
-        uid = self.table_email_list.item(row, 0).text()
-        folder_item = self.folder_tree.currentItem()
-        if not folder_item:
-            return
-        konto_id = folder_item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
-
-        email_actions.delete_email(konto_id, uid)
-        self.refresh_email_list()
-
-    def _show_source(self):
-        meta = self.current_attachment_meta
-        if not meta:
+        # BEZPIECZNY SELECT
+        if not self.safe_select(imap):
+            QMessageBox.warning(self, "IMAP",
+                                f"Nie można wybrać folderu:\n{self.current_folder_server}")
             return
 
-        raw = email_actions.load_message(
-            meta["konto_id"],
-            meta["folder"],
-            meta["email_uid"]
-        )
-        if not raw:
-            QMessageBox.warning(self, "Błąd", "Nie udało się pobrać źródła.")
-            return
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Źródło wiadomości")
-        lay = QVBoxLayout(dlg)
-        txt = QTextEdit()
-        txt.setPlainText(raw.as_string())
-        lay.addWidget(txt)
-        dlg.resize(800, 600)
-        dlg.exec()
-
-    def _folder_drag_enter(self, event):
-        event.accept()
-
-    def _folder_drop_event(self, event):
-        item = self.folder_tree.itemAt(event.position().toPoint())
-        if not item:
-            return
-
-        target_folder = item.text(0)
-        row = self.table_email_list.currentRow()
-        if row < 0:
-            return
-
-        uid = self.table_email_list.item(row, 0).text()
-        konto_id = item.data(0, Qt.ItemDataRole.UserRole)
-        if konto_id is None:
-            konto_id = self.email_account_combo.currentData()
-
-        ok, sender = email_actions.move_email_and_get_sender(konto_id, uid, target_folder)
-        if not ok:
-            QMessageBox.warning(self, "Błąd", "Nie udało się przenieść wiadomości.")
-            return
-
-        if sender:
-            self._ask_add_filter(konto_id, sender, target_folder)
-
-        self.refresh_email_list(folder_override=target_folder, konto_override=konto_id)
-
-    def _ask_add_filter(self, konto_id, sender, folder):
-        reply = QMessageBox.question(
-            self,
-            "Dodaj filtr?",
-            f"Czy chcesz dodać filtr, aby wiadomości od:\n\n{sender}\n\nzawsze trafiały do folderu:\n{folder}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            email_actions.add_filter(konto_id, sender, folder)
-            self._refresh_email_filters()
-
-    def _add_filter_from_ui(self):
-        konto_id = self.filter_konto_combo.currentData()
-        sender = self.filter_od.text().strip() or None
-        folder = self.filter_folder.text().strip()
-
-        if not konto_id or not folder:
-            QMessageBox.warning(self, "Błąd", "Wybierz konto i folder docelowy")
-            return
-
-        email_actions.add_filter(konto_id, sender or "", folder)
-        QMessageBox.information(self, "Sukces", "Filtr został dodany")
-
-        self.filter_od.clear()
-        self.filter_temat.clear()
-        self.filter_folder.clear()
-        self._refresh_email_filters()
-
-    def _refresh_email_filters(self):
-        conn = get_conn()
-        cur = conn.cursor()
         try:
-            cur.execute("""
-                SELECT rf.id, rf.od, rf.temat_zawiera, rf.folder_docelowy
-                FROM reguly_filtrow rf
-                JOIN konta_email ke ON rf.konto_id = ke.id
-                JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
-                WHERE pke.pracownik_id = ?
-            """, (self.pracownik_id,))
-            rows = cur.fetchall()
+            typ, msg_data = imap.fetch(self.current_uid, "(RFC822)")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                QMessageBox.warning(self, "Błąd", "Nie można pobrać wiadomości.")
+                return
+
+            raw = msg_data[0][1]
+            msg = email.message_from_bytes(raw)
+
+            attachments = self.get_attachments(msg)
+            if idx >= len(attachments):
+                QMessageBox.warning(self, "Błąd", "Załącznik nie istnieje.")
+                return
+
+            part = attachments[idx]["part"]
+            filename = attachments[idx]["filename"]
+
+            data = part.get_payload(decode=True)
+            if not data:
+                QMessageBox.warning(self, "Błąd", "Nie można pobrać danych załącznika.")
+                return
+
+            import os
+            save_dir = os.path.join(os.getcwd(), "attachments")
+            os.makedirs(save_dir, exist_ok=True)
+
+            path = os.path.join(save_dir, filename)
+
+            with open(path, "wb") as f:
+                f.write(data)
+
+            QMessageBox.information(self, "Załącznik zapisany",
+                                    f"Załącznik zapisano w:\n{path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie można pobrać załącznika:\n{e}")
+
         finally:
-            conn.close()
+            try:
+                imap.logout()
+            except:
+                pass
 
-        self.table_email_filters.setRowCount(0)
-        for r, row in enumerate(rows):
-            fid, od, temat, folder = row
-            self.table_email_filters.insertRow(r)
-            self.table_email_filters.setItem(r, 0, QTableWidgetItem(str(fid)))
-            self.table_email_filters.setItem(r, 1, QTableWidgetItem(od or "Dowolny"))
-            self.table_email_filters.setItem(r, 2, QTableWidgetItem(temat or "Dowolny"))
-            self.table_email_filters.setItem(r, 3, QTableWidgetItem(folder or "N/A"))
+    # =====================================================================
+    # OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE / NIEPRZECZYTANE
+    # =====================================================================
 
-            btn_delete = QPushButton("Usuń")
-            btn_delete.clicked.connect(lambda checked, f=fid: self._delete_filter(f))
-            self.table_email_filters.setCellWidget(r, 4, btn_delete)
-
-    def _delete_filter(self, filter_id):
-        reply = QMessageBox.question(
-            self,
-            "Potwierdzenie",
-            "Usunąć ten filtr?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+    def mark_as_read(self, uid: str) -> None:
+        imap = self.open_imap()
+        if not imap:
             return
 
-        conn = get_conn()
-        cur = conn.cursor()
+        if not self.safe_select(imap):
+            QMessageBox.warning(self, "IMAP",
+                                f"Nie można wybrać folderu:\n{self.current_folder_server}")
+            return
+
         try:
-            cur.execute("DELETE FROM reguly_filtrow WHERE id = ?", (filter_id,))
-            conn.commit()
+            imap.store(uid, "+FLAGS", r"(\Seen)")
+        except Exception as e:
+            QMessageBox.warning(self, "Błąd", f"Nie można oznaczyć jako przeczytane:\n{e}")
         finally:
-            conn.close()
+            try:
+                imap.logout()
+            except:
+                pass
 
-        self._refresh_email_filters()
+    def mark_as_unread(self, uid: str) -> None:
+        imap = self.open_imap()
+        if not imap:
+            return
 
-    def _trigger_email_sync(self):
-        runnable = SyncRunnable(self)
-        runnable.signals.finished.connect(lambda ok: self.refresh_email_list())
-        runnable.signals.error.connect(lambda msg: QMessageBox.critical(self, "Błąd synchronizacji", msg))
-        self.thread_pool.start(runnable)
+        if not self.safe_select(imap):
+            QMessageBox.warning(self, "IMAP",
+                                f"Nie można wybrać folderu:\n{self.current_folder_server}")
+            return
+
+        try:
+            imap.store(uid, "-FLAGS", r"(\Seen)")
+        except Exception as e:
+            QMessageBox.warning(self, "Błąd", f"Nie można oznaczyć jako nieprzeczytane:\n{e}")
+        finally:
+            try:
+                imap.logout()
+            except:
+                pass
+
+    # =====================================================================
+    # PRZENOSZENIE WIADOMOŚCI MIĘDZY FOLDERAMI
+    # =====================================================================
+
+    def move_message(self, uid: str, target_folder_server: str) -> None:
+        """
+        Przenosi wiadomość na serwerze IMAP:
+        COPY → DELETE → EXPUNGE
+        """
+        imap = self.open_imap()
+        if not imap:
+            return
+
+        if not self.safe_select(imap):
+            QMessageBox.warning(self, "IMAP",
+                                f"Nie można wybrać folderu:\n{self.current_folder_server}")
+            return
+
+        try:
+            typ, _ = imap.copy(uid, target_folder_server)
+            if typ != "OK":
+                QMessageBox.warning(self, "Błąd", "Nie można skopiować wiadomości.")
+                return
+
+            imap.store(uid, "+FLAGS", r"(\Deleted)")
+            imap.expunge()
+
+            QMessageBox.information(self, "OK", "Wiadomość przeniesiona.")
+
+            self.load_mail_list_from_imap()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie można przenieść wiadomości:\n{e}")
+
+        finally:
+            try:
+                imap.logout()
+            except:
+                pass
+    # =====================================================================
+    # TWORZENIE FOLDERÓW
+    # =====================================================================
+
+    def create_folder(self, name: str, parent_server: Optional[str] = None) -> None:
+        """
+        Tworzy folder na serwerze IMAP.
+        """
+        imap = self.open_imap()
+        if not imap:
+            return
+
+        server_name = name if not parent_server else f"{parent_server}.{name}"
+
+        try:
+            typ, _ = imap.create(server_name)
+            if typ == "OK":
+                QMessageBox.information(self, "OK", f"Folder '{server_name}' utworzony.")
+                self.load_folders_from_imap()
+            else:
+                QMessageBox.warning(self, "Błąd", "Nie można utworzyć folderu.")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie można utworzyć folderu:\n{e}")
+        finally:
+            try:
+                imap.logout()
+            except:
+                pass
+
+    # =====================================================================
+    # USUWANIE FOLDERÓW
+    # =====================================================================
+
+    def delete_folder(self, server_name: str) -> None:
+        """
+        Usuwa folder na serwerze IMAP.
+        """
+        imap = self.open_imap()
+        if not imap:
+            return
+
+        try:
+            typ, _ = imap.delete(server_name)
+            if typ == "OK":
+                QMessageBox.information(self, "OK", f"Folder '{server_name}' usunięty.")
+                self.load_folders_from_imap()
+            else:
+                QMessageBox.warning(self, "Błąd", "Nie można usunąć folderu.")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie można usunąć folderu:\n{e}")
+        finally:
+            try:
+                imap.logout()
+            except:
+                pass
+
+    # =====================================================================
+    # FOLDERY — DB
+    # =====================================================================
+
+    def get_folders_from_db(self) -> List[str]:
+        return get_folders_for_account(self.current_account["id"])
+
+    def add_folder_to_db(self, folder: str) -> None:
+        add_folder_for_account(self.current_account["id"], folder)
+
+    def remove_folder_from_db(self, folder: str) -> None:
+        remove_folder_for_account(self.current_account["id"], folder)
+
+    # =====================================================================
+    # SYNCHRONIZACJA FOLDERÓW (AUTOMATYCZNA)
+    # =====================================================================
+
+    def synchronize_folders(self) -> None:
+        """
+        Automatyczna synchronizacja folderów IMAP z bazą danych.
+        """
+        imap = self.open_imap()
+        if not imap:
+            return
+
+        db_folders = self.get_folders_from_db()
+
+        # NOWY SYNC — ZERO PARSOWANIA
+        imap_folders, new_folders, deleted_folders = sync_folders(imap, db_folders)
+
+        for f in new_folders:
+            self.add_folder_to_db(f)
+
+        for f in deleted_folders:
+            self.remove_folder_from_db(f)
+
+        try:
+            imap.logout()
+        except:
+            pass
+
+    # =====================================================================
+    # RĘCZNA SYNCHRONIZACJA (PRZYCISK)
+    # =====================================================================
+
+    def on_manual_sync(self) -> None:
+        """
+        Ręczna synchronizacja folderów + odświeżenie widoków.
+        """
+        self.synchronize_folders()
+        self.load_folders_from_imap()
+
+        if self.current_folder_server:
+            self.load_mail_list_from_imap()
+
+        QMessageBox.information(self, "Synchronizacja", "Synchronizacja zakończona.")
+
+    # =====================================================================
+    # ODŚWIEŻANIE WIDOKÓW
+    # =====================================================================
+
+    def refresh_all(self) -> None:
+        """
+        Odświeża foldery i listę wiadomości.
+        """
+        self.load_folders_from_imap()
+
+        if self.current_folder_server:
+            self.load_mail_list_from_imap()

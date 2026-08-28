@@ -1,71 +1,80 @@
 # app/email/email_storage.py
+import re
+import logging
 import sqlite3
-from PyQt6.QtWidgets import (
-    QTableWidgetItem,
-    QTableWidget,
-    QPushButton,
-    QMessageBox,
-)
-
-from app.db.dao_companies import get_conn
+from typing import Optional
+from PyQt6.QtWidgets import QTableWidgetItem, QPushButton, QMessageBox
+from app.db.dao_conn import get_conn
 from app.utils.crypto import encrypt_password as default_encrypt_password
+from email.message import Message
+logger = logging.getLogger(__name__)
+EMAIL_RE = re.compile(r"[^@]+@[^@]+\.[^@]+")
 
 
 def refresh_email_accounts(self):
-    """Odśwież listę kont email w UI."""
     self.table_email_accounts.setRowCount(0)
     conn = get_conn()
-    cursor = conn.cursor()
-
     try:
-        cursor.execute("""
-            SELECT id, email, serwer_imap, aktywna
-            FROM konta_email WHERE pracownik_id = ?
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, pracownik_id, email, serwer_imap, port_imap, ssl_imap,
+                   serwer_smtp, port_smtp, ssl_smtp, haslo_enc, aktywne
+            FROM konta_email
+            WHERE pracownik_id = ?
             ORDER BY id ASC
         """, (self.pracownik_id,))
+        rows = cur.fetchall()
 
-        for row_idx, row in enumerate(cursor.fetchall()):
+        for row_idx, row in enumerate(rows):
             self.table_email_accounts.insertRow(row_idx)
-            konto_id, email_addr, imap_server, aktywna = row
+            row_dict = dict(row) if not isinstance(row, dict) else row
+
+            konto_id = row_dict.get("id", "")
+            email_addr = row_dict.get("email", "")
+            imap_server = row_dict.get("serwer_imap", "")
+            aktywna = row_dict.get("aktywne", 0)
 
             self.table_email_accounts.setItem(row_idx, 0, QTableWidgetItem(str(konto_id)))
             self.table_email_accounts.setItem(row_idx, 1, QTableWidgetItem(email_addr or ""))
             self.table_email_accounts.setItem(row_idx, 2, QTableWidgetItem(imap_server or ""))
             self.table_email_accounts.setItem(row_idx, 3, QTableWidgetItem("Tak" if aktywna else "Nie"))
 
-            # Akcje: Usuń
             btn_delete = QPushButton("Usuń")
             btn_delete.setStyleSheet("background-color: #e74c3c; color: white;")
             btn_delete.clicked.connect(lambda checked, kid=konto_id: self.delete_email_account(kid))
             self.table_email_accounts.setCellWidget(row_idx, 4, btn_delete)
 
-        # odśwież combosy i kolumny
         try:
             self._refresh_email_account_combos()
         except Exception:
-            pass
+            logger.exception("refresh_email_accounts: _refresh_email_account_combos failed")
         self.table_email_accounts.resizeColumnsToContents()
     finally:
         conn.close()
 
 
 def refresh_email_filters(self):
-    """Odśwież listę filtrów email w UI."""
     self.table_email_filters.setRowCount(0)
     conn = get_conn()
-    cursor = conn.cursor()
-
     try:
-        cursor.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             SELECT rf.id, rf.od, rf.temat_zawiera, rf.folder_docelowy
             FROM reguly_filtrow rf
             JOIN konta_email ke ON rf.konto_id = ke.id
             WHERE ke.pracownik_id = ?
+            ORDER BY rf.id
         """, (self.pracownik_id,))
+        rows = cur.fetchall()
 
-        for row_idx, row in enumerate(cursor.fetchall()):
+        for row_idx, row in enumerate(rows):
             self.table_email_filters.insertRow(row_idx)
-            filter_id, od, temat, folder = row
+            row_dict = dict(row) if not isinstance(row, dict) else row
+
+            filter_id = row_dict.get("id", "")
+            od = row_dict.get("od", None)
+            temat = row_dict.get("temat_zawiera", None)
+            folder = row_dict.get("folder_docelowy", None)
 
             self.table_email_filters.setItem(row_idx, 0, QTableWidgetItem(str(filter_id)))
             self.table_email_filters.setItem(row_idx, 1, QTableWidgetItem(od or "Dowolny"))
@@ -81,7 +90,6 @@ def refresh_email_filters(self):
 
 
 def add_email_filter(self):
-    """Dodaj nowy filtr dla konta email."""
     konto_id = self.filter_konto_combo.currentData()
     od = self.filter_od.text().strip() or None
     temat = self.filter_temat.text().strip() or None
@@ -92,29 +100,26 @@ def add_email_filter(self):
         return
 
     conn = get_conn()
-    cursor = conn.cursor()
-
     try:
-        cursor.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             INSERT INTO reguly_filtrow (konto_id, od, temat_zawiera, folder_docelowy, aktywna)
             VALUES (?, ?, ?, ?, 1)
         """, (konto_id, od, temat, folder))
         conn.commit()
         QMessageBox.information(self, "Sukces", "Filtr został dodany")
-
         self.filter_od.clear()
         self.filter_temat.clear()
         self.filter_folder.clear()
-
         refresh_email_filters(self)
     except Exception as e:
+        logger.exception("add_email_filter failed")
         QMessageBox.critical(self, "Błąd", f"Błąd dodawania filtru: {str(e)}")
     finally:
         conn.close()
 
 
 def delete_email_filter(self, filter_id):
-    """Usuń filtr po id (z potwierdzeniem)."""
     reply = QMessageBox.question(
         self,
         "Potwierdzenie",
@@ -123,31 +128,43 @@ def delete_email_filter(self, filter_id):
     )
     if reply == QMessageBox.StandardButton.Yes:
         conn = get_conn()
-        cursor = conn.cursor()
         try:
-            cursor.execute("DELETE FROM reguly_filtrow WHERE id = ?", (filter_id,))
+            cur = conn.cursor()
+            cur.execute("BEGIN")
+            cur.execute("DELETE FROM reguly_filtrow WHERE id = ?", (filter_id,))
             conn.commit()
             refresh_email_filters(self)
         except Exception as e:
+            conn.rollback()
+            logger.exception("delete_email_filter failed")
             QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć filtru: {e}")
         finally:
             conn.close()
 
 
 def add_email_account(self, encrypt_password=None):
-    """
-    Dodaj konto email.
-    Jeśli nie podano encrypt_password, użyj domyślnej funkcji z app.utils.crypto.
-    """
     email_addr = self.email_input.text().strip()
     imap_srv = self.imap_server.text().strip()
-    imap_p = self.imap_port.value()
+    try:
+        imap_p = int(self.imap_port.value()) if hasattr(self.imap_port, "value") else int(self.imap_port.text().strip())
+    except Exception:
+        imap_p = 993
     smtp_srv = self.smtp_server.text().strip()
-    smtp_p = self.smtp_port.value()
+    try:
+        smtp_p = int(self.smtp_port.value()) if hasattr(self.smtp_port, "value") else int(self.smtp_port.text().strip())
+    except Exception:
+        smtp_p = 465
     password = self.email_password.text()
+    ssl_imap = 1 if getattr(self, "imap_ssl_checkbox", None) and self.imap_ssl_checkbox.isChecked() else 1
+    ssl_smtp = 1 if getattr(self, "smtp_ssl_checkbox", None) and self.smtp_ssl_checkbox.isChecked() else 1
+    aktywne = 1
 
     if not all([email_addr, imap_srv, smtp_srv, password]):
         QMessageBox.warning(self, "Błąd", "Uzupełnij wszystkie pola")
+        return
+
+    if not EMAIL_RE.match(email_addr):
+        QMessageBox.warning(self, "Błąd", "Nieprawidłowy adres e-mail")
         return
 
     if encrypt_password is None:
@@ -156,58 +173,139 @@ def add_email_account(self, encrypt_password=None):
     try:
         encrypted_pwd = encrypt_password(password)
     except Exception as e:
+        logger.exception("encrypt_password failed")
         QMessageBox.critical(self, "Błąd", f"Nie udało się zaszyfrować hasła: {e}")
         return
 
     conn = get_conn()
-    cursor = conn.cursor()
-
     try:
-        cursor.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             INSERT INTO konta_email
-            (pracownik_id, email, serwer_imap, port_imap,
-             serwer_smtp, port_smtp, haslo_enc)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (pracownik_id, email, serwer_imap, port_imap, ssl_imap,
+             serwer_smtp, port_smtp, ssl_smtp, haslo_enc, aktywne)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            self.pracownik_id,
+            getattr(self, "pracownik_id", None),
             email_addr,
             imap_srv,
-            imap_p,
+            int(imap_p) if imap_p is not None else None,
+            ssl_imap,
             smtp_srv,
-            smtp_p,
+            int(smtp_p) if smtp_p is not None else None,
+            ssl_smtp,
             encrypted_pwd,
+            aktywne,
         ))
         conn.commit()
         QMessageBox.information(self, "Sukces", "Konto email zostało dodane!")
-
         self.email_input.clear()
         self.imap_server.clear()
         self.smtp_server.clear()
         self.email_password.clear()
-
         refresh_email_accounts(self)
     except Exception as e:
+        logger.exception("add_email_account failed")
         QMessageBox.critical(self, "Błąd", f"Błąd dodawania konta: {str(e)}")
     finally:
         conn.close()
 
 
 def delete_email_account(self, konto_id):
-    """Usuń konto email (z potwierdzeniem)."""
     reply = QMessageBox.question(
         self,
         "Potwierdzenie",
-        "Usunąć to konto?",
+        "Usunąć to konto i wszystkie powiązane dane?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
     )
-    if reply == QMessageBox.StandardButton.Yes:
-        conn = get_conn()
-        cursor = conn.cursor()
-        try:
-            cursor.execute("DELETE FROM konta_email WHERE id = ?", (konto_id,))
-            conn.commit()
-            refresh_email_accounts(self)
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć konta: {e}")
-        finally:
-            conn.close()
+    if reply != QMessageBox.StandardButton.Yes:
+        return
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM wiadomosci_email WHERE konto_id = ?", (konto_id,))
+        cur.execute("DELETE FROM foldery_email WHERE konto_id = ?", (konto_id,))
+        cur.execute("DELETE FROM pracownik_konto_email WHERE konto_id = ?", (konto_id,))
+        cur.execute("DELETE FROM konta_email WHERE id = ?", (konto_id,))
+        conn.commit()
+        refresh_email_accounts(self)
+    except Exception as e:
+        conn.rollback()
+        logger.exception("delete_email_account failed")
+        QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć konta: {e}")
+    finally:
+        conn.close()
+
+def get_email_accounts_for_employee(pracownik_id: int):
+    """
+    Zwraca listę kont email przypisanych do pracownika.
+    Obsługuje multi-assign (pracownik_konto_email).
+    """
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT ke.id, ke.email, ke.serwer_imap, ke.port_imap, ke.ssl_imap,
+                   ke.serwer_smtp, ke.port_smtp, ke.ssl_smtp, ke.haslo_enc, ke.aktywne
+            FROM konta_email ke
+            JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
+            WHERE pke.pracownik_id = ?
+            ORDER BY ke.id
+        """, (pracownik_id,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+def get_folders_for_account(account_id: int) -> list[str]:
+    """
+    Pobiera listę folderów IMAP zapisanych w bazie dla danego konta.
+    """
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT nazwa
+        FROM foldery_email
+        WHERE konto_id = ?
+        ORDER BY nazwa ASC
+    """, (account_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [r["nazwa"] for r in rows]
+
+def add_folder_for_account(account_id: int, folder_name: str) -> None:
+    """
+    Dodaje folder do bazy, jeśli jeszcze go nie ma.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR IGNORE INTO foldery_email (konto_id, nazwa)
+        VALUES (?, ?)
+    """, (account_id, folder_name))
+
+    conn.commit()
+    conn.close()
+
+
+def remove_folder_for_account(account_id: int, folder_name: str) -> None:
+    """
+    Usuwa folder z bazy.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM foldery_email
+        WHERE konto_id = ? AND nazwa = ?
+    """, (account_id, folder_name))
+
+    conn.commit()
+    conn.close()

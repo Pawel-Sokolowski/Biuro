@@ -3,7 +3,6 @@ import sqlite3
 import bcrypt
 from app.config import DB_NAME
 
-
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -13,9 +12,7 @@ def init_db():
     cur.execute("PRAGMA journal_mode = WAL;")
     cur.execute("PRAGMA synchronous = NORMAL;")
 
-    # ============================
-    # FIRMY
-    # ============================
+    # firmy
     cur.execute("""
         CREATE TABLE IF NOT EXISTS firmy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,9 +63,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # STATUSY MIESIĘCZNE
-    # ============================
+    # statusy_miesieczne
     cur.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
             firma_id INTEGER NOT NULL,
@@ -83,9 +78,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # DOKUMENTY
-    # ============================
+    # dokumenty
     cur.execute("""
         CREATE TABLE IF NOT EXISTS dokumenty (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,9 +105,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # CENNIKI
-    # ============================
+    # cenniki
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,9 +119,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # USŁUGI DODATKOWE
-    # ============================
+    # uslugi_dodatkowe
     cur.execute("""
         CREATE TABLE IF NOT EXISTS uslugi_dodatkowe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,9 +143,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # PRACOWNICY
-    # ============================
+    # pracownicy
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownicy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,9 +156,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # ROLE
-    # ============================
+    # role
     cur.execute("""
         CREATE TABLE IF NOT EXISTS role (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,9 +176,7 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (4, 'admin');")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (5, 'opiekun');")
 
-    # ============================
-    # PRACOWNIK ↔ FIRMA
-    # ============================
+    # pracownik_firma
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownik_firma (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,9 +190,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # NOTATKI
-    # ============================
+    # company_notes
     cur.execute("""
         CREATE TABLE IF NOT EXISTS company_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,9 +203,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # UDZIAŁOWCY
-    # ============================
+    # udzialowcy
     cur.execute("""
         CREATE TABLE IF NOT EXISTS udzialowcy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,9 +214,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # KONTAKTY FIRMY
-    # ============================
+    # company_contacts
     cur.execute("""
         CREATE TABLE IF NOT EXISTS company_contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,12 +228,11 @@ def init_db():
         );
     """)
 
-    # ============================
-    # KONTA EMAIL — POPRAWIONE
-    # ============================
+    # konta_email
     cur.execute("""
         CREATE TABLE IF NOT EXISTS konta_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pracownik_id INTEGER,
             email TEXT NOT NULL,
             haslo_enc TEXT,
             serwer_imap TEXT,
@@ -265,13 +241,12 @@ def init_db():
             serwer_smtp TEXT,
             port_smtp INTEGER DEFAULT 465,
             ssl_smtp TEXT DEFAULT 'SSL/TLS',
-            aktywne INTEGER DEFAULT 1
+            aktywne INTEGER DEFAULT 1,
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE SET NULL
         );
     """)
 
-    # ============================
-    # FOLDERY EMAIL
-    # ============================
+    # foldery_email
     cur.execute("""
         CREATE TABLE IF NOT EXISTS foldery_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -281,9 +256,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # WIADOMOŚCI EMAIL
-    # ============================
+    # wiadomosci_email
     cur.execute("""
         CREATE TABLE IF NOT EXISTS wiadomosci_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -302,9 +275,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # ZAŁĄCZNIKI EMAIL
-    # ============================
+    # email_attachments
     cur.execute("""
         CREATE TABLE IF NOT EXISTS email_attachments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -317,9 +288,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # PRACOWNIK ↔ KONTO EMAIL
-    # ============================
+    # pracownik_konto_email
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownik_konto_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,9 +301,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # REGUŁY FILTRÓW EMAIL
-    # ============================
+    # reguly_filtrow
     cur.execute("""
         CREATE TABLE IF NOT EXISTS reguly_filtrow (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,9 +321,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # CHAT
-    # ============================
+    # chat
     cur.execute("""
         CREATE TABLE IF NOT EXISTS konwersacje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -394,9 +359,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja ON wiadomosci_chat(konwersacja_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
 
-    # ============================
-    # FAKTURY
-    # ============================
+    # faktury
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -429,9 +392,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # TAGI
-    # ============================
+    # tags
     cur.execute("""
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -449,9 +410,7 @@ def init_db():
         );
     """)
 
-    # ============================
-    # LOGI, SESJE, AUDYT
-    # ============================
+    # logs, settings, sessions, audit
     cur.execute("""
         CREATE TABLE IF NOT EXISTS system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -492,16 +451,14 @@ def init_db():
         );
     """)
 
-    # ============================
-    # INDEKSY
-    # ============================
+    # indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_pracownicy_email ON pracownicy(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_firmy_nip ON firmy(nip);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
 
-    # pierwszy admin i dane startowe
+    # initial data
     cur.execute("SELECT COUNT(*) AS cnt FROM pracownicy")
     cnt_row = cur.fetchone()
     cnt = cnt_row["cnt"] if cnt_row else 0
@@ -534,7 +491,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
 
 if __name__ == "__main__":
     init_db()

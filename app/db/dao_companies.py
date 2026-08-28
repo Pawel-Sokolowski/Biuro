@@ -144,6 +144,74 @@ def add_company_note(firma_id: int, tresc: str) -> None:
     conn.close()
 
 # ============================================================
+#  KONTA EMAIL (ADMIN / OGÓLNE)
+# ============================================================
+
+def get_email_accounts() -> List[Dict[str, Any]]:
+    """
+    Zwraca wszystkie konta email (użyteczne dla panelu admina).
+    Zwracamy porty jako INTEGER oraz pola pracownik_id i aktywne.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            id,
+            pracownik_id,
+            email,
+            serwer_imap,
+            CAST(port_imap AS INTEGER) AS port_imap,
+            ssl_imap,
+            serwer_smtp,
+            CAST(port_smtp AS INTEGER) AS port_smtp,
+            ssl_smtp,
+            haslo_enc,
+            aktywne
+        FROM konta_email
+        ORDER BY id
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    # debug: pokaż klucze pierwszego rekordu (jeśli istnieje)
+    if rows:
+        try:
+            print("DEBUG get_email_accounts: keys =", list(dict(rows[0]).keys()))
+            print("DEBUG get_email_accounts: sample =", dict(rows[0]))
+        except Exception:
+            pass
+    return [dict(r) for r in rows]
+
+def get_email_accounts_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            id,
+            pracownik_id,
+            email,
+            serwer_imap,
+            CAST(port_imap AS INTEGER) AS port_imap,
+            ssl_imap,
+            serwer_smtp,
+            CAST(port_smtp AS INTEGER) AS port_smtp,
+            ssl_smtp,
+            haslo_enc,
+            aktywne
+        FROM konta_email
+        WHERE pracownik_id = ?
+        ORDER BY id
+    """, (pracownik_id,))
+    rows = cur.fetchall()
+    conn.close()
+    if rows:
+        try:
+            print(f"DEBUG get_email_accounts_for_employee({pracownik_id}): keys =", list(dict(rows[0]).keys()))
+            print(f"DEBUG get_email_accounts_for_employee({pracownik_id}): sample =", dict(rows[0]))
+        except Exception:
+            pass
+    return [dict(r) for r in rows]
+
+# ============================================================
 #  STATUSY MIESIĘCZNE
 # ============================================================
 

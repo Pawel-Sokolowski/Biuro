@@ -1,23 +1,23 @@
-# app/email/email_actions.py
-
+# app/email/email_actions.py  -- część 1/4
 from __future__ import annotations
 
 import email
 import email.header
 import imaplib
+import smtplib
 import os
 import sqlite3
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from email.message import EmailMessage
+from email.utils import formataddr
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 from app.db.dao_conn import get_conn
 from app.email.email_storage import get_email_accounts_for_employee
 from app.utils.crypto import decrypt_password
 
-# -----------------------------
 # MAPOWANIE NAZW FOLDERÓW
-# -----------------------------
-
 SERVER_TO_LOCAL = {
     "INBOX": "Odebrane",
     "INBOX.Sent": "Wysłane",
@@ -27,7 +27,6 @@ SERVER_TO_LOCAL = {
     "INBOX.Drafts": "Szkice",
     "INBOX.Archive": "Archiwum",
 }
-
 LOCAL_TO_SERVER = {
     "Odebrane": "INBOX",
     "Wysłane": "INBOX.Sent",
@@ -36,7 +35,7 @@ LOCAL_TO_SERVER = {
     "Archiwum": "INBOX.Archive",
 }
 
-
+# HELPERY
 def safe_header(value: str) -> str:
     if not value:
         return ""
@@ -58,12 +57,7 @@ def safe_header(value: str) -> str:
     except Exception:
         return value
 
-
 def parse_mailbox_name(raw: bytes) -> str:
-    """
-    Parsuje linię z IMAP LIST i wyciąga pełną nazwę folderu,
-    bez rozbijania na słowa (ważne dla nazw typu 'ART GROUP SP Z O O').
-    """
     s = raw.decode(errors="replace")
     first_quote = s.find('"')
     if first_quote != -1:
@@ -72,190 +66,129 @@ def parse_mailbox_name(raw: bytes) -> str:
             return s[first_quote + 1:last_quote]
     return s.split()[-1].strip('"')
 
-
 def normalize_folder_name(server_name: str) -> str:
-    """
-    Zamienia nazwę folderu z serwera na nazwę lokalną (UI),
-    np. INBOX.Sent -> Wysłane.
-    Jeśli nie jest folderem systemowym, zwraca oryginalną nazwę.
-    """
     return SERVER_TO_LOCAL.get(server_name, server_name)
 
-
 def denormalize_folder_name(local_name: str) -> str:
-    """
-    Zamienia nazwę lokalną (UI) na nazwę folderu na serwerze IMAP,
-    np. Wysłane -> INBOX.Sent.
-    Jeśli nie jest folderem systemowym, zwraca oryginalną nazwę.
-    """
     return LOCAL_TO_SERVER.get(local_name, local_name)
 
+# KONTA I LOGOWANIE IMAP
+def _get_account_by_id(konto_id: int) -> Optional[Dict[str, Any]]:
+    accounts = get_email_accounts_for_employee(None)
+    for acc in accounts:
+        if acc.get("id") == konto_id:
+            return acc
+    return None
 
-# -----------------------------
-# KONTA I FOLDERY
-# -----------------------------
+def _open_imap_for_account(acc: Dict[str, Any]) -> Optional[imaplib.IMAP4_SSL]:
+    email_addr = acc.get("email")
+    host = acc.get("serwer_imap") or ""
+    port = int(acc.get("port_imap") or 993)
+    enc = acc.get("haslo_enc")
+    if not enc:
+        return None
+    try:
+        pwd = decrypt_password(enc)
+    except Exception:
+        return None
+    try:
+        imap = imaplib.IMAP4_SSL(host, port)
+        imap.login(email_addr, pwd)
+        return imap
+    except Exception:
+        return None
 
-def load_accounts(pracownik_id: Optional[int]) -> List[Tuple[int, str]]:
+# SMTP / WYSYŁKA (pojedyncze)
+def get_smtp_config_for_account(konto_id: int) -> dict:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        if pracownik_id is None:
-            cur.execute("SELECT id, email FROM konta_email ORDER BY id")
-        else:
-            cur.execute(
-                """
-                SELECT ke.id, ke.email
-                FROM konta_email ke
-                JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
-                WHERE pke.pracownik_id = ?
-                ORDER BY ke.id
-            """,
-                (pracownik_id,),
+        cur.execute("SELECT serwer_smtp, port_smtp, email, haslo_enc, display_name FROM konta_email WHERE id = ?", (konto_id,))
+        r = cur.fetchone()
+        if not r:
+            raise ValueError(f"konto {konto_id} nie znalezione")
+        pwd = decrypt_password(r["haslo_enc"]) if r["haslo_enc"] else ""
+        return {
+            "host": r["serwer_smtp"],
+            "port": int(r["port_smtp"] or 587),
+            "user": r["email"],
+            "password": pwd,
+            "display_name": r["display_name"] or r["email"]
+        }
+    finally:
+        conn.close()
+
+def prepare_message(from_addr: str, from_name: str, to_addrs: Iterable[str],
+                    subject: str, body: str, attachments: Optional[List[str]] = None,
+                    cc: Optional[Iterable[str]] = None, bcc: Optional[Iterable[str]] = None) -> EmailMessage:
+    msg = EmailMessage()
+    msg["From"] = formataddr((from_name, from_addr))
+    msg["To"] = ", ".join(to_addrs) if isinstance(to_addrs, (list, tuple)) else str(to_addrs)
+    if cc:
+        msg["Cc"] = ", ".join(cc)
+    msg["Subject"] = subject or ""
+    msg.set_content(body or "")
+    if attachments:
+        for p in attachments:
+            try:
+                path = Path(p)
+                if not path.exists():
+                    continue
+                maintype, subtype = ("application", "octet-stream")
+                with open(path, "rb") as f:
+                    data = f.read()
+                msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=path.name)
+            except Exception:
+                continue
+    return msg
+
+def send_email_smtp(konto_id: int, to_addrs: Iterable[str], subject: str, body: str,
+                    attachments: Optional[List[str]] = None, cc: Optional[Iterable[str]] = None,
+                    bcc: Optional[Iterable[str]] = None, timeout: int = 30) -> Tuple[bool, str]:
+    try:
+        cfg = get_smtp_config_for_account(konto_id)
+        msg = prepare_message(cfg["user"], cfg["display_name"], to_addrs, subject, body, attachments, cc, bcc)
+        all_recipients = list(to_addrs or []) + list(cc or []) + list(bcc or [])
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=timeout) as s:
+            s.starttls()
+            if cfg["password"]:
+                s.login(cfg["user"], cfg["password"])
+            s.send_message(msg, from_addr=cfg["user"], to_addrs=all_recipients)
+        return True, "OK"
+    except Exception as e:
+        tb = traceback.format_exc()
+        return False, f"{e}\n{tb}"
+
+def send_batch_emails(konto_id: int, messages: List[Dict[str, Any]], retry: int = 2) -> List[Dict[str, Any]]:
+    results = []
+    for m in messages:
+        ok = False
+        last_err = ""
+        for attempt in range(retry + 1):
+            ok, msg = send_email_smtp(
+                konto_id,
+                m.get("to") or [],
+                m.get("subject") or "",
+                m.get("body") or "",
+                attachments=m.get("attachments"),
+                cc=m.get("cc"),
+                bcc=m.get("bcc")
             )
-        rows = cur.fetchall()
-        return [(r["id"], r["email"]) for r in rows]
-    finally:
-        conn.close()
-
-
-def load_all_accounts_folders(pracownik_id: Optional[int]) -> List[Tuple[int, str, List[str]]]:
-    """
-    Zwraca listę: [(konto_id, adres_email, [lista_folderów_lokalnych]), ...]
-    Foldery są już po normalize_folder_name (czyli np. 'Odebrane', 'Wysłane', itd.).
-    """
-    accounts = load_accounts(pracownik_id)
-    result: List[Tuple[int, str, List[str]]] = []
-    for kid, addr in accounts:
-        folders: List[str] = []
-        try:
-            conn = get_conn()
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT nazwa FROM foldery_email WHERE konto_id = ? ORDER BY id",
-                (kid,),
-            )
-            rows = cur.fetchall()
-            folders = [r["nazwa"] for r in rows]
-        except Exception as e:
-            print(f"[DEBUG] load_all_accounts_folders error for konto_id={kid}: {e}")
-            folders = []
-        finally:
-            conn.close()
-        result.append((kid, addr, folders))
-    return result
-
+            if ok:
+                break
+            last_err = msg
+        results.append({"message": m, "ok": ok, "info": "OK" if ok else last_err})
+    return results
 
 # -----------------------------
-# LISTA WIADOMOŚCI
+# ŁADOWANIE POJEDYNCZEJ WIADOMOŚCI (z DB)
 # -----------------------------
-
-def refresh_email_list(konto_id: int, folder: str) -> List[Dict[str, Any]]:
-    """
-    Ładuje listę wiadomości dla danego folderu (po nazwie lokalnej),
-    sortując po dacie malejąco.
-    """
-    conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    try:
-        print(f"[DEBUG] refresh_email_list: konto_id={konto_id}, folder={folder}")
-        cur.execute(
-            """
-            SELECT id FROM foldery_email
-            WHERE konto_id = ? AND nazwa = ?
-        """,
-            (konto_id, folder),
-        )
-        row = cur.fetchone()
-
-        if not row:
-            print(f"[DEBUG] refresh_email_list: folder '{folder}' not found for konto_id={konto_id}")
-            return []
-
-        folder_id = row["id"]
-
-        cur.execute(
-            """
-            SELECT id, uid, nadawca, temat, data, przeczytana
-            FROM wiadomosci_email
-            WHERE konto_id = ? AND folder_id = ?
-            ORDER BY data DESC
-        """,
-            (konto_id, folder_id),
-        )
-
-        rows = cur.fetchall()
-        print(f"[DEBUG] refresh_email_list: fetched {len(rows)} messages")
-        return [dict(r) for r in rows]
-
-    finally:
-        conn.close()
-
-
-def search_messages(konto_id: int, folder: str, query: str) -> List[Dict[str, Any]]:
-    """
-    Szuka wiadomości w danym folderze (po nazwie lokalnej),
-    po nadawcy, temacie lub treści (LOWER LIKE %query%).
-    """
-    q = f"%{query.lower()}%"
-    conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    try:
-        print(f"[DEBUG] search_messages: konto_id={konto_id}, folder={folder}, query={query}")
-        cur.execute(
-            """
-            SELECT id FROM foldery_email
-            WHERE konto_id = ? AND nazwa = ?
-        """,
-            (konto_id, folder),
-        )
-        row = cur.fetchone()
-
-        if not row:
-            print(f"[DEBUG] search_messages: folder '{folder}' not found for konto_id={konto_id}")
-            return []
-
-        folder_id = row["id"]
-
-        cur.execute(
-            """
-            SELECT id, uid, nadawca AS od, temat, data, przeczytana
-            FROM wiadomosci_email
-            WHERE konto_id = ? AND folder_id = ?
-              AND (
-                    LOWER(nadawca) LIKE ?
-                 OR LOWER(temat) LIKE ?
-                 OR LOWER(tresc) LIKE ?
-              )
-            ORDER BY id DESC
-        """,
-            (konto_id, folder_id, q, q, q),
-        )
-
-        rows = cur.fetchall()
-        print(f"[DEBUG] search_messages: found {len(rows)} messages")
-        return [dict(r) for r in rows]
-
-    finally:
-        conn.close()
-
-# -----------------------------
-# ŁADOWANIE POJEDYNCZEJ WIADOMOŚCI
-# -----------------------------
-
 def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message.Message]:
-    """
-    Ładuje pełną wiadomość z bazy (tresc = raw RFC822).
-    """
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        print(f"[DEBUG] load_message: konto_id={konto_id}, folder={folder}, uid={uid}")
-
         cur.execute(
             """
             SELECT wiadomosci_email.uid, wiadomosci_email.tresc
@@ -268,36 +201,24 @@ def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message
         """,
             (konto_id, folder, uid),
         )
-
         row = cur.fetchone()
         if not row:
-            print("[DEBUG] load_message: message not found")
             return None
-
         raw = row["tresc"]
-
         try:
             msg = email.message_from_string(raw)
             return msg
-        except Exception as e:
-            print(f"[DEBUG] load_message: parse error {e}")
+        except Exception:
             return None
-
     finally:
         conn.close()
-
 
 # -----------------------------
 # EKSTRAKCJA HTML
 # -----------------------------
-
 def extract_html(msg: email.message.Message) -> Optional[str]:
-    """
-    Zwraca treść HTML z wiadomości, jeśli istnieje.
-    """
     if msg is None:
         return None
-
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/html":
@@ -320,107 +241,68 @@ def extract_html(msg: email.message.Message) -> Optional[str]:
                 )
             except Exception:
                 return None
-
     return None
 
-
 # -----------------------------
-# ZAŁĄCZNIKI
+# ZAŁĄCZNIKI (z DB)
 # -----------------------------
-
 def get_attachments(msg: email.message.Message) -> List[Dict[str, Any]]:
-    """
-    Zwraca listę załączników:
-    [
-        {"index": 0, "filename": "..."},
-        {"index": 1, "filename": "..."},
-        ...
-    ]
-    """
     if msg is None:
         return []
-
     attachments: List[Dict[str, Any]] = []
     idx = 0
-
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
             continue
-        if part.get("Content-Disposition") is None:
+        cd = part.get("Content-Disposition")
+        if cd is None:
             continue
-
         filename = part.get_filename()
         if not filename:
             continue
-
-        attachments.append({"index": idx, "filename": filename})
+        attachments.append({"index": idx, "filename": safe_header(filename)})
         idx += 1
-
     return attachments
 
-
 def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optional[str]:
-    """
-    Zapisuje załącznik do pliku i zwraca ścieżkę.
-    """
     msg = load_message(konto_id, folder, uid)
     if not msg:
         return None
-
     idx = 0
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
             continue
-        if part.get("Content-Disposition") is None:
+        cd = part.get("Content-Disposition")
+        if cd is None:
             continue
-
         filename = part.get_filename()
         if not filename:
             continue
-
         if idx == index:
             data = part.get_payload(decode=True)
-
             save_dir = os.path.join(os.getcwd(), "tmp_attachments")
             os.makedirs(save_dir, exist_ok=True)
-
-            path = os.path.join(save_dir, filename)
-
+            path = os.path.join(save_dir, safe_header(filename))
             try:
                 with open(path, "wb") as f:
                     f.write(data)
                 return path
-            except Exception as e:
-                print(f"[DEBUG] open_attachment: write error {e}")
+            except Exception:
                 return None
-
         idx += 1
-
     return None
 
-
 def download_all_attachments(konto_id: int, folder: str, uid: str, attachments: List[Dict[str, Any]]) -> None:
-    """
-    Pobiera wszystkie załączniki.
-    """
     for att in attachments:
         open_attachment(konto_id, folder, uid, att["index"])
 
-
 # -----------------------------
-# FILTRY
+# FILTRY (DB)
 # -----------------------------
-
 def add_filter(konto_id: int, od: str, folder: str) -> None:
-    """
-    Dodaje filtr lokalny (nie serwerowy).
-    """
     conn = get_conn()
     cur = conn.cursor()
-
     try:
-        print(f"[DEBUG] add_filter: konto_id={konto_id}, od={od}, folder={folder}")
-
         cur.execute(
             """
             INSERT INTO reguly_filtrow (pracownik_id, konto_id, od, folder_docelowy, aktywna)
@@ -431,154 +313,462 @@ def add_filter(konto_id: int, od: str, folder: str) -> None:
         """,
             (konto_id, konto_id, od, folder),
         )
-
         conn.commit()
-
     finally:
         conn.close()
 
-
 # -----------------------------
-# OZNACZANIE WIADOMOŚCI
+# OZNACZANIE WIADOMOŚCI (lokalnie)
 # -----------------------------
-
 def mark_read(konto_id: int, uid: str) -> None:
     conn = get_conn()
     cur = conn.cursor()
-
     try:
-        print(f"[DEBUG] mark_read: konto_id={konto_id}, uid={uid}")
-
         cur.execute(
             "UPDATE wiadomosci_email SET przeczytana = 1 WHERE konto_id = ? AND uid = ?",
             (konto_id, uid),
         )
-
         conn.commit()
-
     finally:
         conn.close()
-
 
 def mark_unread(konto_id: int, uid: str) -> None:
     conn = get_conn()
     cur = conn.cursor()
-
     try:
-        print(f"[DEBUG] mark_unread: konto_id={konto_id}, uid={uid}")
-
         cur.execute(
             "UPDATE wiadomosci_email SET przeczytana = 0 WHERE konto_id = ? AND uid = ?",
             (konto_id, uid),
         )
-
         conn.commit()
-
     finally:
         conn.close()
 
-
 def delete_email(konto_id: int, uid: str) -> None:
-    """
-    Miękkie usunięcie (usunieta = 1).
-    """
     conn = get_conn()
     cur = conn.cursor()
-
     try:
-        print(f"[DEBUG] delete_email: konto_id={konto_id}, uid={uid}")
-
         cur.execute(
             "UPDATE wiadomosci_email SET usunieta = 1 WHERE konto_id = ? AND uid = ?",
             (konto_id, uid),
         )
-
         conn.commit()
-
     finally:
         conn.close()
+
 # -----------------------------
-# IMAP — LOGOWANIE DO KONTA
+# FETCH HEADERS FROM IMAP -> STORE IN DB
 # -----------------------------
-
-def _open_imap_for_account(acc: Dict[str, Any]) -> Optional[imaplib.IMAP4_SSL]:
-    """
-    Logowanie do IMAP dla danego konta.
-    """
-    email_addr = acc.get("email")
-    host = acc.get("serwer_imap") or ""
-    port = int(acc.get("port_imap") or 993)
-    enc = acc.get("haslo_enc")
-
-    if not enc:
-        print(f"[DEBUG] _open_imap_for_account: no password for {email_addr}")
-        return None
-
+def fetch_headers_from_imap_and_store(konto_id: int, server_folder: str, imap_host: str = None, imap_port: int = 993) -> Tuple[int, int]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
     try:
-        pwd = decrypt_password(enc)
-    except Exception as e:
-        print(f"[DEBUG] _open_imap_for_account: decrypt error for {email_addr}: {e}")
-        return None
-
-    try:
+        cur.execute("SELECT serwer_imap, port_imap, email, haslo_enc FROM konta_email WHERE id = ?", (konto_id,))
+        r = cur.fetchone()
+        if not r:
+            raise ValueError("konto nie znalezione")
+        host = imap_host or r["serwer_imap"]
+        port = int(imap_port or r["port_imap"] or 993)
+        pwd = decrypt_password(r["haslo_enc"]) if r["haslo_enc"] else ""
         imap = imaplib.IMAP4_SSL(host, port)
-        imap.login(email_addr, pwd)
-        print(f"[DEBUG] _open_imap_for_account: IMAP login OK for {email_addr}")
-        return imap
-    except Exception as e:
-        print(f"[IMAP] Błąd połączenia dla {email_addr}: {e}")
-        return None
+        imap.login(r["email"], pwd)
+        try:
+            status, _ = imap.select(f'"{server_folder}"')
+            if status != "OK":
+                status, _ = imap.select(server_folder)
+            if status != "OK":
+                raise RuntimeError(f"Nie można wybrać folderu {server_folder}")
+        except Exception:
+            imap.logout()
+            raise
+        typ, data = imap.search(None, "ALL")
+        if typ != "OK":
+            imap.logout()
+            raise RuntimeError("search failed")
+        uids = data[0].split()
+        fetched = 0
+        updated = 0
+        for uid in uids:
+            uid_b = uid if isinstance(uid, bytes) else uid.encode()
+            try:
+                typ_h, msg_data = imap.fetch(uid_b, "(BODY.PEEK[HEADER])")
+                if typ_h != "OK" or not msg_data or not msg_data[0]:
+                    continue
+                raw = msg_data[0][1]
+                if not raw:
+                    continue
+                hdr = email.message_from_bytes(raw)
+                nadawca = safe_header(hdr.get("From", ""))
+                temat = safe_header(hdr.get("Subject", ""))
+                data_hdr = safe_header(hdr.get("Date", ""))
+                typ_f, flags_data = imap.fetch(uid_b, "(FLAGS)")
+                flags_str = ""
+                try:
+                    if flags_data and flags_data[0]:
+                        flags_str = flags_data[0][0].decode(errors="replace") if isinstance(flags_data[0][0], (bytes, bytearray)) else str(flags_data[0])
+                except Exception:
+                    flags_str = ""
+                przeczytana = 1 if ("\\Seen" in flags_str or "\\SEEN" in flags_str) else 0
+                cur.execute("SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?", (konto_id, server_folder))
+                row = cur.fetchone()
+                if not row:
+                    cur.execute("INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)", (konto_id, server_folder))
+                    folder_id = cur.lastrowid
+                else:
+                    folder_id = row["id"]
+                uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
+                cur.execute("SELECT id FROM wiadomosci_email WHERE konto_id = ? AND uid = ?", (konto_id, uid_str))
+                existing = cur.fetchone()
+                if existing:
+                    cur.execute(
+                        "UPDATE wiadomosci_email SET nadawca = ?, temat = ?, data = ?, przeczytana = ?, folder_id = ? WHERE konto_id = ? AND uid = ?",
+                        (nadawca, temat, data_hdr, przeczytana, folder_id, konto_id, uid_str),
+                    )
+                    updated += 1
+                else:
+                    cur.execute(
+                        "INSERT INTO wiadomosci_email (konto_id, folder_id, uid, nadawca, temat, data, przeczytana) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (konto_id, folder_id, uid_str, nadawca, temat, data_hdr, przeczytana),
+                    )
+                    fetched += 1
+                conn.commit()
+            except Exception:
+                continue
+        imap.logout()
+        return fetched, updated
+    finally:
+        conn.close()
 
-
-def _get_account_by_id(konto_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Pobiera konto email po ID.
-    """
-    accounts = get_email_accounts_for_employee(None)
-    for acc in accounts:
-        if acc.get("id") == konto_id:
-            return acc
-    return None
-
-
-# -----------------------------
-# PRZENOSZENIE WIADOMOŚCI (LOCAL + SERVER)
-# -----------------------------
-
-def move_email_and_get_sender(konto_id: int, uid: str, target_folder: str) -> Tuple[bool, Optional[str]]:
-    """
-    Przenosi wiadomość:
-    ✔ lokalnie (SQLite)
-    ✔ na serwerze IMAP (COPY + DELETE + EXPUNGE)
-    """
+def fetch_message_from_imap_and_store(
+    konto_id: int,
+    server_folder: str,
+    uid: str,
+    imap_host: str = None,
+    imap_port: int = 993
+) -> bool:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     try:
-        print(f"[DEBUG] move_email_and_get_sender: konto_id={konto_id}, uid={uid}, target_folder={target_folder}")
+        # pobranie danych konta
+        cur.execute(
+            "SELECT serwer_imap, port_imap, email, haslo_enc FROM konta_email WHERE id = ?",
+            (konto_id,)
+        )
+        r = cur.fetchone()
+        if not r:
+            raise ValueError("konto nie znalezione")
 
-        # Pobierz nadawcę i folder źródłowy
+        host = imap_host or r["serwer_imap"]
+        port = int(imap_port or r["port_imap"] or 993)
+        pwd = decrypt_password(r["haslo_enc"]) if r["haslo_enc"] else ""
+
+        # połączenie IMAP
+        imap = imaplib.IMAP4_SSL(host, port)
+        imap.login(r["email"], pwd)
+
+        # wybór folderu
+        try:
+            status, _ = imap.select(f'"{server_folder}"')
+            if status != "OK":
+                status, _ = imap.select(server_folder)
+            if status != "OK":
+                raise RuntimeError(f"Nie można wybrać folderu {server_folder}")
+        except Exception:
+            imap.logout()
+            raise
+
+        # pobranie pełnej wiadomości
+        typ, data = imap.fetch(
+            uid.encode() if isinstance(uid, str) else uid,
+            "(BODY[])"
+        )
+
+        if typ != "OK" or not data or not data[0]:
+            imap.logout()
+            return False
+
+        raw = data[0][1]
+        if not raw:
+            imap.logout()
+            return False
+
+        raw_str = (
+            raw.decode("utf-8", errors="replace")
+            if isinstance(raw, (bytes, bytearray))
+            else str(raw)
+        )
+
+        # folder_id
+        cur.execute(
+            "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
+            (konto_id, server_folder)
+        )
+        row = cur.fetchone()
+
+        if not row:
+            cur.execute(
+                "INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)",
+                (konto_id, server_folder)
+            )
+            folder_id = cur.lastrowid
+        else:
+            folder_id = row["id"]
+
+        # zapis treści
+        cur.execute(
+            "SELECT id FROM wiadomosci_email WHERE konto_id = ? AND uid = ?",
+            (konto_id, uid)
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            cur.execute(
+                "UPDATE wiadomosci_email SET tresc = ? WHERE konto_id = ? AND uid = ?",
+                (raw_str, konto_id, uid)
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO wiadomosci_email (konto_id, folder_id, uid, tresc)
+                VALUES (?, ?, ?, ?)
+                """,
+                (konto_id, folder_id, uid, raw_str)
+            )
+
+        conn.commit()
+
+        # ---------------------------------------------------------
+        # CACHE 300 — usuń treść ze starszych wiadomości
+        # ---------------------------------------------------------
+        cur.execute("""
+            SELECT id FROM wiadomosci_email
+            WHERE konto_id = ? AND tresc IS NOT NULL
+            ORDER BY id DESC
+            LIMIT -1 OFFSET 300
+        """, (konto_id,))
+        rows_to_delete = cur.fetchall()
+
+        for rdel in rows_to_delete:
+            cur.execute(
+                "UPDATE wiadomosci_email SET tresc = NULL WHERE id = ?",
+                (rdel["id"],)
+            )
+
+        conn.commit()
+        # ---------------------------------------------------------
+
+        imap.logout()
+        return True
+
+    finally:
+        conn.close()
+
+# -----------------------------
+# MARK READ/UNREAD ON SERVER + DB
+# -----------------------------
+def mark_read_remote(konto_id: int, server_folder: str, uid: str) -> bool:
+    try:
+        conn = get_conn()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT serwer_imap, port_imap, email, haslo_enc FROM konta_email WHERE id = ?", (konto_id,))
+        r = cur.fetchone()
+        if not r:
+            return False
+        host = r["serwer_imap"]
+        port = int(r["port_imap"] or 993)
+        pwd = decrypt_password(r["haslo_enc"]) if r["haslo_enc"] else ""
+        imap = imaplib.IMAP4_SSL(host, port)
+        imap.login(r["email"], pwd)
+        try:
+            status, _ = imap.select(f'"{server_folder}"')
+            if status != "OK":
+                status, _ = imap.select(server_folder)
+            if status != "OK":
+                imap.logout()
+                return False
+            typ, _ = imap.store(uid, "+FLAGS", r"(\Seen)")
+            imap.logout()
+            if typ == "OK":
+                cur.execute("UPDATE wiadomosci_email SET przeczytana = 1 WHERE konto_id = ? AND uid = ?", (konto_id, uid))
+                conn.commit()
+                return True
+        except Exception:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+            raise
+    except Exception:
+        # swallow and return False
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def mark_unread_remote(konto_id: int, server_folder: str, uid: str) -> bool:
+    try:
+        conn = get_conn()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT serwer_imap, port_imap, email, haslo_enc FROM konta_email WHERE id = ?", (konto_id,))
+        r = cur.fetchone()
+        if not r:
+            return False
+        host = r["serwer_imap"]
+        port = int(r["port_imap"] or 993)
+        pwd = decrypt_password(r["haslo_enc"]) if r["haslo_enc"] else ""
+        imap = imaplib.IMAP4_SSL(host, port)
+        imap.login(r["email"], pwd)
+        try:
+            status, _ = imap.select(f'"{server_folder}"')
+            if status != "OK":
+                status, _ = imap.select(server_folder)
+            if status != "OK":
+                imap.logout()
+                return False
+            typ, _ = imap.store(uid, "-FLAGS", r"(\Seen)")
+            imap.logout()
+            if typ == "OK":
+                cur.execute("UPDATE wiadomosci_email SET przeczytana = 0 WHERE konto_id = ? AND uid = ?", (konto_id, uid))
+                conn.commit()
+                return True
+        except Exception:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+            raise
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+# -----------------------------
+# DELETE REMOTE (and mark local)
+# -----------------------------
+def delete_email_remote(konto_id: int, server_folder: str, uid: str) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        acc = _get_account_by_id(konto_id)
+        if not acc:
+            return False
+        imap = _open_imap_for_account(acc)
+        if not imap:
+            return False
+        try:
+            try:
+                imap.select(f'"{server_folder}"')
+            except Exception:
+                imap.select(server_folder)
+            typ, _ = imap.store(uid, "+FLAGS", r"(\Deleted)")
+            if typ == "OK":
+                imap.expunge()
+            try:
+                imap.logout()
+            except Exception:
+                pass
+        except Exception:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+            return False
+        cur.execute("UPDATE wiadomosci_email SET usunieta = 1 WHERE konto_id = ? AND uid = ?", (konto_id, uid))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+# -----------------------------
+# EMPTY FOLDER (remote + local mark)
+# -----------------------------
+def empty_folder(konto_id: int, server_name: str) -> bool:
+    acc = _get_account_by_id(konto_id)
+    if not acc:
+        return False
+    imap = _open_imap_for_account(acc)
+    if not imap:
+        return False
+    ok = False
+    try:
+        try:
+            imap.select(f'"{server_name}"')
+        except Exception:
+            imap.select(server_name)
+        typ, data = imap.search(None, "ALL")
+        if typ != "OK":
+            pass
+        else:
+            uids = data[0].split()
+            for uid in uids:
+                imap.store(uid, "+FLAGS", r"(\Deleted)")
+            imap.expunge()
+            ok = True
+    except Exception:
+        ok = False
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+    if not ok:
+        return False
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
+            (konto_id, server_name),
+        )
+        row = cur.fetchone()
+        if row:
+            folder_id = row["id"]
+            cur.execute(
+                "UPDATE wiadomosci_email SET usunieta = 1 WHERE konto_id = ? AND folder_id = ?",
+                (konto_id, folder_id),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return True
+
+# -----------------------------
+# MOVE EMAIL (local + server)
+# -----------------------------
+def move_email_and_get_sender(konto_id: int, uid: str, target_folder: str) -> Tuple[bool, Optional[str]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
         cur.execute(
             "SELECT id, nadawca, folder_id FROM wiadomosci_email WHERE konto_id = ? AND uid = ?",
             (konto_id, uid),
         )
         row = cur.fetchone()
-
         if not row:
-            print("[DEBUG] move_email_and_get_sender: message not found")
             return False, None
-
         nadawca = row["nadawca"]
         src_folder_id = row["folder_id"]
-
-        # Upewnij się, że folder docelowy istnieje lokalnie
         cur.execute(
             "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
             (konto_id, target_folder),
         )
         frow = cur.fetchone()
-
         if not frow:
             cur.execute(
                 "INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)",
@@ -587,23 +777,16 @@ def move_email_and_get_sender(konto_id: int, uid: str, target_folder: str) -> Tu
             folder_id = cur.lastrowid
         else:
             folder_id = frow["id"]
-
-        # Aktualizacja lokalna
         cur.execute(
             "UPDATE wiadomosci_email SET folder_id = ? WHERE konto_id = ? AND uid = ?",
             (folder_id, konto_id, uid),
         )
         conn.commit()
-
-        # -----------------------------
-        # PRZENIESIENIE NA SERWERZE IMAP
-        # -----------------------------
         acc = _get_account_by_id(konto_id)
         if acc:
             imap = _open_imap_for_account(acc)
             if imap:
                 try:
-                    # Pobierz nazwę folderu źródłowego
                     cur.execute(
                         "SELECT nazwa FROM foldery_email WHERE id = ?",
                         (src_folder_id,),
@@ -612,83 +795,54 @@ def move_email_and_get_sender(konto_id: int, uid: str, target_folder: str) -> Tu
                     src_name_local = srow["nazwa"] if srow else "INBOX"
                     src_name_server = denormalize_folder_name(src_name_local)
                     dst_name_server = denormalize_folder_name(target_folder)
-
-                    # Wybierz folder źródłowy
                     try:
                         imap.select(f'"{src_name_server}"')
                     except Exception:
                         imap.select(src_name_server)
-
-                    # COPY → przeniesienie
                     typ, _ = imap.copy(uid, f'"{dst_name_server}"')
-
                     if typ == "OK":
-                        # Usuń z folderu źródłowego
                         imap.store(uid, "+FLAGS", r"(\Deleted)")
                         imap.expunge()
                     else:
-                        print(f"[DEBUG] IMAP copy failed for UID={uid}")
-
-                except Exception as e:
-                    print(f"[DEBUG] move_email_and_get_sender: IMAP move error {e}")
-
+                        pass
+                except Exception:
+                    pass
                 finally:
                     try:
                         imap.logout()
                     except Exception:
                         pass
-
         return True, nadawca
-
     finally:
         conn.close()
 
-
 # -----------------------------
-# TWORZENIE FOLDERÓW (LOCAL + SERVER)
+# CREATE / DELETE FOLDER (remote + local)
 # -----------------------------
-
 def create_folder(konto_id: int, name: str, parent_server: Optional[str]) -> bool:
-    """
-    Tworzy folder:
-    ✔ na serwerze IMAP
-    ✔ lokalnie w SQLite
-    """
     acc = _get_account_by_id(konto_id)
     if not acc:
-        print(f"[DEBUG] create_folder: account not found for konto_id={konto_id}")
         return False
-
-    # pełna nazwa na serwerze
     server_name = name if not parent_server else f"{parent_server}.{name}"
-
     imap = _open_imap_for_account(acc)
     if not imap:
         return False
-
     ok = False
-
     try:
         typ, _ = imap.create(f'"{server_name}"')
         if typ == "OK":
             ok = True
-        else:
-            print(f"[DEBUG] create_folder: IMAP create failed for {server_name}")
-    except Exception as e:
-        print(f"[DEBUG] create_folder: IMAP error {e}")
+    except Exception:
+        ok = False
     finally:
         try:
             imap.logout()
         except Exception:
             pass
-
     if not ok:
         return False
-
-    # zapis lokalny
     conn = get_conn()
     cur = conn.cursor()
-
     try:
         cur.execute(
             "INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)",
@@ -697,52 +851,31 @@ def create_folder(konto_id: int, name: str, parent_server: Optional[str]) -> boo
         conn.commit()
     finally:
         conn.close()
-
     return True
 
-
-# -----------------------------
-# USUWANIE FOLDERÓW (LOCAL + SERVER)
-# -----------------------------
-
 def delete_folder(konto_id: int, server_name: str) -> bool:
-    """
-    Usuwa folder:
-    ✔ na serwerze IMAP
-    ✔ lokalnie w SQLite
-    """
     acc = _get_account_by_id(konto_id)
     if not acc:
-        print(f"[DEBUG] delete_folder: account not found for konto_id={konto_id}")
         return False
-
     imap = _open_imap_for_account(acc)
     if not imap:
         return False
-
     ok = False
-
     try:
         typ, _ = imap.delete(f'"{server_name}"')
         if typ == "OK":
             ok = True
-        else:
-            print(f"[DEBUG] delete_folder: IMAP delete failed for {server_name}")
-    except Exception as e:
-        print(f"[DEBUG] delete_folder: IMAP error {e}")
+    except Exception:
+        ok = False
     finally:
         try:
             imap.logout()
         except Exception:
             pass
-
     if not ok:
         return False
-
-    # usuń lokalnie
     conn = get_conn()
     cur = conn.cursor()
-
     try:
         cur.execute(
             "DELETE FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
@@ -751,224 +884,133 @@ def delete_folder(konto_id: int, server_name: str) -> bool:
         conn.commit()
     finally:
         conn.close()
-
     return True
+
 # -----------------------------
-# OPRÓŻNIANIE FOLDERÓW (LOCAL + SERVER)
+# LIST FOLDERS FROM IMAP -> STORE
 # -----------------------------
-
-def empty_folder(konto_id: int, server_name: str) -> bool:
-    """
-    Opróżnia folder:
-    ✔ usuwa wszystkie wiadomości na serwerze IMAP
-    ✔ oznacza wiadomości jako usunięte lokalnie
-    """
-    acc = _get_account_by_id(konto_id)
-    if not acc:
-        print(f"[DEBUG] empty_folder: account not found for konto_id={konto_id}")
-        return False
-
-    imap = _open_imap_for_account(acc)
-    if not imap:
-        return False
-
-    ok = False
-
+def list_folders_from_imap_and_store(konto_id: int) -> List[str]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
     try:
-        # wybierz folder
+        cur.execute("SELECT serwer_imap, port_imap, email, haslo_enc FROM konta_email WHERE id = ?", (konto_id,))
+        r = cur.fetchone()
+        if not r:
+            return []
+        host = r["serwer_imap"]
+        port = int(r["port_imap"] or 993)
+        pwd = decrypt_password(r["haslo_enc"]) if r["haslo_enc"] else ""
         try:
-            imap.select(f'"{server_name}"')
+            imap = imaplib.IMAP4_SSL(host, port)
+            imap.login(r["email"], pwd)
         except Exception:
-            imap.select(server_name)
-
-        typ, data = imap.search(None, "ALL")
-        if typ != "OK":
-            print(f"[DEBUG] empty_folder: search failed for {server_name}")
-        else:
-            uids = data[0].split()
-            for uid in uids:
-                imap.store(uid, "+FLAGS", r"(\Deleted)")
-            imap.expunge()
-            ok = True
-
-    except Exception as e:
-        print(f"[DEBUG] empty_folder: IMAP error {e}")
-
-    finally:
+            return []
+        folders = []
+        for args in [("INBOX", "*"), ("INBOX", "%"), ("", "*"), ("", "%")]:
+            try:
+                typ, boxes = imap.list(*args)
+                if typ == "OK" and boxes:
+                    for b in boxes:
+                        try:
+                            name = parse_mailbox_name(b)
+                            if name and name != ".":
+                                folders.append(name)
+                                cur.execute("SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?", (konto_id, name))
+                                if not cur.fetchone():
+                                    cur.execute("INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)", (konto_id, name))
+                        except Exception:
+                            continue
+                    conn.commit()
+            except Exception:
+                continue
         try:
             imap.logout()
         except Exception:
             pass
-
-    if not ok:
-        return False
-
-    # lokalnie oznacz jako usunięte
-    conn = get_conn()
-    cur = conn.cursor()
-
-    try:
-        cur.execute(
-            "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
-            (konto_id, server_name),
-        )
-        row = cur.fetchone()
-
-        if row:
-            folder_id = row["id"]
-            cur.execute(
-                "UPDATE wiadomosci_email SET usunieta = 1 WHERE konto_id = ? AND folder_id = ?",
-                (konto_id, folder_id),
-            )
-            conn.commit()
-
+        return folders
     finally:
         conn.close()
 
-    return True
-
-
 # -----------------------------
-# SYNC WSZYSTKICH MAILI (IMAP → SQLite)
+# SYNC ALL EMAILS (IMAP -> SQLite)
 # -----------------------------
-
 def sync_all_emails(pracownik_id: int) -> bool:
-    """
-    Pobiera wszystkie foldery i wiadomości z IMAP i zapisuje je lokalnie.
-    Obsługuje:
-    ✔ foldery systemowe (mapowanie)
-    ✔ foldery użytkownika
-    ✔ podfoldery (hierarchia IMAP)
-    ✔ dekodowanie UTF7-IMAP
-    ✔ bez rozbijania nazw na słowa
-    """
-    print(f"[DEBUG] sync_all_emails: pracownik_id={pracownik_id}")
-
     accounts = get_email_accounts_for_employee(pracownik_id)
-    print(f"[DEBUG] sync_all_emails: accounts={accounts}")
-
     success_any = False
-
     for acc in accounts:
         try:
             imap = _open_imap_for_account(acc)
             if not imap:
                 continue
-
             email_addr = acc.get("email")
-
-            # -----------------------------
-            # LISTA FOLDERÓW
-            # -----------------------------
             try:
                 typ, mailboxes = imap.list()
-                print(f"[DEBUG] sync_all_emails: mailboxes for {email_addr}: {mailboxes}")
             except Exception:
                 mailboxes = []
-
             conn = get_conn()
             cur = conn.cursor()
-
             try:
                 for m in mailboxes:
                     try:
                         name_server = parse_mailbox_name(m)
                     except Exception:
                         name_server = "INBOX"
-
                     name_local = normalize_folder_name(name_server)
-
                     cur.execute(
                         "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
                         (acc["id"], name_local),
                     )
-
                     if not cur.fetchone():
                         cur.execute(
                             "INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)",
                             (acc["id"], name_local),
                         )
-
                 conn.commit()
-
             finally:
                 conn.close()
-
-            # -----------------------------
-            # WIADOMOŚCI
-            # -----------------------------
             conn = get_conn()
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
-
             try:
                 cur.execute(
                     "SELECT id, nazwa FROM foldery_email WHERE konto_id = ?",
                     (acc["id"],),
                 )
                 folders = cur.fetchall()
-
-                print(f"[DEBUG] sync_all_emails: DB folders for konto_id={acc['id']}: {folders}")
-
                 for f in folders:
                     fname_local = f["nazwa"]
                     fname_server = denormalize_folder_name(fname_local)
-
                     try:
                         try:
                             imap.select(f'"{fname_server}"', readonly=True)
                         except Exception:
                             imap.select(fname_server, readonly=True)
-
-                        print(f"[DEBUG] sync_all_emails: selected folder {fname_server}")
-
-                    except Exception as e:
-                        print(f"[DEBUG] sync_all_emails: cannot select folder {fname_server}: {e}")
+                    except Exception:
                         continue
-
                     typ, data = imap.search(None, "ALL")
-                    print(f"[DEBUG] sync_all_emails: search result type={typ}, data={data}")
-
                     if typ != "OK":
                         continue
-
                     uids = data[0].split()
-                    uids = uids[-200:]  # ostatnie 200 wiadomości
-
-                    print(f"[DEBUG] sync_all_emails: {len(uids)} UIDs in {fname_server}")
-
+                    uids = uids[-200:]
                     for uid in uids:
                         try:
                             uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
-
                             cur.execute(
                                 "SELECT id FROM wiadomosci_email WHERE konto_id = ? AND uid = ?",
                                 (acc["id"], uid_str),
                             )
-
                             if cur.fetchone():
                                 continue
-
-                            typ, msg_data = imap.fetch(uid, "(RFC822)")
-
+                            typ, msg_data = imap.fetch(uid, "(BODY[])")
                             if typ != "OK" or not msg_data or not msg_data[0]:
-                                print(f"[DEBUG] sync_all_emails: fetch failed for UID={uid_str}")
                                 continue
-
                             raw = msg_data[0][1]
-
-                            raw_bytes = (
-                                raw
-                                if isinstance(raw, (bytes, bytearray))
-                                else str(raw).encode("utf-8", errors="replace")
-                            )
-
+                            raw_bytes = raw if isinstance(raw, (bytes, bytearray)) else str(raw).encode("utf-8", errors="replace")
                             try:
                                 msg = email.message_from_bytes(raw_bytes)
-                            except Exception as e:
-                                print(f"[DEBUG] sync_all_emails: parse error for UID={uid_str}: {e}")
+                            except Exception:
                                 msg = None
-
                             if msg:
                                 nadawca = safe_header(msg.get("From", ""))
                                 temat = safe_header(msg.get("Subject", ""))
@@ -977,10 +1019,8 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                 nadawca = ""
                                 temat = ""
                                 data_hdr = ""
-
                             folder_id = f["id"]
                             raw_s = raw_bytes.decode("utf-8", errors="replace")
-
                             cur.execute(
                                 """
                                 INSERT INTO wiadomosci_email
@@ -998,24 +1038,111 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                     raw_s,
                                 ),
                             )
-
-                        except Exception as e:
-                            print("sync email store error:", e)
-
+                        except Exception:
+                            pass
                 conn.commit()
-
             finally:
                 conn.close()
-
             try:
                 imap.logout()
             except Exception:
                 pass
-
             success_any = True
-
         except Exception:
-            print("sync account outer error:", traceback.format_exc())
-
+            pass
     return success_any
+# app/email/email_actions.py  -- część 4/4 (dokończenie)
 
+# -----------------------------
+# DROBNE HELPERY I WRAPPERY
+# -----------------------------
+def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Zwraca wiersz konta (dict) lub None.
+    """
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM konta_email WHERE id = ?", (konto_id,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+def ensure_local_folder_exists(konto_id: int, folder_name: str) -> int:
+    """
+    Upewnia się, że folder istnieje w tabeli foldery_email.
+    Zwraca folder_id.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?", (konto_id, folder_name))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur.execute("INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)", (konto_id, folder_name))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def list_accounts() -> List[Dict[str, Any]]:
+    """
+    Zwraca listę wszystkich kont (do debugu / UI).
+    """
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, email, serwer_imap, serwer_smtp, aktywne FROM konta_email ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+def safe_uid(u: Any) -> str:
+    """
+    Normalizuje UID do stringa.
+    """
+    if u is None:
+        return ""
+    if isinstance(u, bytes):
+        try:
+            return u.decode()
+        except Exception:
+            return str(u)
+    return str(u)
+
+__all__ = [
+    "list_folders_from_imap_and_store",
+    "fetch_headers_from_imap_and_store",
+    "fetch_message_from_imap_and_store",
+    "mark_read_remote",
+    "mark_unread_remote",
+    "delete_email_remote",
+    "empty_folder",
+    "move_email_and_get_sender",
+    "create_folder",
+    "delete_folder",
+    "sync_all_emails",
+    "send_email_smtp",
+    "send_batch_emails",
+    "load_message",
+    "extract_html",
+    "get_attachments",
+    "open_attachment",
+    "download_all_attachments",
+    "add_filter",
+    "mark_read",
+    "mark_unread",
+    "delete_email",
+    "get_account_info",
+    "ensure_local_folder_exists",
+    "list_accounts",
+    "safe_uid",
+    "safe_header",
+    "parse_mailbox_name",
+    "normalize_folder_name",
+    "denormalize_folder_name",
+]

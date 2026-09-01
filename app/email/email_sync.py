@@ -1,82 +1,98 @@
-# app/email/email_sync.py
-
 from __future__ import annotations
+
+import codecs
 import email
-import email.header
-import imaplib
 from typing import Optional, List, Tuple
 
 
-# =====================================================================
-# BEZPIECZNY HEADER
-# =====================================================================
-
 def safe_header(value: str) -> str:
+    if not value:
+        return ""
     try:
-        decoded = email.header.decode_header(value)
-        parts = []
-        for text, enc in decoded:
+        parts = email.header.decode_header(value)
+        decoded = []
+        for text, charset in parts:
             if isinstance(text, bytes):
-                parts.append(text.decode(enc or "utf-8", errors="replace"))
+                try:
+                    decoded.append(text.decode(charset or "utf-8", errors="replace"))
+                except Exception:
+                    decoded.append(text.decode("utf-8", errors="replace"))
             else:
-                parts.append(text)
-        return "".join(parts)
+                decoded.append(text)
+        return "".join(decoded)
     except Exception:
         return value
 
 
-# =====================================================================
-# NAJWAŻNIEJSZA FUNKCJA — ZERO PARSOWANIA
-# =====================================================================
+def decode_imap_utf7(name: bytes | str) -> str:
+    if not name:
+        return ""
+    try:
+        s = name.decode("utf-8", errors="replace") if isinstance(name, bytes) else str(name)
+        try:
+            return codecs.decode(s.encode("ascii", errors="replace"), "imap4-utf-7")
+        except Exception:
+            try:
+                return codecs.decode(s, "imap4-utf-7")
+            except Exception:
+                return s
+    except Exception:
+        return str(name)
+
+
+def encode_imap_utf7(name: str) -> str:
+    if not name:
+        return ""
+    try:
+        return codecs.encode(name, "imap4-utf-7").decode("ascii", errors="replace")
+    except Exception:
+        return name
+
 
 def extract_folder_name(raw: bytes) -> str:
-    """
-    Pobiera nazwę folderu IMAP dokładnie tak, jak IMAP ją zwraca.
-    Zero parsowania, zero zgadywania.
-    """
-    try:
-        text = raw.decode()
-    except:
-        text = str(raw)
-
-    # IMAP zawsze trzyma nazwę folderu w ostatnim cudzysłowie
-    if '"' in text:
-        return text.split('"')[-2].strip()
-
-    # jeśli nie ma cudzysłowów — bierz ostatni token
-    return text.split()[-1].strip()
+    if not raw:
+        return ""
+    line = raw.decode(errors="replace").strip()
+    if '"' in line:
+        parts = line.split('"')
+        if len(parts) >= 2:
+            return parts[-2].strip()
+    tokens = line.split()
+    return tokens[-1].strip() if tokens else ""
 
 
-# =====================================================================
-# IMAP LIST — pobieranie folderów
-# =====================================================================
+def extract_separator(raw: bytes) -> str:
+    line = raw.decode(errors="replace")
+    if '"' in line:
+        parts = line.split('"')
+        if len(parts) >= 3:
+            return parts[1]
+    return "/"
+
+
+def extract_flags(raw: bytes) -> str:
+    line = raw.decode(errors="replace")
+    if "(" in line and ")" in line:
+        return line.split(")")[0].replace("(", "").strip()
+    return ""
+
 
 def imap_list_folders(imap) -> List[str]:
-    """
-    Pobiera listę folderów IMAP w sposób kompatybilny z każdym serwerem.
-    Zwraca listę nazw folderów dokładnie takich, jak IMAP je zwrócił.
-    """
     attempts = [
         ("INBOX", "*"),
         ("INBOX", "%"),
         ("", "*"),
         ("", "%"),
     ]
-
     for args in attempts:
         try:
             typ, boxes = imap.list(*args)
             if typ == "OK" and boxes:
                 return [extract_folder_name(b) for b in boxes]
-        except:
+        except Exception:
             pass
-
     return []
 
-
-# =====================================================================
-# IMAP SELECT — stabilny
-# =====================================================================
 
 def imap_safe_select(imap, folder: str) -> bool:
     attempts = [
@@ -84,25 +100,18 @@ def imap_safe_select(imap, folder: str) -> bool:
         (folder, False),
         (folder, None),
     ]
-
     for f, readonly in attempts:
         try:
             if readonly is None:
                 status, _ = imap.select(f)
             else:
                 status, _ = imap.select(f, readonly=readonly)
-
             if status == "OK":
                 return True
-        except:
+        except Exception:
             pass
-
     return False
 
-
-# =====================================================================
-# FETCH — nagłówki
-# =====================================================================
 
 def imap_fetch_headers(imap, uid: str) -> Optional[email.message.Message]:
     try:
@@ -114,23 +123,15 @@ def imap_fetch_headers(imap, uid: str) -> Optional[email.message.Message]:
         return None
 
 
-# =====================================================================
-# FETCH — pełna wiadomość
-# =====================================================================
-
 def imap_fetch_full(imap, uid: str) -> Optional[email.message.Message]:
     try:
-        typ, msg_data = imap.fetch(uid, "(RFC822)")
+        typ, msg_data = imap.fetch(uid, "(BODY[])")
         if typ != "OK" or not msg_data or not msg_data[0]:
             return None
         return email.message_from_bytes(msg_data[0][1])
     except Exception:
         return None
 
-
-# =====================================================================
-# SEARCH — lista UID
-# =====================================================================
 
 def imap_search_uids(imap) -> List[str]:
     try:
@@ -141,10 +142,6 @@ def imap_search_uids(imap) -> List[str]:
     except Exception:
         return []
 
-
-# =====================================================================
-# FLAGI — przeczytane / nieprzeczytane
-# =====================================================================
 
 def imap_mark_read(imap, uid: str) -> bool:
     try:
@@ -162,10 +159,6 @@ def imap_mark_unread(imap, uid: str) -> bool:
         return False
 
 
-# =====================================================================
-# PRZENOSZENIE WIADOMOŚCI
-# =====================================================================
-
 def imap_move_message(imap, uid: str, target_folder: str) -> bool:
     try:
         typ, _ = imap.copy(uid, target_folder)
@@ -176,14 +169,9 @@ def imap_move_message(imap, uid: str, target_folder: str) -> bool:
         return True
     except Exception:
         return False
-# =====================================================================
-# IMAP CREATE — tworzenie folderów
-# =====================================================================
+
 
 def imap_create_folder(imap, folder: str) -> bool:
-    """
-    Tworzy folder na serwerze IMAP.
-    """
     try:
         typ, _ = imap.create(folder)
         return typ == "OK"
@@ -191,14 +179,7 @@ def imap_create_folder(imap, folder: str) -> bool:
         return False
 
 
-# =====================================================================
-# IMAP DELETE — usuwanie folderów
-# =====================================================================
-
 def imap_delete_folder(imap, folder: str) -> bool:
-    """
-    Usuwa folder na serwerze IMAP.
-    """
     try:
         typ, _ = imap.delete(folder)
         return typ == "OK"
@@ -206,75 +187,25 @@ def imap_delete_folder(imap, folder: str) -> bool:
         return False
 
 
-# =====================================================================
-# IMAP OPEN — logowanie
-# =====================================================================
-
-def imap_open(host: str, port: int, email_addr: str, password: str):
-    """
-    Łączy z serwerem IMAP i loguje użytkownika.
-    """
-    try:
-        imap = imaplib.IMAP4_SSL(host, port)
-        imap.login(email_addr, password)
-        return imap
-    except Exception:
-        return None
-
-
-# =====================================================================
-# IMAP CLOSE — wylogowanie
-# =====================================================================
-
-def imap_close(imap):
-    """
-    Bezpieczne wylogowanie.
-    """
-    try:
-        imap.logout()
-    except:
-        pass
-
-
-# =====================================================================
-# SYNCHRONIZACJA FOLDERÓW IMAP ↔ DB (1:1, BEZ PARSOWANIA)
-# =====================================================================
-
-def sync_folders(imap, db_folders: list[str]) -> tuple[list[str], list[str], list[str]]:
-    """
-    Synchronizuje foldery IMAP z bazą danych.
-
-    Zwraca:
-    - imap_folders: wszystkie foldery z IMAP (dokładnie takie jak IMAP zwrócił)
-    - new_folders: foldery, które są na IMAP, ale nie ma ich w DB
-    - deleted_folders: foldery, które są w DB, ale zniknęły z IMAP
-    """
-
-    # pobierz foldery 1:1 z IMAP
+def sync_folders(imap, db_folders: List[str]) -> Tuple[List[str], List[str], List[str]]:
     mailboxes = []
-
     for args in [
         ("INBOX", "*"),
         ("INBOX", "%"),
         ("", "*"),
-        ("", "%")
+        ("", "%"),
     ]:
         try:
             typ, boxes = imap.list(*args)
             if typ == "OK" and boxes:
                 mailboxes = boxes
                 break
-        except:
+        except Exception:
             pass
 
-    # NAJWAŻNIEJSZE: zero parsowania
     imap_folders = [extract_folder_name(m) for m in mailboxes]
-
-    # porównanie z DB
     imap_set = set(imap_folders)
     db_set = set(db_folders)
-
     new_folders = list(imap_set - db_set)
     deleted_folders = list(db_set - imap_set)
-
     return imap_folders, new_folders, deleted_folders

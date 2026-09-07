@@ -3,6 +3,7 @@ import sqlite3
 import bcrypt
 from app.config import DB_NAME
 
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -25,6 +26,7 @@ def init_db():
             miasto TEXT,
             kod_pocztowy TEXT,
             ulica TEXT,
+            adres_budynek TEXT,
             forma_dzialalnosci TEXT,
             forma_opodatkowania TEXT,
             analityka_fk TEXT,
@@ -105,14 +107,27 @@ def init_db():
         );
     """)
 
-    # cenniki
+    # cenniki księgowość
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             klucz TEXT UNIQUE NOT NULL,
             cena_netto_ksiegowosc REAL NOT NULL,
+            cena_brutto_ksiegowosc REAL NOT NULL,
             cena_za_dokument_ponad_limit REAL NOT NULL,
             zdrowotna REAL NOT NULL,
+            netto REAL,
+            brutto REAL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # cenniki kadry
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cenniki_kadry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            klucz TEXT UNIQUE NOT NULL,
+            cena_netto_kadry REAL NOT NULL,
             netto REAL,
             brutto REAL,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -491,6 +506,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+
 
 if __name__ == "__main__":
     init_db()

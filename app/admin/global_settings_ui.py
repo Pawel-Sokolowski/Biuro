@@ -38,6 +38,7 @@ class GlobalSettingsPage(QWidget):
         self._create_roles_tab()
         self._create_email_tab()
         self._create_pricing_tab()
+        self._create_pricing_tab_kadry()
         self._create_extra_services_tab()
         self._create_companies_tab()
         self._create_logs_tab()
@@ -576,53 +577,120 @@ class GlobalSettingsPage(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć przypisania: {e}")
 
-    # CENNIK GLOBALNY
+    # CENNIK GLOBALNY KSIĘGOWOŚĆ
 
     def _create_pricing_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self.pricing_table = QTableWidget(0, 6)
-        self.pricing_table.setHorizontalHeaderLabels([
-            "Klucz", "Cena netto księgowość", "Cena za dokument ponad limit",
+        self.pricing_table_ksiegowosc = QTableWidget(0, 6)
+        self.pricing_table_ksiegowosc.setHorizontalHeaderLabels([
+            "Cennik", "Cena netto księgowość", "Cena za dokument ponad limit",
             "Zdrowotna", "Netto", "Brutto"
         ])
-        self.pricing_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.pricing_table)
+        self.pricing_table_ksiegowosc.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.pricing_table_ksiegowosc)
 
         btn_row = QHBoxLayout()
         btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self._refresh_pricing)
+        btn_refresh.clicked.connect(self._refresh_pricing_ksiegowosc)
         btn_import = QPushButton("Importuj cennik z CSV")
-        btn_import.clicked.connect(self._import_pricing)
+        btn_import.clicked.connect(self._import_pricing_ksiegowosc)
         btn_row.addWidget(btn_refresh)
         btn_row.addWidget(btn_import)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
-        self.tabs.addTab(page, "Cennik globalny")
-        self._refresh_pricing()
+        self.tabs.addTab(page, "Cennik globalny księgowość")
+        self._refresh_pricing_ksiegowosc()
 
-    def _refresh_pricing(self):
+    def _refresh_pricing_ksiegowosc(self):
+        from app.db.dao_companies import opis_cennika_z_klucza
+
         rows = self.logic.get_global_pricing()
-        self.pricing_table.setRowCount(0)
-        for r in rows:
-            row_idx = self.pricing_table.rowCount()
-            self.pricing_table.insertRow(row_idx)
-            for col_idx, key in enumerate([
-                "klucz", "cena_netto_ksiegowosc", "cena_za_dokument_ponad_limit",
-                "zdrowotna", "netto", "brutto"
-            ]):
-                self.pricing_table.setItem(row_idx, col_idx, QTableWidgetItem(str(r[key])))
+        self.pricing_table_ksiegowosc.setRowCount(0)
 
-    def _import_pricing(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Wybierz plik CSV cennika", "", "CSV (*.csv);;Wszystkie pliki (*)")
+        for r in rows:
+            row_idx = self.pricing_table_ksiegowosc.rowCount()
+            self.pricing_table_ksiegowosc.insertRow(row_idx)
+
+            self.pricing_table_ksiegowosc.setItem(row_idx, 0, QTableWidgetItem(opis_cennika_z_klucza(r["klucz"])))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 1, QTableWidgetItem(str(r["cena_netto_ksiegowosc"])))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 2, QTableWidgetItem(str(r["cena_za_dokument_ponad_limit"])))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 3, QTableWidgetItem(str(r["zdrowotna"])))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 4, QTableWidgetItem(str(r["netto"])))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 5, QTableWidgetItem(str(r["brutto"])))
+
+    def _import_pricing_ksiegowosc(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plik cennika",
+            "",
+            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;Wszystkie pliki (*)"
+        )
         if not path:
             return
         try:
             self.logic.import_global_pricing_from_csv(path)
-            self._refresh_pricing()
-            QMessageBox.information(self, "Cennik", "Cennik został zaimportowany.")
+            self._refresh_pricing_ksiegowosc()
+            QMessageBox.information(self, "Cennik", "Cennik księgowości został zaimportowany.")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zaimportować cennika: {e}")
+
+    # CENNIK GLOBALNY KADRY
+
+    def _create_pricing_tab_kadry(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self.pricing_table_kadry = QTableWidget(0, 4)
+        self.pricing_table_kadry.setHorizontalHeaderLabels([
+            "Cennik", "Cena netto kadry", "Netto", "Brutto"
+        ])
+        self.pricing_table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.pricing_table_kadry)
+
+        btn_row = QHBoxLayout()
+        btn_refresh = QPushButton("Odśwież")
+        btn_refresh.clicked.connect(self._refresh_pricing_kadry)
+        btn_import = QPushButton("Importuj cennik z CSV")
+        btn_import.clicked.connect(self._import_pricing_kadry)
+        btn_row.addWidget(btn_refresh)
+        btn_row.addWidget(btn_import)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self.tabs.addTab(page, "Cennik globalny kadry")
+        self._refresh_pricing_kadry()
+
+    def _refresh_pricing_kadry(self):
+        from app.db.dao_companies import opis_cennika_z_klucza
+
+        rows = self.logic.get_pricing_kadry()
+        self.pricing_table_kadry.setRowCount(0)
+
+        for r in rows:
+            row_idx = self.pricing_table_kadry.rowCount()
+            self.pricing_table_kadry.insertRow(row_idx)
+
+            self.pricing_table_kadry.setItem(row_idx, 0, QTableWidgetItem(opis_cennika_z_klucza(r["klucz"])))
+            self.pricing_table_kadry.setItem(row_idx, 1, QTableWidgetItem(str(r["cena_netto_kadry"])))
+            self.pricing_table_kadry.setItem(row_idx, 2, QTableWidgetItem(str(r["netto"])))
+            self.pricing_table_kadry.setItem(row_idx, 3, QTableWidgetItem(str(r["brutto"])))
+
+    def _import_pricing_kadry(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plik cennika",
+            "",
+            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;Wszystkie pliki (*)"
+        )
+        if not path:
+            return
+        try:
+            self.logic.import_pricing_kadry_from_csv(path)
+            self._refresh_pricing_kadry()
+            QMessageBox.information(self, "Cennik", "Cennik kadrowy został zaimportowany.")
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zaimportować cennika: {e}")
 
@@ -656,11 +724,16 @@ class GlobalSettingsPage(QWidget):
     def _refresh_extra_services(self):
         rows = self.logic.get_extra_services()
         self.extra_table.setRowCount(0)
+
         for r in rows:
             row_idx = self.extra_table.rowCount()
             self.extra_table.insertRow(row_idx)
-            for col_idx, key in enumerate(["id", "nazwa", "cena_netto", "stawka_vat", "kategoria"]):
-                self.extra_table.setItem(row_idx, col_idx, QTableWidgetItem(str(r[key])))
+
+            self.extra_table.setItem(row_idx, 0, QTableWidgetItem(str(r["id"])))
+            self.extra_table.setItem(row_idx, 1, QTableWidgetItem(str(r["nazwa"])))
+            self.extra_table.setItem(row_idx, 2, QTableWidgetItem(str(r["cena_netto"])))
+            self.extra_table.setItem(row_idx, 3, QTableWidgetItem(str(r["stawka_vat"])))
+            self.extra_table.setItem(row_idx, 4, QTableWidgetItem(str(r["kategoria"])))
 
     def _add_extra_service_dialog(self):
         dlg = QDialog(self)

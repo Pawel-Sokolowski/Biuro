@@ -1,20 +1,14 @@
 # app/db/dao_companies.py
-from typing import Optional, Dict, Any, List
+import sqlite3
+from typing import List, Dict, Any, Optional
 from app.db.dao_conn import get_conn
-from app.companies.constants import COMPANY_FIELD_ORDER
-from app.companies.companies_model import (
-    serialize_company_payload,
-    update_company_employee_assignments,
-    get_company_assigned_employee_ids
-)
 
-# ============================================================
-#  LISTA FIRM
-# ============================================================
 
-def list_companies() -> List:
+def list_companies() -> List[Dict[str, Any]]:
     conn = get_conn()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, nazwa, nip, miasto, status,
                glowny_cennik, limit_dokumentow,
@@ -22,263 +16,151 @@ def list_companies() -> List:
         FROM firmy
         ORDER BY nazwa
     """)
+
     rows = cur.fetchall()
     conn.close()
-    return rows
 
-# ============================================================
-#  POBIERANIE FIRMY
-# ============================================================
+    return [dict(r) for r in rows]
 
-def get_company(firma_id: int):
+
+def get_companies_filtered(search: str, status: str, employee_id: Optional[int]) -> List[Dict[str, Any]]:
     conn = get_conn()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, nazwa, nip, miasto, status
+        FROM firmy
+        ORDER BY nazwa
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    result: List[Dict[str, Any]] = []
+
+    for r in rows:
+        r = dict(r)
+
+        if search and search.lower() not in (r["nazwa"] or "").lower():
+            continue
+
+        if status != "Wszystkie" and (r["status"] or "Aktywne") != status:
+            continue
+
+        if employee_id:
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute("""
+                SELECT 1 FROM pracownik_firma
+                WHERE firma_id = ? AND pracownik_id = ?
+            """, (r["id"], employee_id))
+            assigned = cur2.fetchone()
+            conn2.close()
+
+            if not assigned:
+                continue
+
+        result.append(r)
+
+    return result
+
+
+def get_employees_list() -> List[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, imie, nazwisko
+        FROM pracownicy
+        WHERE aktywny = 1
+        ORDER BY imie, nazwisko
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+
+def get_company(firma_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
     cur.execute("SELECT * FROM firmy WHERE id = ?", (firma_id,))
     row = cur.fetchone()
-    conn.close()
-    return row
 
-# ============================================================
-#  ZAPIS FIRMY (FULL)
-# ============================================================
+    conn.close()
+    return dict(row) if row else None
+
+
+FIRMA_FIELDS = [
+    "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",
+    "miasto", "kod_pocztowy", "ulica", "adres_budynek",
+    "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk",
+    "osoba_kontaktowa", "adres_email", "nr_telefonu",
+    "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
+    "adres_koresp_miasto", "adres_koresp_kod_pocztowy", "adres_koresp_ulica",
+    "data_rozpoczecia_dg", "data_rozpoczecia_sprzedazy",
+    "data_koniec_zus_start", "data_koniec_zus_pref", "data_koniec_maly_zus",
+    "data_koniec_a1", "data_rozpoczecia_obslugi", "data_zakonczenia_obslugi",
+    "zawieszenia_dzialalnosci", "kody_pkd",
+    "cennik_ksiegowy", "cennik_kadrowy", "cennik_czasowy",
+    "glowny_cennik", "glowny_cennik_manualny",
+    "limit_dokumentow", "liczba_pracownikow",
+    "uop", "uz", "uod",
+    "typ_rozliczenia", "vat_czynny", "status"
+]
+
 
 def save_company(payload: Dict[str, Any]) -> int:
-    """
-    Pełny zapis firmy zgodny z COMPANY_FIELD_ORDER.
-    Obsługuje:
-      - insert
-      - update
-      - przypisania pracowników
-      - udziałowców (osobno)
-    """
-
     conn = get_conn()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    data = serialize_company_payload(payload)
-    employee_ids = payload.get("assigned_employee_ids", [])
+    data = {f: payload.get(f) for f in FIRMA_FIELDS}
 
-    if "id" in payload and payload["id"]:
-        # UPDATE
+    if payload.get("id"):
         firma_id = payload["id"]
-        set_clause = ", ".join([f"{f} = ?" for f in COMPANY_FIELD_ORDER])
+        set_clause = ", ".join([f"{f} = ?" for f in FIRMA_FIELDS])
         cur.execute(
             f"UPDATE firmy SET {set_clause} WHERE id = ?",
-            [data[f] for f in COMPANY_FIELD_ORDER] + [firma_id]
+            [data[f] for f in FIRMA_FIELDS] + [firma_id]
         )
     else:
-        # INSERT
-        cols = ", ".join(COMPANY_FIELD_ORDER)
-        placeholders = ", ".join(["?"] * len(COMPANY_FIELD_ORDER))
+        cols = ", ".join(FIRMA_FIELDS)
+        placeholders = ", ".join(["?"] * len(FIRMA_FIELDS))
         cur.execute(
             f"INSERT INTO firmy ({cols}) VALUES ({placeholders})",
-            [data[f] for f in COMPANY_FIELD_ORDER]
+            [data[f] for f in FIRMA_FIELDS]
         )
         firma_id = cur.lastrowid
-
-    # Przypisania pracowników
-    update_company_employee_assignments(cur, firma_id, employee_ids)
 
     conn.commit()
     conn.close()
     return firma_id
 
-# ============================================================
-#  UDZIAŁOWCY
-# ============================================================
 
-def get_company_shareholders(firma_id: int) -> List:
+def get_global_pricing() -> List[Dict[str, Any]]:
     conn = get_conn()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+
     cur.execute("""
-        SELECT id, imie_nazwisko, procent
-        FROM udzialowcy
-        WHERE firma_id = ?
-        ORDER BY id
-    """, (firma_id,))
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-def save_company_shareholders(firma_id: int, shareholders: List[Dict[str, Any]]) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("DELETE FROM udzialowcy WHERE firma_id = ?", (firma_id,))
-
-    for sh in shareholders:
-        cur.execute("""
-            INSERT INTO udzialowcy (firma_id, imie_nazwisko, procent)
-            VALUES (?, ?, ?)
-        """, (firma_id, sh["name"], sh["share"]))
-
-    conn.commit()
-    conn.close()
-
-# ============================================================
-#  NOTATKI
-# ============================================================
-
-def get_company_notes(firma_id: int) -> List:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, tresc, data_utworzenia
-        FROM company_notes
-        WHERE firma_id = ?
-        ORDER BY data_utworzenia DESC
-        LIMIT 50
-    """, (firma_id,))
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-def add_company_note(firma_id: int, tresc: str) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO company_notes (firma_id, tresc)
-        VALUES (?, ?)
-    """, (firma_id, tresc))
-    conn.commit()
-    conn.close()
-
-# ============================================================
-#  KONTA EMAIL (ADMIN / OGÓLNE)
-# ============================================================
-
-def get_email_accounts() -> List[Dict[str, Any]]:
-    """
-    Zwraca wszystkie konta email (użyteczne dla panelu admina).
-    Zwracamy porty jako INTEGER oraz pola pracownik_id i aktywne.
-    """
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT
-            id,
-            pracownik_id,
-            email,
-            serwer_imap,
-            CAST(port_imap AS INTEGER) AS port_imap,
-            ssl_imap,
-            serwer_smtp,
-            CAST(port_smtp AS INTEGER) AS port_smtp,
-            ssl_smtp,
-            haslo_enc,
-            aktywne
-        FROM konta_email
-        ORDER BY id
+        SELECT klucz,
+               cena_netto_ksiegowosc AS netto,
+               brutto AS brutto,
+               cena_za_dokument_ponad_limit AS ponad_limit
+        FROM cenniki
+        ORDER BY klucz
     """)
+
     rows = cur.fetchall()
     conn.close()
-    # debug: pokaż klucze pierwszego rekordu (jeśli istnieje)
-    if rows:
-        try:
-            print("DEBUG get_email_accounts: keys =", list(dict(rows[0]).keys()))
-            print("DEBUG get_email_accounts: sample =", dict(rows[0]))
-        except Exception:
-            pass
+
     return [dict(r) for r in rows]
 
-def get_email_accounts_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT
-            id,
-            pracownik_id,
-            email,
-            serwer_imap,
-            CAST(port_imap AS INTEGER) AS port_imap,
-            ssl_imap,
-            serwer_smtp,
-            CAST(port_smtp AS INTEGER) AS port_smtp,
-            ssl_smtp,
-            haslo_enc,
-            aktywne
-        FROM konta_email
-        WHERE pracownik_id = ?
-        ORDER BY id
-    """, (pracownik_id,))
-    rows = cur.fetchall()
-    conn.close()
-    if rows:
-        try:
-            print(f"DEBUG get_email_accounts_for_employee({pracownik_id}): keys =", list(dict(rows[0]).keys()))
-            print(f"DEBUG get_email_accounts_for_employee({pracownik_id}): sample =", dict(rows[0]))
-        except Exception:
-            pass
-    return [dict(r) for r in rows]
-
-# ============================================================
-#  STATUSY MIESIĘCZNE
-# ============================================================
-
-def get_month_status(firma_id: int, miesiac: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT *
-        FROM statusy_miesieczne
-        WHERE firma_id = ? AND miesiac = ?
-    """, (firma_id, miesiac))
-    row = cur.fetchone()
-    conn.close()
-    return row
-
-def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> None:
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO statusy_miesieczne (
-            firma_id, miesiac,
-            etap, ilosc_dok,
-            sekundy_ksiegowosc, sekundy_kadry,
-            wartosc_uslug
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(firma_id, miesiac)
-        DO UPDATE SET
-            etap = excluded.etap,
-            ilosc_dok = excluded.ilosc_dok,
-            sekundy_ksiegowosc = excluded.sekundy_ksiegowosc,
-            sekundy_kadry = excluded.sekundy_kadry,
-            wartosc_uslug = excluded.wartosc_uslug
-    """, (
-        firma_id,
-        miesiac,
-        payload.get("etap", "Brak"),
-        payload.get("ilosc_dok", 0),
-        payload.get("sekundy_ksiegowosc", 0),
-        payload.get("sekundy_kadry", 0),
-        payload.get("wartosc_uslug", 0.0),
-    ))
-
-    conn.commit()
-    conn.close()
-
-# ============================================================
-#  DOKUMENTY
-# ============================================================
-
-def count_documents_for_month(firma_id: int, miesiac: str) -> int:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT COUNT(*) AS cnt
-        FROM dokumenty
-        WHERE firma_id = ?
-          AND substr(data_wyst, 1, 7) = ?
-    """, (firma_id, miesiac))
-    row = cur.fetchone()
-    conn.close()
-    return int(row["cnt"] or 0)
-
-# ============================================================
-#  CENNIKI
-# ============================================================
 
 def _extract_limit_from_key(klucz: str) -> Optional[int]:
     try:
@@ -286,16 +168,23 @@ def _extract_limit_from_key(klucz: str) -> Optional[int]:
     except Exception:
         return None
 
-def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int):
-    """
-    Zwraca rekord z tabeli cenniki dla:
-      typ: 'Ryczałt' / 'KPIR' / 'KH'
-      vat_czynny: bool
-      limit_dokumentow: int
 
-    klucz: np. Ryczałt_N_20, KPIR_T_50
-    """
+def opis_cennika_z_klucza(klucz: str) -> str:
+    try:
+        parts = klucz.split("_")
+        rodzaj = parts[0]
+        vat = parts[1]
+        limit = parts[2]
+
+        vat_txt = "bez VAT" if vat == "N" else "VAT czynny"
+        return f"{rodzaj} • {vat_txt} • limit {limit} dokumentów"
+    except Exception:
+        return klucz
+
+
+def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     vat_suffix = "T" if vat_czynny else "N"
@@ -325,6 +214,23 @@ def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int):
             best_row = row
 
     if best_row is None:
-        return rows[0]
+        return dict(rows[0])
 
-    return best_row
+    return dict(best_row)
+
+
+def get_pricing_kadry() -> List[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT klucz, cena_netto_kadry
+        FROM cenniki_kadry
+        ORDER BY klucz
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [dict(r) for r in rows]

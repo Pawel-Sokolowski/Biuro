@@ -1,28 +1,24 @@
-from typing import List, Dict, Any, Optional
 import sqlite3
 import csv
 from pathlib import Path
+from typing import List, Dict
+import openpyxl
 
 from app.db.dao_conn import get_conn
-from app.db.dao_employees import (
-    add_employee,
-    list_employees,
-    update_employee,
-    delete_employee,
-    set_employee_active,
-    change_employee_password,
-)
-from app.db.dao_companies import (
-    list_companies,
-    get_company,
-    save_company,
-    get_company_shareholders,
-    save_company_shareholders,
-    get_month_status,
-    save_month_status,
-    count_documents_for_month,
-    wybierz_cennik,
-)
+from app.db.dao_companies import list_companies
+from app.db.dao_employees import list_employees, add_employee, update_employee, delete_employee, set_employee_active, \
+    change_employee_password
+
+
+def safe_float(val):
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    val = str(val).strip()
+    if val == "" or val.lower() == "none":
+        return 0.0
+    return float(val.replace(",", "."))
 
 
 class GlobalSettingsLogic:
@@ -225,8 +221,6 @@ class GlobalSettingsLogic:
         conn.commit()
         conn.close()
 
-    # CENNIK GLOBALNY
-
     def get_global_pricing(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
@@ -245,18 +239,60 @@ class GlobalSettingsLogic:
         if not path.exists():
             raise FileNotFoundError(csv_path)
 
-        conn = get_conn()
-        cur = conn.cursor()
+        # CSV
+        if path.suffix.lower() == ".csv":
+            conn = get_conn()
+            cur = conn.cursor()
 
-        with path.open("r", encoding="utf-8") as f:
-            reader = csv.DictReader(f, delimiter=";")
-            for row in reader:
-                klucz = row.get("Klucz")
-                cena_netto_ksiegowosc = float(row.get("cena netto księgowość", "0").replace(",", "."))
-                cena_za_dokument_ponad_limit = float(row.get("cena za dokument ponad limit", "0").replace(",", "."))
-                zdrowotna = float(row.get("zdrowotna", "0").replace(",", "."))
-                netto = float(row.get("Netto", "0").replace(",", "."))
-                brutto = float(row.get("Brutto", "0").replace(",", "."))
+            with path.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter=";")
+                for row in reader:
+                    klucz = row.get("Klucz")
+                    cena_netto_ksiegowosc = safe_float(row.get("cena netto księgowość"))
+                    cena_za_dokument_ponad_limit = safe_float(row.get("cena za dokument ponad limit"))
+                    zdrowotna = safe_float(row.get("zdrowotna"))
+                    netto = safe_float(row.get("Netto"))
+                    brutto = safe_float(row.get("Brutto"))
+
+                    cur.execute("""
+                        INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
+                                             zdrowotna, netto, brutto)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(klucz) DO UPDATE SET
+                            cena_netto_ksiegowosc = excluded.cena_netto_ksiegowosc,
+                            cena_za_dokument_ponad_limit = excluded.cena_za_dokument_ponad_limit,
+                            zdrowotna = excluded.zdrowotna,
+                            netto = excluded.netto,
+                            brutto = excluded.brutto
+                    """, (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
+                          zdrowotna, netto, brutto))
+
+            conn.commit()
+            conn.close()
+            return
+
+        # EXCEL
+        if path.suffix.lower() in (".xlsx", ".xls"):
+            wb = openpyxl.load_workbook(path, data_only=True)
+            ws = wb.active
+
+            header = [str(h).strip().lower() for h in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+            idx = {h: i for i, h in enumerate(header)}
+
+            conn = get_conn()
+            cur = conn.cursor()
+
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not any(row):
+                    continue
+
+                klucz = str(row[idx["klucz"]]).strip()
+                cena_netto_ksiegowosc = safe_float(row[idx["cena netto księgowość"]])
+                cena_za_dokument_ponad_limit = safe_float(row[idx["cena za dokument ponad limit"]])
+                zdrowotna = safe_float(row[idx["zdrowotna"]])
+                netto = safe_float(row[idx["netto"]])
+                brutto = safe_float(row[idx["brutto"]])
+
                 cur.execute("""
                     INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
                                          zdrowotna, netto, brutto)
@@ -270,10 +306,97 @@ class GlobalSettingsLogic:
                 """, (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
                       zdrowotna, netto, brutto))
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+            conn.close()
+            return
 
+        raise ValueError("Obsługiwane formaty: CSV, XLSX, XLS")
+
+    # ============================
+    # CENNIK KADRY
+    # ============================
+
+    def get_pricing_kadry(self) -> List[sqlite3.Row]:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT klucz, cena_netto_kadry, netto, brutto
+            FROM cenniki_kadry
+            ORDER BY klucz
+        """)
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+
+    def import_pricing_kadry_from_csv(self, csv_path: str):
+        path = Path(csv_path)
+        if not path.exists():
+            raise FileNotFoundError(csv_path)
+
+        # CSV
+        if path.suffix.lower() == ".csv":
+            conn = get_conn()
+            cur = conn.cursor()
+
+            with path.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter=";")
+                for row in reader:
+                    klucz = row.get("Klucz")
+                    cena_netto_kadry = safe_float(row.get("cena netto kadry"))
+                    netto = safe_float(row.get("Netto"))
+                    brutto = safe_float(row.get("Brutto"))
+
+                    cur.execute("""
+                        INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, netto, brutto)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(klucz) DO UPDATE SET
+                            cena_netto_kadry = excluded.cena_netto_kadry,
+                            netto = excluded.netto,
+                            brutto = excluded.brutto
+                    """, (klucz, cena_netto_kadry, netto, brutto))
+
+            conn.commit()
+            conn.close()
+            return
+
+        # EXCEL
+        if path.suffix.lower() in (".xlsx", ".xls"):
+            wb = openpyxl.load_workbook(path, data_only=True)
+            ws = wb.active
+
+            header = [str(h).strip().lower() for h in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+            idx = {h: i for i, h in enumerate(header)}
+
+            conn = get_conn()
+            cur = conn.cursor()
+
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not any(row):
+                    continue
+
+                klucz = str(row[idx["klucz"]]).strip()
+                cena_netto_kadry = safe_float(row[idx["cena netto kadry"]])
+                netto = safe_float(row[idx["netto"]])
+                brutto = safe_float(row[idx["brutto"]])
+
+                cur.execute("""
+                    INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, netto, brutto)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(klucz) DO UPDATE SET
+                        cena_netto_kadry = excluded.cena_netto_kadry,
+                        netto = excluded.netto,
+                        brutto = excluded.brutto
+                """, (klucz, cena_netto_kadry, netto, brutto))
+
+            conn.commit()
+            conn.close()
+            return
+
+        raise ValueError("Obsługiwane formaty: CSV, XLSX, XLS")
+
+    # ============================
     # USŁUGI DODATKOWE
+    # ============================
 
     def get_extra_services(self) -> List[sqlite3.Row]:
         conn = get_conn()
@@ -304,7 +427,71 @@ class GlobalSettingsLogic:
         conn.commit()
         conn.close()
 
-    # FIRMY
+    def import_extra_services_from_csv(self, csv_path: str):
+        path = Path(csv_path)
+        if not path.exists():
+            raise FileNotFoundError(csv_path)
+
+        # CSV
+        if path.suffix.lower() == ".csv":
+            conn = get_conn()
+            cur = conn.cursor()
+
+            with path.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter=";")
+                for row in reader:
+                    nazwa = row.get("Nazwa")
+                    cena_netto = safe_float(row.get("Cena netto"))
+                    stawka_vat = str(row.get("Stawka VAT") or "").strip()
+                    kategoria = str(row.get("Kategoria") or "").strip()
+
+                    cur.execute("""
+                        INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(nazwa) DO UPDATE SET
+                            cena_netto = excluded.cena_netto,
+                            stawka_vat = excluded.stawka_vat,
+                            kategoria = excluded.kategoria
+                    """, (nazwa, cena_netto, stawka_vat, kategoria))
+
+            conn.commit()
+            conn.close()
+            return
+
+        # EXCEL
+        if path.suffix.lower() in (".xlsx", ".xls"):
+            wb = openpyxl.load_workbook(path, data_only=True)
+            ws = wb.active
+
+            header = [str(h).strip().lower() for h in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+            idx = {h: i for i, h in enumerate(header)}
+
+            conn = get_conn()
+            cur = conn.cursor()
+
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not any(row):
+                    continue
+
+                nazwa = str(row[idx["nazwa"]]).strip()
+                cena_netto = safe_float(row[idx["cena netto"]])
+                stawka_vat = str(row[idx["stawka vat"]] or "").strip()
+                kategoria = str(row[idx["kategoria"]] or "").strip()
+
+                cur.execute("""
+                    INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(nazwa) DO UPDATE SET
+                        cena_netto = excluded.cena_netto,
+                        stawka_vat = excluded.stawka_vat,
+                        kategoria = excluded.kategoria
+                """, (nazwa, cena_netto, stawka_vat, kategoria))
+
+            conn.commit()
+            conn.close()
+            return
+
+        raise ValueError("Obsługiwane formaty: CSV, XLSX, XLS")
 
     def get_all_companies(self) -> List[sqlite3.Row]:
         return list_companies()
@@ -316,12 +503,9 @@ class GlobalSettingsLogic:
         conn.commit()
         conn.close()
 
-    # LOGI
 
     def get_login_logs(self) -> List[sqlite3.Row]:
         return []
-
-    # SYSTEM
 
     def backup_database(self, target_path: str):
         pass

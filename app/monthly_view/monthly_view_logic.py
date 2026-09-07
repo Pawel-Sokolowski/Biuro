@@ -3,10 +3,12 @@ import datetime
 from typing import Optional, Dict, Any, List
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import (
-    get_month_status,
-    save_month_status,
     get_company,
     save_company
+)
+from app.db.dao_monthly import (
+    get_month_status,
+    save_month_status
 )
 from app.global_utils.calculator import oblicz_miesieczny_koszt
 

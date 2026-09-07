@@ -6,10 +6,6 @@ from datetime import datetime, timedelta
 from app.db.dao_conn import get_conn
 
 
-# ============================================================
-#  CREATE / UPDATE
-# ============================================================
-
 def create_or_update_invoice(
     firma_id: int,
     miesiac: str,
@@ -17,14 +13,6 @@ def create_or_update_invoice(
     kwota_netto: float,
     kwota_brutto: float
 ) -> int:
-    """
-    Tworzy lub aktualizuje fakturę miesięczną.
-    Daty generowane automatycznie:
-      - data_wystawienia = dziś
-      - data_sprzedazy = dziś
-      - termin_platnosci = dziś + 7 dni
-    """
-
     conn = get_conn()
     cur = conn.cursor()
 
@@ -74,10 +62,6 @@ def create_or_update_invoice(
     return invoice_id
 
 
-# ============================================================
-#  MARK EXPORTED
-# ============================================================
-
 def mark_exported(invoice_ids: List[int]) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -86,10 +70,6 @@ def mark_exported(invoice_ids: List[int]) -> None:
     conn.commit()
     conn.close()
 
-
-# ============================================================
-#  GET SINGLE INVOICE
-# ============================================================
 
 def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
@@ -106,10 +86,6 @@ def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[
     return dict(row) if row else None
 
 
-# ============================================================
-#  GET ALL INVOICES FOR COMPANY (NOT EXPORTED)
-# ============================================================
-
 def get_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -125,6 +101,7 @@ def get_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
     conn.close()
 
     return [dict(r) for r in rows]
+
 
 def get_exported_invoices() -> List[Dict[str, Any]]:
     conn = get_conn()

@@ -1051,11 +1051,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
         except Exception:
             pass
     return success_any
-# app/email/email_actions.py  -- część 4/4 (dokończenie)
 
-# -----------------------------
-# DROBNE HELPERY I WRAPPERY
-# -----------------------------
 def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
     """
     Zwraca wiersz konta (dict) lub None.

@@ -1,10 +1,10 @@
-import datetime
-from typing import Optional
-import logging
-from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtGui import QFont
-from app.utils.ui_imports import *
+"""Main application entry point with login and navigation."""
 
+import logging
+from typing import Optional
+from PyQt6.QtWidgets import QApplication
+
+from app.utils.ui_imports import *
 from app.db.dao_employees import get_employee_info
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
@@ -17,28 +17,17 @@ from app.invoices.faktury_ui import FakturyPage
 
 logger = logging.getLogger(__name__)
 
-# --- Improved Constants ---
+# Application constants
 APP_TITLE = "System Zarządzania Biurem Rachunkowego"
-DEFAULT_WINDOW_WIDTH = 1400
-DEFAULT_WINDOW_HEIGHT = 850
-SIDEBAR_WIDTH = 240
-
-COLOR_PRIMARY = "#1c70b7"
-COLOR_PRIMARY_DARK = "#155a8a"
-COLOR_PRIMARY_HOVER = "#1668a3"
-COLOR_BACKGROUND = "#eae0d5"
-COLOR_TEXT = "#2c3e50"
-COLOR_BORDER = "#d0c7bd"
-COLOR_WHITE = "white"
 
 
 class LoginWindow(QDialog):
-    """User login dialog window."""
+    """User login and registration dialog."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Logowanie")
-        self.setFixedSize(420, 320)
+        self.setFixedSize(420, 380)
         self.pracownik_id: Optional[int] = None
         self.email_input = None
         self.password_input = None
@@ -46,37 +35,21 @@ class LoginWindow(QDialog):
 
     def _build_ui(self):
         """Build login form UI."""
-        self.setStyleSheet(f"""
-            QDialog {{ background-color: {COLOR_BACKGROUND}; }}
-            QLabel {{ color: {COLOR_PRIMARY}; font-weight: bold; }}
-            QLineEdit {{
-                padding: 8px;
-                border-radius: 6px;
-                border: 1px solid #b8b1a8;
-                background-color: {COLOR_WHITE};
-            }}
-            QPushButton {{
-                background-color: {COLOR_PRIMARY};
-                color: {COLOR_WHITE};
-                padding: 8px;
-                border-radius: 6px;
-                font-weight: bold;
-                border: none;
-            }}
-            QPushButton:hover {{ background-color: {COLOR_PRIMARY_DARK}; }}
-            QPushButton:pressed {{ background-color: {COLOR_PRIMARY_DARK}; }}
-        """)
-
+        self.setStyleSheet(STYLE_DIALOG)
+        
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(12)
+        layout.setContentsMargins(MARGIN_LARGE, MARGIN_LARGE, MARGIN_LARGE, MARGIN_LARGE)
+        layout.setSpacing(SPACING_NORMAL)
 
+        # Title
         lbl_title = QLabel("Zaloguj się")
-        lbl_title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        font = QFont("Arial", *FONT_TITLE[1:])
+        lbl_title.setFont(font)
         layout.addWidget(lbl_title)
 
+        # Form
         form = QFormLayout()
-        form.setSpacing(10)
+        form.setSpacing(SPACING_NORMAL)
         
         self.email_input = QLineEdit()
         self.email_input.setPlaceholderText("example@example.com")
@@ -91,14 +64,19 @@ class LoginWindow(QDialog):
 
         layout.addStretch()
 
-        row = QHBoxLayout()
-        btn_login = QPushButton("Zaloguj")
+        # Buttons
+        button_row = QHBoxLayout()
+        button_row.setSpacing(SPACING_NORMAL)
+        
+        btn_login = create_primary_button("Zaloguj")
         btn_login.clicked.connect(self._on_login)
-        btn_register = QPushButton("Zarejestruj")
+        
+        btn_register = create_secondary_button("Zarejestruj")
         btn_register.clicked.connect(self._on_register)
-        row.addWidget(btn_login)
-        row.addWidget(btn_register)
-        layout.addLayout(row)
+        
+        button_row.addWidget(btn_login)
+        button_row.addWidget(btn_register)
+        layout.addLayout(button_row)
 
     def _on_login(self):
         """Handle login button click."""
@@ -122,9 +100,11 @@ class LoginWindow(QDialog):
             
             if ok and user_id:
                 self.pracownik_id = user_id
+                logger.info(f"User {user_id} logged in successfully")
                 self.accept()
             else:
-                QMessageBox.critical(self, "Błąd", "Nieprawidłowy email lub hasło")
+                msg = result[2] if isinstance(result, tuple) and len(result) > 2 else "Nieprawidłowy email lub hasło"
+                QMessageBox.critical(self, "Błąd", msg)
         except Exception as e:
             logger.error(f"Login error: {e}")
             QMessageBox.critical(self, "Błąd", f"Błąd logowania: {str(e)}")
@@ -136,10 +116,10 @@ class LoginWindow(QDialog):
         dlg = QDialog(self)
         dlg.setWindowTitle("Rejestracja")
         dlg.setFixedSize(420, 380)
-        dlg.setStyleSheet(self.styleSheet())
+        dlg.setStyleSheet(STYLE_DIALOG)
 
         form = QFormLayout()
-        form.setSpacing(10)
+        form.setSpacing(SPACING_NORMAL)
         
         email = QLineEdit()
         email.setPlaceholderText("example@example.com")
@@ -170,7 +150,6 @@ class LoginWindow(QDialog):
         layout.addWidget(btns)
 
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Validate inputs
             email_text = email.text().strip()
             password_text = haslo.text()
             
@@ -197,6 +176,7 @@ class LoginWindow(QDialog):
                     ok = bool(result)
                 
                 if ok:
+                    logger.info(f"User registered: {email_text}")
                     QMessageBox.information(self, "OK", "Rejestracja udana. Możesz się teraz zalogować.")
                 else:
                     msg = result[2] if isinstance(result, tuple) and len(result) > 2 else "Rejestracja nie powiodła się."
@@ -214,13 +194,6 @@ class OfficeManagerApp(QMainWindow):
         self.pracownik_id = pracownik_id
         self.sidebar = None
         self.pages = None
-        self.page_monthly = None
-        self.page_companies = None
-        self.page_email = None
-        self.page_chat = None
-        self.page_faktury = None
-        self.page_raporty = None
-        self.page_settings = None
         
         if pracownik_id is None:
             self.pracownik_id = self._show_login_dialog()
@@ -230,7 +203,7 @@ class OfficeManagerApp(QMainWindow):
                 return
 
         self.setWindowTitle(APP_TITLE)
-        self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+        self.resize(APP_WIDTH, APP_HEIGHT)
         self._build_ui()
 
     def _show_login_dialog(self) -> Optional[int]:
@@ -242,20 +215,7 @@ class OfficeManagerApp(QMainWindow):
 
     def _build_ui(self):
         """Build main application UI."""
-        self.setStyleSheet(f"""
-            QWidget {{ background-color: {COLOR_BACKGROUND}; font-family: Arial; }}
-            QLabel {{ color: {COLOR_TEXT}; }}
-            QPushButton {{
-                background-color: {COLOR_PRIMARY};
-                color: {COLOR_WHITE};
-                padding: 8px 14px;
-                border-radius: 6px;
-                font-weight: bold;
-                border: none;
-            }}
-            QPushButton:hover {{ background-color: {COLOR_PRIMARY_DARK}; }}
-            QPushButton:pressed {{ background-color: {COLOR_PRIMARY_DARK}; }}
-        """)
+        self.setStyleSheet(STYLE_MAIN_WINDOW)
 
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -266,28 +226,7 @@ class OfficeManagerApp(QMainWindow):
         # --- Sidebar ---
         self.sidebar = QListWidget()
         self.sidebar.setFixedWidth(SIDEBAR_WIDTH)
-        self.sidebar.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {COLOR_PRIMARY};
-                color: {COLOR_WHITE};
-                border: none;
-                font-size: 14px;
-                outline: none;
-            }}
-            QListWidget::item {{ 
-                padding: 15px 12px;
-                margin: 0px;
-            }}
-            QListWidget::item:selected {{ 
-                background-color: {COLOR_PRIMARY_DARK}; 
-                font-weight: bold;
-                border-left: 3px solid {COLOR_WHITE};
-                margin: 0px;
-            }}
-            QListWidget::item:hover {{ 
-                background-color: {COLOR_PRIMARY_HOVER}; 
-            }}
-        """)
+        self.sidebar.setStyleSheet(STYLE_SIDEBAR)
 
         sidebar_items = [
             "📅 Widok miesięczny",
@@ -310,10 +249,10 @@ class OfficeManagerApp(QMainWindow):
 
         # --- Header ---
         header = QWidget()
-        header.setStyleSheet(f"background-color: {COLOR_WHITE}; border-bottom: 2px solid {COLOR_BORDER};")
-        header.setFixedHeight(60)
+        header.setStyleSheet(STYLE_HEADER)
+        header.setFixedHeight(HEADER_HEIGHT)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 12, 20, 12)
+        header_layout.setContentsMargins(MARGIN_LARGE, 12, MARGIN_LARGE, 12)
         header_layout.setSpacing(0)
 
         try:
@@ -340,21 +279,21 @@ class OfficeManagerApp(QMainWindow):
 
         # Initialize all pages
         try:
-            self.page_monthly = MonthlyViewPage(self.pracownik_id)
-            self.page_companies = CompaniesPage(self.pracownik_id)
-            self.page_email = EmailPage(self.pracownik_id)
-            self.page_chat = ChatPage(self.pracownik_id)
-            self.page_faktury = FakturyPage(self.pracownik_id)
-            self.page_raporty = ReportsPage(self.pracownik_id)
-            self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
+            page_monthly = MonthlyViewPage(self.pracownik_id)
+            page_companies = CompaniesPage(self.pracownik_id)
+            page_email = EmailPage(self.pracownik_id)
+            page_chat = ChatPage(self.pracownik_id)
+            page_faktury = FakturyPage(self.pracownik_id)
+            page_raporty = ReportsPage(self.pracownik_id)
+            page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
 
-            self.pages.addWidget(self.page_monthly)
-            self.pages.addWidget(self.page_companies)
-            self.pages.addWidget(self.page_email)
-            self.pages.addWidget(self.page_chat)
-            self.pages.addWidget(self.page_faktury)
-            self.pages.addWidget(self.page_raporty)
-            self.pages.addWidget(self.page_settings)
+            self.pages.addWidget(page_monthly)
+            self.pages.addWidget(page_companies)
+            self.pages.addWidget(page_email)
+            self.pages.addWidget(page_chat)
+            self.pages.addWidget(page_faktury)
+            self.pages.addWidget(page_raporty)
+            self.pages.addWidget(page_settings)
 
             self.sidebar.setCurrentRow(0)
             self.pages.setCurrentIndex(0)

@@ -1,17 +1,13 @@
-# app/email/email_page.py
+"""Email page UI - IMAP email management."""
+
 from __future__ import annotations
 
 import re
 import email
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton,
-    QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit
-)
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from app.utils.ui_imports import *
 
 from app.email.email_storage import (
     get_email_accounts_for_employee,
@@ -41,12 +37,16 @@ from app.email.email_actions import (
     open_attachment,
 )
 
+logger = logging.getLogger(__name__)
+
 ARCHIVE_FOLDER = "INBOX.Archive"
 SPAM_FOLDER = "INBOX.spam"
 TRASH_FOLDER = "INBOX.Trash"
 
 
 class EmailPage(QWidget):
+    """Email management page."""
+    
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
@@ -63,581 +63,211 @@ class EmailPage(QWidget):
             self.current_account = self.accounts[0]
             try:
                 list_folders_from_imap_and_store(self.current_account["id"])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to list folders: {e}")
             self.load_folders_from_db()
         else:
             QMessageBox.warning(self, "Brak kont", "Nie znaleziono żadnych kont email.")
 
     def _build_ui(self) -> None:
-        main_layout = QVBoxLayout()
-        self.setLayout(main_layout)
+        """Build email UI."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(MARGIN_NORMAL, MARGIN_NORMAL, MARGIN_NORMAL, MARGIN_NORMAL)
+        main_layout.setSpacing(SPACING_NORMAL)
+        
+        # Title
+        title = create_section_header("✉️  Email")
+        main_layout.addWidget(title)
 
-        # Toolbar 1
+        # Toolbar 1 - Sync controls
         toolbar = QHBoxLayout()
-        btn_sync = QPushButton("Synchronizacja wiadomości")
+        toolbar.setSpacing(SPACING_NORMAL)
+        
+        btn_sync = create_primary_button("🔄 Synchronizacja wiadomości")
         btn_sync.clicked.connect(self.on_manual_sync)
         toolbar.addWidget(btn_sync)
 
-        btn_refresh = QPushButton("Odśwież widok")
+        btn_refresh = create_primary_button("🔃 Odśwież widok")
         btn_refresh.clicked.connect(self.refresh_all)
         toolbar.addWidget(btn_refresh)
 
         toolbar.addStretch()
         main_layout.addLayout(toolbar)
 
-        # Toolbar 2 — NOWY pasek przycisków
+        # Toolbar 2 - Email actions
         mail_toolbar = QHBoxLayout()
+        mail_toolbar.setSpacing(SPACING_NORMAL)
 
-        self.btn_reply = QPushButton("Odpowiedz")
+        self.btn_reply = create_primary_button("↩️  Odpowiedz")
         self.btn_reply.clicked.connect(self.on_reply)
         mail_toolbar.addWidget(self.btn_reply)
 
-        self.btn_forward = QPushButton("Przekaż")
+        self.btn_forward = create_primary_button("↪️  Przekaż")
         self.btn_forward.clicked.connect(self.on_forward)
         mail_toolbar.addWidget(self.btn_forward)
 
-        self.btn_archive = QPushButton("Archiwizuj")
+        self.btn_archive = create_secondary_button("📦 Archiwizuj")
         self.btn_archive.clicked.connect(self.on_archive)
         mail_toolbar.addWidget(self.btn_archive)
 
-        self.btn_spam = QPushButton("Niechciane")
+        self.btn_spam = create_secondary_button("🚫 Niechciane")
         self.btn_spam.clicked.connect(self.on_spam)
         mail_toolbar.addWidget(self.btn_spam)
 
-        self.btn_delete = QPushButton("Usuń")
+        self.btn_delete = create_danger_button("🗑️  Usuń")
         self.btn_delete.clicked.connect(self.on_delete)
         mail_toolbar.addWidget(self.btn_delete)
-
-        self.btn_more = QPushButton("Więcej")
-        self.btn_more.clicked.connect(self.on_more)
-        mail_toolbar.addWidget(self.btn_more)
 
         mail_toolbar.addStretch()
         main_layout.addLayout(mail_toolbar)
 
-        # Splitter
+        # Content area with splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(splitter)
 
-        # Folder tree
-        self.folder_tree = QTreeWidget()
-        self.folder_tree.setHeaderLabel("Foldery")
-        self.folder_tree.itemClicked.connect(self.on_folder_clicked)
-        splitter.addWidget(self.folder_tree)
+        # Left: folder list
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(QLabel("Foldery:"))
+        
+        self.folder_list = QListWidget()
+        self.folder_list.itemClicked.connect(self.on_folder_selected)
+        left_layout.addWidget(self.folder_list)
 
-        # Middle panel
-        right_container = QFrame()
-        right_layout = QVBoxLayout()
-        right_container.setLayout(right_layout)
+        # Right: message list and content
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(QLabel("Wiadomości:"))
+        
+        self.message_list = QListWidget()
+        self.message_list.itemClicked.connect(self.on_message_selected)
+        right_layout.addWidget(self.message_list)
 
-        header = QFrame()
-        h_layout = QHBoxLayout()
-        header.setLayout(h_layout)
-
-        lbl_att = QLabel("")
-        lbl_att.setFixedWidth(20)
-        h_layout.addWidget(lbl_att)
-
-        lbl_thread = QLabel("")
-        lbl_thread.setFixedWidth(20)
-        h_layout.addWidget(lbl_thread)
-
-        lbl_subject = QLabel("Temat")
-        lbl_subject.setStyleSheet("font-weight: bold;")
-        h_layout.addWidget(lbl_subject, 3)
-
-        lbl_dot = QLabel("")
-        lbl_dot.setFixedWidth(16)
-        h_layout.addWidget(lbl_dot)
-
-        lbl_from = QLabel("Korespondenci")
-        lbl_from.setStyleSheet("font-weight: bold;")
-        lbl_from.setFixedWidth(220)
-        h_layout.addWidget(lbl_from, 2)
-
-        lbl_date = QLabel("Data")
-        lbl_date.setStyleSheet("font-weight: bold;")
-        lbl_date.setFixedWidth(140)
-        h_layout.addWidget(lbl_date)
-
-        right_layout.addWidget(header)
-
-        self.mail_list = QListWidget()
-        self.mail_list.itemClicked.connect(self.on_mail_clicked)
-        right_layout.addWidget(self.mail_list)
-
-        splitter.addWidget(right_container)
-
-        # Message view
-        self.mail_view = QTextEdit()
-        self.mail_view.setReadOnly(True)
-        splitter.addWidget(self.mail_view)
-
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
-        splitter.setStretchFactor(2, 3)
-    def normalize_name(self, s: str) -> str:
-        if not s:
-            return ""
-        s = re.sub(r'\s+', ' ', s).strip()
-        return s.replace('\x00', '').strip()
 
-    def folder_sort_key(self, display_label: str) -> Tuple[int, int, str]:
-        label = (display_label or "").strip()
-        low = label.lower()
-        main_order = {"odebrane": 0, "wyslane": 1, "spam": 2, "archiwum": 3}
-        if low in main_order:
-            return (0, main_order[low], "")
-        for n in range(1, 5):
-            prefix = f"{n} "
-            if low.startswith(prefix):
-                return (1, n, low)
-        return (2, 0, low)
+        main_layout.addWidget(splitter)
 
-    def load_folders_from_db(self) -> None:
-        self.folder_tree.clear()
-        if not self.current_account:
-            return
-
-        root = QTreeWidgetItem([self.current_account["email"]])
-        self.folder_tree.addTopLevelItem(root)
-
+    def on_manual_sync(self):
+        """Handle manual sync button."""
         try:
+            logger.info("Manual sync started")
+            sync_all_emails(self.current_account["id"])
+            self.refresh_all()
+            QMessageBox.information(self, "OK", "Synchronizacja zakończona")
+        except Exception as e:
+            logger.error(f"Sync failed: {e}")
+            QMessageBox.critical(self, "Błąd", f"Synchronizacja nie powiodła się: {str(e)}")
+
+    def refresh_all(self):
+        """Refresh all views."""
+        logger.debug("Refreshing email views")
+        self.load_folders_from_db()
+
+    def load_folders_from_db(self):
+        """Load folders from database."""
+        try:
+            if not self.current_account:
+                return
+            
             folders = get_folders_for_account(self.current_account["id"])
-        except Exception:
-            folders = []
+            self.folder_list.clear()
+            
+            for folder in folders:
+                item = QListWidgetItem(folder["nazwa"])
+                item.setData(Qt.ItemDataRole.UserRole, folder["id"])
+                self.folder_list.addItem(item)
+            
+            logger.debug(f"Loaded {len(folders)} folders")
+        except Exception as e:
+            logger.error(f"Failed to load folders: {e}")
 
-        mains = ["Odebrane", "Wysłane", "Spam", "Archiwum"]
-        for m in reversed(mains):
-            if m in folders:
-                folders.remove(m)
-        for m in reversed(mains):
-            folders.insert(0, m)
+    def on_folder_selected(self, item: QListWidgetItem):
+        """Handle folder selection."""
+        self.current_folder_local = item.text()
+        logger.debug(f"Selected folder: {self.current_folder_local}")
+        self.load_messages_for_folder()
 
-        numbered = [f for f in folders if re.match(r'^[1-4]\b', f)]
-        others = [f for f in folders if f not in mains and f not in numbered]
-        others_sorted = sorted(others, key=lambda n: self.folder_sort_key(n))
-        final = mains + numbered + others_sorted
-
-        nodes: Dict[str, QTreeWidgetItem] = {}
-        for f in final:
-            parts = [p.strip() for p in f.split(".") if p.strip()]
-            parent = root
-            path_segments: List[str] = []
-            for part in parts:
-                path_segments.append(part)
-                server_path = ".".join(path_segments)
-                display = self.normalize_name(part)
-                if server_path not in nodes:
-                    item = QTreeWidgetItem([display])
-                    item.setData(0, Qt.ItemDataRole.UserRole, server_path)
-                    parent.addChild(item)
-                    nodes[server_path] = item
-                parent = nodes[server_path]
-
-        self.folder_tree.expandAll()
-
-    def on_folder_clicked(self, item: QTreeWidgetItem, column: int) -> None:
-        local_name = item.data(0, Qt.ItemDataRole.UserRole)
-        if not local_name:
-            return
-        self.current_folder_local = local_name
-        self.load_mail_list_from_db(local_name)
-
-    def create_message_widget(self, subject: str, sender: str, date: str,
-                              has_attachment: bool, has_thread: bool, is_unread: bool) -> QFrame:
-        w = QFrame()
-        h = QHBoxLayout()
-        h.setContentsMargins(6, 4, 6, 4)
-        h.setSpacing(8)
-
-        att_label = QLabel("📎" if has_attachment else "")
-        att_label.setFixedWidth(20)
-        h.addWidget(att_label)
-
-        thread_btn = QPushButton("⤴" if has_thread else "")
-        thread_btn.setFlat(True)
-        thread_btn.setFixedWidth(20)
-        thread_btn.setObjectName("thread_btn")
-        h.addWidget(thread_btn)
-
-        subj_label = QLabel(subject or "(brak tematu)")
-        subj_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        h.addWidget(subj_label, 3)
-
-        dot_btn = QPushButton("●" if is_unread else "○")
-        dot_btn.setFlat(True)
-        dot_btn.setFixedWidth(16)
-        dot_btn.setObjectName("dot_btn")
-        dot_btn.setStyleSheet("color: #1E90FF;" if is_unread else "color: #888888;")
-        h.addWidget(dot_btn)
-
-        sender_label = QLabel(sender)
-        sender_label.setFixedWidth(220)
-        h.addWidget(sender_label, 2)
-
-        date_label = QLabel(date)
-        date_label.setFixedWidth(140)
-        h.addWidget(date_label)
-
-        font = subj_label.font()
-        font.setBold(bool(is_unread))
-        subj_label.setFont(font)
-
-        w.setLayout(h)
-        return w
-
-    def load_mail_list_from_db(self, local_folder: str) -> None:
-        self.mail_list.clear()
-        self.mail_view.clear()
-        self.cached_message = None
-        self.unread_map.clear()
-
-        if not self.current_account:
-            return
-
-        konto_id = self.current_account["id"]
-
+    def load_messages_for_folder(self):
+        """Load messages from selected folder."""
         try:
-            rows = refresh_email_list(konto_id, local_folder)
-        except Exception:
-            rows = []
+            if not self.current_folder_local:
+                return
+            
+            messages = search_messages(self.current_account["id"], self.current_folder_local)
+            self.message_list.clear()
+            
+            for msg in messages:
+                subject = msg.get("temat", "(bez tematu)")
+                sender = msg.get("nadawca", "(nieznany)")
+                item = QListWidgetItem(f"{sender} - {subject}")
+                item.setData(Qt.ItemDataRole.UserRole, msg["uid"])
+                self.message_list.addItem(item)
+            
+            logger.debug(f"Loaded {len(messages)} messages")
+        except Exception as e:
+            logger.error(f"Failed to load messages: {e}")
 
-        for r in rows:
-            uid = r.get("uid")
-            sender = r.get("nadawca") or ""
-            subject = r.get("temat") or ""
-            date = r.get("data") or ""
-            is_unread = not bool(r.get("przeczytana"))
-            self.unread_map[uid] = is_unread
+    def on_message_selected(self, item: QListWidgetItem):
+        """Handle message selection."""
+        self.current_uid = item.data(Qt.ItemDataRole.UserRole)
+        logger.debug(f"Selected message UID: {self.current_uid}")
 
-            has_thread = False
+    def on_reply(self):
+        """Handle reply action."""
+        if not self.current_uid:
+            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość")
+            return
+        logger.info(f"Reply to UID: {self.current_uid}")
+
+    def on_forward(self):
+        """Handle forward action."""
+        if not self.current_uid:
+            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość")
+            return
+        logger.info(f"Forward UID: {self.current_uid}")
+
+    def on_archive(self):
+        """Handle archive action."""
+        if not self.current_uid:
+            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość")
+            return
+        try:
+            move_email_and_get_sender(self.current_account["id"], self.current_uid, ARCHIVE_FOLDER)
+            self.load_messages_for_folder()
+            logger.info(f"Archived UID: {self.current_uid}")
+        except Exception as e:
+            logger.error(f"Archive failed: {e}")
+            QMessageBox.critical(self, "Błąd", f"Archiwizacja nie powiodła się: {str(e)}")
+
+    def on_spam(self):
+        """Handle spam action."""
+        if not self.current_uid:
+            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość")
+            return
+        try:
+            move_email_and_get_sender(self.current_account["id"], self.current_uid, SPAM_FOLDER)
+            self.load_messages_for_folder()
+            logger.info(f"Marked as spam UID: {self.current_uid}")
+        except Exception as e:
+            logger.error(f"Spam action failed: {e}")
+            QMessageBox.critical(self, "Błąd", f"Operacja nie powiodła się: {str(e)}")
+
+    def on_delete(self):
+        """Handle delete action."""
+        if not self.current_uid:
+            QMessageBox.warning(self, "Błąd", "Wybierz wiadomość")
+            return
+        
+        reply = QMessageBox.question(self, "Potwierdzenie", "Czy na pewno usunąć wiadomość?")
+        if reply == QMessageBox.StandardButton.Yes:
             try:
-                conv = search_messages(konto_id, local_folder, subject or "")
-                has_thread = len(conv) > 1
-            except Exception:
-                pass
-
-            has_attachment = False
-            try:
-                msg = load_message(konto_id, local_folder, uid)
-                if msg:
-                    atts = get_attachments(msg)
-                    has_attachment = len(atts) > 0
-            except Exception:
-                pass
-
-            widget = self.create_message_widget(subject, sender, date, has_attachment, has_thread, is_unread)
-            item = QListWidgetItem()
-            item.setSizeHint(widget.sizeHint())
-            item.setData(Qt.ItemDataRole.UserRole, uid)
-            item.setData(Qt.ItemDataRole.UserRole + 1, local_folder)
-            self.mail_list.addItem(item)
-            self.mail_list.setItemWidget(item, widget)
-
-            thread_btn = widget.findChild(QPushButton, "thread_btn")
-            dot_btn = widget.findChild(QPushButton, "dot_btn")
-
-            if thread_btn:
-                thread_btn.clicked.connect(lambda _, u=uid, s=subject, lf=local_folder: self.on_thread_clicked(u, s, lf))
-            if dot_btn:
-                dot_btn.clicked.connect(lambda _, u=uid, it=item, lf=local_folder: self.on_toggle_read(u, it, lf))
-    def on_thread_clicked(self, uid: str, subject: str, local_folder: str) -> None:
-        konto_id = self.current_account["id"]
-        try:
-            results = search_messages(konto_id, local_folder, subject or "")
-        except Exception:
-            results = []
-
-        texts = []
-        for r in results:
-            texts.append(
-                f"UID {r.get('uid')}\nFrom: {r.get('od') or r.get('nadawca')}\n"
-                f"Subject: {r.get('temat')}\nDate: {r.get('data')}\n"
-            )
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Konwersacja")
-        dlg.resize(700, 400)
-        v = QVBoxLayout()
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText("\n\n".join(texts) if texts else "Brak powiązanych wiadomości.")
-        v.addWidget(te)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        bb.rejected.connect(dlg.reject)
-        v.addWidget(bb)
-        dlg.setLayout(v)
-        dlg.exec()
-
-    def on_toggle_read(self, uid: str, item: QListWidgetItem, local_folder: str) -> None:
-        konto_id = self.current_account["id"]
-        server_folder = denormalize_folder_name(local_folder)
-        is_unread = self.unread_map.get(uid, False)
-
-        try:
-            if is_unread:
-                ok = mark_read_remote(konto_id, server_folder, uid)
-            else:
-                ok = mark_unread_remote(konto_id, server_folder, uid)
-        except Exception:
-            ok = False
-
-        if ok:
-            self.unread_map[uid] = not is_unread
-            self.update_item_widget(item, uid)
-
-    def update_item_widget(self, item: QListWidgetItem, uid: str) -> None:
-        widget = self.mail_list.itemWidget(item)
-        if not widget:
-            return
-
-        dot_btn = widget.findChild(QPushButton, "dot_btn")
-        labels = widget.findChildren(QLabel)
-        is_unread = self.unread_map.get(uid, False)
-
-        if dot_btn:
-            dot_btn.setText("●" if is_unread else "○")
-            dot_btn.setStyleSheet("color: #1E90FF;" if is_unread else "color: #888888;")
-
-        if labels and len(labels) >= 3:
-            subj = labels[2]
-            f = subj.font()
-            f.setBold(bool(is_unread))
-            subj.setFont(f)
-
-    def on_mail_clicked(self, item: QListWidgetItem) -> None:
-        uid = item.data(Qt.ItemDataRole.UserRole)
-        local_folder = item.data(Qt.ItemDataRole.UserRole + 1)
-
-        if not uid or not local_folder or not self.current_account:
-            return
-
-        self.current_uid = uid
-        self.cached_message = None
-        konto_id = self.current_account["id"]
-
-        try:
-            msg = load_message(konto_id, local_folder, uid)
-            if not msg:
-                server_folder = denormalize_folder_name(local_folder)
-                fetch_ok = fetch_message_from_imap_and_store(konto_id, server_folder, uid)
-                if fetch_ok:
-                    msg = load_message(konto_id, local_folder, uid)
-        except Exception:
-            msg = None
-
-        if not msg:
-            QMessageBox.warning(self, "IMAP", "Nie można pobrać treści wiadomości.")
-            return
-
-        self.cached_message = msg
-        html = extract_html(msg)
-
-        if html:
-            self.mail_view.setHtml(html)
-        else:
-            text = ""
-            try:
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        if part.get_content_type() == "text/plain":
-                            text = part.get_payload(decode=True).decode(
-                                part.get_content_charset() or "utf-8",
-                                errors="replace"
-                            )
-                            break
-                else:
-                    if msg.get_content_type() == "text/plain":
-                        text = msg.get_payload(decode=True).decode(
-                            msg.get_content_charset() or "utf-8",
-                            errors="replace"
-                        )
-            except Exception:
-                text = ""
-            self.mail_view.setPlainText(text)
-
-        attachments = get_attachments(msg)
-        self.show_attachments(attachments)
-
-        if self.unread_map.get(uid, False):
-            try:
-                mark_read_remote(konto_id, denormalize_folder_name(local_folder), uid)
-            except Exception:
-                pass
-            self.unread_map[uid] = False
-            self.update_item_widget(item, uid)
-
-    def show_attachments(self, attachments: List[Dict[str, Any]]) -> None:
-        if not attachments:
-            self.mail_view.append("\n\nBrak załączników.")
-            return
-
-        self.mail_view.append("\n\n<b>Załączniki:</b>")
-        for att in attachments:
-            fname = att["filename"]
-            idx = att["index"]
-            self.mail_view.append(f'<a href="attachment:{idx}">{fname}</a>')
-
-    def on_attachment_clicked(self, url) -> None:
-        href = url.toString()
-        if not href.startswith("attachment:"):
-            return
-
-        idx = int(href.split(":")[1])
-
-        if not self.current_account or not self.current_folder_local or not self.current_uid:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            path = open_attachment(
-                konto_id,
-                self.current_folder_local,
-                self.current_uid,
-                idx
-            )
-            if path:
-                QMessageBox.information(self, "Załącznik", f"Załącznik zapisano: {path}")
-            else:
-                QMessageBox.warning(self, "Załącznik", "Nie można pobrać załącznika.")
-        except Exception:
-            QMessageBox.warning(self, "Załącznik", "Nie można pobrać załącznika.")
-
-    def on_manual_sync(self) -> None:
-        if not self.current_account:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            if self.current_folder_local:
-                server_folder = denormalize_folder_name(self.current_folder_local)
-                try:
-                    fetch_headers_from_imap_and_store(konto_id, server_folder)
-                except Exception:
-                    pass
-
-            try:
-                list_folders_from_imap_and_store(konto_id)
-            except Exception:
-                pass
-
-            self.load_folders_from_db()
-
-            if self.current_folder_local:
-                self.load_mail_list_from_db(self.current_folder_local)
-
-            QMessageBox.information(self, "Synchronizacja", "Synchronizacja zakończona.")
-        except Exception as e:
-            QMessageBox.warning(self, "Synchronizacja", f"Błąd synchronizacji:\n{e}")
-
-    def refresh_all(self) -> None:
-        if self.current_folder_local:
-            self.load_mail_list_from_db(self.current_folder_local)
-
-    def on_reply(self) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            send_email_smtp(
-                konto_id=konto_id,
-                reply_to_uid=self.current_uid,
-                folder=self.current_folder_local,
-            )
-            QMessageBox.information(self, "Email", "Wysłano odpowiedź.")
-        except Exception as e:
-            QMessageBox.warning(self, "Email", f"Nie udało się wysłać odpowiedzi:\n{e}")
-
-    def on_forward(self) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            send_email_smtp(
-                konto_id=konto_id,
-                forward_uid=self.current_uid,
-                folder=self.current_folder_local,
-            )
-            QMessageBox.information(self, "Email", "Wiadomość przekazana.")
-        except Exception as e:
-            QMessageBox.warning(self, "Email", f"Nie udało się przekazać wiadomości:\n{e}")
-
-    def on_archive(self) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            server_folder = denormalize_folder_name(self.current_folder_local)
-        except Exception:
-            server_folder = self.current_folder_local
-
-        try:
-            move_email_and_get_sender(
-                konto_id,
-                server_folder,
-                self.current_uid,
-                ARCHIVE_FOLDER,
-            )
-            self.load_mail_list_from_db(self.current_folder_local)
-        except Exception as e:
-            QMessageBox.warning(self, "Archiwizuj", f"Nie udało się przenieść do archiwum:\n{e}")
-
-    def on_spam(self) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            server_folder = denormalize_folder_name(self.current_folder_local)
-        except Exception:
-            server_folder = self.current_folder_local
-
-        try:
-            move_email_and_get_sender(
-                konto_id,
-                server_folder,
-                self.current_uid,
-                SPAM_FOLDER,
-            )
-            self.load_mail_list_from_db(self.current_folder_local)
-        except Exception as e:
-            QMessageBox.warning(self, "Niechciane", f"Nie udało się przenieść do spamu:\n{e}")
-
-    def on_delete(self) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
-            return
-
-        konto_id = self.current_account["id"]
-
-        try:
-            server_folder = denormalize_folder_name(self.current_folder_local)
-        except Exception:
-            server_folder = self.current_folder_local
-
-        try:
-            move_email_and_get_sender(
-                konto_id,
-                server_folder,
-                self.current_uid,
-                TRASH_FOLDER,
-            )
-            self.load_mail_list_from_db(self.current_folder_local)
-        except Exception as e:
-            QMessageBox.warning(self, "Usuń", f"Nie udało się przenieść do kosza:\n{e}")
-
-    def on_more(self) -> None:
-        QMessageBox.information(self, "Więcej", "Dodatkowe opcje w przygotowaniu.")
-
-    def closeEvent(self, event) -> None:
-        super().closeEvent(event)
+                delete_email_remote(self.current_account["id"], self.current_uid)
+                self.load_messages_for_folder()
+                logger.info(f"Deleted UID: {self.current_uid}")
+            except Exception as e:
+                logger.error(f"Delete failed: {e}")
+                QMessageBox.critical(self, "Błąd", f"Usunięcie nie powiodło się: {str(e)}")

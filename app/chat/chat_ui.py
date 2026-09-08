@@ -1,63 +1,69 @@
-# app/chat/chat_ui.py
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox,
-    QScrollArea, QSizePolicy, QFrame
-)
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QDateTime
+"""Chat page UI - internal employee messaging."""
+
+import logging
 from typing import Optional
+
+from app.utils.ui_imports import *
 from app.config import DB_NAME
 from app.chat.chat_model import get_conversations, get_messages, add_message, create_conversation
 
 import sqlite3
 
+logger = logging.getLogger(__name__)
+
 
 def _format_date_header(dt_str: str) -> str:
-    """
-    Format date string from DB to 'YYYY-MM-DD'. Accepts common SQLite datetime formats.
-    """
+    """Format date string from DB to 'YYYY-MM-DD'. Accepts common SQLite datetime formats."""
     if not dt_str:
         return ""
     dt = QDateTime.fromString(dt_str, "yyyy-MM-dd HH:mm:ss")
     if not dt.isValid():
         dt = QDateTime.fromString(dt_str, Qt.DateFormat.ISODate)
     if not dt.isValid():
-        # fallback: take date part
         return dt_str.split(" ")[0]
     return dt.toString("yyyy-MM-dd")
 
 
 class ChatPage(QWidget):
+    """Internal chat messaging page."""
+    
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
         self.current_konwersacja: Optional[int] = None
         self.offset = 0
-        self.current_pracownik_id = pracownik_id  # alias used in rendering
+        self.current_pracownik_id = pracownik_id
 
         self._build_ui()
         self.refresh_chat_conversations()
 
     def _build_ui(self):
+        """Build chat UI."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(MARGIN_NORMAL, MARGIN_NORMAL, MARGIN_NORMAL, MARGIN_NORMAL)
+        layout.setSpacing(SPACING_NORMAL)
 
-        title = QLabel("Chat wewnętrzny")
-        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        # Title
+        title = create_section_header("💬 Chat wewnętrzny")
         layout.addWidget(title)
+
+        # Main container
+        container = QHBoxLayout()
+        container.setSpacing(SPACING_LARGE)
 
         # LEFT: conversations list
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(SPACING_NORMAL)
+        
         left_layout.addWidget(QLabel("Konwersacje:"))
 
         self.chat_conversations = QListWidget()
         self.chat_conversations.itemSelectionChanged.connect(self.on_chat_selected)
         left_layout.addWidget(self.chat_conversations)
 
-        btn_new = QPushButton("➕ Nowa konwersacja")
+        btn_new = create_primary_button("➕ Nowa konwersacja")
         btn_new.clicked.connect(self.create_new_conversation)
         left_layout.addWidget(btn_new)
 
@@ -65,221 +71,120 @@ class ChatPage(QWidget):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(SPACING_NORMAL)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.messages_container = QWidget()
         self.messages_layout = QVBoxLayout(self.messages_container)
-        self.messages_layout.setContentsMargins(6, 6, 6, 6)
-        self.messages_layout.setSpacing(6)
+        self.messages_layout.setContentsMargins(MARGIN_SMALL, MARGIN_SMALL, MARGIN_SMALL, MARGIN_SMALL)
+        self.messages_layout.setSpacing(SPACING_SMALL)
         self.messages_container.setLayout(self.messages_layout)
         self.scroll_area.setWidget(self.messages_container)
         right_layout.addWidget(self.scroll_area)
 
-        btn_history = QPushButton("⬆ Pokaż starsze wiadomości")
+        btn_history = create_secondary_button("⬆ Pokaż starsze wiadomości")
         btn_history.clicked.connect(self.load_more_history)
         right_layout.addWidget(btn_history)
 
+        # Message input
         bottom = QHBoxLayout()
+        bottom.setSpacing(SPACING_NORMAL)
+        
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Napisz wiadomość...")
         bottom.addWidget(self.chat_input)
 
-        btn_send = QPushButton("Wyślij")
+        btn_send = create_primary_button("Wyślij")
         btn_send.clicked.connect(self.send_message)
         bottom.addWidget(btn_send)
 
         right_layout.addLayout(bottom)
 
         # Layout split
-        container = QHBoxLayout()
         container.addWidget(left, 1)
         container.addWidget(right, 3)
         layout.addLayout(container)
 
-    # ============================================================
-    # CONVERSATIONS
-    # ============================================================
-    def refresh_chat_conversations(self):
-        self.chat_conversations.clear()
-        rows = get_conversations(self.pracownik_id)
-        for r in rows:
-            nazwa = r.get("nazwa") or f"Konwersacja {r.get('id')}"
-            item = QListWidgetItem(nazwa)
-            item.setData(Qt.ItemDataRole.UserRole, r.get("id"))
-            self.chat_conversations.addItem(item)
-
     def on_chat_selected(self):
-        item = self.chat_conversations.currentItem()
-        if not item:
-            return
-        self.current_konwersacja = item.data(Qt.ItemDataRole.UserRole)
-        self.offset = 0
-        self.load_messages()
+        """Handle chat selection."""
+        current = self.chat_conversations.currentItem()
+        if current:
+            self.current_konwersacja = current.data(Qt.ItemDataRole.UserRole)
+            self.offset = 0
+            self.load_messages()
+        logger.debug(f"Selected conversation: {self.current_konwersacja}")
 
-    # ============================================================
-    # MESSAGES LOADING & RENDERING (grouped by sender + date)
-    # ============================================================
+    def refresh_chat_conversations(self):
+        """Refresh conversation list."""
+        try:
+            conversations = get_conversations(self.pracownik_id)
+            self.chat_conversations.clear()
+            
+            for conv in conversations:
+                item = QListWidgetItem(conv["nazwa"])
+                item.setData(Qt.ItemDataRole.UserRole, conv["id"])
+                self.chat_conversations.addItem(item)
+                logger.debug(f"Added conversation: {conv['nazwa']}")
+        except Exception as e:
+            logger.error(f"Failed to refresh conversations: {e}")
+            QMessageBox.critical(self, "Błąd", f"Nie udało się załadować konwersacji: {str(e)}")
+
+    def create_new_conversation(self):
+        """Create new conversation."""
+        text, ok = QInputDialog.getText(self, "Nowa konwersacja", "Nazwa konwersacji:")
+        if ok and text.strip():
+            try:
+                conv_id = create_conversation(text.strip(), self.pracownik_id)
+                self.refresh_chat_conversations()
+                logger.info(f"Created conversation: {text} (ID: {conv_id})")
+            except Exception as e:
+                logger.error(f"Failed to create conversation: {e}")
+                QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć konwersacji: {str(e)}")
+
     def load_messages(self):
+        """Load messages from current conversation."""
         if not self.current_konwersacja:
             return
-
-        messages = get_messages(self.current_konwersacja, limit=100, offset=self.offset)
-        # messages are returned oldest-first by dao; render grouped
-        self._render_grouped_messages(messages)
+        
+        try:
+            # Clear layout
+            while self.messages_layout.count():
+                self.messages_layout.takeAt(0).widget().deleteLater()
+            
+            messages = get_messages(self.current_konwersacja, self.offset)
+            for msg in reversed(messages):
+                label = QLabel(f"<b>{msg['pracownik_name']}:</b> {msg['tresc']}")
+                label.setWordWrap(True)
+                self.messages_layout.addWidget(label)
+            
+            self.messages_layout.addStretch()
+            logger.debug(f"Loaded {len(messages)} messages")
+        except Exception as e:
+            logger.error(f"Failed to load messages: {e}")
 
     def load_more_history(self):
-        self.offset += 100
+        """Load older messages."""
+        self.offset += 10
         self.load_messages()
+        logger.debug(f"Loading more history, offset: {self.offset}")
 
-    def _clear_messages(self):
-        while self.messages_layout.count():
-            item = self.messages_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-    def _render_grouped_messages(self, messages):
-        """
-        Render messages grouped by date and sender.
-        Consecutive messages from same sender on same date are shown under one header.
-        """
-        self._clear_messages()
-
-        last_sender_id = None
-        last_date = None
-        group_layout = None
-
-        for msg in messages:
-            sender_id = msg.get("pracownik_id")
-            sender_name = (msg.get("imie") or "") + ((" " + msg.get("nazwisko")) if msg.get("nazwisko") else "")
-            timestamp = msg.get("data_wysylki") or ""
-            date_header = _format_date_header(timestamp)
-
-            # New date header if date changed
-            if date_header != last_date:
-                date_label = QLabel(date_header)
-                date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                date_label.setStyleSheet("color: #666; font-weight: bold; margin: 8px 0;")
-                self.messages_layout.addWidget(date_label)
-                last_date = date_header
-                # reset sender grouping on date change
-                last_sender_id = None
-                group_layout = None
-
-            # New group if sender changed
-            if sender_id != last_sender_id:
-                # create group frame
-                group_frame = QFrame()
-                group_frame.setFrameShape(QFrame.Shape.NoFrame)
-                group_vlayout = QVBoxLayout()
-                group_vlayout.setContentsMargins(6, 4, 6, 8)
-                group_vlayout.setSpacing(4)
-                group_frame.setLayout(group_vlayout)
-
-                # header with sender name and optional time of first message in group
-                time_str = ""
-                try:
-                    dt = QDateTime.fromString(timestamp, "yyyy-MM-dd HH:mm:ss")
-                    if not dt.isValid():
-                        dt = QDateTime.fromString(timestamp, Qt.DateFormat.ISODate)
-                    if dt.isValid():
-                        time_str = dt.toString("HH:mm")
-                except Exception:
-                    time_str = ""
-
-                header_text = f"{sender_name}" + (f"  {time_str}" if time_str else "")
-                header = QLabel(header_text)
-                header.setStyleSheet("font-weight: 600; color: #222; margin-bottom: 4px;")
-                group_vlayout.addWidget(header)
-
-                self.messages_layout.addWidget(group_frame)
-                group_layout = group_vlayout
-
-                last_sender_id = sender_id
-
-            # message bubble
-            text_label = QLabel(msg.get("tresc") or "")
-            text_label.setWordWrap(True)
-            text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            text_label.setStyleSheet("""
-                background: #f1f1f1;
-                border-radius: 8px;
-                padding: 8px;
-                margin-bottom: 4px;
-                max-width: 600px;
-            """)
-
-            # alignment wrapper
-            wrapper = QHBoxLayout()
-            if sender_id == self.current_pracownik_id:
-                wrapper.addStretch()
-                wrapper.addWidget(text_label)
-            else:
-                wrapper.addWidget(text_label)
-                wrapper.addStretch()
-
-            group_layout.addLayout(wrapper)
-
-        # stretch at the end to push content up if few messages
-        self.messages_layout.addStretch()
-        # scroll to bottom
-        self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
-
-    # ============================================================
-    # SENDING MESSAGES
-    # ============================================================
     def send_message(self):
+        """Send new message."""
+        if not self.current_konwersacja:
+            QMessageBox.warning(self, "Błąd", "Wybierz konwersację")
+            return
+        
         text = self.chat_input.text().strip()
         if not text:
             return
-
-        if not self.current_konwersacja:
-            QMessageBox.warning(self, "Brak konwersacji", "Wybierz lub utwórz konwersację przed wysłaniem wiadomości.")
-            return
-
+        
         try:
             add_message(self.current_konwersacja, self.pracownik_id, text)
+            self.chat_input.clear()
+            self.offset = 0
+            self.load_messages()
+            logger.info(f"Message sent to conversation {self.current_konwersacja}")
         except Exception as e:
-            QMessageBox.critical(self, "Błąd zapisu", f"Nie udało się wysłać wiadomości: {e}")
-            return
-
-        self.chat_input.clear()
-        # reload messages (keeps grouping)
-        self.load_messages()
-
-    # ============================================================
-    # CREATE NEW CONVERSATION
-    # ============================================================
-    def create_new_conversation(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, QMessageBox
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Nowa konwersacja")
-        dialog.setFixedSize(420, 180)
-
-        layout = QVBoxLayout(dialog)
-        form = QFormLayout()
-
-        nazwa_field = QLineEdit()
-        form.addRow("Nazwa:", nazwa_field)
-        layout.addLayout(form)
-
-        btn_create = QPushButton("Utwórz")
-        layout.addWidget(btn_create)
-
-        def on_create():
-            nazwa = nazwa_field.text().strip()
-            if not nazwa:
-                QMessageBox.warning(dialog, "Błąd", "Wpisz nazwę konwersacji")
-                return
-            try:
-                create_conversation(nazwa, self.pracownik_id)
-            except Exception as e:
-                QMessageBox.critical(dialog, "Błąd", f"Nie udało się utworzyć konwersacji: {e}")
-                return
-            dialog.accept()
-            self.refresh_chat_conversations()
-
-        btn_create.clicked.connect(on_create)
-        dialog.exec()
+            logger.error(f"Failed to send message: {e}")
+            QMessageBox.critical(self, "Błąd", f"Nie udało się wysłać wiadomości: {str(e)}")

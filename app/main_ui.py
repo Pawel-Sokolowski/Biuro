@@ -5,6 +5,7 @@ from typing import Optional
 from PyQt6.QtWidgets import QApplication
 
 from app.utils.ui_imports import *
+from app.utils.app_header import AppHeader
 from app.db.dao_employees import get_employee_info
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
@@ -194,6 +195,7 @@ class OfficeManagerApp(QMainWindow):
         self.pracownik_id = pracownik_id
         self.sidebar = None
         self.pages = None
+        self.app_header = None
         
         if pracownik_id is None:
             self.pracownik_id = self._show_login_dialog()
@@ -219,9 +221,18 @@ class OfficeManagerApp(QMainWindow):
 
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
+        main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        # --- Header with user info and time tracker ---
+        self.app_header = AppHeader(self.pracownik_id)
+        main_layout.addWidget(self.app_header)
+
+        # --- Content area with sidebar ---
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         # --- Sidebar ---
         self.sidebar = QListWidget()
@@ -239,43 +250,16 @@ class OfficeManagerApp(QMainWindow):
         ]
         self.sidebar.addItems(sidebar_items)
         self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
-        main_layout.addWidget(self.sidebar)
-
-        # --- Content Area ---
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-
-        # --- Header ---
-        header = QWidget()
-        header.setStyleSheet(STYLE_HEADER)
-        header.setFixedHeight(HEADER_HEIGHT)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(MARGIN_LARGE, 12, MARGIN_LARGE, 12)
-        header_layout.setSpacing(0)
-
-        try:
-            emp = get_employee_info(self.pracownik_id)
-            if emp:
-                name = f"{emp.get('imie', '')} {emp.get('nazwisko', '')}".strip()
-            else:
-                name = "Nieznany"
-        except Exception as e:
-            logger.error(f"Failed to get employee info: {e}")
-            name = "Błąd"
-        
-        lbl_user = QLabel(f"<b>Zalogowany:</b> {name}")
-        lbl_user.setStyleSheet(f"font-size: 14px; color: {COLOR_TEXT};")
-        header_layout.addWidget(lbl_user)
-        header_layout.addStretch()
-
-        content_layout.addWidget(header)
+        content_layout.addWidget(self.sidebar)
 
         # --- Pages ---
         self.pages = QStackedWidget()
-        content_layout.addWidget(self.pages)
-        main_layout.addWidget(content)
+        content_layout.addWidget(self.pages, 1)
+
+        # Add content to main layout
+        content_widget = QWidget()
+        content_widget.setLayout(content_layout)
+        main_layout.addWidget(content_widget, 1)
 
         # Initialize all pages
         try:

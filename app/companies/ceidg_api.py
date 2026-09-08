@@ -1,64 +1,79 @@
 import requests
-from app.config import CEIDG_BASE_URL, CEIDG_API_KEY
+from app.config import CEIDG_API_KEY, CEIDG_BASE_URL
 
-def search_ceidg_by_nip(nip: str):
-    nip = nip.replace("-", "").replace(" ", "")
 
-    headers = {
-        "Authorization": f"Bearer {CEIDG_API_KEY}"
-    }
+def get_ceidg_firma_by_nip(nip: str):
+    url = f"{CEIDG_BASE_URL}/firma"
+    params = {"nip": nip}
+    headers = {"Authorization": f"Bearer {CEIDG_API_KEY}"}
 
-    url_search = f"{CEIDG_BASE_URL}/firmy"
-    params = {
-        "wlasciciel[nip]": nip,
-        "limit": 1,
-        "status[]": [
-            "AKTYWNY",
-            "WYKRESLONY",
-            "ZAWIESZONY",
-            "OCZEKUJE_NA_ROZPOCZECIE_DZIALALNOSCI",
-            "WYLACZNIE_W_FORMIE_SPOLKI"
-        ]
-    }
-
-    r = requests.get(url_search, params=params, headers=headers, timeout=10)
-    print("CEIDG SEARCH STATUS:", r.status_code)
-    print("CEIDG SEARCH JSON:", r.text)
+    r = requests.get(url, params=params, headers=headers, timeout=10)
+    print("CEIDG FIRMA STATUS:", r.status_code)
+    print("CEIDG FIRMA JSON:", r.text)
 
     if r.status_code != 200:
-        return {"error": f"HTTP {r.status_code}", "response": r.text}
+        return {"error": True}
 
     data = r.json()
-    firmy = data.get("firmy", [])
-    if not firmy:
-        return {"error": "Brak wyników", "response": data}
+    firma_list = data.get("firma", [])
+    if not firma_list:
+        return {"error": True}
 
-    match = firmy[0]
-    firm_id = match.get("id")
+    f = firma_list[0]
 
-    url_firma = f"{CEIDG_BASE_URL}/firma/{firm_id}"
-    r2 = requests.get(url_firma, headers=headers, timeout=10)
+    dz = f.get("adresDzialalnosci") or {}
+    ko = f.get("adresKorespondencyjny") or {}
 
-    if r2.status_code != 200:
-        return {"error": f"HTTP {r2.status_code}", "response": r2.text}
+    # automatyczne kopiowanie korespondencji → działalności, jeśli CEIDG nie ma adresu działalności
+    if not dz.get("miasto"):
+        dz = {
+            "miasto": ko.get("miasto", ""),
+            "kod": ko.get("kod", ""),
+            "ulica": ko.get("ulica", ""),
+            "budynek": ko.get("budynek", ""),
+            "lokal": ko.get("lokal", ""),
+            "wojewodztwo": ko.get("wojewodztwo", ""),
+            "powiat": ko.get("powiat", ""),
+            "gmina": ko.get("gmina", ""),
+            "kraj": ko.get("kraj", "")
+        }
 
-    f = r2.json()
-
-    adr = f.get("adresDzialalnosci", {})
-    wl = f.get("wlasciciel", {})
-    pkd_list = [p.get("kod") for p in f.get("pkd", []) if p.get("kod")]
+    pkd_list = f.get("pkd", []) or []
+    pkd_codes = [p.get("kod") for p in pkd_list if p.get("kod")]
 
     return {
+        "id": f.get("id"),
         "nazwa": f.get("nazwa"),
-        "nip": wl.get("nip"),
-        "regon": wl.get("regon"),
-        "miasto": adr.get("miasto"),
-        "kod_pocztowy": adr.get("kod"),
-        "ulica": adr.get("ulica"),
-        "budynek": adr.get("budynek"),
-        "lokal": adr.get("lokal"),
-        "pkd": pkd_list,
-        "status": f.get("status"),
+        "nip": f.get("wlasciciel", {}).get("nip"),
+        "regon": f.get("wlasciciel", {}).get("regon"),
+        "pkd": pkd_codes,
         "data_rozpoczecia": f.get("dataRozpoczecia"),
-        "raw": f
+
+        # adres działalności
+        "dz_miasto": dz.get("miasto", ""),
+        "dz_kod": dz.get("kod", ""),
+        "dz_ulica": dz.get("ulica", ""),
+        "dz_budynek": dz.get("budynek", ""),
+        "dz_lokal": dz.get("lokal", ""),
+        "dz_wojewodztwo": dz.get("wojewodztwo", ""),
+        "dz_powiat": dz.get("powiat", ""),
+        "dz_gmina": dz.get("gmina", ""),
+        "dz_kraj": dz.get("kraj", ""),
+
+        # adres korespondencji
+        "koresp_miasto": ko.get("miasto", ""),
+        "koresp_kod": ko.get("kod", ""),
+        "koresp_ulica": ko.get("ulica", ""),
+        "koresp_budynek": ko.get("budynek", ""),
+        "koresp_lokal": ko.get("lokal", ""),
+        "koresp_wojewodztwo": ko.get("wojewodztwo", ""),
+        "koresp_powiat": ko.get("powiat", ""),
+        "koresp_gmina": ko.get("gmina", ""),
+        "koresp_kraj": ko.get("kraj", ""),
+
+        # kontakt
+        "telefon": f.get("telefon", ""),
+        "email": f.get("email", ""),
+        "www": f.get("www", ""),
+        "adres_doreczen_elektronicznych": f.get("adresDoreczenElektronicznych", "")
     }

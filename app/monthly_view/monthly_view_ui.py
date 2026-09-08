@@ -1,11 +1,13 @@
-# app/ui/monthly_view_ui.py
+# app/monthly_view/monthly_view_ui.py
+from PyQt6.QtWidgets import QMenu
 from app.utils.ui_imports import *
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QBrush, QColor
 from PyQt6.QtCore import Qt
 from datetime import datetime, timedelta
 from app.monthly_view.monthly_view_logic import MonthlyViewLogic
 
 COMPANY_STAGE_OPTIONS = ["Brak", "Komplet dokumentów", "Sprawdzone", "Zaksięgowane", "Wysłane wyniki"]
+COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
 
 
 class MonthlyViewPage(QWidget):
@@ -14,27 +16,23 @@ class MonthlyViewPage(QWidget):
         self.pracownik_id = pracownik_id
         self.logic = MonthlyViewLogic(pracownik_id)
 
-        # UI elements
         self.month_selector = None
         self.month_employee_filter = None
+        self.status_filter = None
 
-        # tables
         self.table_ksiegowosc = None
         self.table_kadry = None
 
         self._build_ui()
 
-    # ============================================================
-    # BUILD UI
-    # ============================================================
+    # ============================
+    # HEADER
+    # ============================
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # ============================
-        # HEADER
-        # ============================
         header_row = QWidget()
         header_layout = QHBoxLayout(header_row)
 
@@ -69,6 +67,18 @@ class MonthlyViewPage(QWidget):
         )
         header_layout.addWidget(self.month_employee_filter)
 
+        lbl_status = QLabel("Status firmy:")
+        lbl_status.setFont(QFont("Arial", 12))
+        header_layout.addWidget(lbl_status)
+
+        self.status_filter = QComboBox()
+        self.status_filter.addItems(COMPANY_STATUS_FILTER)
+        self.status_filter.setCurrentText("Aktywne")
+        self.status_filter.currentIndexChanged.connect(
+            lambda _: self.refresh_tables()
+        )
+        header_layout.addWidget(self.status_filter)
+
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self.refresh_tables)
         header_layout.addWidget(btn_refresh)
@@ -80,50 +90,64 @@ class MonthlyViewPage(QWidget):
         # ============================
         self.month_tabs = QTabWidget()
 
-        # --- KSIĘGOWOŚĆ ---
+        # KSIĘGOWOŚĆ
         tab_ks = QWidget()
         ks_layout = QVBoxLayout(tab_ks)
 
+        lbl_ks_header = QLabel("Księgowość – miesięczny status firm")
+        lbl_ks_header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        ks_layout.addWidget(lbl_ks_header)
+
         self.table_ksiegowosc = QTableWidget()
-        self.table_ksiegowosc.setColumnCount(9)
+        self.table_ksiegowosc.setColumnCount(11)
         self.table_ksiegowosc.setHorizontalHeaderLabels([
             "ID",
             "Nazwa",
             "Etap",
             "Ilość dokumentów",
             "Czas Księgowość",
+            "Zawieszona od",
             "Stoper",
             "Notatka",
             "Usługa",
-            "Edytuj"
+            "Edytuj",
+            "⋯"
         ])
         self.table_ksiegowosc.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.table_ksiegowosc.hideColumn(0)
+        self.table_ksiegowosc.setAlternatingRowColors(True)
         ks_layout.addWidget(self.table_ksiegowosc)
 
-        # --- KADRY ---
+        # KADRY
         tab_kadry = QWidget()
         kadry_layout = QVBoxLayout(tab_kadry)
 
+        lbl_kadry_header = QLabel("Kadry – miesięczny status firm")
+        lbl_kadry_header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        kadry_layout.addWidget(lbl_kadry_header)
+
         self.table_kadry = QTableWidget()
-        self.table_kadry.setColumnCount(9)
+        self.table_kadry.setColumnCount(11)
         self.table_kadry.setHorizontalHeaderLabels([
             "ID",
             "Nazwa",
             "Etap",
             "Ilość dokumentów",
             "Czas Kadry",
+            "Zawieszona od",
             "Stoper",
             "Notatka",
             "Usługa",
-            "Edytuj"
+            "Edytuj",
+            "⋯"
         ])
         self.table_kadry.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.table_kadry.hideColumn(0)
+        self.table_kadry.setAlternatingRowColors(True)
         kadry_layout.addWidget(self.table_kadry)
 
         self.month_tabs.addTab(tab_ks, "Księgowość")
@@ -131,13 +155,11 @@ class MonthlyViewPage(QWidget):
 
         layout.addWidget(self.month_tabs)
 
-        # Initial load
         self.refresh_monthly_filters()
         self.refresh_tables()
-
-    # ============================================================
+    # ============================
     # FILTERS
-    # ============================================================
+    # ============================
     def refresh_monthly_filters(self):
         employees = self.logic.get_employee_filter_list()
 
@@ -154,21 +176,22 @@ class MonthlyViewPage(QWidget):
         self.logic.set_month(new_month)
         self.refresh_tables()
 
-    # ============================================================
-    # REFRESH BOTH TABLES
-    # ============================================================
+    # ============================
+    # REFRESH TABLES
+    # ============================
     def refresh_tables(self):
         rows = self.logic.get_monthly_rows(
             selected_month=self.month_selector.currentText(),
-            selected_employee=self.month_employee_filter.currentData()
+            selected_employee=self.month_employee_filter.currentData(),
+            selected_status=self.status_filter.currentText()
         )
 
         self._render_table_ksiegowosc(rows)
         self._render_table_kadry(rows)
 
-    # ============================================================
+    # ============================
     # RENDER KSIĘGOWOŚĆ
-    # ============================================================
+    # ============================
     def _render_table_ksiegowosc(self, rows):
         self.table_ksiegowosc.setRowCount(0)
         self.logic.status_widgets = {}
@@ -179,16 +202,16 @@ class MonthlyViewPage(QWidget):
             etap = row["etap"]
             ilosc_dok = row["ilosc_dok"]
             sekundy = row["sekundy_ksiegowosc"]
+            zawieszona_od = row.get("zawieszona_od", "") or ""
 
             self.table_ksiegowosc.insertRow(row_idx)
 
-            # 0: ID
-            self.table_ksiegowosc.setItem(row_idx, 0, QTableWidgetItem(str(f_id)))
+            item_id = QTableWidgetItem(str(f_id))
+            self.table_ksiegowosc.setItem(row_idx, 0, item_id)
 
-            # 1: Nazwa
-            self.table_ksiegowosc.setItem(row_idx, 1, QTableWidgetItem(nazwa))
+            item_name = QTableWidgetItem(nazwa)
+            self.table_ksiegowosc.setItem(row_idx, 1, item_name)
 
-            # 2: Etap
             cb_etap = QComboBox()
             cb_etap.addItems(COMPANY_STAGE_OPTIONS)
             cb_etap.setCurrentText(etap)
@@ -197,7 +220,6 @@ class MonthlyViewPage(QWidget):
             )
             self.table_ksiegowosc.setCellWidget(row_idx, 2, cb_etap)
 
-            # 3: Ilość dokumentów
             txt_docs = QLineEdit(str(ilosc_dok))
             txt_docs.setAlignment(Qt.AlignmentFlag.AlignCenter)
             txt_docs.setFixedWidth(80)
@@ -206,13 +228,15 @@ class MonthlyViewPage(QWidget):
             )
             self.table_ksiegowosc.setCellWidget(row_idx, 3, txt_docs)
 
-            # 4: Czas Księgowość
             czas_format = self.logic.format_seconds(sekundy)
             lbl_time = QLabel(czas_format)
             lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_ksiegowosc.setCellWidget(row_idx, 4, lbl_time)
 
-            # 5: Stoper
+            lbl_zaw = QLabel(zawieszona_od)
+            lbl_zaw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_ksiegowosc.setCellWidget(row_idx, 5, lbl_zaw)
+
             btn_stoper = QPushButton(
                 "▶" if self.logic.aktywna_firma_stoper_ks != f_id else "⏸"
             )
@@ -221,29 +245,38 @@ class MonthlyViewPage(QWidget):
                 lambda checked, fid=f_id, btn=btn_stoper:
                     self._toggle_stoper(fid, btn, "ksiegowosc")
             )
-            self.table_ksiegowosc.setCellWidget(row_idx, 5, btn_stoper)
+            self.table_ksiegowosc.setCellWidget(row_idx, 6, btn_stoper)
 
-            # 6: Notatka
             lbl_note = QLabel(row["note_snippet"])
             lbl_note.setWordWrap(True)
             lbl_note.mouseDoubleClickEvent = lambda event, fid=f_id: self.logic.open_notes_window(fid)
-            self.table_ksiegowosc.setCellWidget(row_idx, 6, lbl_note)
+            self.table_ksiegowosc.setCellWidget(row_idx, 7, lbl_note)
 
-            # 7: Usługa dodatkowa
             btn_usluga = QPushButton("Usługa")
             btn_usluga.clicked.connect(lambda checked, fid=f_id: self.logic.open_extra_service_window(fid))
-            self.table_ksiegowosc.setCellWidget(row_idx, 7, btn_usluga)
+            self.table_ksiegowosc.setCellWidget(row_idx, 8, btn_usluga)
 
-            # 8: Edytuj firmę
             btn_edit = QPushButton("Edytuj")
             btn_edit.clicked.connect(lambda checked, fid=f_id: self.logic.open_company_edit_window(fid))
-            self.table_ksiegowosc.setCellWidget(row_idx, 8, btn_edit)
+            self.table_ksiegowosc.setCellWidget(row_idx, 9, btn_edit)
+
+            btn_more = QPushButton("⋯")
+            btn_more.setFixedSize(32, 24)
+            btn_more.clicked.connect(lambda checked, fid=f_id, btn=btn_more: self._open_more_menu(fid, btn))
+            self.table_ksiegowosc.setCellWidget(row_idx, 10, btn_more)
+
+            # kolorowanie zawieszonych
+            if zawieszona_od:
+                brush = QBrush(QColor("#ffe6e6"))
+                for col in range(0, 11):
+                    item = self.table_ksiegowosc.item(row_idx, col)
+                    if item:
+                        item.setBackground(brush)
 
             self.logic.status_widgets[f_id] = (txt_docs, cb_etap)
-
-    # ============================================================
+    # ============================
     # RENDER KADRY
-    # ============================================================
+    # ============================
     def _render_table_kadry(self, rows):
         self.table_kadry.setRowCount(0)
 
@@ -253,16 +286,16 @@ class MonthlyViewPage(QWidget):
             etap = row["etap"]
             ilosc_dok = row["ilosc_dok"]
             sekundy = row["sekundy_kadry"]
+            zawieszona_od = row.get("zawieszona_od", "") or ""
 
             self.table_kadry.insertRow(row_idx)
 
-            # 0: ID
-            self.table_kadry.setItem(row_idx, 0, QTableWidgetItem(str(f_id)))
+            item_id = QTableWidgetItem(str(f_id))
+            self.table_kadry.setItem(row_idx, 0, item_id)
 
-            # 1: Nazwa
-            self.table_kadry.setItem(row_idx, 1, QTableWidgetItem(nazwa))
+            item_name = QTableWidgetItem(nazwa)
+            self.table_kadry.setItem(row_idx, 1, item_name)
 
-            # 2: Etap
             cb_etap = QComboBox()
             cb_etap.addItems(COMPANY_STAGE_OPTIONS)
             cb_etap.setCurrentText(etap)
@@ -271,7 +304,6 @@ class MonthlyViewPage(QWidget):
             )
             self.table_kadry.setCellWidget(row_idx, 2, cb_etap)
 
-            # 3: Ilość dokumentów
             txt_docs = QLineEdit(str(ilosc_dok))
             txt_docs.setAlignment(Qt.AlignmentFlag.AlignCenter)
             txt_docs.setFixedWidth(80)
@@ -280,13 +312,15 @@ class MonthlyViewPage(QWidget):
             )
             self.table_kadry.setCellWidget(row_idx, 3, txt_docs)
 
-            # 4: Czas Kadry
             czas_format = self.logic.format_seconds(sekundy)
             lbl_time = QLabel(czas_format)
             lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_kadry.setCellWidget(row_idx, 4, lbl_time)
 
-            # 5: Stoper
+            lbl_zaw = QLabel(zawieszona_od)
+            lbl_zaw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_kadry.setCellWidget(row_idx, 5, lbl_zaw)
+
             btn_stoper = QPushButton(
                 "▶" if self.logic.aktywna_firma_stoper_kadry != f_id else "⏸"
             )
@@ -295,27 +329,37 @@ class MonthlyViewPage(QWidget):
                 lambda checked, fid=f_id, btn=btn_stoper:
                     self._toggle_stoper(fid, btn, "kadry")
             )
-            self.table_kadry.setCellWidget(row_idx, 5, btn_stoper)
+            self.table_kadry.setCellWidget(row_idx, 6, btn_stoper)
 
-            # 6: Notatka
             lbl_note = QLabel(row["note_snippet"])
             lbl_note.setWordWrap(True)
             lbl_note.mouseDoubleClickEvent = lambda event, fid=f_id: self.logic.open_notes_window(fid)
-            self.table_kadry.setCellWidget(row_idx, 6, lbl_note)
+            self.table_kadry.setCellWidget(row_idx, 7, lbl_note)
 
-            # 7: Usługa dodatkowa
             btn_usluga = QPushButton("Usługa")
             btn_usluga.clicked.connect(lambda checked, fid=f_id: self.logic.open_extra_service_window(fid))
-            self.table_kadry.setCellWidget(row_idx, 7, btn_usluga)
+            self.table_kadry.setCellWidget(row_idx, 8, btn_usluga)
 
-            # 8: Edytuj firmę
             btn_edit = QPushButton("Edytuj")
             btn_edit.clicked.connect(lambda checked, fid=f_id: self.logic.open_company_edit_window(fid))
-            self.table_kadry.setCellWidget(row_idx, 8, btn_edit)
+            self.table_kadry.setCellWidget(row_idx, 9, btn_edit)
 
-    # ============================================================
-    # STOPER BUTTON HANDLER
-    # ============================================================
+            btn_more = QPushButton("⋯")
+            btn_more.setFixedSize(32, 24)
+            btn_more.clicked.connect(lambda checked, fid=f_id, btn=btn_more: self._open_more_menu(fid, btn))
+            self.table_kadry.setCellWidget(row_idx, 10, btn_more)
+
+            # kolorowanie zawieszonych
+            if zawieszona_od:
+                brush = QBrush(QColor("#ffe6e6"))
+                for col in range(0, 11):
+                    item = self.table_kadry.item(row_idx, col)
+                    if item:
+                        item.setBackground(brush)
+
+    # ============================
+    # STOPER
+    # ============================
     def _toggle_stoper(self, firma_id: int, btn: QPushButton, typ: str):
         self.logic.toggle_stoper(firma_id, typ)
 
@@ -328,9 +372,35 @@ class MonthlyViewPage(QWidget):
 
         self.refresh_tables()
 
-# ============================================================
-#  INLINE NOTES WINDOW (bez osobnego pliku)
-# ============================================================
+    # ============================
+    # WIĘCEJ OPCJI
+    # ============================
+    def _open_more_menu(self, firma_id: int, btn: QPushButton):
+        menu = QMenu(btn)
+        act_zawies = menu.addAction("Dodaj zawieszenie")
+        act_arch = menu.addAction("Przenieś do archiwalnych")
+        menu.addSeparator()
+        act_opt1 = menu.addAction("Opcja 1")
+        act_opt2 = menu.addAction("Opcja 2")
+        act_opt3 = menu.addAction("Opcja 3")
+
+        action = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+        if action == act_zawies:
+            self.logic.mark_company_suspended_manual(firma_id)
+        elif action == act_arch:
+            self.logic.move_company_to_archive(firma_id)
+        elif action == act_opt1:
+            self.logic.more_option_1(firma_id)
+        elif action == act_opt2:
+            self.logic.more_option_2(firma_id)
+        elif action == act_opt3:
+            self.logic.more_option_3(firma_id)
+
+
+# ============================
+# INLINE WINDOWS
+# ============================
+
 class InlineNotesWindow(QDialog):
     def __init__(self, firma_id: int):
         super().__init__()
@@ -395,9 +465,6 @@ class InlineNotesWindow(QDialog):
         self.accept()
 
 
-# ============================================================
-#  INLINE EXTRA SERVICE WINDOW (bez osobnego pliku)
-# ============================================================
 class InlineExtraServiceWindow(QDialog):
     def __init__(self, firma_id: int, miesiac: str):
         super().__init__()

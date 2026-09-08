@@ -1,5 +1,3 @@
-# app/companies/companies_ui.py
-
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox,
     QPushButton, QListWidget, QListWidgetItem
@@ -28,19 +26,12 @@ class CompaniesPage(QWidget):
         self._build_ui()
         self._refresh_companies()
 
-    # ============================================================
-    #  BUDOWA UI
-    # ============================================================
-
     def _build_ui(self):
         self.main_layout = QVBoxLayout(self)
 
         self.list_page = QWidget()
         list_layout = QVBoxLayout(self.list_page)
 
-        # ------------------------------
-        # FILTRY
-        # ------------------------------
         filter_row = QHBoxLayout()
 
         self.search_input = QLineEdit()
@@ -70,18 +61,11 @@ class CompaniesPage(QWidget):
 
         list_layout.addLayout(filter_row)
 
-        # ------------------------------
-        # LISTA FIRM
-        # ------------------------------
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._open_edit_form)
         list_layout.addWidget(self.list_widget)
 
         self.main_layout.addWidget(self.list_page)
-
-    # ============================================================
-    #  ODCZYT LISTY FIRM
-    # ============================================================
 
     def _refresh_companies(self):
         search = self.search_input.text().strip()
@@ -95,10 +79,6 @@ class CompaniesPage(QWidget):
             item = QListWidgetItem(f"{r['nazwa']} — NIP {r['nip']} — {r['miasto']}")
             item.setData(Qt.ItemDataRole.UserRole, r["id"])
             self.list_widget.addItem(item)
-
-    # ============================================================
-    #  OTWARCIE FORMULARZA
-    # ============================================================
 
     def _open_add_form(self):
         self.form_page = CompanyForm(self.pracownik_id, None, self)

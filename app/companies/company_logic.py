@@ -1,11 +1,9 @@
-# app/companies/companies_logic.py
-
 import sqlite3
-from typing import List, Dict, Any
+from typing import Dict, Any, List
 
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
-from app.companies.ceidg_api import search_ceidg_by_nip
+from app.companies.ceidg_api import get_ceidg_firma_by_nip
 from app.db.dao_conn import get_conn
 
 
@@ -16,15 +14,16 @@ class WorkerSignals(QObject):
 
 
 class CEIDGWorker(QRunnable):
-    def __init__(self, nip: str):
+    def __init__(self, nip: str, form):
         super().__init__()
         self.nip = nip
+        self.form = form
         self.signals = WorkerSignals()
 
     def run(self):
         try:
-            res = search_ceidg_by_nip(self.nip)
-            self.signals.result.emit(res)
+            res = get_ceidg_firma_by_nip(self.nip)
+            self.signals.result.emit((self.form, res))
         except Exception as e:
             self.signals.error.emit(e)
         finally:
@@ -41,8 +40,8 @@ def ceidg_fetch(form):
 
     form._ceidg_in_progress = True
 
-    worker = CEIDGWorker(nip)
-    worker.signals.result.connect(lambda data: ceidg_apply(form, data))
+    worker = CEIDGWorker(nip, form)
+    worker.signals.result.connect(lambda payload: ceidg_apply(*payload))
     worker.signals.error.connect(lambda err: ceidg_error(form, err))
     worker.signals.finished.connect(lambda: ceidg_finished(form))
 
@@ -55,16 +54,35 @@ def ceidg_apply(form, data: Dict[str, Any]):
     if not data or data.get("error"):
         return
 
+    # identyfikatory
     form.inputs["nazwa"].setText(data.get("nazwa", "") or "")
     form.inputs["nip"].setText(data.get("nip", "") or "")
     form.inputs["regon"].setText(data.get("regon", "") or "")
     form.inputs["kody_pkd"].setText(", ".join(data.get("pkd", []) or []))
 
-    form.inputs["miasto"].setText(data.get("miasto", "") or "")
-    form.inputs["kod_pocztowy"].setText(data.get("kod_pocztowy", "") or "")
-    form.inputs["ulica"].setText(data.get("ulica", "") or "")
-    form.inputs["adres_budynek"].setText(data.get("budynek", "") or "")
+    # adres działalności
+    form.inputs["dz_miasto"].setText(data.get("dz_miasto", "") or "")
+    form.inputs["dz_kod"].setText(data.get("dz_kod", "") or "")
+    form.inputs["dz_ulica"].setText(data.get("dz_ulica", "") or "")
+    form.inputs["dz_budynek"].setText(data.get("dz_budynek", "") or "")
+    form.inputs["dz_lokal"].setText(data.get("dz_lokal", "") or "")
+    form.inputs["dz_wojewodztwo"].setText(data.get("dz_wojewodztwo", "") or "")
+    form.inputs["dz_powiat"].setText(data.get("dz_powiat", "") or "")
+    form.inputs["dz_gmina"].setText(data.get("dz_gmina", "") or "")
+    form.inputs["dz_kraj"].setText(data.get("dz_kraj", "") or "")
 
+    # adres korespondencji
+    form.inputs["ko_miasto"].setText(data.get("koresp_miasto", "") or "")
+    form.inputs["ko_kod"].setText(data.get("koresp_kod", "") or "")
+    form.inputs["ko_ulica"].setText(data.get("koresp_ulica", "") or "")
+    form.inputs["ko_budynek"].setText(data.get("koresp_budynek", "") or "")
+    form.inputs["ko_lokal"].setText(data.get("koresp_lokal", "") or "")
+    form.inputs["ko_wojewodztwo"].setText(data.get("koresp_wojewodztwo", "") or "")
+    form.inputs["ko_powiat"].setText(data.get("koresp_powiat", "") or "")
+    form.inputs["ko_gmina"].setText(data.get("koresp_gmina", "") or "")
+    form.inputs["ko_kraj"].setText(data.get("koresp_kraj", "") or "")
+
+    # data rozpoczęcia DG
     ds = data.get("data_rozpoczecia")
     if ds:
         d = QDate.fromString(ds[:10], "yyyy-MM-dd")
@@ -80,6 +98,7 @@ def ceidg_finished(form):
     form._ceidg_in_progress = False
 
 
+# cenniki księgowe
 def get_ksiegowosc_options() -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
@@ -115,6 +134,7 @@ def get_ksiegowosc_by_key(klucz: str) -> Dict[str, Any] | None:
     return None
 
 
+# cenniki kadrowe
 def get_kadry_options() -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row

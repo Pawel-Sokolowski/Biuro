@@ -6,7 +6,7 @@ from app.utils.ui_imports import *
 from app.db.dao_employees import get_employee_info
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
-from app.companies.companies_ui import CompaniesPage
+from app.companies.company_ui import CompaniesPage
 from app.email.email_ui import EmailPage
 from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage

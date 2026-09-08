@@ -1,302 +1,461 @@
 # app/companies/company_form.py
-
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QComboBox, QCheckBox, QDateEdit
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QComboBox, QTabWidget, QFormLayout, QScrollArea, QDateEdit,
+    QMessageBox, QGroupBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QFont
 
-from app.companies import companies_logic
-from app.db.dao_companies import save_company
+from app.db.dao_companies import save_company, get_company
+from app.companies.ceidg_api import get_ceidg_firma_by_nip
+
+
+class NoWheelDateEdit(QDateEdit):
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class CompanyForm(QWidget):
-    def __init__(self, pracownik_id: int, company_data=None, parent=None):
+    def __init__(self, pracownik_id: int, company_data: dict | None, parent=None):
         super().__init__(parent)
-
         self.pracownik_id = pracownik_id
         self.company_data = company_data or {}
-        self.on_saved = None
 
-        self.inputs = {}
-        self._ceidg_in_progress = False
-        self._last_ceidg_raw = None
+        self.setMinimumWidth(900)
 
-        self._build_ui()
-
-    # ============================================================
-    #  BUDOWA UI
-    # ============================================================
-
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-
-        title = QLabel("Edytuj firmę" if self.company_data else "Dodaj firmę")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        layout.addWidget(title)
-
+        # główny scroll
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
 
-        # ------------------------------------------------------------
-        #  IDENTYFIKATORY
-        # ------------------------------------------------------------
-        group, grid = self._section("Identyfikatory")
+        container = QWidget()
+        scroll.setWidget(container)
 
-        nip_input = QLineEdit()
-        nip_input.setText(self.company_data.get("nip", ""))
-        self.inputs["nip"] = nip_input
+        main_layout = QVBoxLayout(container)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(25)
 
-        btn_ceidg = QPushButton("Pobierz z CEIDG")
-        btn_ceidg.clicked.connect(self._ceidg_fetch)
+        # ============================
+        # NAGŁÓWEK
+        # ============================
+        header = QLabel("Dane firmy")
+        header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        main_layout.addWidget(header)
 
-        nip_row = QWidget()
-        nip_row_l = QHBoxLayout(nip_row)
-        nip_row_l.addWidget(self._field("NIP", nip_input))
-        nip_row_l.addWidget(btn_ceidg)
+        # ============================
+        # DANE GŁÓWNE
+        # ============================
+        box_main = QGroupBox("Dane główne")
+        layout_main = QFormLayout()
+        layout_main.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout_main.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+        box_main.setLayout(layout_main)
 
-        grid.addWidget(nip_row, 0, 0, 1, 3)
+        # nazwa
+        self.f_nazwa = QLineEdit(self.company_data.get("nazwa", ""))
+        self.f_nazwa_skr = QLineEdit(self.company_data.get("nazwa_skrocona", ""))
 
-        self._add_line_to_grid(grid, 1, 0, "Nazwa", "nazwa")
-        self._add_line_to_grid(grid, 1, 1, "Nazwa skrócona", "nazwa_skrocona")
-        self._add_line_to_grid(grid, 2, 0, "REGON", "regon")
-        self._add_line_to_grid(grid, 2, 1, "KRS", "krs")
-        self._add_line_to_grid(grid, 2, 2, "PESEL", "pesel")
+        row_nazwa = QWidget()
+        row_nazwa_layout = QHBoxLayout(row_nazwa)
+        row_nazwa_layout.setContentsMargins(0, 0, 0, 0)
+        row_nazwa_layout.addWidget(QLabel("Nazwa"))
+        row_nazwa_layout.addWidget(self.f_nazwa)
+        row_nazwa_layout.addWidget(QLabel("Nazwa skrócona"))
+        row_nazwa_layout.addWidget(self.f_nazwa_skr)
+        layout_main.addRow(row_nazwa)
 
-        content_layout.addWidget(group)
+        # NIP + CEIDG
+        self.f_nip = QLineEdit(self.company_data.get("nip", ""))
+        self.btn_ceidg = QPushButton("Pobierz z CEIDG")
+        self.btn_ceidg.clicked.connect(self._fetch_ceidg)
 
-        # ------------------------------------------------------------
-        #  ADRES SIEDZIBY
-        # ------------------------------------------------------------
-        group, grid = self._section("Adres siedziby")
+        self.f_regon = QLineEdit(self.company_data.get("regon", ""))
 
-        self._add_line_to_grid(grid, 0, 0, "Miasto", "miasto")
-        self._add_line_to_grid(grid, 0, 1, "Kod pocztowy", "kod_pocztowy")
-        self._add_line_to_grid(grid, 1, 0, "Ulica", "ulica")
-        self._add_line_to_grid(grid, 1, 1, "Budynek / lokal", "adres_budynek")
+        row_nip = QWidget()
+        row_nip_layout = QHBoxLayout(row_nip)
+        row_nip_layout.setContentsMargins(0, 0, 0, 0)
+        row_nip_layout.addWidget(QLabel("NIP"))
+        row_nip_layout.addWidget(self.f_nip)
+        row_nip_layout.addWidget(self.btn_ceidg)
+        row_nip_layout.addWidget(QLabel("REGON"))
+        row_nip_layout.addWidget(self.f_regon)
+        layout_main.addRow(row_nip)
 
-        content_layout.addWidget(group)
+        # KRS + PESEL
+        self.f_krs = QLineEdit(self.company_data.get("krs", ""))
+        self.f_pesel = QLineEdit(self.company_data.get("pesel", ""))
 
-        # ------------------------------------------------------------
-        #  ADRESY DODATKOWE
-        # ------------------------------------------------------------
-        group, grid = self._section("Adresy dodatkowe")
+        row_krs = QWidget()
+        row_krs_layout = QHBoxLayout(row_krs)
+        row_krs_layout.setContentsMargins(0, 0, 0, 0)
+        row_krs_layout.addWidget(QLabel("KRS"))
+        row_krs_layout.addWidget(self.f_krs)
+        row_krs_layout.addWidget(QLabel("PESEL"))
+        row_krs_layout.addWidget(self.f_pesel)
+        layout_main.addRow(row_krs)
 
-        self._add_line_to_grid(grid, 0, 0, "Zam. miasto", "adres_zam_miasto")
-        self._add_line_to_grid(grid, 0, 1, "Zam. kod", "adres_zam_kod_pocztowy")
-        self._add_line_to_grid(grid, 1, 0, "Zam. ulica", "adres_zam_ulica")
-        self._add_line_to_grid(grid, 1, 1, "Koresp. miasto", "adres_koresp_miasto")
-        self._add_line_to_grid(grid, 2, 0, "Koresp. kod", "adres_koresp_kod_pocztowy")
-        self._add_line_to_grid(grid, 2, 1, "Koresp. ulica", "adres_koresp_ulica")
+        main_layout.addWidget(box_main)
 
-        content_layout.addWidget(group)
+        # ============================
+        # ADRESY — ZAKŁADKI
+        # ============================
+        self.tabs_address = QTabWidget()
+        self._build_address_tabs()
+        main_layout.addWidget(self.tabs_address)
 
-        # ------------------------------------------------------------
-        #  KONTAKT
-        # ------------------------------------------------------------
-        group, grid = self._section("Kontakt")
+        self._build_forma_dzial(main_layout)
+        self._build_kontakt(main_layout)
+        self._build_daty_zus(main_layout)
+        self._build_cenniki(main_layout)
 
-        self._add_line_to_grid(grid, 0, 0, "Email", "adres_email")
-        self._add_line_to_grid(grid, 0, 1, "Telefon", "nr_telefonu")
-        self._add_line_to_grid(grid, 1, 0, "Osoba kontaktowa", "osoba_kontaktowa")
+        btn_row = QWidget()
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.addStretch()
 
-        content_layout.addWidget(group)
-
-        # ------------------------------------------------------------
-        #  DANE CEIDG
-        # ------------------------------------------------------------
-        group, grid = self._section("Dane CEIDG")
-
-        self._add_line_to_grid(grid, 0, 0, "Forma działalności", "forma_dzialalnosci")
-
-        typ_combo = QComboBox()
-        typ_combo.addItems(["Ryczałt", "KPIR", "KH"])
-        typ_combo.setCurrentText(self.company_data.get("typ_rozliczenia", "Ryczałt"))
-        self.inputs["typ_rozliczenia"] = typ_combo
-        grid.addWidget(self._field("Rodzaj rozliczenia", typ_combo), 0, 1)
-
-        self._add_line_to_grid(grid, 1, 0, "Kody PKD", "kody_pkd")
-
-        vat_cb = QCheckBox("VAT czynny")
-        vat_cb.setChecked(bool(int(self.company_data.get("vat_czynny", 0))))
-        self.inputs["vat_czynny"] = vat_cb
-        grid.addWidget(self._field("Status VAT", vat_cb), 1, 1)
-
-        date_start = QDateEdit()
-        date_start.setCalendarPopup(True)
-        date_start.setDisplayFormat("yyyy-MM-dd")
-        ds = self.company_data.get("data_rozpoczecia_dg")
-        if ds:
-            date_start.setDate(QDate.fromString(ds[:10], "yyyy-MM-dd"))
-        self.inputs["data_rozpoczecia_dg"] = date_start
-        grid.addWidget(self._field("Data rozpoczęcia", date_start), 2, 0)
-
-        content_layout.addWidget(group)
-
-        group, grid = self._section("Kadry")
-
-        self._add_line_to_grid(grid, 0, 0, "Liczba UoP", "uop")
-        self._add_line_to_grid(grid, 0, 1, "Liczba UZ", "uz")
-        self._add_line_to_grid(grid, 1, 0, "Liczba UoD", "uod")
-
-        kadry_options = companies_logic.get_kadry_options()
-        self.kadry_items = []
-
-        kadry_widget = QWidget()
-        kadry_layout = QVBoxLayout(kadry_widget)
-
-        for opt in kadry_options:
-            cb = QCheckBox(f"{opt['nazwa']} — {opt['cena']} zł")
-            self.kadry_items.append({"checkbox": cb, "klucz": opt["klucz"]})
-            kadry_layout.addWidget(cb)
-
-        selected = (self.company_data.get("cennik_kadrowy") or "").split(",")
-        for item in self.kadry_items:
-            if item["klucz"] in selected:
-                item["checkbox"].setChecked(True)
-
-        grid.addWidget(self._field("Cennik kadrowy", kadry_widget), 2, 0, 1, 2)
-
-        self.cena_kadrowa_edit = QLineEdit()
-        self.cena_kadrowa_edit.setReadOnly(True)
-        self.cena_kadrowa_edit.setText(self.company_data.get("cena_kadrowa", "0.00"))
-        grid.addWidget(self._field("Cena kadrowa (wyliczona)", self.cena_kadrowa_edit), 3, 0)
-
-        self.inputs["uop"].textChanged.connect(self._recalculate_kadry)
-        self.inputs["uz"].textChanged.connect(self._recalculate_kadry)
-        self.inputs["uod"].textChanged.connect(self._recalculate_kadry)
-        for item in self.kadry_items:
-            item["checkbox"].stateChanged.connect(self._recalculate_kadry)
-
-        content_layout.addWidget(group)
-
-        group, grid = self._section("Faktura")
-
-        self._add_line_to_grid(grid, 0, 0, "Limit dokumentów", "limit_dokumentow")
-
-        ksieg_options = companies_logic.get_ksiegowosc_options()
-
-        self.cennik_ks_combo = QComboBox()
-        for opt in ksieg_options:
-            self.cennik_ks_combo.addItem(
-                f"{opt['klucz']} — {opt['netto']} zł netto",
-                opt["klucz"]
-            )
-
-        if self.company_data.get("cennik_ksiegowy"):
-            idx = self.cennik_ks_combo.findData(self.company_data["cennik_ksiegowy"])
-            if idx >= 0:
-                self.cennik_ks_combo.setCurrentIndex(idx)
-
-        self.inputs["cennik_ksiegowy"] = self.cennik_ks_combo
-        grid.addWidget(self._field("Cennik usług księgowych", self.cennik_ks_combo), 0, 1)
-
-        self.cena_ponad_limit_edit = QLineEdit()
-        self.cena_ponad_limit_edit.setReadOnly(True)
-        grid.addWidget(self._field("Cena ponad limit", self.cena_ponad_limit_edit), 1, 0)
-
-        self.cennik_ks_combo.currentIndexChanged.connect(self._update_ksiegowosc)
-
-        content_layout.addWidget(group)
-
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        # przyciski
-        btns = QHBoxLayout()
         btn_save = QPushButton("Zapisz")
-        btn_cancel = QPushButton("Anuluj")
         btn_save.clicked.connect(self._save)
-        btn_cancel.clicked.connect(self._cancel)
-        btns.addWidget(btn_save)
-        btns.addWidget(btn_cancel)
-        layout.addLayout(btns)
 
-    def _ceidg_fetch(self):
-        companies_logic.ceidg_fetch(self)
+        btn_cancel = QPushButton("Anuluj")
+        btn_cancel.clicked.connect(lambda: self.parent().close() if self.parent() else None)
 
-    def _update_ksiegowosc(self):
-        klucz = self.cennik_ks_combo.currentData()
-        if not klucz:
-            self.cena_ponad_limit_edit.setText("0.00")
+        btn_layout.addWidget(btn_save)
+        btn_layout.addWidget(btn_cancel)
+
+        main_layout.addWidget(btn_row)
+
+        # finalne osadzenie
+        final_layout = QVBoxLayout(self)
+        final_layout.addWidget(scroll)
+
+    # ============================
+    # CEIDG
+    # ============================
+    def _fetch_ceidg(self):
+        nip = self.f_nip.text().strip()
+        if not nip:
+            QMessageBox.warning(self, "Błąd", "Podaj NIP")
             return
 
-        opt = companies_logic.get_ksiegowosc_by_key(klucz)
-        if not opt:
-            self.cena_ponad_limit_edit.setText("0.00")
+        data = get_ceidg_firma_by_nip(nip)
+        if not data or data.get("error"):
+            QMessageBox.warning(self, "Błąd", "Nie znaleziono firmy w CEIDG")
             return
 
-        self.cena_ponad_limit_edit.setText(str(opt["ponad_limit"]))
+        self.f_nazwa.setText(data.get("nazwa", ""))
+        self.f_regon.setText(data.get("regon", ""))
+        self.f_krs.setText(data.get("krs", ""))
+        self.f_pesel.setText(data.get("pesel", ""))
+    # ============================
+    # ADRESY — ZAKŁADKI
+    # ============================
+    def _build_address_tabs(self):
+        self.tabs_address.clear()
 
-    def _recalculate_kadry(self):
-        try:
-            uop = int(self.inputs["uop"].text() or 0)
-            uz = int(self.inputs["uz"].text() or 0)
-            uod = int(self.inputs["uod"].text() or 0)
-        except:
+        # trzy zakładki
+        self.tab_dzial = QWidget()
+        self.tab_kor = QWidget()
+        self.tab_zam = QWidget()
+
+        self._build_address_tab(self.tab_dzial, "dzial")
+        self._build_address_tab(self.tab_kor, "kor")
+        self._build_address_tab(self.tab_zam, "zam")
+
+        self.tabs_address.addTab(self.tab_dzial, "Adres działalności")
+        self.tabs_address.addTab(self.tab_kor, "Adres korespondencji")
+        self.tabs_address.addTab(self.tab_zam, "Adres zamieszkania")
+
+    # ============================
+    # POJEDYNCZA ZAKŁADKA ADRESU
+    # ============================
+    def _build_address_tab(self, tab: QWidget, prefix: str):
+        layout = QFormLayout(tab)
+        layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # pola
+        setattr(self, f"{prefix}_kraj", QLineEdit(self.company_data.get(f"{prefix}_kraj", "")))
+        setattr(self, f"{prefix}_woj", QLineEdit(self.company_data.get(f"{prefix}_woj", "")))
+        setattr(self, f"{prefix}_powiat", QLineEdit(self.company_data.get(f"{prefix}_powiat", "")))
+        setattr(self, f"{prefix}_gmina", QLineEdit(self.company_data.get(f"{prefix}_gmina", "")))
+        setattr(self, f"{prefix}_miasto", QLineEdit(self.company_data.get(f"{prefix}_miasto", "")))
+        setattr(self, f"{prefix}_kod", QLineEdit(self.company_data.get(f"{prefix}_kod", "")))
+        setattr(self, f"{prefix}_ulica", QLineEdit(self.company_data.get(f"{prefix}_ulica", "")))
+        setattr(self, f"{prefix}_budynek", QLineEdit(self.company_data.get(f"{prefix}_budynek", "")))
+        setattr(self, f"{prefix}_lokal", QLineEdit(self.company_data.get(f"{prefix}_lokal", "")))
+
+        layout.addRow("Kraj", getattr(self, f"{prefix}_kraj"))
+        layout.addRow("Województwo", getattr(self, f"{prefix}_woj"))
+        layout.addRow("Powiat", getattr(self, f"{prefix}_powiat"))
+        layout.addRow("Gmina", getattr(self, f"{prefix}_gmina"))
+        layout.addRow("Miasto", getattr(self, f"{prefix}_miasto"))
+        layout.addRow("Kod pocztowy", getattr(self, f"{prefix}_kod"))
+        layout.addRow("Ulica", getattr(self, f"{prefix}_ulica"))
+        layout.addRow("Budynek", getattr(self, f"{prefix}_budynek"))
+        layout.addRow("Lokal", getattr(self, f"{prefix}_lokal"))
+
+        # kopiowanie adresów
+        btn_copy = QPushButton("Kopiuj z...")
+        btn_copy.clicked.connect(lambda: self._copy_address_dialog(prefix))
+        layout.addRow(btn_copy)
+
+    # ============================
+    # KOPIOWANIE ADRESÓW
+    # ============================
+    def _copy_address_dialog(self, target_prefix: str):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QListWidget
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Kopiuj adres")
+        dialog.resize(300, 200)
+
+        v = QVBoxLayout(dialog)
+        listw = QListWidget()
+        listw.addItem("Adres działalności")
+        listw.addItem("Adres korespondencji")
+        listw.addItem("Adres zamieszkania")
+        v.addWidget(listw)
+
+        btn = QPushButton("Kopiuj")
+        v.addWidget(btn)
+
+        def _copy():
+            idx = listw.currentRow()
+            if idx == -1:
+                return
+
+            source = ["dzial", "kor", "zam"][idx]
+            self._copy_address(source, target_prefix)
+            dialog.accept()
+
+        btn.clicked.connect(_copy)
+        dialog.exec()
+
+    def _copy_address(self, src: str, dst: str):
+        fields = ["kraj", "woj", "powiat", "gmina", "miasto", "kod", "ulica", "budynek", "lokal"]
+        for f in fields:
+            getattr(self, f"{dst}_{f}").setText(getattr(self, f"{src}_{f}").text())
+
+    # ============================
+    # FORMA DZIAŁALNOŚCI I OPODATKOWANIE
+    # ============================
+    def _build_forma_dzial(self, main_layout: QVBoxLayout):
+        box = QGroupBox("Forma działalności i opodatkowanie")
+        form = QFormLayout(box)
+
+        self.f_forma = QComboBox()
+        self.f_forma.addItems(["JDG", "Spółka z o.o.", "Spółka cywilna", "Inna"])
+        self.f_forma.setCurrentText(self.company_data.get("forma_dzial", "JDG"))
+
+        self.f_opodatk = QComboBox()
+        self.f_opodatk.addItems(["KPiR", "Ryczałt", "Księgi rachunkowe"])
+        self.f_opodatk.setCurrentText(self.company_data.get("forma_opodatk", "KPiR"))
+
+        self.f_analityka = QLineEdit(self.company_data.get("analityka_fk", ""))
+
+        form.addRow("Forma działalności", self.f_forma)
+        form.addRow("Forma opodatkowania", self.f_opodatk)
+        form.addRow("Analityka FK", self.f_analityka)
+
+        main_layout.addWidget(box)
+
+    # ============================
+    # KONTAKT
+    # ============================
+    def _build_kontakt(self, main_layout: QVBoxLayout):
+        box = QGroupBox("Kontakt")
+        form = QFormLayout(box)
+
+        self.f_kont_imie = QLineEdit(self.company_data.get("kont_imie", ""))
+        self.f_kont_nazw = QLineEdit(self.company_data.get("kont_nazw", ""))
+        self.f_kont_email = QLineEdit(self.company_data.get("kont_email", ""))
+        self.f_kont_tel = QLineEdit(self.company_data.get("kont_tel", ""))
+
+        form.addRow("Imię", self.f_kont_imie)
+        form.addRow("Nazwisko", self.f_kont_nazw)
+        form.addRow("Email", self.f_kont_email)
+        form.addRow("Telefon", self.f_kont_tel)
+
+        main_layout.addWidget(box)
+    # ============================
+    # DATY DZIAŁALNOŚCI I ZUS
+    # ============================
+    def _build_daty_zus(self, main_layout: QVBoxLayout):
+        box = QGroupBox("Daty działalności i ZUS")
+        form = QFormLayout(box)
+
+        # start działalności
+        self.f_start = NoWheelDateEdit()
+        self.f_start.setCalendarPopup(True)
+        if self.company_data.get("start_dzial"):
+            self.f_start.setDate(QDate.fromString(self.company_data["start_dzial"], "yyyy-MM-dd"))
+        else:
+            self.f_start.setDate(QDate(2000, 1, 1))  # neutralna data
+
+        # rozpoczęcie obsługi
+        self.f_obs = NoWheelDateEdit()
+        self.f_obs.setCalendarPopup(True)
+        if self.company_data.get("start_obs"):
+            self.f_obs.setDate(QDate.fromString(self.company_data["start_obs"], "yyyy-MM-dd"))
+        else:
+            self.f_obs.setDate(QDate(2000, 1, 1))
+
+        # ZUS forma
+        self.zus_ulga = QCheckBox("Ulga na start")
+        self.zus_pref = QCheckBox("ZUS preferencyjny")
+        self.zus_maly = QCheckBox("Mały ZUS")
+        self.zus_a1 = QCheckBox("A1")
+
+        # koniec ulg
+        self.f_koniec_ulgi = NoWheelDateEdit()
+        self.f_koniec_ulgi.setCalendarPopup(True)
+        self.f_koniec_ulgi.setDate(QDate(2000, 1, 1))
+
+        self.f_koniec_a1 = NoWheelDateEdit()
+        self.f_koniec_a1.setCalendarPopup(True)
+        self.f_koniec_a1.setDate(QDate(2000, 1, 1))
+
+        # eventy
+        self.zus_ulga.stateChanged.connect(self._recalc_zus)
+        self.zus_pref.stateChanged.connect(self._recalc_zus)
+        self.zus_maly.stateChanged.connect(self._recalc_zus)
+        self.zus_a1.stateChanged.connect(self._recalc_zus)
+        self.f_start.dateChanged.connect(self._recalc_zus)
+
+        # układ
+        form.addRow("Start działalności", self.f_start)
+        form.addRow("Rozpoczęcie obsługi", self.f_obs)
+
+        zus_row = QWidget()
+        zus_layout = QHBoxLayout(zus_row)
+        zus_layout.setContentsMargins(0, 0, 0, 0)
+        zus_layout.addWidget(self.zus_ulga)
+        zus_layout.addWidget(self.zus_pref)
+        zus_layout.addWidget(self.zus_maly)
+        zus_layout.addWidget(self.zus_a1)
+        form.addRow("Forma ZUS", zus_row)
+
+        form.addRow("Koniec ulg", self.f_koniec_ulgi)
+        form.addRow("Koniec A1", self.f_koniec_a1)
+
+        main_layout.addWidget(box)
+
+    # ============================
+    # WYLICZANIE ZUS
+    # ============================
+    def _recalc_zus(self):
+        start = self.f_start.date()
+        if not start.isValid():
             return
 
-        selected_keys = [
-            item["klucz"]
-            for item in self.kadry_items
-            if item["checkbox"].isChecked()
-        ]
+        # ulga na start — 6 miesięcy
+        if self.zus_ulga.isChecked():
+            koniec = start.addMonths(6)
+            self.f_koniec_ulgi.setDate(koniec)
 
-        total = companies_logic.calculate_kadry_price(uop, uz, uod, selected_keys)
-        self.cena_kadrowa_edit.setText(f"{total:.2f}")
+        # preferencyjny — 24 miesiące
+        elif self.zus_pref.isChecked():
+            koniec = start.addMonths(24)
+            self.f_koniec_ulgi.setDate(koniec)
 
+        # mały ZUS — 36 miesięcy
+        elif self.zus_maly.isChecked():
+            koniec = start.addMonths(36)
+            self.f_koniec_ulgi.setDate(koniec)
+
+        # brak ulg
+        else:
+            self.f_koniec_ulgi.setDate(QDate(2000, 1, 1))
+
+        # A1 — 12 miesięcy
+        if self.zus_a1.isChecked():
+            koniec_a1 = start.addMonths(12)
+            self.f_koniec_a1.setDate(koniec_a1)
+        else:
+            self.f_koniec_a1.setDate(QDate(2000, 1, 1))
+
+    # ============================
+    # CENNIKI I LIMITY
+    # ============================
+    def _build_cenniki(self, main_layout: QVBoxLayout):
+        box = QGroupBox("Cenniki i limity")
+        form = QFormLayout(box)
+
+        self.f_limit_ks = QLineEdit(str(self.company_data.get("limit_ksiegowosc", "")))
+        self.f_limit_kadry = QLineEdit(str(self.company_data.get("limit_kadry", "")))
+        self.f_limit_ryczalt = QLineEdit(str(self.company_data.get("limit_ryczalt", "")))
+
+        form.addRow("Limit księgowość", self.f_limit_ks)
+        form.addRow("Limit kadry", self.f_limit_kadry)
+        form.addRow("Limit ryczałt", self.f_limit_ryczalt)
+
+        main_layout.addWidget(box)
+
+    # ============================
+    # ZAPIS
+    # ============================
     def _save(self):
-        payload = {}
+        payload = {
+            "nazwa": self.f_nazwa.text(),
+            "nazwa_skrocona": self.f_nazwa_skr.text(),
+            "nip": self.f_nip.text(),
+            "regon": self.f_regon.text(),
+            "krs": self.f_krs.text(),
+            "pesel": self.f_pesel.text(),
 
-        for key, widget in self.inputs.items():
-            if isinstance(widget, QLineEdit):
-                payload[key] = widget.text().strip()
-            elif isinstance(widget, QComboBox):
-                payload[key] = widget.currentData() or widget.currentText()
-            elif isinstance(widget, QCheckBox):
-                payload[key] = 1 if widget.isChecked() else 0
-            elif isinstance(widget, QDateEdit):
-                payload[key] = widget.date().toString("yyyy-MM-dd")
+            # adresy
+            "dzial_kraj": self.dzial_kraj.text(),
+            "dzial_woj": self.dzial_woj.text(),
+            "dzial_powiat": self.dzial_powiat.text(),
+            "dzial_gmina": self.dzial_gmina.text(),
+            "dzial_miasto": self.dzial_miasto.text(),
+            "dzial_kod": self.dzial_kod.text(),
+            "dzial_ulica": self.dzial_ulica.text(),
+            "dzial_budynek": self.dzial_budynek.text(),
+            "dzial_lokal": self.dzial_lokal.text(),
 
-        selected_keys = [
-            item["klucz"]
-            for item in self.kadry_items
-            if item["checkbox"].isChecked()
-        ]
-        payload["cennik_kadrowy"] = ",".join(selected_keys)
+            "kor_kraj": self.kor_kraj.text(),
+            "kor_woj": self.kor_woj.text(),
+            "kor_powiat": self.kor_powiat.text(),
+            "kor_gmina": self.kor_gmina.text(),
+            "kor_miasto": self.kor_miasto.text(),
+            "kor_kod": self.kor_kod.text(),
+            "kor_ulica": self.kor_ulica.text(),
+            "kor_budynek": self.kor_budynek.text(),
+            "kor_lokal": self.kor_lokal.text(),
 
-        payload["cena_kadrowa"] = self.cena_kadrowa_edit.text().strip()
+            "zam_kraj": self.zam_kraj.text(),
+            "zam_woj": self.zam_woj.text(),
+            "zam_powiat": self.zam_powiat.text(),
+            "zam_gmina": self.zam_gmina.text(),
+            "zam_miasto": self.zam_miasto.text(),
+            "zam_kod": self.zam_kod.text(),
+            "zam_ulica": self.zam_ulica.text(),
+            "zam_budynek": self.zam_budynek.text(),
+            "zam_lokal": self.zam_lokal.text(),
 
-        if self.company_data.get("id"):
-            payload["id"] = self.company_data["id"]
+            # forma działalności
+            "forma_dzial": self.f_forma.currentText(),
+            "forma_opodatk": self.f_opodatk.currentText(),
+            "analityka_fk": self.f_analityka.text(),
+
+            # kontakt
+            "kont_imie": self.f_kont_imie.text(),
+            "kont_nazw": self.f_kont_nazw.text(),
+            "kont_email": self.f_kont_email.text(),
+            "kont_tel": self.f_kont_tel.text(),
+
+            # daty
+            "start_dzial": self.f_start.date().toString("yyyy-MM-dd"),
+            "start_obs": self.f_obs.date().toString("yyyy-MM-dd"),
+            "koniec_ulgi": self.f_koniec_ulgi.date().toString("yyyy-MM-dd"),
+            "koniec_a1": self.f_koniec_a1.date().toString("yyyy-MM-dd"),
+
+            # limity
+            "limit_ksiegowosc": self.f_limit_ks.text(),
+            "limit_kadry": self.f_limit_kadry.text(),
+            "limit_ryczalt": self.f_limit_ryczalt.text(),
+        }
 
         save_company(payload)
-
-        if self.on_saved:
-            self.on_saved()
-
-    def _cancel(self):
-        if self.on_saved:
-            self.on_saved()
-
-    def _section(self, title: str):
-        group = QGroupBox(title)
-        grid = QGridLayout(group)
-        return group, grid
-
-    def _field(self, label: str, widget: QWidget):
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setContentsMargins(0, 0, 0, 0)
-        l.addWidget(QLabel(label))
-        l.addWidget(widget)
-        return w
-
-    def _add_line_to_grid(self, grid, row, col, label, key):
-        w = QLineEdit()
-        w.setText(str(self.company_data.get(key, "")))
-        self.inputs[key] = w
-        grid.addWidget(self._field(label, w), row, col)
+        QMessageBox.information(self, "Sukces", "Dane firmy zapisane")
+        if self.parent():
+            self.parent().close()

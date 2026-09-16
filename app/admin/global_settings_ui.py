@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QMessageBox,
     QLineEdit, QSpinBox, QComboBox, QFileDialog, QListWidget, QListWidgetItem
 )
-
+from app.utils.importers import import_cennik_from_excel
 from app.admin.global_settings_logic import GlobalSettingsLogic
 
 
@@ -594,7 +594,7 @@ class GlobalSettingsPage(QWidget):
         btn_row = QHBoxLayout()
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self._refresh_pricing_ksiegowosc)
-        btn_import = QPushButton("Importuj cennik z CSV")
+        btn_import = QPushButton("Importuj cennik z Excel")
         btn_import.clicked.connect(self._import_pricing_ksiegowosc)
         btn_row.addWidget(btn_refresh)
         btn_row.addWidget(btn_import)
@@ -610,16 +610,61 @@ class GlobalSettingsPage(QWidget):
         rows = self.logic.get_global_pricing()
         self.pricing_table_ksiegowosc.setRowCount(0)
 
+        def row_get(r, *candidates, default=None):
+            # sqlite3.Row nie ma .get, więc sprawdzamy klucze bezpośrednio
+            try:
+                keys = r.keys()
+            except Exception:
+                return default
+            for name in candidates:
+                if name in keys:
+                    return r[name]
+            return default
+
+        def to_float_safe(v, default=0.0):
+            try:
+                if v is None or v == "":
+                    return float(default)
+                return float(v)
+            except Exception:
+                return float(default)
+
         for r in rows:
             row_idx = self.pricing_table_ksiegowosc.rowCount()
             self.pricing_table_ksiegowosc.insertRow(row_idx)
 
-            self.pricing_table_ksiegowosc.setItem(row_idx, 0, QTableWidgetItem(opis_cennika_z_klucza(r["klucz"])))
-            self.pricing_table_ksiegowosc.setItem(row_idx, 1, QTableWidgetItem(str(r["cena_netto_ksiegowosc"])))
-            self.pricing_table_ksiegowosc.setItem(row_idx, 2, QTableWidgetItem(str(r["cena_za_dokument_ponad_limit"])))
-            self.pricing_table_ksiegowosc.setItem(row_idx, 3, QTableWidgetItem(str(r["zdrowotna"])))
-            self.pricing_table_ksiegowosc.setItem(row_idx, 4, QTableWidgetItem(str(r["netto"])))
-            self.pricing_table_ksiegowosc.setItem(row_idx, 5, QTableWidgetItem(str(r["brutto"])))
+            # Pobieramy możliwe nazwy pól zwracanych przez DAO
+            klucz = row_get(r, "klucz", "key", "typ", default="")
+            netto_val = row_get(r, "netto", "cena_netto_ksiegowosc", default=0)
+            za_przekroczenie_val = row_get(
+                r,
+                "za_przekroczenie_limitu_netto",
+                "cena_za_dokument_ponad_limit",
+                "cena_za_dokument",
+                default=0
+            )
+            zdrowotna_val = row_get(r, "zdrowotna", default=0)
+            brutto_val = row_get(r, "brutto", default=0)
+
+            # Bezpieczne konwersje
+            netto_f = to_float_safe(netto_val, 0.0)
+            za_przekroczenie_f = to_float_safe(za_przekroczenie_val, 0.0)
+            zdrowotna_f = to_float_safe(zdrowotna_val, 0.0)
+            brutto_f = to_float_safe(brutto_val, 0.0)
+
+            # Opis cennika — jeśli funkcja rzuci wyjątek, używamy klucza
+            try:
+                opis = opis_cennika_z_klucza(klucz) if klucz else ""
+            except Exception:
+                opis = klucz or ""
+
+            # Ustawienie komórek w tabeli (formatowane jako liczby z dwoma miejscami po przecinku)
+            self.pricing_table_ksiegowosc.setItem(row_idx, 0, QTableWidgetItem(str(opis)))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 1, QTableWidgetItem(f"{netto_f:.2f}"))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 2, QTableWidgetItem(f"{za_przekroczenie_f:.2f}"))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 3, QTableWidgetItem(f"{zdrowotna_f:.2f}"))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 4, QTableWidgetItem(f"{netto_f:.2f}"))
+            self.pricing_table_ksiegowosc.setItem(row_idx, 5, QTableWidgetItem(f"{brutto_f:.2f}"))
 
     def _import_pricing_ksiegowosc(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -630,10 +675,19 @@ class GlobalSettingsPage(QWidget):
         )
         if not path:
             return
+
         try:
-            self.logic.import_global_pricing_from_csv(path)
+            # używamy importera EXCEL z DAO
+            from app.utils.importers import import_cennik_from_excel
+
+            result = import_cennik_from_excel(path)
+
+            if result["errors"]:
+                raise Exception("\n".join(result["errors"]))
+
             self._refresh_pricing_ksiegowosc()
             QMessageBox.information(self, "Cennik", "Cennik księgowości został zaimportowany.")
+
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zaimportować cennika: {e}")
 

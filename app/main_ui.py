@@ -15,6 +15,10 @@ from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage
 from app.admin.global_settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
+import datetime
+print("DEBUG:", datetime)
+print("DEBUG:", getattr(datetime, "now", None))
+print("DEBUG FILE:", getattr(datetime, "__file__", None))
 
 logger = logging.getLogger(__name__)
 

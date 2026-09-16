@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+import datetime
 from typing import Optional
 
 from app.utils.ui_imports import *
@@ -87,7 +87,7 @@ class FakturyPage(QWidget):
 
         # Month selector
         self.miesiac_edit = QLineEdit()
-        self.miesiac_edit.setText(datetime.now().strftime("%Y-%m"))
+        self.miesiac_edit.setText(datetime.datetime.now().strftime("%Y-%m"))
         filter_row.addWidget(QLabel("Miesiąc:"))
         filter_row.addWidget(self.miesiac_edit, 1)
 
@@ -100,7 +100,7 @@ class FakturyPage(QWidget):
         btn_generate.clicked.connect(self._generate_invoice)
         filter_row.addWidget(btn_generate)
 
-        btn_export = create_secondary_button(💾 Eksportuj zaznaczone")
+        btn_export = create_secondary_button("💾 Eksportuj zaznaczone")
         btn_export.clicked.connect(self._export_selected)
         filter_row.addWidget(btn_export)
 

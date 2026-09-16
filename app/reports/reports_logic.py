@@ -1,4 +1,3 @@
-# app/reports/reports_logic.py
 import sqlite3
 from typing import List, Dict, Any
 from app.config import DB_NAME
@@ -24,7 +23,7 @@ def get_all_companies() -> List[Dict[str, Any]]:
 # RANGE MIESIĘCY
 # ============================================================
 def get_months_range(start: str, end: str) -> List[str]:
-    from datetime import datetime
+    import datetime
     out = []
 
     s = datetime.strptime(start, "%Y-%m")
@@ -156,9 +155,9 @@ def compare_companies(firma_ids: List[int], miesiac: str) -> Dict[str, Any]:
 
 
 # ============================================================
-# ZAROBEK NA GODZINĘ — POPRAWIONY
+# ZAROBEK NA GODZINĘ — POPRAWIONY (JEDEN MIESIĄC)
 # ============================================================
-def build_profit_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
+def build_profit_report(firma_ids: List[int], miesiac: str) -> Dict[str, Any]:
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -166,42 +165,40 @@ def build_profit_report(firma_ids: List[int], months: List[str]) -> Dict[str, An
     out = {}
 
     for fid in firma_ids:
-        out[fid] = {}
+        cur.execute("""
+            SELECT sekundy_ksiegowosc, sekundy_kadry, wartosc_uslug
+            FROM statusy_miesieczne
+            WHERE firma_id = ? AND miesiac = ?
+        """, (fid, miesiac))
 
-        for miesiac in months:
-            cur.execute("""
-                SELECT sekundy_ksiegowosc, sekundy_kadry, wartosc_uslug
-                FROM statusy_miesieczne
-                WHERE firma_id = ? AND miesiac = ?
-            """, (fid, miesiac))
+        row = cur.fetchone()
 
-            row = cur.fetchone()
-
-            if not row:
-                out[fid][miesiac] = {
-                    "profit_kadry": 0,
-                    "profit_ksiegowosc": 0
-                }
-                continue
-
-            sek_ks = float(row["sekundy_ksiegowosc"] or 0)
-            sek_kad = float(row["sekundy_kadry"] or 0)
-            wartosc = float(row["wartosc_uslug"] or 0)
-
-            extra = get_extra_services_value(fid, miesiac)
-            wartosc += extra
-
-            wart_ks = wartosc * 0.5
-            wart_kad = wartosc * 0.5
-
-            profit_ks = wart_ks / (sek_ks / 3600) if sek_ks > 0 else 0
-            profit_kad = wart_kad / (sek_kad / 3600) if sek_kad > 0 else 0
-
-            out[fid][miesiac] = {
-                "profit_kadry": profit_kad,
-                "profit_ksiegowosc": profit_ks,
-                "extra": extra
+        if not row:
+            out[fid] = {
+                "profit_kadry": 0,
+                "profit_ksiegowosc": 0,
+                "extra": 0
             }
+            continue
+
+        sek_ks = float(row["sekundy_ksiegowosc"] or 0)
+        sek_kad = float(row["sekundy_kadry"] or 0)
+        wartosc = float(row["wartosc_uslug"] or 0)
+
+        extra = get_extra_services_value(fid, miesiac)
+        wartosc += extra
+
+        wart_ks = wartosc * 0.5
+        wart_kad = wartosc * 0.5
+
+        profit_ks = wart_ks / (sek_ks / 3600) if sek_ks > 0 else 0
+        profit_kad = wart_kad / (sek_kad / 3600) if sek_kad > 0 else 0
+
+        out[fid] = {
+            "profit_kadry": profit_kad,
+            "profit_ksiegowosc": profit_ks,
+            "extra": extra
+        }
 
     conn.close()
     return out

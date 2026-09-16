@@ -1,12 +1,11 @@
-# app/monthly_view/monthly_view_logic.py
-import datetime
 import sqlite3
-from datetime import date, timedelta
-from typing import Optional, Dict, Any, List
+import datetime
+from typing import List, Dict, Any, Optional
 
 from app.db.dao_conn import get_conn
-from app.db.dao_companies import get_company, save_company
 from app.db.dao_monthly import get_month_status, save_month_status
+from app.db.dao_companies import get_company, save_company
+from app.global_utils.calculator import oblicz_miesieczny_koszt
 
 
 class MonthlyViewLogic:
@@ -49,7 +48,6 @@ class MonthlyViewLogic:
         result = [(0, "Wszyscy")]
         result.extend([(r["id"], r["label"]) for r in rows])
         return result
-
     # główna lista miesięczna
     def get_monthly_rows(self, selected_month: str, selected_employee: Optional[int], selected_status: str) -> List[Dict[str, Any]]:
         conn = get_conn()
@@ -117,6 +115,7 @@ class MonthlyViewLogic:
             result.append(r)
 
         return result
+
     # format czasu
     def format_seconds(self, sekundy: int) -> str:
         return str(datetime.timedelta(seconds=sekundy or 0))
@@ -142,9 +141,12 @@ class MonthlyViewLogic:
                 "wartosc_uslug": 0.0
             })
 
+    def get_monthly_status(self, month: str, typ: str, status: str, emp_id: Optional[int]):
+        return self.get_monthly_rows(month, emp_id, status)
+
     # unified stoper
     def toggle_stoper(self, firma_id: int, typ: str):
-        now = datetime.datetime.now()
+        now = datetime.date.now()
         self._ensure_month_status(firma_id)
 
         conn = get_conn()
@@ -217,15 +219,14 @@ class MonthlyViewLogic:
             conn.commit()
             conn.close()
             return
-
     # okna
-    def open_notes_window(self, firma_id: int):
-        from app.monthly_view.monthly_view_ui import InlineNotesWindow
-        InlineNotesWindow(firma_id).exec()
-
-    def open_extra_service_window(self, firma_id: int):
-        from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
-        InlineExtraServiceWindow(firma_id, self.aktualny_miesiac).exec()
+    # def open_notes_window(self, firma_id: int):
+    #     from app.monthly_view.monthly_view_ui import InlineNotesWindow
+    #     InlineNotesWindow(firma_id).exec()
+    #
+    # def open_extra_service_window(self, firma_id: int):
+    #     from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
+    #     InlineExtraServiceWindow(firma_id, self.aktualny_miesiac).exec()
 
     # firma helpers
     def _get_company_data(self, firma_id: int) -> Optional[Dict[str, Any]]:
@@ -258,9 +259,10 @@ class MonthlyViewLogic:
         form.on_saved = _on_saved
         layout.addWidget(form)
         dialog.exec()
+
     # zawieszenia — ręczne
     def mark_company_suspended_manual(self, firma_id: int):
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        today = datetime.date.today().strftime("%Y-%m-%d")
         conn = get_conn()
         cur = conn.cursor()
 
@@ -304,6 +306,7 @@ class MonthlyViewLogic:
         day = today.day
         last_day = self._last_day_of_month(today)
 
+        # tylko 1 dzień miesiąca lub ostatni
         if day not in (1, last_day):
             return
 
@@ -342,7 +345,7 @@ class MonthlyViewLogic:
 
         conn.close()
 
-    # ostatni dzień miesiąca
-    def _last_day_of_month(self, d: date) -> int:
-        next_month = d.replace(day=28) + timedelta(days=4)
-        return (next_month - timedelta(days=next_month.day)).day
+
+    def _last_day_of_month(self, d: datetime.date) -> int:
+        next_month = d.replace(day=28) + datetime.timedelta(days=4)
+        return (next_month - datetime.timedelta(days=next_month.day)).day

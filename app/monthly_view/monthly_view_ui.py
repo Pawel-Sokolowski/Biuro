@@ -1,7 +1,7 @@
 """Monthly view page UI - company status tracking."""
 
 import logging
-from datetime import datetime, timedelta
+import datetime
 from typing import Optional
 
 from app.utils.ui_imports import *
@@ -31,31 +31,28 @@ class MonthlyViewPage(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        """Build monthly view UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(MARGIN_NORMAL, MARGIN_NORMAL, MARGIN_NORMAL, MARGIN_NORMAL)
         layout.setSpacing(SPACING_NORMAL)
 
-        # Title
         title = create_section_header("📅 Widok miesięczny")
         layout.addWidget(title)
 
-        # Header controls
         header_row = QWidget()
         header_layout = QHBoxLayout(header_row)
         header_layout.setSpacing(SPACING_NORMAL)
 
-        # Month selector
         lbl_month = QLabel("Miesiąc rozliczeniowy:")
         set_font(lbl_month, 11, bold=True)
         header_layout.addWidget(lbl_month)
 
-        today = datetime.today()
+        today = datetime.date.today()
+
         self.month_selector = QComboBox()
         months = []
 
         for i in range(0, 24):
-            d = (today.replace(day=1) - timedelta(days=30 * i))
+            d = (today.replace(day=1) - datetime.timedelta(days=30 * i))
             months.append(d.strftime("%Y-%m"))
 
         months = list(dict.fromkeys(months))
@@ -66,7 +63,6 @@ class MonthlyViewPage(QWidget):
         self.month_selector.currentTextChanged.connect(self._change_month)
         header_layout.addWidget(self.month_selector)
 
-        # Employee filter
         lbl_emp = QLabel("Filtr pracownika:")
         set_font(lbl_emp, 11, bold=True)
         header_layout.addWidget(lbl_emp)
@@ -78,7 +74,6 @@ class MonthlyViewPage(QWidget):
         )
         header_layout.addWidget(self.month_employee_filter)
 
-        # Status filter
         lbl_status = QLabel("Status firmy:")
         set_font(lbl_status, 11, bold=True)
         header_layout.addWidget(lbl_status)
@@ -91,7 +86,6 @@ class MonthlyViewPage(QWidget):
         )
         header_layout.addWidget(self.status_filter)
 
-        # Refresh button
         btn_refresh = create_primary_button("🔃 Odśwież")
         btn_refresh.clicked.connect(self.refresh_tables)
         header_layout.addWidget(btn_refresh)
@@ -99,10 +93,8 @@ class MonthlyViewPage(QWidget):
         header_layout.addStretch()
         layout.addWidget(header_row)
 
-        # Tabs
         self.month_tabs = QTabWidget()
 
-        # Accounting tab
         tab_ks = QWidget()
         ks_layout = QVBoxLayout(tab_ks)
         ks_layout.setContentsMargins(0, 0, 0, 0)
@@ -121,7 +113,6 @@ class MonthlyViewPage(QWidget):
         ks_layout.addWidget(self.table_ksiegowosc)
         self.month_tabs.addTab(tab_ks, "📋 Księgowość")
 
-        # HR tab
         tab_kadry = QWidget()
         kadry_layout = QVBoxLayout(tab_kadry)
         kadry_layout.setContentsMargins(0, 0, 0, 0)
@@ -144,59 +135,52 @@ class MonthlyViewPage(QWidget):
         self.refresh_tables()
 
     def _change_month(self):
-        """Handle month change."""
         logger.debug(f"Month changed to {self.month_selector.currentText()}")
         self.refresh_tables()
 
     def refresh_tables(self):
-        """Refresh both tables based on current filters."""
         try:
             month = self.month_selector.currentText()
             status = self.status_filter.currentText()
             emp_filter = self.month_employee_filter.currentData()
 
-            # Refresh accounting table
             self._refresh_ksiegowosc(month, status, emp_filter)
-            # Refresh HR table
             self._refresh_kadry(month, status, emp_filter)
-            
+
             logger.info(f"Tables refreshed for {month}")
         except Exception as e:
             logger.error(f"Failed to refresh tables: {e}")
             QMessageBox.critical(self, "Błąd", f"Nie udało się odświeżyć tabel: {str(e)}")
 
     def _refresh_ksiegowosc(self, month: str, status: str, emp_id: Optional[int]):
-        """Refresh accounting table."""
         try:
             rows = self.logic.get_monthly_status(month, "ksiegowosc", status, emp_id)
             self.table_ksiegowosc.setRowCount(0)
-            
+
             for row_idx, row_data in enumerate(rows):
                 self.table_ksiegowosc.insertRow(row_idx)
                 for col_idx, value in enumerate(row_data):
                     item = QTableWidgetItem(str(value))
                     self.table_ksiegowosc.setItem(row_idx, col_idx, item)
-            
+
             logger.debug(f"Loaded {len(rows)} accounting rows")
         except Exception as e:
             logger.error(f"Failed to refresh accounting table: {e}")
 
     def _refresh_kadry(self, month: str, status: str, emp_id: Optional[int]):
-        """Refresh HR table."""
         try:
             rows = self.logic.get_monthly_status(month, "kadry", status, emp_id)
             self.table_kadry.setRowCount(0)
-            
+
             for row_idx, row_data in enumerate(rows):
                 self.table_kadry.insertRow(row_idx)
                 for col_idx, value in enumerate(row_data):
                     item = QTableWidgetItem(str(value))
                     self.table_kadry.setItem(row_idx, col_idx, item)
-            
+
             logger.debug(f"Loaded {len(rows)} HR rows")
         except Exception as e:
             logger.error(f"Failed to refresh HR table: {e}")
 
     def on_table_cell_click(self, row: int, col: int):
-        """Handle table cell click."""
         logger.debug(f"Table cell clicked: row={row}, col={col}")

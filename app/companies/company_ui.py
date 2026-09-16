@@ -53,7 +53,7 @@ class CompaniesPage(QWidget):
         filter_row.setSpacing(SPACING_NORMAL)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Szukaj firmy..."
+        self.search_input.setPlaceholderText("🔍 Szukaj firmy...")
         self.search_input.textChanged.connect(self._refresh_companies)
         filter_row.addWidget(self.search_input, 2)
 

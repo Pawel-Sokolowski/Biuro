@@ -1,14 +1,16 @@
+import csv
+
 import openpyxl
 import sqlite3
 import time
 import re
 from typing import Dict, Any
-
+import os
 from app.utils.parsing import normalize_identifier, resolve_employee_ids
 from app.companies.helpers import _get_cell, parse_num
 from app.config import DB_NAME
 
-
+#app/utils/importers.py
 # ============================================================
 #  PARSER CENNIKÓW TEKSTOWYCH (dla opisów w plikach firm)
 # ============================================================
@@ -120,20 +122,17 @@ def import_companies_from_excel_file(filepath: str, db_path: str) -> Dict[str, A
                 if src in header_index:
                     payload[dst] = row_values[header_index[src]]
 
-            # Przypisani pracownicy
             assigned_raw = row_values[header_index["Przypisani pracownicy"]] if "Przypisani pracownicy" in header_index else None
             payload["assigned_employee_ids"], unresolved = resolve_employee_ids(cursor, assigned_raw)
 
             if unresolved:
                 warnings.append(f"Wiersz {row_number}: nie znaleziono pracowników {', '.join(unresolved)}.")
 
-            # Nazwa firmy
             company_name = str(payload.get("nazwa", "")).strip()
             if not company_name:
                 warnings.append(f"Wiersz {row_number}: pominięto pustą nazwę firmy.")
                 continue
 
-            # PARSOWANIE CENNIKÓW TEKSTOWYCH (jeśli są)
             cennik_ksiegowy = parse_cennik_text(str(payload.get("cennik_ksiegowy", "")))
             cennik_kadrowy = parse_cennik_text(str(payload.get("cennik_kadrowy", "")))
             cennik_czasowy = parse_cennik_text(str(payload.get("cennik_czasowy", "")))
@@ -151,7 +150,6 @@ def import_companies_from_excel_file(filepath: str, db_path: str) -> Dict[str, A
                 "ryczalt_czasowy": cennik_czasowy.get("ryczalt")
             })
 
-            # NIP
             normalized_nip = normalize_identifier(payload.get("nip"), {10})
             company_id = None
 
@@ -160,7 +158,6 @@ def import_companies_from_excel_file(filepath: str, db_path: str) -> Dict[str, A
                 row = cursor.fetchone()
                 company_id = row[0] if row else None
 
-            # UPDATE / INSERT
             if company_id:
                 cursor.execute("""
                     UPDATE firmy SET
@@ -204,28 +201,42 @@ def parse_num(val):
     except:
         return None
 
-
-def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME):
+def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME) -> Dict[str, Any]:
     """
-    Importuje cennik zgodnie z kolumnami:
-    Klucz, cena netto 2024, wzrost ilości dokumentów, cena za dokument,
-    za przekroczenie limitu netto, zdrowotna, Netto, Brutto
+    Import cennika z pliku Excel (.xlsx/.xls) lub CSV (.csv).
+    Zwraca dict: {"imported": int, "updated": int, "errors": [str, ...]}
     """
+    ext = os.path.splitext(filepath)[1].lower()
 
-    wb = openpyxl.load_workbook(filepath, data_only=True)
-    ws = wb.active
+    # Wczytanie nagłówka i wierszy w zależności od formatu
+    try:
+        if ext == ".csv":
+            # autodetekcja separatora: najczęściej przecinek lub średnik; próbujemy wykryć
+            with open(filepath, newline='', encoding='utf-8') as f:
+                sample = f.read(4096)
+                f.seek(0)
+                # prosty detektor separatora
+                delimiter = ',' if sample.count(',') >= sample.count(';') else ';'
+                reader = csv.reader(f, delimiter=delimiter)
+                header = next(reader, None)
+                rows = [row for row in reader]
+        else:
+            wb = openpyxl.load_workbook(filepath, data_only=True)
+            ws = wb.active
+            header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            rows = [tuple(cell for cell in row) for row in ws.iter_rows(min_row=2, values_only=True)]
+    except Exception as e:
+        return {"imported": 0, "updated": 0, "errors": [f"Błąd wczytywania pliku: {e}"]}
 
-    header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
     if not header:
         return {"imported": 0, "updated": 0, "errors": ["Brak nagłówków w pliku."]}
 
-    headers = [str(h).strip().lower() if h else "" for h in header]
+    headers = [str(h).strip().lower() if h is not None else "" for h in header]
     idx = {h: i for i, h in enumerate(headers)}
 
     required = [
         "klucz",
         "cena netto 2024",
-        "wzrost ilości dokumentów",
         "cena za dokument",
         "za przekroczenie limitu netto",
         "zdrowotna",
@@ -244,27 +255,43 @@ def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME):
     updated = 0
     errors = []
 
-    for rownum, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-
-        if not any(c not in (None, "") for c in row):
-            continue
-
+    def get_cell(row, key):
+        i = idx.get(key)
+        if i is None:
+            return None
         try:
-            klucz = str(row[idx["klucz"]]).strip()
+            return row[i]
+        except Exception:
+            return None
 
-            # Rozbijamy klucz: np. Ryczałt_N_10 → typ=Ryczałt, vat=N, limit=10
-            parts = klucz.split("_")
-            typ = parts[0]
-            vat = parts[1]
-            limit = int(parts[2]) if len(parts) > 2 else 0
+    for rownum, row in enumerate(rows, start=2):
+        try:
+            klucz_raw = get_cell(row, "klucz")
+            if klucz_raw is None or str(klucz_raw).strip() == "":
+                continue
 
-            cena_netto_2024 = parse_num(row[idx["cena netto 2024"]])
-            wzrost = parse_num(row[idx["wzrost ilości dokumentów"]])
-            cena_za_dokument = parse_num(row[idx["cena za dokument"]])
-            za_przekroczenie = parse_num(row[idx["za przekroczenie limitu netto"]])
-            zdrowotna = parse_num(row[idx["zdrowotna"]])
-            netto = parse_num(row[idx["netto"]])
-            brutto = parse_num(row[idx["brutto"]])
+            klucz = str(klucz_raw).strip()
+
+            # Parsowanie wartości numerycznych bezpiecznie
+            cena_netto_ksiegowosc = parse_num(get_cell(row, "cena netto 2024"))
+            cena_za_dokument_ponad_limit = parse_num(get_cell(row, "za przekroczenie limitu netto"))
+            zdrowotna = parse_num(get_cell(row, "zdrowotna"))
+            netto = parse_num(get_cell(row, "netto"))
+            brutto = parse_num(get_cell(row, "brutto"))
+
+            # Ustaw wartości domyślne dla pól NOT NULL w schemacie
+            if cena_netto_ksiegowosc is None:
+                cena_netto_ksiegowosc = 0.0
+            if cena_za_dokument_ponad_limit is None:
+                cena_za_dokument_ponad_limit = 0.0
+            if zdrowotna is None:
+                zdrowotna = 0.0
+            if netto is None:
+                netto = 0.0
+            if brutto is None:
+                brutto = 0.0
+
+            cena_brutto_ksiegowosc = brutto  # zgodnie z tabelą
 
             now = time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -274,29 +301,45 @@ def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME):
             if existing:
                 cur.execute("""
                     UPDATE cenniki SET
-                        cena_netto_2024 = ?, wzrost_ilosci_dokumentow = ?, cena_za_dokument = ?,
-                        za_przekroczenie_limitu_netto = ?, zdrowotna = ?, netto = ?, brutto = ?, updated_at = ?
+                        cena_netto_ksiegowosc = ?,
+                        cena_brutto_ksiegowosc = ?,
+                        cena_za_dokument_ponad_limit = ?,
+                        zdrowotna = ?,
+                        netto = ?,
+                        brutto = ?,
+                        updated_at = ?
                     WHERE klucz = ?
                 """, (
-                    cena_netto_2024, wzrost, cena_za_dokument,
-                    za_przekroczenie, zdrowotna, netto, brutto, now, klucz
+                    cena_netto_ksiegowosc,
+                    cena_brutto_ksiegowosc,
+                    cena_za_dokument_ponad_limit,
+                    zdrowotna,
+                    netto,
+                    brutto,
+                    now,
+                    klucz
                 ))
                 updated += 1
-
             else:
                 cur.execute("""
                     INSERT INTO cenniki (
-                        klucz, cena_netto_2024, wzrost_ilosci_dokumentow, cena_za_dokument,
-                        za_przekroczenie_limitu_netto, zdrowotna, netto, brutto, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        klucz, cena_netto_ksiegowosc, cena_brutto_ksiegowosc,
+                        cena_za_dokument_ponad_limit, zdrowotna, netto, brutto, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    klucz, cena_netto_2024, wzrost, cena_za_dokument,
-                    za_przekroczenie, zdrowotna, netto, brutto, now
+                    klucz,
+                    cena_netto_ksiegowosc,
+                    cena_brutto_ksiegowosc,
+                    cena_za_dokument_ponad_limit,
+                    zdrowotna,
+                    netto,
+                    brutto,
+                    now
                 ))
                 imported += 1
 
         except Exception as e:
-            errors.append(f"Wiersz {rownum}: {str(e)}")
+            errors.append(f"Wiersz {rownum}: {e}")
 
     conn.commit()
     conn.close()

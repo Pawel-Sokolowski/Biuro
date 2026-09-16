@@ -76,31 +76,105 @@ class CompaniesPage(QWidget):
 
         self.list_widget.clear()
         for r in rows:
-            item = QListWidgetItem(f"{r['nazwa']} — NIP {r['nip']} — {r['miasto']}")
+            item = QListWidgetItem(f"{r['nazwa']} — NIP {r.get('nip','')} — {r.get('miasto','')}")
             item.setData(Qt.ItemDataRole.UserRole, r["id"])
             self.list_widget.addItem(item)
 
     def _open_add_form(self):
+        """
+        Otwiera formularz dodawania firmy.
+        Tworzy instancję CompanyForm, podłącza callback on_saved i przełącza widok na formularz.
+        """
+        # Usuń istniejący formularz jeśli jest (bez zapisu)
+        if self.form_page is not None:
+            try:
+                self.form_page.hide()
+                self.form_page.setParent(None)
+                self.form_page.deleteLater()
+            except Exception:
+                pass
+            self.form_page = None
+
+        # Tworzymy nowy formularz (nowy rekord -> company_data = None)
         self.form_page = CompanyForm(self.pracownik_id, None, self)
+        # callback po zapisaniu formularza
         self.form_page.on_saved = self._on_form_saved
         self._switch_to_form()
 
     def _open_edit_form(self, item):
+        """
+        Otwiera formularz edycji firmy dla wybranego elementu listy.
+        Pobiera dane firmy z DAO i tworzy CompanyForm z tymi danymi.
+        """
+        # pobierz id firmy z itemu
         fid = item.data(Qt.ItemDataRole.UserRole)
         data = get_company(fid)
 
+        # Usuń istniejący formularz jeśli jest (zapobiega duplikatom)
+        if self.form_page is not None:
+            try:
+                self.form_page.hide()
+                self.form_page.setParent(None)
+                self.form_page.deleteLater()
+            except Exception:
+                pass
+            self.form_page = None
+
+        # Tworzymy formularz z danymi firmy
         self.form_page = CompanyForm(self.pracownik_id, data, self)
         self.form_page.on_saved = self._on_form_saved
         self._switch_to_form()
 
     def _switch_to_form(self):
-        self.list_page.hide()
-        if self.form_page is not None:
+        """
+        Przełącza widok z listy firm na formularz.
+        Ukrywa list_page i dodaje form_page do layoutu tylko raz.
+        """
+        # Ukryj listę
+        if self.list_page is not None:
+            self.list_page.hide()
+
+        # Jeśli formularz już dodany do layoutu, tylko pokaż go
+        if self.form_page is None:
+            return
+
+        # Sprawdź czy form_page już jest w layoutcie (unikamy wielokrotnego dodawania)
+        already_added = False
+        for i in range(self.main_layout.count()):
+            w = self.main_layout.itemAt(i).widget()
+            if w is self.form_page:
+                already_added = True
+                break
+
+        if not already_added:
             self.main_layout.addWidget(self.form_page)
 
+        self.form_page.show()
+        # Ustaw fokus na pierwszym polu formularza jeśli istnieje
+        try:
+            first_child = self.form_page.findChild(QLineEdit)
+            if first_child:
+                first_child.setFocus()
+        except Exception:
+            pass
+
     def _on_form_saved(self):
+        """
+        Callback wywoływany po zapisaniu formularza.
+        Usuwa formularz z layoutu, odświeża listę i pokazuje list_page.
+        """
+        # Usuń formularz z layoutu i zniszcz widget
         if self.form_page is not None:
-            self.form_page.setParent(None)
+            try:
+                # Ukryj i usuń widget z layoutu
+                self.form_page.hide()
+                self.form_page.setParent(None)
+                self.form_page.deleteLater()
+            except Exception:
+                pass
             self.form_page = None
-        self.list_page.show()
+
+        # Pokaż listę i odśwież dane
+        if self.list_page is not None:
+            self.list_page.show()
         self._refresh_companies()

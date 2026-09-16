@@ -61,7 +61,28 @@ def init_db():
             uod INTEGER DEFAULT 0,
             typ_rozliczenia TEXT DEFAULT 'Ryczałt',
             vat_czynny INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'Aktywne'
+            status TEXT DEFAULT 'Aktywne',
+
+            -- Nowe kolumny wspierające automatyczne i ręczne wybieranie cennika KPIR
+            -- cennik_kpir_auto: klucz cennika wybrany automatycznie na podstawie limit_dokumentow (np. "KPIR_N_10")
+            cennik_kpir_auto TEXT,
+            -- cena_ksiegowosc_auto: wyliczona cena netto księgowości na podstawie cennik_kpir_auto
+            cena_ksiegowosc_auto REAL DEFAULT 0,
+            -- cennik_kpir_manual: ręczny wybór cennika (jeśli użytkownik chce nadpisać automatyczny wybór)
+            cennik_kpir_manual TEXT,
+            -- jeśli 1 -> używamy cennik_kpir_manual zamiast automatycznego wyboru
+            manual_cennik_override INTEGER DEFAULT 0
+        );
+    """)
+
+    # tabela preferencji cennikowych (opcjonalna, ułatwia cache/śledzenie wyborów)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS firma_cennik_preference (
+            firma_id INTEGER PRIMARY KEY,
+            wybrany_klucz TEXT,
+            cena_netto REAL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
         );
     """)
 
@@ -108,10 +129,12 @@ def init_db():
     """)
 
     # cenniki księgowość
+    # dodajemy kolumnę 'typ' aby łatwo filtrować cenniki (np. 'KPIR', 'VAT', 'RYC')
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             klucz TEXT UNIQUE NOT NULL,
+            typ TEXT DEFAULT 'KSIEGOWOSC',
             cena_netto_ksiegowosc REAL NOT NULL,
             cena_brutto_ksiegowosc REAL NOT NULL,
             cena_za_dokument_ponad_limit REAL NOT NULL,
@@ -121,6 +144,9 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
+
+    # indeks ułatwiający wyszukiwanie cenników KPIR
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_typ_klucz ON cenniki(typ, klucz);")
 
     # cenniki kadry
     cur.execute("""
@@ -387,12 +413,15 @@ def init_db():
             termin_platnosci TEXT,
             pozycje_json TEXT NOT NULL,
             eksportowana INTEGER DEFAULT 0,
-            data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP,
+            data_eksportu TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
             UNIQUE(firma_id, miesiac)
         );
     """)
 
+    # faktury_pozycje - rozszerzone o flagę generated
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_pozycje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -403,7 +432,22 @@ def init_db():
             stawka_vat TEXT,
             wartosc_netto REAL,
             wartosc_brutto REAL,
+            generated INTEGER DEFAULT 0, -- 1 jeśli pozycja została wygenerowana automatycznie
             FOREIGN KEY(faktura_id) REFERENCES faktury(id) ON DELETE CASCADE
+        );
+    """)
+
+    # archiwum pozycji faktur (przechowuje pozycje po usunięciu nagłówka)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS faktury_archiwum (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            faktura_id INTEGER,
+            firma_id INTEGER,
+            miesiac TEXT,
+            pozycje_json TEXT,
+            kwota_netto REAL,
+            kwota_brutto REAL,
+            archived_at TEXT DEFAULT (datetime('now'))
         );
     """)
 
@@ -472,6 +516,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(faktura_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
 
     # initial data
     cur.execute("SELECT COUNT(*) AS cnt FROM pracownicy")

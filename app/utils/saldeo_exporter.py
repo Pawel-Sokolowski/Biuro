@@ -5,8 +5,11 @@ from typing import Optional, Dict, Any, List, Tuple
 from app.db.dao_companies import get_conn
 
 
+# ============================================================
+# Pomocnicze funkcje cenników (Twoja oryginalna logika)
+# ============================================================
+
 def _parse_limit_from_key(key: str) -> Optional[int]:
-    # np. Ryczałt_N_20 -> 20
     try:
         parts = key.split("_")
         val = int(parts[-1])
@@ -16,11 +19,6 @@ def _parse_limit_from_key(key: str) -> Optional[int]:
 
 
 def wybierz_cennik(cur: sqlite3.Cursor, typ_rozliczenia: str, vat_czynny: bool, limit_dokumentow: int) -> Optional[str]:
-    """
-    Wybiera najlepszy klucz cennika na podstawie typu rozliczenia, VAT i limitu dokumentów.
-    Typy: 'Ryczałt', 'KPIR', 'KH'
-    VAT: True -> sufiks T, False -> N
-    """
     base_map = {
         "Ryczałt": "Ryczałt",
         "KPIR": "KPIR",
@@ -46,7 +44,6 @@ def wybierz_cennik(cur: sqlite3.Cursor, typ_rozliczenia: str, vat_czynny: bool, 
             best_key = k
 
     if best_key is None:
-        # jeśli nie ma <= limitu, weź najmniejszy dostępny
         for k in keys:
             lim = _parse_limit_from_key(k)
             if lim is not None:
@@ -65,10 +62,6 @@ def pobierz_cene_za_dokument(cur: sqlite3.Cursor, klucz: str) -> Optional[float]
 
 
 def apply_default_main_pricing(cur: sqlite3.Cursor, firma_id: int, ilosc_dok: int) -> None:
-    """
-    Ustawia główny cennik firmy na podstawie globalnego cennika i liczby dokumentów.
-    Uwzględnia typ rozliczenia, VAT oraz flagę ręcznego nadpisania.
-    """
     try:
         cur.execute("""
             SELECT glowny_cennik, limit_dokumentow, forma_opodatkowania,
@@ -76,7 +69,6 @@ def apply_default_main_pricing(cur: sqlite3.Cursor, firma_id: int, ilosc_dok: in
             FROM firmy WHERE id = ?
         """, (firma_id,))
     except sqlite3.OperationalError:
-        # starsza baza bez dodatkowych kolumn
         return
 
     row = cur.fetchone()
@@ -106,6 +98,24 @@ def apply_default_main_pricing(cur: sqlite3.Cursor, firma_id: int, ilosc_dok: in
     cur.execute("UPDATE firmy SET glowny_cennik = ?, limit_dokumentow = ? WHERE id = ?", (klucz, limit, firma_id))
 
 
+# ============================================================
+# Formatowanie kwot zgodnie z SaldeoSMART (A1)
+# ============================================================
+
+def format_amount_pl(amount: float) -> str:
+    """
+    Formatowanie kwot zgodnie z polskim standardem:
+    - separator tysięcy: kropka
+    - separator dziesiętny: przecinek
+    - zawsze 2 miejsca po przecinku
+    """
+    return f"{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+# ============================================================
+# Nagłówki SaldeoSMART (pełne, 60+ kolumn)
+# ============================================================
+
 SALDEO_HEADERS = [
     "Lp.", "Sufiks", "Własny opis faktury", "Metoda kasowa", "VAT marża",
     "Data wystawienia", "Data dostawy", "Termin płatności", "Wyślij do KSeF",
@@ -127,13 +137,12 @@ SALDEO_HEADERS = [
 ]
 
 
+# ============================================================
+# PROFESJONALNY EKSPORT SALDEO SMART
+# ============================================================
+
 def export_saldeo_csv(db_path: Optional[str], output_path: str, miesiac: str) -> None:
-    """
-    Eksportuje dokumenty do pliku CSV zgodnego z SaldeoSMART.
-    miesiac w formacie 'YYYY-MM' (np. '2026-08').
-    Jedna faktura może mieć wiele pozycji — LP tylko w pierwszym wierszu.
-    """
-    conn = get_conn(db_path)
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
@@ -147,10 +156,9 @@ def export_saldeo_csv(db_path: Optional[str], output_path: str, miesiac: str) ->
     rows = cur.fetchall()
     conn.close()
 
-    # grupowanie po numerze faktury
-    faktury: Dict[str, List[Tuple]] = {}
+    faktury: Dict[str, List[sqlite3.Row]] = {}
     for r in rows:
-        nr = r[1]
+        nr = r["numer"]
         faktury.setdefault(nr, []).append(r)
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -158,83 +166,38 @@ def export_saldeo_csv(db_path: Optional[str], output_path: str, miesiac: str) ->
         writer.writerow(SALDEO_HEADERS)
 
         lp_counter = 1
+
         for nr_fv, pozycje in faktury.items():
             first = True
+
             for r in pozycje:
-                firma_id, numer, typ, cena_netto, data_wyst, nazwa_firmy, nip, miasto = r
+                firma_id = r["firma_id"]
+                numer = r["numer"]
+                typ = r["typ"]
+                cena_netto = float(r["cena_netto"])
+                data_wyst = r["data_wyst"]
+                nazwa_firmy = r["nazwa"]
+                nip = r["nip"]
+                miasto = r["miasto"]
 
                 lp_val = lp_counter if first else ""
-                sufiks = ""  # np. seria numeracji
-                opis_faktury = typ
-                metoda_kasowa = ""
-                vat_marza = ""
-                data_wystawienia = data_wyst
-                data_dostawy = data_wyst
-                termin_platnosci = data_wyst
-                wyslij_ksef = "X"
-                wyslij_kontrahent = ""
-                nabywca_skrocona = nazwa_firmy
-                nazwa_pelna = nazwa_firmy
-                adres = ""
-                kod_pocztowy = ""
-                miejscowosc = miasto or ""
-                nip_val = nip or ""
-                regon = ""
-                kraj = "PL"
-                email = ""
-                odbiorca_skrocona = nazwa_firmy
-                odbiorca_pelna = nazwa_firmy
-                rola_odbiorcy = "Odbiorca"
-                id_wew = ""
-                adres_odb = ""
-                kod_odb = ""
-                miasto_odb = ""
-                nip_odb = ""
-                regon_odb = ""
-                kraj_odb = "PL"
-                email_odb = ""
-                waluta = "PLN"
-                nazwa_towaru = typ
-                pkwiu = ""
-                ilosc = "1"
-                jednostka = "usługa"
-                cena_netto_jedn = f"{cena_netto:.2f}"
-                cena_brutto_jedn = ""
-                stawka_vat = "23%"
-                podstawa_zw = ""
-                forma_platnosci = "przelew"
-                zaplacono = ""
-                data_wplaty = ""
-                konto_bankowe = ""
-                rodzaj_transportu = ""
-                data_dopuszczenia = ""
-                rbh_przebieg = ""
-                uwagi = ""
-                wystawca = ""
-                grupa_towarowa = ""
-                numer_zamowienia = ""
-                data_zamowienia = ""
-                numer_umowy = ""
-                data_umowy = ""
-                kategoria = ""
-                opis_zdarzenia = ""
-                rejestr = ""
+                cena_netto_fmt = format_amount_pl(cena_netto)
 
                 row_out = [
-                    lp_val, sufiks, opis_faktury, metoda_kasowa, vat_marza,
-                    data_wystawienia, data_dostawy, termin_platnosci, wyslij_ksef,
-                    wyslij_kontrahent, nabywca_skrocona, nazwa_pelna, adres,
-                    kod_pocztowy, miejscowosc, nip_val, regon, kraj, email,
-                    odbiorca_skrocona, odbiorca_pelna, rola_odbiorcy, id_wew,
-                    adres_odb, kod_odb, miasto_odb, nip_odb, regon_odb,
-                    kraj_odb, email_odb, waluta, nazwa_towaru, pkwiu, ilosc,
-                    jednostka, cena_netto_jedn, cena_brutto_jedn, stawka_vat,
-                    podstawa_zw, forma_platnosci, zaplacono, data_wplaty,
-                    konto_bankowe, rodzaj_transportu, data_dopuszczenia,
-                    rbh_przebieg, uwagi, wystawca, grupa_towarowa,
-                    numer_zamowienia, data_zamowienia, numer_umowy, data_umowy,
-                    kategoria, opis_zdarzenia, rejestr
+                    lp_val, "", typ, "", "",
+                    data_wyst, data_wyst, data_wyst, "X",
+                    "", nazwa_firmy, nazwa_firmy, "",
+                    "", miasto or "", nip or "", "",
+                    "PL", "", nazwa_firmy, nazwa_firmy,
+                    "Odbiorca", "", "", "", "", "", "",
+                    "PL", "", "PLN", typ, "", "1",
+                    "usługa", cena_netto_fmt, "", "23%",
+                    "", "przelew", "", "", "", "",
+                    "", "", "", "", "", "",
+                    "", "", "", "", "", "", ""
                 ]
+
                 writer.writerow(row_out)
                 first = False
+
             lp_counter += 1

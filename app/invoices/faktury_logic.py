@@ -2,7 +2,7 @@
 import sqlite3
 from typing import List, Dict, Any, Optional
 import json
-from datetime import datetime, timedelta
+import datetime
 
 from app.db.dao_conn import get_conn
 from app.db.dao_faktury import create_or_update_invoice

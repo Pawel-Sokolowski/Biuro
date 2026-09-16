@@ -1,7 +1,7 @@
 # app/db/dao_faktury.py
 import json
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+import datetime
 
 from app.db.dao_conn import get_conn
 
@@ -18,8 +18,8 @@ def create_or_update_invoice(
 
     pozycje_json = json.dumps(pozycje, ensure_ascii=False)
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    termin = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    termin = (datetime.datetime.now() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
 
     cur.execute("""
         SELECT id FROM faktury

@@ -2,7 +2,7 @@
 
 import logging
 from typing import Optional, Callable
-from datetime import datetime, timedelta
+import datetime
 
 from app.utils.ui_imports import *
 from app.db.dao_employees import get_employee_info
@@ -68,7 +68,7 @@ class TimeTracker(QWidget):
     def _start_tracking(self):
         """Start tracking time."""
         self.current_category = self.combo_category.currentText()
-        self.start_time = datetime.now()
+        self.start_time = datetime.datetime.now()
         self.is_tracking = True
         self.combo_category.setEnabled(False)
         self.btn_toggle.setText("⏸️ Stop")
@@ -99,7 +99,7 @@ class TimeTracker(QWidget):
             self.timer.stop()
         
         if self.start_time:
-            elapsed = (datetime.now() - self.start_time).total_seconds()
+            elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
             self.elapsed_seconds += int(elapsed)
             self.time_updated.emit(self.current_category, self.elapsed_seconds)
         
@@ -123,7 +123,7 @@ class TimeTracker(QWidget):
     def _update_time_display(self):
         """Update time display."""
         if self.start_time:
-            elapsed = (datetime.now() - self.start_time).total_seconds() + self.elapsed_seconds
+            elapsed = (datetime.datetime.now() - self.start_time).total_seconds() + self.elapsed_seconds
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)

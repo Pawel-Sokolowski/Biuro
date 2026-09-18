@@ -1,4 +1,4 @@
-# Auto-generated constants extracted from main.py
+# app/constants.py
 
 COMPANY_EXTRA_COLUMNS = {
     "nazwa_skrocona": "TEXT",
@@ -35,18 +35,41 @@ COMPANY_EXTRA_COLUMNS = {
     "glowny_cennik": "TEXT",
     "glowny_cennik_manualny": "INTEGER DEFAULT 0",
     "limit_dokumentow": "INTEGER DEFAULT 0",
-    "liczba_pracownikow": "INTEGER DEFAULT 0"
+    "liczba_pracownikow": "INTEGER DEFAULT 0",
+    "uop": "INTEGER DEFAULT 0",
+    "uz": "INTEGER DEFAULT 0",
+    "uod": "INTEGER DEFAULT 0",
+    "typ_rozliczenia": "TEXT DEFAULT 'Ryczałt'",
+    "vat_czynny": "INTEGER DEFAULT 0",
+    "status": "TEXT DEFAULT 'Aktywne'",
+    "cennik_kpir_auto": "TEXT",
+    "cena_ksiegowosc_auto": "REAL DEFAULT 0",
+    "cennik_kpir_manual": "TEXT",
+    "manual_cennik_override": "INTEGER DEFAULT 0",
+    "limit_kadry": "INTEGER DEFAULT 0",
+    "limit_ryczalt": "INTEGER DEFAULT 0",
+    "zdrowotna": "REAL DEFAULT 0"
 }
 
 COMPANY_FIELD_ORDER = [
-    "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel", "miasto", "kod_pocztowy", "ulica",
-    "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk", "osoba_kontaktowa", "adres_email",
-    "nr_telefonu", "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
-    "adres_koresp_miasto", "adres_koresp_kod_pocztowy", "adres_koresp_ulica", "data_rozpoczecia_dg",
-    "data_rozpoczecia_sprzedazy", "data_koniec_zus_start", "data_koniec_zus_pref", "data_koniec_maly_zus",
-    "data_koniec_a1", "data_rozpoczecia_obslugi", "data_zakonczenia_obslugi", "zawieszenia_dzialalnosci",
-    "kody_pkd", "cennik_ksiegowy", "cennik_kadrowy", "cennik_czasowy", "glowny_cennik",
-    "glowny_cennik_manualny", "limit_dokumentow", "liczba_pracownikow", "uop", "uz", "uod"
+    "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",
+    "miasto", "kod_pocztowy", "ulica", "adres_budynek",
+    "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk",
+    "osoba_kontaktowa", "adres_email", "nr_telefonu",
+    "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
+    "adres_koresp_miasto", "adres_koresp_kod_pocztowy", "adres_koresp_ulica",
+    "data_rozpoczecia_dg", "data_rozpoczecia_sprzedazy",
+    "data_koniec_zus_start", "data_koniec_zus_pref", "data_koniec_maly_zus",
+    "data_koniec_a1", "data_rozpoczecia_obslugi", "data_zakonczenia_obslugi",
+    "zawieszenia_dzialalnosci", "kody_pkd",
+    "cennik_ksiegowy", "cennik_kadrowy", "cennik_czasowy",
+    "glowny_cennik", "glowny_cennik_manualny",
+    "limit_dokumentow", "limit_kadry", "limit_ryczalt",
+    "liczba_pracownikow", "uop", "uz", "uod",
+    "typ_rozliczenia", "vat_czynny", "status",
+    "cennik_kpir_auto", "cena_ksiegowosc_auto",
+    "cennik_kpir_manual", "manual_cennik_override",
+    "zdrowotna"
 ]
 
 COMPANY_IMPORT_HEADER_MAP = {
@@ -85,7 +108,19 @@ COMPANY_IMPORT_HEADER_MAP = {
     "Cenniki usług kadrowych": "cennik_kadrowy",
     "Cenniki czasowe": "cennik_czasowy",
     "Liczba pracowników": "liczba_pracownikow",
-    "Limit dokumentów": "limit_dokumentow"
+    "Limit dokumentów": "limit_dokumentow",
+    "Limit kadry": "limit_kadry",
+    "Limit ryczałt": "limit_ryczalt",
+    "Zdrowotna": "zdrowotna",
+    "VAT czynny": "vat_czynny",
+    "Typ rozliczenia": "typ_rozliczenia",
+    "Status": "status"
 }
 
-COMPANY_STAGE_OPTIONS = ["Brak", "Dostarczone", "Komplet dokumentów", "Zaksięgowane", "Wysłane"]
+COMPANY_STAGE_OPTIONS = [
+    "Brak",
+    "Dostarczone",
+    "Komplet dokumentów",
+    "Zaksięgowane",
+    "Wysłane"
+]

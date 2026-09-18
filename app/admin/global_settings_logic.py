@@ -1,16 +1,24 @@
-import sqlite3
+# app/admin/global_settings_logic.py
 import csv
+import sqlite3
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
+
 import openpyxl
 
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import list_companies
-from app.db.dao_employees import list_employees, add_employee, update_employee, delete_employee, set_employee_active, \
-    change_employee_password
+from app.db.dao_employees import (
+    list_employees,
+    add_employee,
+    update_employee,
+    delete_employee,
+    set_employee_active,
+    change_employee_password,
+)
 
 
-def safe_float(val):
+def safe_float(val) -> float:
     if val is None:
         return 0.0
     if isinstance(val, (int, float)):
@@ -22,6 +30,12 @@ def safe_float(val):
 
 
 class GlobalSettingsLogic:
+    def __init__(self):
+        pass
+
+    # -------------------------
+    # Użytkownicy (delegacja do DAO)
+    # -------------------------
     def get_users(self) -> List[sqlite3.Row]:
         return list_employees()
 
@@ -40,49 +54,64 @@ class GlobalSettingsLogic:
     def reset_user_password(self, pracownik_id: int, new_password: str):
         change_employee_password(pracownik_id, new_password)
 
-    # ROLE + UPRAWNIENIA
-
+    # -------------------------
+    # Role + uprawnienia
+    # -------------------------
     def get_roles(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, nazwa,
                    COALESCE(can_view_invoices, 0) AS can_view_invoices,
                    COALESCE(can_access_admin_settings, 0) AS can_access_admin_settings,
                    COALESCE(can_manage_users, 0) AS can_manage_users
             FROM role
             ORDER BY id
-        """)
+            """
+        )
         rows = cur.fetchall()
         conn.close()
         return rows
 
-    def add_role(self, nazwa: str,
-                 can_view_invoices: bool = False,
-                 can_access_admin_settings: bool = False,
-                 can_manage_users: bool = False) -> int:
+    def add_role(
+        self,
+        nazwa: str,
+        can_view_invoices: bool = False,
+        can_access_admin_settings: bool = False,
+        can_manage_users: bool = False,
+    ) -> int:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO role (nazwa, can_view_invoices, can_access_admin_settings, can_manage_users)
             VALUES (?, ?, ?, ?)
-        """, (nazwa, int(can_view_invoices), int(can_access_admin_settings), int(can_manage_users)))
+            """,
+            (nazwa, int(can_view_invoices), int(can_access_admin_settings), int(can_manage_users)),
+        )
         rid = cur.lastrowid
         conn.commit()
         conn.close()
         return rid
 
-    def update_role_permissions(self, rola_id: int,
-                                can_view_invoices: bool,
-                                can_access_admin_settings: bool,
-                                can_manage_users: bool):
+    def update_role_permissions(
+        self,
+        rola_id: int,
+        can_view_invoices: bool,
+        can_access_admin_settings: bool,
+        can_manage_users: bool,
+    ):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE role
             SET can_view_invoices = ?, can_access_admin_settings = ?, can_manage_users = ?
             WHERE id = ?
-        """, (int(can_view_invoices), int(can_access_admin_settings), int(can_manage_users), rola_id))
+            """,
+            (int(can_view_invoices), int(can_access_admin_settings), int(can_manage_users), rola_id),
+        )
         conn.commit()
         conn.close()
 
@@ -96,7 +125,8 @@ class GlobalSettingsLogic:
     def get_user_permissions(self, pracownik_id: int) -> Dict[str, bool]:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT
                 MAX(COALESCE(r.can_view_invoices, 0)) AS can_view_invoices,
                 MAX(COALESCE(r.can_access_admin_settings, 0)) AS can_access_admin_settings,
@@ -104,7 +134,9 @@ class GlobalSettingsLogic:
             FROM pracownik_firma pf
             JOIN role r ON pf.rola_id = r.id
             WHERE pf.pracownik_id = ?
-        """, (pracownik_id,))
+            """,
+            (pracownik_id,),
+        )
         row = cur.fetchone()
         conn.close()
         if not row:
@@ -119,12 +151,14 @@ class GlobalSettingsLogic:
             "can_manage_users": bool(row["can_manage_users"]),
         }
 
-    # KONTA EMAIL + PRZYPISANIA
-
+    # -------------------------
+    # Konta email i przypisania
+    # -------------------------
     def get_email_accounts(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT
                 id,
                 email,
@@ -133,31 +167,32 @@ class GlobalSettingsLogic:
                 haslo_enc
             FROM konta_email
             ORDER BY id
-        """)
+            """
+        )
         rows = cur.fetchall()
         conn.close()
         return rows
 
     def add_email_account(
-            self,
-            email: str,
-            imap_server: str,
-            smtp_server: str,
-            password: str,
-            imap_port: int,
-            smtp_port: int,
-            imap_ssl: str,
-            smtp_ssl: str
+        self,
+        email: str,
+        imap_server: str,
+        smtp_server: str,
+        password: str,
+        imap_port: int,
+        smtp_port: int,
+        imap_ssl: str,
+        smtp_ssl: str,
     ) -> int:
         """Dodaje konto email i zwraca jego ID."""
-
         from app.utils.crypto import encrypt_password
+
         encrypted_pwd = encrypt_password(password)
 
         conn = get_conn()
         cur = conn.cursor()
-
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO konta_email (
                 email,
                 haslo_enc,
@@ -166,17 +201,12 @@ class GlobalSettingsLogic:
                 aktywne
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        """, (
-            email,
-            encrypted_pwd,
-            imap_server, imap_port, imap_ssl,
-            smtp_server, smtp_port, smtp_ssl
-        ))
-
+            """,
+            (email, encrypted_pwd, imap_server, imap_port, imap_ssl, smtp_server, smtp_port, smtp_ssl),
+        )
         konto_id = cur.lastrowid
         conn.commit()
         conn.close()
-
         return konto_id
 
     def delete_email_account(self, konto_id: int):
@@ -190,13 +220,15 @@ class GlobalSettingsLogic:
     def get_email_assignments(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT pke.konto_id, ke.email, pke.pracownik_id, pr.email AS pracownik_email
             FROM pracownik_konto_email pke
             JOIN konta_email ke ON pke.konto_id = ke.id
             JOIN pracownicy pr ON pke.pracownik_id = pr.id
             ORDER BY ke.email, pr.email
-        """)
+            """
+        )
         rows = cur.fetchall()
         conn.close()
         return rows
@@ -204,32 +236,43 @@ class GlobalSettingsLogic:
     def assign_email_to_employee(self, konto_id: int, pracownik_id: int):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT OR IGNORE INTO pracownik_konto_email (konto_id, pracownik_id)
             VALUES (?, ?)
-        """, (konto_id, pracownik_id))
+            """,
+            (konto_id, pracownik_id),
+        )
         conn.commit()
         conn.close()
 
     def remove_email_assignment(self, konto_id: int, pracownik_id: int):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             DELETE FROM pracownik_konto_email
             WHERE konto_id = ? AND pracownik_id = ?
-        """, (konto_id, pracownik_id))
+            """,
+            (konto_id, pracownik_id),
+        )
         conn.commit()
         conn.close()
 
+    # -------------------------
+    # Cennik księgowość (globalny)
+    # -------------------------
     def get_global_pricing(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
                    zdrowotna, netto, brutto
             FROM cenniki
             ORDER BY klucz
-        """)
+            """
+        )
         rows = cur.fetchall()
         conn.close()
         return rows
@@ -247,14 +290,15 @@ class GlobalSettingsLogic:
             with path.open("r", encoding="utf-8") as f:
                 reader = csv.DictReader(f, delimiter=";")
                 for row in reader:
-                    klucz = row.get("Klucz")
-                    cena_netto_ksiegowosc = safe_float(row.get("cena netto księgowość"))
-                    cena_za_dokument_ponad_limit = safe_float(row.get("cena za dokument ponad limit"))
+                    klucz = row.get("Klucz") or row.get("klucz")
+                    cena_netto_ksiegowosc = safe_float(row.get("cena netto księgowość") or row.get("cena_netto_ksiegowosc"))
+                    cena_za_dokument_ponad_limit = safe_float(row.get("cena za dokument ponad limit") or row.get("cena_za_dokument_ponad_limit"))
                     zdrowotna = safe_float(row.get("zdrowotna"))
-                    netto = safe_float(row.get("Netto"))
-                    brutto = safe_float(row.get("Brutto"))
+                    netto = safe_float(row.get("Netto") or row.get("netto"))
+                    brutto = safe_float(row.get("Brutto") or row.get("brutto"))
 
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
                                              zdrowotna, netto, brutto)
                         VALUES (?, ?, ?, ?, ?, ?)
@@ -264,8 +308,16 @@ class GlobalSettingsLogic:
                             zdrowotna = excluded.zdrowotna,
                             netto = excluded.netto,
                             brutto = excluded.brutto
-                    """, (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
-                          zdrowotna, netto, brutto))
+                        """,
+                        (
+                            klucz,
+                            cena_netto_ksiegowosc,
+                            cena_za_dokument_ponad_limit,
+                            zdrowotna,
+                            netto,
+                            brutto,
+                        ),
+                    )
 
             conn.commit()
             conn.close()
@@ -287,13 +339,14 @@ class GlobalSettingsLogic:
                     continue
 
                 klucz = str(row[idx["klucz"]]).strip()
-                cena_netto_ksiegowosc = safe_float(row[idx["cena netto księgowość"]])
-                cena_za_dokument_ponad_limit = safe_float(row[idx["cena za dokument ponad limit"]])
-                zdrowotna = safe_float(row[idx["zdrowotna"]])
-                netto = safe_float(row[idx["netto"]])
-                brutto = safe_float(row[idx["brutto"]])
+                cena_netto_ksiegowosc = safe_float(row[idx.get("cena netto księgowość", idx.get("cena_netto_ksiegowosc"))])
+                cena_za_dokument_ponad_limit = safe_float(row[idx.get("cena za dokument ponad limit", idx.get("cena_za_dokument_ponad_limit"))])
+                zdrowotna = safe_float(row[idx.get("zdrowotna")])
+                netto = safe_float(row[idx.get("netto")])
+                brutto = safe_float(row[idx.get("brutto")])
 
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
                                          zdrowotna, netto, brutto)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -303,8 +356,16 @@ class GlobalSettingsLogic:
                         zdrowotna = excluded.zdrowotna,
                         netto = excluded.netto,
                         brutto = excluded.brutto
-                """, (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
-                      zdrowotna, netto, brutto))
+                    """,
+                    (
+                        klucz,
+                        cena_netto_ksiegowosc,
+                        cena_za_dokument_ponad_limit,
+                        zdrowotna,
+                        netto,
+                        brutto,
+                    ),
+                )
 
             conn.commit()
             conn.close()
@@ -315,12 +376,15 @@ class GlobalSettingsLogic:
     # ============================
     # CENNIK KADRY
     # ============================
-
     def get_pricing_kadry(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT klucz, cena_netto_kadry, netto, brutto
+            SELECT
+                klucz,
+                cena_netto_kadry,
+                cena_brutto_kadry,
+                opis
             FROM cenniki_kadry
             ORDER BY klucz
         """)
@@ -341,19 +405,22 @@ class GlobalSettingsLogic:
             with path.open("r", encoding="utf-8") as f:
                 reader = csv.DictReader(f, delimiter=";")
                 for row in reader:
-                    klucz = row.get("Klucz")
-                    cena_netto_kadry = safe_float(row.get("cena netto kadry"))
-                    netto = safe_float(row.get("Netto"))
-                    brutto = safe_float(row.get("Brutto"))
+                    klucz = row.get("Klucz") or row.get("klucz")
+                    cena_netto_kadry = safe_float(row.get("cena netto kadry") or row.get("cena_netto_kadry"))
+                    netto = safe_float(row.get("Netto") or row.get("netto"))
+                    brutto = safe_float(row.get("Brutto") or row.get("brutto"))
 
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, netto, brutto)
                         VALUES (?, ?, ?, ?)
                         ON CONFLICT(klucz) DO UPDATE SET
                             cena_netto_kadry = excluded.cena_netto_kadry,
                             netto = excluded.netto,
                             brutto = excluded.brutto
-                    """, (klucz, cena_netto_kadry, netto, brutto))
+                        """,
+                        (klucz, cena_netto_kadry, netto, brutto),
+                    )
 
             conn.commit()
             conn.close()
@@ -375,18 +442,21 @@ class GlobalSettingsLogic:
                     continue
 
                 klucz = str(row[idx["klucz"]]).strip()
-                cena_netto_kadry = safe_float(row[idx["cena netto kadry"]])
-                netto = safe_float(row[idx["netto"]])
-                brutto = safe_float(row[idx["brutto"]])
+                cena_netto_kadry = safe_float(row[idx.get("cena netto kadry", idx.get("cena_netto_kadry"))])
+                netto = safe_float(row[idx.get("netto")])
+                brutto = safe_float(row[idx.get("brutto")])
 
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, netto, brutto)
                     VALUES (?, ?, ?, ?)
                     ON CONFLICT(klucz) DO UPDATE SET
                         cena_netto_kadry = excluded.cena_netto_kadry,
                         netto = excluded.netto,
                         brutto = excluded.brutto
-                """, (klucz, cena_netto_kadry, netto, brutto))
+                    """,
+                    (klucz, cena_netto_kadry, netto, brutto),
+                )
 
             conn.commit()
             conn.close()
@@ -397,15 +467,16 @@ class GlobalSettingsLogic:
     # ============================
     # USŁUGI DODATKOWE
     # ============================
-
     def get_extra_services(self) -> List[sqlite3.Row]:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, nazwa, cena_netto, stawka_vat, COALESCE(kategoria, '') AS kategoria
             FROM uslugi_dodatkowe
             ORDER BY nazwa
-        """)
+            """
+        )
         rows = cur.fetchall()
         conn.close()
         return rows
@@ -413,10 +484,13 @@ class GlobalSettingsLogic:
     def add_extra_service(self, nazwa: str, cena_netto: float, stawka_vat: str, kategoria: str):
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
             VALUES (?, ?, ?, ?)
-        """, (nazwa, cena_netto, stawka_vat, kategoria))
+            """,
+            (nazwa, cena_netto, stawka_vat, kategoria),
+        )
         conn.commit()
         conn.close()
 
@@ -440,19 +514,22 @@ class GlobalSettingsLogic:
             with path.open("r", encoding="utf-8") as f:
                 reader = csv.DictReader(f, delimiter=";")
                 for row in reader:
-                    nazwa = row.get("Nazwa")
-                    cena_netto = safe_float(row.get("Cena netto"))
-                    stawka_vat = str(row.get("Stawka VAT") or "").strip()
-                    kategoria = str(row.get("Kategoria") or "").strip()
+                    nazwa = row.get("Nazwa") or row.get("nazwa")
+                    cena_netto = safe_float(row.get("Cena netto") or row.get("cena_netto"))
+                    stawka_vat = str(row.get("Stawka VAT") or row.get("stawka_vat") or "").strip()
+                    kategoria = str(row.get("Kategoria") or row.get("kategoria") or "").strip()
 
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
                         VALUES (?, ?, ?, ?)
                         ON CONFLICT(nazwa) DO UPDATE SET
                             cena_netto = excluded.cena_netto,
                             stawka_vat = excluded.stawka_vat,
                             kategoria = excluded.kategoria
-                    """, (nazwa, cena_netto, stawka_vat, kategoria))
+                        """,
+                        (nazwa, cena_netto, stawka_vat, kategoria),
+                    )
 
             conn.commit()
             conn.close()
@@ -474,18 +551,21 @@ class GlobalSettingsLogic:
                     continue
 
                 nazwa = str(row[idx["nazwa"]]).strip()
-                cena_netto = safe_float(row[idx["cena netto"]])
-                stawka_vat = str(row[idx["stawka vat"]] or "").strip()
-                kategoria = str(row[idx["kategoria"]] or "").strip()
+                cena_netto = safe_float(row[idx.get("cena netto", idx.get("cena_netto"))])
+                stawka_vat = str(row[idx.get("stawka vat", idx.get("cena_netto"))] or "").strip()
+                kategoria = str(row[idx.get("kategoria")] or "").strip()
 
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
                     VALUES (?, ?, ?, ?)
                     ON CONFLICT(nazwa) DO UPDATE SET
                         cena_netto = excluded.cena_netto,
                         stawka_vat = excluded.stawka_vat,
                         kategoria = excluded.kategoria
-                """, (nazwa, cena_netto, stawka_vat, kategoria))
+                    """,
+                    (nazwa, cena_netto, stawka_vat, kategoria),
+                )
 
             conn.commit()
             conn.close()
@@ -493,6 +573,9 @@ class GlobalSettingsLogic:
 
         raise ValueError("Obsługiwane formaty: CSV, XLSX, XLS")
 
+    # -------------------------
+    # Firmy
+    # -------------------------
     def get_all_companies(self) -> List[sqlite3.Row]:
         return list_companies()
 
@@ -503,7 +586,9 @@ class GlobalSettingsLogic:
         conn.commit()
         conn.close()
 
-
+    # -------------------------
+    # Logi / narzędzia
+    # -------------------------
     def get_login_logs(self) -> List[sqlite3.Row]:
         return []
 

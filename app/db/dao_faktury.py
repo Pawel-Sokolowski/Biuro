@@ -17,7 +17,6 @@ def create_or_update_invoice(
 ) -> int:
     """
     Tworzy nową fakturę lub aktualizuje istniejącą (bez logiki scalania).
-    DAO nie decyduje które pozycje nadpisywać — to robi warstwa logic.
     Zwraca id faktury.
     """
     conn = get_conn()

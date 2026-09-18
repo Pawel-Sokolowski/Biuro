@@ -1,12 +1,16 @@
+# app/companies/company_logic.py
 import sqlite3
-from typing import Dict, Any, List
-
+from typing import Any, Dict, Optional, List, Tuple
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
 from app.companies.ceidg_api import get_ceidg_firma_by_nip
 from app.db.dao_conn import get_conn
+from app.db.dao_cenniki_kadry import get_kadry_price, get_kadry_description
 
 
+# -------------------------
+# Worker / Signals for CEIDG async fetch
+# -------------------------
 class WorkerSignals(QObject):
     result = pyqtSignal(object)
     error = pyqtSignal(Exception)
@@ -30,172 +34,513 @@ class CEIDGWorker(QRunnable):
             self.signals.finished.emit()
 
 
+# -------------------------
+# CEIDG helpers (UI integration helpers)
+# -------------------------
+def _safe_set(widget, value):
+    try:
+        if widget is None:
+            return
+        if hasattr(widget, "setText"):
+            widget.setText(str(value or ""))
+        elif hasattr(widget, "setDate") and isinstance(value, str):
+            d = QDate.fromString(value[:10], "yyyy-MM-dd")
+            if d.isValid():
+                widget.setDate(d)
+    except Exception:
+        pass
+
+
+def ceidg_apply(form, data: Optional[Dict[str, Any]]):
+    """
+    Apply CEIDG response to form widgets. Form is expected to have `inputs` dict mapping keys to widgets.
+    """
+    form._last_ceidg_raw = data or {}
+    if not data or data.get("error"):
+        return
+
+    if isinstance(data, dict) and "firma" in data and isinstance(data["firma"], list) and data["firma"]:
+        raw = data["firma"][0]
+    else:
+        raw = data
+
+    # nazwa
+    if form.inputs.get("nazwa"):
+        _safe_set(form.inputs.get("nazwa"), raw.get("nazwa"))
+
+    wl = raw.get("wlasciciel") or {}
+
+    # NIP / REGON
+    if form.inputs.get("nip"):
+        _safe_set(form.inputs.get("nip"), wl.get("nip") or raw.get("nip"))
+    if form.inputs.get("regon"):
+        _safe_set(form.inputs.get("regon"), wl.get("regon") or raw.get("regon"))
+
+    # PKD
+    pkd_list = raw.get("pkd") or raw.get("pkdList") or []
+    pkd_codes: List[str] = []
+    if isinstance(pkd_list, list):
+        for p in pkd_list:
+            if isinstance(p, dict):
+                code = p.get("kod") or p.get("code")
+                if code:
+                    pkd_codes.append(code)
+            elif isinstance(p, str):
+                pkd_codes.append(p)
+    elif isinstance(pkd_list, str):
+        pkd_codes = [pkd_list]
+
+    main_pkd = raw.get("pkdGlowny") or raw.get("pkd_glowny") or {}
+    if isinstance(main_pkd, dict):
+        mp = main_pkd.get("kod") or main_pkd.get("code")
+        if mp and mp not in pkd_codes:
+            pkd_codes.insert(0, mp)
+
+    if form.inputs.get("kody_pkd"):
+        _safe_set(form.inputs.get("kody_pkd"), ", ".join(pkd_codes))
+
+    # data rozpoczęcia DG
+    ds = raw.get("dataRozpoczecia") or raw.get("data_rozpoczecia") or raw.get("dataRozpoczeciaDG")
+    if ds and form.inputs.get("data_rozpoczecia_dg"):
+        _safe_set(form.inputs.get("data_rozpoczecia_dg"), ds)
+
+    # adresy
+    adres_dz = raw.get("adresDzialalnosci") or raw.get("adres_dzialalnosci") or {}
+    adres_ko = raw.get("adresKorespondencyjny") or raw.get("adres_korespondencyjny") or {}
+
+    if form.inputs.get("dz_miasto"):
+        _safe_set(form.inputs.get("dz_miasto"),
+                  raw.get("dz_miasto") or adres_dz.get("miasto") or raw.get("miasto"))
+    if form.inputs.get("dz_kod"):
+        _safe_set(form.inputs.get("dz_kod"),
+                  raw.get("dz_kod") or adres_dz.get("kod") or adres_dz.get("kodPocztowy") or raw.get("kod"))
+    if form.inputs.get("dz_ulica"):
+        _safe_set(form.inputs.get("dz_ulica"),
+                  raw.get("dz_ulica") or adres_dz.get("ulica") or adres_dz.get("ulic") or adres_dz.get("street"))
+    if form.inputs.get("dz_budynek"):
+        _safe_set(form.inputs.get("dz_budynek"),
+                  raw.get("dz_budynek") or adres_dz.get("budynek") or adres_dz.get("building"))
+    if form.inputs.get("dz_lokal"):
+        _safe_set(form.inputs.get("dz_lokal"),
+                  raw.get("dz_lokal") or adres_dz.get("lokal") or adres_dz.get("apartment"))
+    if form.inputs.get("dz_wojewodztwo"):
+        _safe_set(form.inputs.get("dz_wojewodztwo"),
+                  raw.get("dz_wojewodztwo") or adres_dz.get("wojewodztwo") or adres_dz.get("province"))
+    if form.inputs.get("dz_powiat"):
+        _safe_set(form.inputs.get("dz_powiat"),
+                  raw.get("dz_powiat") or adres_dz.get("powiat") or adres_dz.get("county"))
+    if form.inputs.get("dz_gmina"):
+        _safe_set(form.inputs.get("dz_gmina"),
+                  raw.get("dz_gmina") or adres_dz.get("gmina") or adres_dz.get("commune"))
+    if form.inputs.get("dz_kraj"):
+        _safe_set(form.inputs.get("dz_kraj"),
+                  raw.get("dz_kraj") or adres_dz.get("kraj") or adres_dz.get("country"))
+
+    if form.inputs.get("ko_miasto"):
+        _safe_set(form.inputs.get("ko_miasto"),
+                  raw.get("ko_miasto") or adres_ko.get("miasto") or raw.get("koresp_miasto"))
+    if form.inputs.get("ko_kod"):
+        _safe_set(form.inputs.get("ko_kod"),
+                  raw.get("ko_kod") or adres_ko.get("kod") or adres_ko.get("kodPocztowy") or raw.get("koresp_kod"))
+    if form.inputs.get("ko_ulica"):
+        _safe_set(form.inputs.get("ko_ulica"),
+                  raw.get("ko_ulica") or adres_ko.get("ulica") or adres_ko.get("ulic") or raw.get("koresp_ulica"))
+    if form.inputs.get("ko_budynek"):
+        _safe_set(form.inputs.get("ko_budynek"),
+                  raw.get("ko_budynek") or adres_ko.get("budynek"))
+    if form.inputs.get("ko_lokal"):
+        _safe_set(form.inputs.get("ko_lokal"),
+                  raw.get("ko_lokal") or adres_ko.get("lokal"))
+    if form.inputs.get("ko_wojewodztwo"):
+        _safe_set(form.inputs.get("ko_wojewodztwo"),
+                  raw.get("ko_wojewodztwo") or adres_ko.get("wojewodztwo"))
+    if form.inputs.get("ko_powiat"):
+        _safe_set(form.inputs.get("ko_powiat"),
+                  raw.get("ko_powiat") or adres_ko.get("powiat"))
+    if form.inputs.get("ko_gmina"):
+        _safe_set(form.inputs.get("ko_gmina"),
+                  raw.get("ko_gmina") or adres_ko.get("gmina"))
+    if form.inputs.get("ko_kraj"):
+        _safe_set(form.inputs.get("ko_kraj"),
+                  raw.get("ko_kraj") or adres_ko.get("kraj"))
+
+    # kontakt
+    if form.inputs.get("kont_imie"):
+        _safe_set(form.inputs.get("kont_imie"), wl.get("imie"))
+    if form.inputs.get("kont_nazw"):
+        _safe_set(form.inputs.get("kont_nazw"), wl.get("nazwisko"))
+    if form.inputs.get("kont_email"):
+        _safe_set(form.inputs.get("kont_email"), raw.get("email") or raw.get("kontaktEmail"))
+    if form.inputs.get("kont_tel"):
+        _safe_set(form.inputs.get("kont_tel"), raw.get("telefon") or raw.get("kontaktTelefon"))
+
+    # e-doręczenia
+    if form.inputs.get("adres_doreczen_elektronicznych"):
+        _safe_set(
+            form.inputs.get("adres_doreczen_elektronicznych"),
+            raw.get("adresDoreczenElektronicznych")
+            or raw.get("adres_doreczen_elektronicznych")
+            or raw.get("adres_doreczen")
+        )
+
+    return
+
+
+def ceidg_error(form, error: Exception):
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(form, "CEIDG", f"Błąd pobierania danych z CEIDG: {error}")
+    except Exception:
+        pass
+
+
+def ceidg_finished(form):
+    form._ceidg_in_progress = False
+    try:
+        if hasattr(form, "btn_ceidg"):
+            form.btn_ceidg.setEnabled(True)
+            form.btn_ceidg.setText("Pobierz z CEIDG")
+    except Exception:
+        pass
+
+
 def ceidg_fetch(form):
+    """
+    Kick off CEIDG fetch in background. Form must have inputs dict with 'nip' widget and optional btn_ceidg.
+    """
     if getattr(form, "_ceidg_in_progress", False):
         return
 
-    nip = form.inputs["nip"].text().strip()
+    nip_widget = form.inputs.get("nip")
+    nip = nip_widget.text().strip() if nip_widget else ""
     if not nip:
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(form, "CEIDG", "Podaj NIP przed pobraniem danych z CEIDG.")
+        except Exception:
+            pass
         return
 
     form._ceidg_in_progress = True
+    try:
+        if hasattr(form, "btn_ceidg"):
+            form.btn_ceidg.setEnabled(False)
+            form.btn_ceidg.setText("Pobieranie...")
+    except Exception:
+        pass
 
     worker = CEIDGWorker(nip, form)
     worker.signals.result.connect(lambda payload: ceidg_apply(*payload))
     worker.signals.error.connect(lambda err: ceidg_error(form, err))
     worker.signals.finished.connect(lambda: ceidg_finished(form))
-
     QThreadPool.globalInstance().start(worker)
 
 
-def ceidg_apply(form, data: Dict[str, Any]):
-    form._last_ceidg_raw = data or {}
+# -------------------------
+# CompanyLogic core
+# -------------------------
+class CompanyLogic:
+    def __init__(self):
+        pass
 
-    if not data or data.get("error"):
-        return
+    # ---------------------------------------------------------
+    # Pobieranie firmy
+    # ---------------------------------------------------------
+    def get_company(self, firma_id: int) -> Optional[Dict[str, Any]]:
+        conn = get_conn()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
 
-    # identyfikatory
-    form.inputs["nazwa"].setText(data.get("nazwa", "") or "")
-    form.inputs["nip"].setText(data.get("nip", "") or "")
-    form.inputs["regon"].setText(data.get("regon", "") or "")
-    form.inputs["kody_pkd"].setText(", ".join(data.get("pkd", []) or []))
+        cur.execute("""
+            SELECT *
+            FROM firmy
+            WHERE id = ?
+        """, (firma_id,))
 
-    # adres działalności
-    form.inputs["dz_miasto"].setText(data.get("dz_miasto", "") or "")
-    form.inputs["dz_kod"].setText(data.get("dz_kod", "") or "")
-    form.inputs["dz_ulica"].setText(data.get("dz_ulica", "") or "")
-    form.inputs["dz_budynek"].setText(data.get("dz_budynek", "") or "")
-    form.inputs["dz_lokal"].setText(data.get("dz_lokal", "") or "")
-    form.inputs["dz_wojewodztwo"].setText(data.get("dz_wojewodztwo", "") or "")
-    form.inputs["dz_powiat"].setText(data.get("dz_powiat", "") or "")
-    form.inputs["dz_gmina"].setText(data.get("dz_gmina", "") or "")
-    form.inputs["dz_kraj"].setText(data.get("dz_kraj", "") or "")
+        row = cur.fetchone()
+        conn.close()
 
-    # adres korespondencji
-    form.inputs["ko_miasto"].setText(data.get("koresp_miasto", "") or "")
-    form.inputs["ko_kod"].setText(data.get("koresp_kod", "") or "")
-    form.inputs["ko_ulica"].setText(data.get("koresp_ulica", "") or "")
-    form.inputs["ko_budynek"].setText(data.get("koresp_budynek", "") or "")
-    form.inputs["ko_lokal"].setText(data.get("koresp_lokal", "") or "")
-    form.inputs["ko_wojewodztwo"].setText(data.get("koresp_wojewodztwo", "") or "")
-    form.inputs["ko_powiat"].setText(data.get("koresp_powiat", "") or "")
-    form.inputs["ko_gmina"].setText(data.get("koresp_gmina", "") or "")
-    form.inputs["ko_kraj"].setText(data.get("koresp_kraj", "") or "")
+        return dict(row) if row else None
 
-    # data rozpoczęcia DG
-    ds = data.get("data_rozpoczecia")
-    if ds:
-        d = QDate.fromString(ds[:10], "yyyy-MM-dd")
-        if d.isValid():
-            form.inputs["data_rozpoczecia_dg"].setDate(d)
+    # ---------------------------------------------------------
+    # Pobieranie listy firm
+    # ---------------------------------------------------------
+    def get_all_companies(self) -> List[Dict[str, Any]]:
+        conn = get_conn()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
 
+        cur.execute("SELECT * FROM firmy ORDER BY nazwa")
 
-def ceidg_error(form, error: Exception):
-    print("CEIDG error:", error)
+        rows = cur.fetchall()
+        conn.close()
 
+        return [dict(r) for r in rows]
 
-def ceidg_finished(form):
-    form._ceidg_in_progress = False
+    # ---------------------------------------------------------
+    # Tworzenie nowej firmy
+    # ---------------------------------------------------------
+    def create_company(self, payload: Dict[str, Any]) -> int:
+        fields = []
+        values = []
 
+        for key, val in payload.items():
+            fields.append(key)
+            values.append(val)
 
-# cenniki księgowe
-def get_ksiegowosc_options() -> List[Dict[str, Any]]:
-    conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+        conn = get_conn()
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT klucz,
-               cena_netto_ksiegowosc AS netto,
-               brutto,
-               cena_za_dokument_ponad_limit AS ponad_limit
-        FROM cenniki
-        ORDER BY klucz
-    """)
+        cur.execute(f"""
+            INSERT INTO firmy ({", ".join(fields)})
+            VALUES ({", ".join(["?"] * len(values))})
+        """, values)
 
-    rows = cur.fetchall()
-    conn.close()
+        firma_id = cur.lastrowid
+        conn.commit()
+        conn.close()
 
-    result: List[Dict[str, Any]] = []
-    for r in rows:
-        result.append({
-            "klucz": r["klucz"],
-            "netto": float(r["netto"] or 0),
-            "brutto": float(r["brutto"] or 0),
-            "ponad_limit": float(r["ponad_limit"] or 0),
-        })
-    return result
+        return firma_id
 
+    # ---------------------------------------------------------
+    # Zapisywanie firmy (pełny update)
+    # ---------------------------------------------------------
+    def save_company(self, firma_id: int, payload: Dict[str, Any]) -> None:
+        fields = []
+        values = []
 
-def get_ksiegowosc_by_key(klucz: str) -> Dict[str, Any] | None:
-    for item in get_ksiegowosc_options():
-        if item["klucz"] == klucz:
-            return item
-    return None
+        for key, val in payload.items():
+            fields.append(f"{key} = ?")
+            values.append(val)
 
+        values.append(firma_id)
 
-# cenniki kadrowe
-def get_kadry_options() -> List[Dict[str, Any]]:
-    conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+        conn = get_conn()
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT klucz, cena_netto_kadry
-        FROM cenniki_kadry
-        ORDER BY klucz
-    """)
+        cur.execute(f"""
+            UPDATE firmy
+            SET {", ".join(fields)}
+            WHERE id = ?
+        """, values)
 
-    rows = cur.fetchall()
-    conn.close()
+        conn.commit()
+        conn.close()
 
-    result: List[Dict[str, Any]] = []
+    # ---------------------------------------------------------
+    # Kadry — pobieranie cen z cennika
+    # ---------------------------------------------------------
+    def calculate_kadry_values(self, firma: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Zwraca:
+        {
+            "uop": {"ilosc": X, "cennik": "...", "cena": Y, "netto": Z, "brutto": W, "opis": "..."},
+            "uz": {...},
+            "uod": {...}
+        }
+        """
 
-    for r in rows:
-        klucz = r["klucz"]
-        cena = float(r["cena_netto_kadry"] or 0)
+        result = {}
 
-        if klucz.startswith("UOP"):
-            nazwa = "Umowa o pracę"
-        elif klucz.startswith("UZ"):
-            nazwa = "Umowa Zlecenie"
-        elif klucz.startswith("UOD"):
-            nazwa = "Umowa o dzieło"
-        else:
-            nazwa = klucz
+        # -------------------------
+        # UoP
+        # -------------------------
+        uop_ilosc = firma.get("uop_ilosc") or 0
+        uop_key = firma.get("uop_cennik")
+        uop_cena = get_kadry_price(uop_key) if uop_key else 0
+        uop_opis = get_kadry_description(uop_key) if uop_key else ""
 
-        result.append({
-            "klucz": klucz,
-            "typ": klucz.split("_")[0],
-            "nazwa": nazwa,
-            "cena": cena,
-        })
+        uop_netto = round(uop_ilosc * uop_cena, 2)
+        uop_brutto = round(uop_netto * 1.23, 2)
 
-    return result
+        result["uop"] = {
+            "ilosc": uop_ilosc,
+            "cennik": uop_key,
+            "cena": uop_cena,
+            "netto": uop_netto,
+            "brutto": uop_brutto,
+            "opis": uop_opis,
+        }
 
+        # -------------------------
+        # UZ
+        # -------------------------
+        uz_ilosc = firma.get("uz_ilosc") or 0
+        uz_key = firma.get("uz_cennik")
+        uz_cena = get_kadry_price(uz_key) if uz_key else 0
+        uz_opis = get_kadry_description(uz_key) if uz_key else ""
 
-def calculate_kadry_price(uop: int, uz: int, uod: int, selected_keys: List[str]) -> float:
-    options = get_kadry_options()
+        uz_netto = round(uz_ilosc * uz_cena, 2)
+        uz_brutto = round(uz_netto * 1.23, 2)
 
-    cena_uop = None
-    cena_uz = None
-    cena_uod = None
+        result["uz"] = {
+            "ilosc": uz_ilosc,
+            "cennik": uz_key,
+            "cena": uz_cena,
+            "netto": uz_netto,
+            "brutto": uz_brutto,
+            "opis": uz_opis,
+        }
 
-    for item in options:
-        if item["klucz"] in selected_keys:
-            if item["typ"] == "UOP":
-                cena_uop = item["cena"]
-            elif item["typ"] == "UZ":
-                cena_uz = item["cena"]
-            elif item["typ"] == "UOD":
-                cena_uod = item["cena"]
+        # -------------------------
+        # UoD
+        # -------------------------
+        uod_ilosc = firma.get("uod_ilosc") or 0
+        uod_key = firma.get("uod_cennik")
+        uod_cena = get_kadry_price(uod_key) if uod_key else 0
+        uod_opis = get_kadry_description(uod_key) if uod_key else ""
 
-    total = 0.0
-    if cena_uop is not None:
-        total += uop * cena_uop
-    if cena_uz is not None:
-        total += uz * cena_uz
-    if cena_uod is not None:
-        total += uod * cena_uod
+        uod_netto = round(uod_ilosc * uod_cena, 2)
+        uod_brutto = round(uod_netto * 1.23, 2)
 
-    return total
+        result["uod"] = {
+            "ilosc": uod_ilosc,
+            "cennik": uod_key,
+            "cena": uod_cena,
+            "netto": uod_netto,
+            "brutto": uod_brutto,
+            "opis": uod_opis,
+        }
+
+        return result
+
+    # ---------------------------------------------------------
+    # Kadry — zapis tylko sekcji kadrowej
+    # ---------------------------------------------------------
+    def save_kadry_section(self, firma_id: int, uop_ilosc: int, uz_ilosc: int, uod_ilosc: int,
+                           uop_cennik: Optional[str], uz_cennik: Optional[str], uod_cennik: Optional[str]) -> None:
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            UPDATE firmy
+            SET
+                uop_ilosc = ?,
+                uz_ilosc = ?,
+                uod_ilosc = ?,
+                uop_cennik = ?,
+                uz_cennik = ?,
+                uod_cennik = ?
+            WHERE id = ?
+        """, (
+            uop_ilosc,
+            uz_ilosc,
+            uod_ilosc,
+            uop_cennik,
+            uz_cennik,
+            uod_cennik,
+            firma_id
+        ))
+
+        conn.commit()
+        conn.close()
+
+    # ---------------------------------------------------------
+    # Usuwanie firmy
+    # ---------------------------------------------------------
+    def delete_company(self, firma_id: int) -> None:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("DELETE FROM firmy WHERE id = ?", (firma_id,))
+
+        conn.commit()
+        conn.close()
+
+    # ---------------------------------------------------------
+    # Pobieranie przypisanych pracowników
+    # ---------------------------------------------------------
+    def get_assigned_employees(self, firma_id: int) -> List[int]:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT pracownik_id
+            FROM pracownik_firma
+            WHERE firma_id = ?
+        """, (firma_id,))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return [r[0] for r in rows]
+
+    # ---------------------------------------------------------
+    # Przypisywanie pracowników
+    # ---------------------------------------------------------
+    def assign_employees(self, firma_id: int, employee_ids: List[int]) -> None:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ?", (firma_id,))
+
+        for pid in employee_ids:
+            cur.execute("""
+                INSERT INTO pracownik_firma (pracownik_id, firma_id)
+                VALUES (?, ?)
+            """, (pid, firma_id))
+
+        conn.commit()
+        conn.close()
+
+    # ---------------------------------------------------------
+    # Pobieranie opcji cennika kadrowego (użyteczne dla formularzy)
+    # ---------------------------------------------------------
+    def get_kadry_options(self) -> List[Dict[str, Any]]:
+        conn = get_conn()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT klucz, cena, opis
+            FROM cenniki_kadry
+            ORDER BY klucz
+        """)
+        rows = cur.fetchall()
+        conn.close()
+        result: List[Dict[str, Any]] = []
+        for r in rows:
+            klucz = r["klucz"]
+            cena = float(r["cena"] or 0)
+            if klucz.upper().startswith("UOP"):
+                nazwa = "Umowa o pracę"
+            elif klucz.upper().startswith("UZ"):
+                nazwa = "Umowa zlecenie"
+            elif klucz.upper().startswith("UOD"):
+                nazwa = "Umowa o dzieło"
+            else:
+                nazwa = klucz
+            result.append({
+                "klucz": klucz,
+                "typ": klucz.split("_")[0] if "_" in klucz else klucz,
+                "nazwa": nazwa,
+                "cena": cena,
+                "opis": r.get("opis", "")
+            })
+        return result
+
+    # ---------------------------------------------------------
+    # Kalkulator kadrowy pomocniczy (suma netto)
+    # ---------------------------------------------------------
+    def calculate_kadry_price(self, uop: int, uz: int, uod: int, selected_keys: List[str]) -> float:
+        options = self.get_kadry_options()
+        cena_uop = None
+        cena_uz = None
+        cena_uod = None
+        for item in options:
+            if item["klucz"] in selected_keys:
+                typ = item.get("typ", "").upper()
+                if typ == "UOP":
+                    cena_uop = item["cena"]
+                elif typ == "UZ":
+                    cena_uz = item["cena"]
+                elif typ == "UOD":
+                    cena_uod = item["cena"]
+        total = 0.0
+        if cena_uop is not None:
+            total += uop * cena_uop
+        if cena_uz is not None:
+            total += uz * cena_uz
+        if cena_uod is not None:
+            total += uod * cena_uod
+        return round(total, 2)

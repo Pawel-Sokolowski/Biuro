@@ -56,26 +56,33 @@ def init_db():
             glowny_cennik_manualny INTEGER DEFAULT 0,
             limit_dokumentow INTEGER DEFAULT 0,
             liczba_pracownikow INTEGER DEFAULT 0,
+
+            -- stare pola kadrowe (zostawione dla kompatybilności)
             uop INTEGER DEFAULT 0,
             uz INTEGER DEFAULT 0,
             uod INTEGER DEFAULT 0,
+
+            -- nowe kadry: ilości + klucze cennika dla każdego rodzaju umowy
+            uop_ilosc INTEGER DEFAULT 0,
+            uz_ilosc INTEGER DEFAULT 0,
+            uod_ilosc INTEGER DEFAULT 0,
+            uop_cennik TEXT,
+            uz_cennik TEXT,
+            uod_cennik TEXT,
+
             typ_rozliczenia TEXT DEFAULT 'Ryczałt',
             vat_czynny INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Aktywne',
 
-            -- Nowe kolumny wspierające automatyczne i ręczne wybieranie cennika KPIR
-            -- cennik_kpir_auto: klucz cennika wybrany automatycznie na podstawie limit_dokumentow (np. "KPIR_N_10")
+            -- automatyczny / ręczny wybór cennika księgowego (KPIR)
             cennik_kpir_auto TEXT,
-            -- cena_ksiegowosc_auto: wyliczona cena netto księgowości na podstawie cennik_kpir_auto
             cena_ksiegowosc_auto REAL DEFAULT 0,
-            -- cennik_kpir_manual: ręczny wybór cennika (jeśli użytkownik chce nadpisać automatyczny wybór)
             cennik_kpir_manual TEXT,
-            -- jeśli 1 -> używamy cennik_kpir_manual zamiast automatycznego wyboru
             manual_cennik_override INTEGER DEFAULT 0
         );
     """)
 
-    # tabela preferencji cennikowych (opcjonalna, ułatwia cache/śledzenie wyborów)
+    # preferencje cennikowe
     cur.execute("""
         CREATE TABLE IF NOT EXISTS firma_cennik_preference (
             firma_id INTEGER PRIMARY KEY,
@@ -128,39 +135,37 @@ def init_db():
         );
     """)
 
-    # cenniki księgowość
-    # dodajemy kolumnę 'typ' aby łatwo filtrować cenniki (np. 'KPIR', 'VAT', 'RYC')
+    # cenniki księgowość (netto/brutto rozdzielone)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             klucz TEXT UNIQUE NOT NULL,
             typ TEXT DEFAULT 'KSIEGOWOSC',
-            cena_netto_ksiegowosc REAL NOT NULL,
-            cena_brutto_ksiegowosc REAL NOT NULL,
-            cena_za_dokument_ponad_limit REAL NOT NULL,
-            zdrowotna REAL NOT NULL,
+            cena_netto_ksiegowosc REAL NOT NULL DEFAULT 0,
+            cena_brutto_ksiegowosc REAL NOT NULL DEFAULT 0,
+            cena_za_dokument_ponad_limit REAL NOT NULL DEFAULT 0,
+            zdrowotna REAL NOT NULL DEFAULT 0,
             netto REAL,
             brutto REAL,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
 
-    # indeks ułatwiający wyszukiwanie cenników KPIR
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_typ_klucz ON cenniki(typ, klucz);")
 
-    # cenniki kadry
+    # cenniki kadry – rozdzielone netto/brutto (kompatybilne z migracją)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki_kadry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             klucz TEXT UNIQUE NOT NULL,
-            cena_netto_kadry REAL NOT NULL,
-            netto REAL,
-            brutto REAL,
+            cena_netto_kadry REAL NOT NULL DEFAULT 0,
+            cena_brutto_kadry REAL NOT NULL DEFAULT 0,
+            opis TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
 
-    # uslugi_dodatkowe
+    # usługi dodatkowe
     cur.execute("""
         CREATE TABLE IF NOT EXISTS uslugi_dodatkowe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -421,7 +426,6 @@ def init_db():
         );
     """)
 
-    # faktury_pozycje - rozszerzone o flagę generated
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_pozycje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,12 +436,11 @@ def init_db():
             stawka_vat TEXT,
             wartosc_netto REAL,
             wartosc_brutto REAL,
-            generated INTEGER DEFAULT 0, -- 1 jeśli pozycja została wygenerowana automatycznie
+            generated INTEGER DEFAULT 0,
             FOREIGN KEY(faktura_id) REFERENCES faktury(id) ON DELETE CASCADE
         );
     """)
 
-    # archiwum pozycji faktur (przechowuje pozycje po usunięciu nagłówka)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_archiwum (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -519,6 +522,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(faktura_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
 
     # initial data
     cur.execute("SELECT COUNT(*) AS cnt FROM pracownicy")

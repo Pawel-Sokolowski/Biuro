@@ -1,14 +1,37 @@
-from typing import Optional
-
+# app/admin/global_settings_ui.py
+from typing import Optional, Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QTabWidget, QWidget, QHBoxLayout,
+    QWidget, QDialog, QVBoxLayout, QLabel, QTabWidget, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton, QHeaderView, QMessageBox,
     QLineEdit, QSpinBox, QComboBox, QFileDialog, QListWidget, QListWidgetItem
 )
-from app.utils.importers import import_cennik_from_excel
+
 from app.admin.global_settings_logic import GlobalSettingsLogic
+
+
+def row_get(r: Any, key: str, default: Any = "") -> Any:
+    """
+    Bezpieczny accessor dla sqlite3.Row oraz dict.
+    Zwraca default jeśli klucz nie istnieje lub wystąpi błąd.
+    """
+    try:
+        if r is None:
+            return default
+        if isinstance(r, dict):
+            return r.get(key, default)
+        # sqlite3.Row: obsługujemy zarówno dostęp przez klucz jak i sprawdzenie keys()
+        try:
+            keys = r.keys()
+            if key in keys:
+                return r[key]
+            return default
+        except Exception:
+            # fallback: spróbuj bezpośrednio
+            return r[key] if key in r else default
+    except Exception:
+        return default
 
 
 class GlobalSettingsPage(QWidget):
@@ -81,7 +104,7 @@ class GlobalSettingsPage(QWidget):
             row_idx = self.users_table.rowCount()
             self.users_table.insertRow(row_idx)
             for col_idx, key in enumerate(["id", "email", "imie", "nazwisko", "aktywny"]):
-                val = r[key]
+                val = row_get(r, key, "")
                 item = QTableWidgetItem(str(val))
                 if key == "aktywny":
                     item.setText("TAK" if val else "NIE")
@@ -159,10 +182,12 @@ class GlobalSettingsPage(QWidget):
         if uid is None:
             QMessageBox.information(self, "Użytkownicy", "Wybierz użytkownika.")
             return
-        if QMessageBox.question(self, "Usuń użytkownika",
-                                "Czy na pewno chcesz usunąć tego użytkownika?",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                                ) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(
+            self,
+            "Usuń użytkownika",
+            "Czy na pewno chcesz usunąć tego użytkownika?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 self.logic.delete_user(uid)
                 self._refresh_users()
@@ -176,9 +201,9 @@ class GlobalSettingsPage(QWidget):
         layout = QVBoxLayout(page)
 
         self.roles_table = QTableWidget(0, 5)
-        self.roles_table.setHorizontalHeaderLabels([
-            "ID", "Nazwa roli", "Faktury", "Panel admina", "Użytkownicy"
-        ])
+        self.roles_table.setHorizontalHeaderLabels(
+            ["ID", "Nazwa roli", "Faktury", "Panel admina", "Użytkownicy"]
+        )
         self.roles_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.roles_table)
 
@@ -207,11 +232,11 @@ class GlobalSettingsPage(QWidget):
         for r in rows:
             row_idx = self.roles_table.rowCount()
             self.roles_table.insertRow(row_idx)
-            self.roles_table.setItem(row_idx, 0, QTableWidgetItem(str(r["id"])))
-            self.roles_table.setItem(row_idx, 1, QTableWidgetItem(r["nazwa"]))
-            self.roles_table.setItem(row_idx, 2, QTableWidgetItem("TAK" if r["can_view_invoices"] else "NIE"))
-            self.roles_table.setItem(row_idx, 3, QTableWidgetItem("TAK" if r["can_access_admin_settings"] else "NIE"))
-            self.roles_table.setItem(row_idx, 4, QTableWidgetItem("TAK" if r["can_manage_users"] else "NIE"))
+            self.roles_table.setItem(row_idx, 0, QTableWidgetItem(str(row_get(r, "id", ""))))
+            self.roles_table.setItem(row_idx, 1, QTableWidgetItem(str(row_get(r, "nazwa", ""))))
+            self.roles_table.setItem(row_idx, 2, QTableWidgetItem("TAK" if row_get(r, "can_view_invoices") else "NIE"))
+            self.roles_table.setItem(row_idx, 3, QTableWidgetItem("TAK" if row_get(r, "can_access_admin_settings") else "NIE"))
+            self.roles_table.setItem(row_idx, 4, QTableWidgetItem("TAK" if row_get(r, "can_manage_users") else "NIE"))
 
     def _add_role_dialog(self):
         dlg = QDialog(self)
@@ -263,7 +288,7 @@ class GlobalSettingsPage(QWidget):
             return None
         try:
             return int(item.text())
-        except ValueError:
+        except Exception:
             return None
 
     def _edit_role_permissions(self):
@@ -279,20 +304,20 @@ class GlobalSettingsPage(QWidget):
         usr_item = self.roles_table.item(row, 4)
 
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Uprawnienia roli: {name_item.text()}")
+        dlg.setWindowTitle(f"Uprawnienia roli: {name_item.text() if name_item else ''}")
         lay = QVBoxLayout(dlg)
 
         cb_invoices = QComboBox()
         cb_invoices.addItems(["Brak dostępu do faktur", "Dostęp do faktur"])
-        cb_invoices.setCurrentIndex(1 if inv_item.text() == "TAK" else 0)
+        cb_invoices.setCurrentIndex(1 if inv_item and inv_item.text() == "TAK" else 0)
 
         cb_admin = QComboBox()
         cb_admin.addItems(["Brak dostępu do panelu admina", "Dostęp do panelu admina"])
-        cb_admin.setCurrentIndex(1 if adm_item.text() == "TAK" else 0)
+        cb_admin.setCurrentIndex(1 if adm_item and adm_item.text() == "TAK" else 0)
 
         cb_users = QComboBox()
         cb_users.addItems(["Brak zarządzania użytkownikami", "Może zarządzać użytkownikami"])
-        cb_users.setCurrentIndex(1 if usr_item.text() == "TAK" else 0)
+        cb_users.setCurrentIndex(1 if usr_item and usr_item.text() == "TAK" else 0)
 
         lay.addWidget(cb_invoices)
         lay.addWidget(cb_admin)
@@ -324,10 +349,12 @@ class GlobalSettingsPage(QWidget):
         if rid is None:
             QMessageBox.information(self, "Role", "Wybierz rolę.")
             return
-        if QMessageBox.question(self, "Usuń rolę",
-                                "Czy na pewno chcesz usunąć tę rolę?",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                                ) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(
+            self,
+            "Usuń rolę",
+            "Czy na pewno chcesz usunąć tę rolę?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 self.logic.delete_role(rid)
                 self._refresh_roles()
@@ -397,7 +424,6 @@ class GlobalSettingsPage(QWidget):
         dlg.setWindowTitle("Dodaj konto email")
         lay = QVBoxLayout(dlg)
 
-        # --- Użytkownicy (multi-select) ---
         lay.addWidget(QLabel("Wybierz użytkowników (możesz zaznaczyć wielu):"))
 
         users_list = QListWidget()
@@ -413,7 +439,6 @@ class GlobalSettingsPage(QWidget):
 
         lay.addWidget(users_list)
 
-        # --- Email + hasło ---
         email = QLineEdit()
         email.setPlaceholderText("Adres email")
         haslo = QLineEdit()
@@ -423,7 +448,6 @@ class GlobalSettingsPage(QWidget):
         lay.addWidget(email)
         lay.addWidget(haslo)
 
-        # --- IMAP ---
         lay.addWidget(QLabel("Serwer przychodzący (IMAP)"))
         imap_server = QLineEdit()
         imap_server.setPlaceholderText("np. imap.gmail.com")
@@ -435,10 +459,9 @@ class GlobalSettingsPage(QWidget):
 
         imap_port = QSpinBox()
         imap_port.setMaximum(99999)
-        imap_port.setValue(993)  # domyślny SSL
+        imap_port.setValue(993)
         lay.addWidget(imap_port)
 
-        # --- SMTP ---
         lay.addWidget(QLabel("Serwer wychodzący (SMTP)"))
         smtp_server = QLineEdit()
         smtp_server.setPlaceholderText("np. smtp.gmail.com")
@@ -450,10 +473,9 @@ class GlobalSettingsPage(QWidget):
 
         smtp_port = QSpinBox()
         smtp_port.setMaximum(99999)
-        smtp_port.setValue(465)  # domyślny SSL
+        smtp_port.setValue(465)
         lay.addWidget(smtp_port)
 
-        # --- Przyciski ---
         btns = QHBoxLayout()
         btn_ok = QPushButton("Zapisz")
         btn_cancel = QPushButton("Anuluj")
@@ -464,7 +486,6 @@ class GlobalSettingsPage(QWidget):
         lay.addLayout(btns)
 
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Pobranie zaznaczonych użytkowników
             selected_users = []
             for i in range(users_list.count()):
                 item = users_list.item(i)
@@ -476,7 +497,6 @@ class GlobalSettingsPage(QWidget):
                 return
 
             try:
-                # Dodajemy konto email
                 konto_id = self.logic.add_email_account(
                     email.text().strip(),
                     imap_server.text().strip(),
@@ -488,7 +508,6 @@ class GlobalSettingsPage(QWidget):
                     smtp_ssl.currentText(),
                 )
 
-                # Przypisujemy konto do wielu użytkowników
                 for uid in selected_users:
                     self.logic.assign_email_to_employee(konto_id, uid)
 
@@ -509,10 +528,12 @@ class GlobalSettingsPage(QWidget):
             kid = int(item.text())
         except ValueError:
             return
-        if QMessageBox.question(self, "Usuń konto email",
-                                "Czy na pewno chcesz usunąć to konto?",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                                ) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(
+            self,
+            "Usuń konto email",
+            "Czy na pewno chcesz usunąć to konto?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 self.logic.delete_email_account(kid)
                 self._refresh_email()
@@ -545,10 +566,7 @@ class GlobalSettingsPage(QWidget):
 
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
-                self.logic.assign_email_to_employee(
-                    konto_id_spin.value(),
-                    pracownik_id_spin.value(),
-                )
+                self.logic.assign_email_to_employee(konto_id_spin.value(), pracownik_id_spin.value())
                 self._refresh_email()
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się przypisać konta: {e}")
@@ -567,10 +585,12 @@ class GlobalSettingsPage(QWidget):
             pid = int(prac_item.text())
         except ValueError:
             return
-        if QMessageBox.question(self, "Usuń przypisanie",
-                                "Czy na pewno chcesz usunąć to przypisanie?",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                                ) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(
+            self,
+            "Usuń przypisanie",
+            "Czy na pewno chcesz usunąć to przypisanie?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 self.logic.remove_email_assignment(kid, pid)
                 self._refresh_email()
@@ -584,10 +604,9 @@ class GlobalSettingsPage(QWidget):
         layout = QVBoxLayout(page)
 
         self.pricing_table_ksiegowosc = QTableWidget(0, 6)
-        self.pricing_table_ksiegowosc.setHorizontalHeaderLabels([
-            "Cennik", "Cena netto księgowość", "Cena za dokument ponad limit",
-            "Zdrowotna", "Netto", "Brutto"
-        ])
+        self.pricing_table_ksiegowosc.setHorizontalHeaderLabels(
+            ["Cennik", "Cena netto księgowość", "Cena za dokument ponad limit", "Zdrowotna", "Netto", "Brutto"]
+        )
         self.pricing_table_ksiegowosc.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.pricing_table_ksiegowosc)
 
@@ -611,7 +630,6 @@ class GlobalSettingsPage(QWidget):
         self.pricing_table_ksiegowosc.setRowCount(0)
 
         def row_get(r, *candidates, default=None):
-            # sqlite3.Row nie ma .get, więc sprawdzamy klucze bezpośrednio
             try:
                 keys = r.keys()
             except Exception:
@@ -633,7 +651,6 @@ class GlobalSettingsPage(QWidget):
             row_idx = self.pricing_table_ksiegowosc.rowCount()
             self.pricing_table_ksiegowosc.insertRow(row_idx)
 
-            # Pobieramy możliwe nazwy pól zwracanych przez DAO
             klucz = row_get(r, "klucz", "key", "typ", default="")
             netto_val = row_get(r, "netto", "cena_netto_ksiegowosc", default=0)
             za_przekroczenie_val = row_get(
@@ -641,24 +658,21 @@ class GlobalSettingsPage(QWidget):
                 "za_przekroczenie_limitu_netto",
                 "cena_za_dokument_ponad_limit",
                 "cena_za_dokument",
-                default=0
+                default=0,
             )
             zdrowotna_val = row_get(r, "zdrowotna", default=0)
             brutto_val = row_get(r, "brutto", default=0)
 
-            # Bezpieczne konwersje
             netto_f = to_float_safe(netto_val, 0.0)
             za_przekroczenie_f = to_float_safe(za_przekroczenie_val, 0.0)
             zdrowotna_f = to_float_safe(zdrowotna_val, 0.0)
             brutto_f = to_float_safe(brutto_val, 0.0)
 
-            # Opis cennika — jeśli funkcja rzuci wyjątek, używamy klucza
             try:
                 opis = opis_cennika_z_klucza(klucz) if klucz else ""
             except Exception:
                 opis = klucz or ""
 
-            # Ustawienie komórek w tabeli (formatowane jako liczby z dwoma miejscami po przecinku)
             self.pricing_table_ksiegowosc.setItem(row_idx, 0, QTableWidgetItem(str(opis)))
             self.pricing_table_ksiegowosc.setItem(row_idx, 1, QTableWidgetItem(f"{netto_f:.2f}"))
             self.pricing_table_ksiegowosc.setItem(row_idx, 2, QTableWidgetItem(f"{za_przekroczenie_f:.2f}"))
@@ -671,23 +685,19 @@ class GlobalSettingsPage(QWidget):
             self,
             "Wybierz plik cennika",
             "",
-            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;Wszystkie pliki (*)"
+            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;Wszystkie pliki (*)",
         )
         if not path:
             return
 
         try:
-            # używamy importera EXCEL z DAO
-            from app.utils.importers import import_cennik_from_excel
+            from app.admin.global_settings_logic import GlobalSettingsLogic as LogicClass
 
-            result = import_cennik_from_excel(path)
-
-            if result["errors"]:
-                raise Exception("\n".join(result["errors"]))
+            # używamy metody logic do importu
+            LogicClass().import_global_pricing_from_csv(path)
 
             self._refresh_pricing_ksiegowosc()
             QMessageBox.information(self, "Cennik", "Cennik księgowości został zaimportowany.")
-
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zaimportować cennika: {e}")
 
@@ -698,16 +708,14 @@ class GlobalSettingsPage(QWidget):
         layout = QVBoxLayout(page)
 
         self.pricing_table_kadry = QTableWidget(0, 4)
-        self.pricing_table_kadry.setHorizontalHeaderLabels([
-            "Cennik", "Cena netto kadry", "Netto", "Brutto"
-        ])
+        self.pricing_table_kadry.setHorizontalHeaderLabels(["Cennik", "Cena netto kadry", "Netto", "Brutto"])
         self.pricing_table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.pricing_table_kadry)
 
         btn_row = QHBoxLayout()
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self._refresh_pricing_kadry)
-        btn_import = QPushButton("Importuj cennik z CSV")
+        btn_import = QPushButton("Importuj cennik z CSV/XLSX")
         btn_import.clicked.connect(self._import_pricing_kadry)
         btn_row.addWidget(btn_refresh)
         btn_row.addWidget(btn_import)
@@ -727,22 +735,34 @@ class GlobalSettingsPage(QWidget):
             row_idx = self.pricing_table_kadry.rowCount()
             self.pricing_table_kadry.insertRow(row_idx)
 
-            self.pricing_table_kadry.setItem(row_idx, 0, QTableWidgetItem(opis_cennika_z_klucza(r["klucz"])))
-            self.pricing_table_kadry.setItem(row_idx, 1, QTableWidgetItem(str(r["cena_netto_kadry"])))
-            self.pricing_table_kadry.setItem(row_idx, 2, QTableWidgetItem(str(r["netto"])))
-            self.pricing_table_kadry.setItem(row_idx, 3, QTableWidgetItem(str(r["brutto"])))
+            klucz = row_get(r, "klucz", "")
+            cena_netto = float(row_get(r, "cena_netto_kadry", 0))
+            cena_brutto = float(row_get(r, "cena_brutto_kadry", round(cena_netto * 1.23, 2)))
+
+            # opis cennika
+            try:
+                opis = opis_cennika_z_klucza(klucz)
+            except Exception:
+                opis = klucz
+
+            self.pricing_table_kadry.setItem(row_idx, 0, QTableWidgetItem(str(opis)))
+            self.pricing_table_kadry.setItem(row_idx, 1, QTableWidgetItem(f"{cena_netto:.2f}"))
+            self.pricing_table_kadry.setItem(row_idx, 2, QTableWidgetItem(f"{cena_netto:.2f}"))  # netto = cena_netto_kadry
+            self.pricing_table_kadry.setItem(row_idx, 3, QTableWidgetItem(f"{cena_brutto:.2f}"))
 
     def _import_pricing_kadry(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Wybierz plik cennika",
             "",
-            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;Wszystkie pliki (*)"
+            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;Wszystkie pliki (*)",
         )
         if not path:
             return
         try:
-            self.logic.import_pricing_kadry_from_csv(path)
+            from app.admin.global_settings_logic import GlobalSettingsLogic as LogicClass
+
+            LogicClass().import_pricing_kadry_from_csv(path)
             self._refresh_pricing_kadry()
             QMessageBox.information(self, "Cennik", "Cennik kadrowy został zaimportowany.")
         except Exception as e:
@@ -847,10 +867,12 @@ class GlobalSettingsPage(QWidget):
             uid = int(item.text())
         except ValueError:
             return
-        if QMessageBox.question(self, "Usuń usługę",
-                                "Czy na pewno chcesz usunąć tę usługę?",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                                ) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(
+            self,
+            "Usuń usługę",
+            "Czy na pewno chcesz usunąć tę usługę?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 self.logic.delete_extra_service(uid)
                 self._refresh_extra_services()
@@ -902,10 +924,12 @@ class GlobalSettingsPage(QWidget):
             fid = int(item.text())
         except ValueError:
             return
-        if QMessageBox.question(self, "Usuń firmę",
-                                "Czy na pewno chcesz usunąć tę firmę?",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                                ) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(
+            self,
+            "Usuń firmę",
+            "Czy na pewno chcesz usunąć tę firmę?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 self.logic.delete_company(fid)
                 self._refresh_companies()
@@ -966,68 +990,3 @@ class GlobalSettingsPage(QWidget):
 
     def _cleanup_emails_stub(self):
         QMessageBox.information(self, "Czyszczenie", "Tu będzie czyszczenie starych emaili (do zaimplementowania).")
-
-    def _create_saldeo_tab(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-
-        # ==========================
-        # FILTRY
-        # ==========================
-        filter_row = QHBoxLayout()
-
-        # Firma (autouzupełnianie)
-        self.saldeo_firma = QComboBox()
-        self.saldeo_firma.setEditable(True)
-        companies = self.logic.get_all_companies()
-        for c in companies:
-            self.saldeo_firma.addItem(c["nazwa"], c["id"])
-        filter_row.addWidget(QLabel("Firma:"))
-        filter_row.addWidget(self.saldeo_firma)
-
-        # Miesiąc
-        from datetime import datetime
-        current_month = datetime.now().strftime("%Y-%m")
-
-        self.saldeo_miesiac = QLineEdit(current_month)
-        filter_row.addWidget(QLabel("Miesiąc (YYYY-MM):"))
-        filter_row.addWidget(self.saldeo_miesiac)
-
-        # Przycisk odśwież
-        btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self._refresh_saldeo_tables)
-        filter_row.addWidget(btn_refresh)
-
-        # Eksport
-        btn_export = QPushButton("Eksport do Saldeo")
-        btn_export.clicked.connect(self._export_saldeo)
-        filter_row.addWidget(btn_export)
-
-        filter_row.addStretch(1)
-        layout.addLayout(filter_row)
-
-        # ==========================
-        # TABELA FAKTUR
-        # ==========================
-        self.saldeo_fv_table = QTableWidget(0, 5)
-        self.saldeo_fv_table.setHorizontalHeaderLabels([
-            "Firma", "Numer", "Typ", "Cena netto", "Data wystawienia"
-        ])
-        self.saldeo_fv_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(QLabel("Faktury"))
-        layout.addWidget(self.saldeo_fv_table)
-
-        # ==========================
-        # TABELA USŁUG DODATKOWYCH
-        # ==========================
-        self.saldeo_extra_table = QTableWidget(0, 5)
-        self.saldeo_extra_table.setHorizontalHeaderLabels([
-            "Firma", "Usługa", "Ilość", "Cena netto", "Kategoria"
-        ])
-        self.saldeo_extra_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(QLabel("Usługi dodatkowe"))
-        layout.addWidget(self.saldeo_extra_table)
-
-        self.tabs.addTab(page, "Faktury / Saldeo")
-        self._refresh_saldeo_tables()
-

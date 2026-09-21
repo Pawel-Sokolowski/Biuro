@@ -8,13 +8,9 @@ from typing import Dict, Any, List, Optional
 import os
 
 from app.utils.parsing import normalize_identifier, resolve_employee_ids
-from app.companies.helpers import _get_cell  # jeśli masz helpery, inaczej usuń
 from app.config import DB_NAME
 
 
-# ============================================================
-# PARSER CENNIKÓW TEKSTOWYCH (tylko dla cenników księgowych)
-# ============================================================
 def parse_cennik_text(text: str) -> Dict[str, Any]:
     """
     Parsuje tekstowy cennik z Excela/komentarza firmy.
@@ -67,9 +63,6 @@ def parse_cennik_text(text: str) -> Dict[str, Any]:
     return out
 
 
-# ============================================================
-# IMPORT FIRM Z EXCEL/CSV
-# ============================================================
 def import_companies_from_excel_file(filepath: str, db_path: str = DB_NAME) -> Dict[str, Any]:
     """
     Import firm z pliku Excel (.xlsx/.xls) lub CSV (.csv).

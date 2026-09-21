@@ -3,7 +3,7 @@ import csv
 import sqlite3
 from pathlib import Path
 from typing import List, Dict, Any
-
+import re
 import openpyxl
 
 from app.db.dao_conn import get_conn
@@ -277,10 +277,16 @@ class GlobalSettingsLogic:
         conn.close()
         return rows
 
+    import re
+
     def import_global_pricing_from_csv(self, csv_path: str):
         path = Path(csv_path)
         if not path.exists():
             raise FileNotFoundError(csv_path)
+
+        def extract_docs(klucz: str) -> int:
+            m = re.search(r"_(\d+)", klucz)
+            return int(m.group(1)) if m else 0
 
         # CSV
         if path.suffix.lower() == ".csv":
@@ -291,16 +297,23 @@ class GlobalSettingsLogic:
                 reader = csv.DictReader(f, delimiter=";")
                 for row in reader:
                     klucz = row.get("Klucz") or row.get("klucz")
-                    cena_netto_ksiegowosc = safe_float(row.get("cena netto księgowość") or row.get("cena_netto_ksiegowosc"))
-                    cena_za_dokument_ponad_limit = safe_float(row.get("cena za dokument ponad limit") or row.get("cena_za_dokument_ponad_limit"))
+                    cena_netto_ksiegowosc = safe_float(row.get("cena netto 2024"))
+                    cena_za_dokument = safe_float(row.get("cena za dokument"))
                     zdrowotna = safe_float(row.get("zdrowotna"))
-                    netto = safe_float(row.get("Netto") or row.get("netto"))
-                    brutto = safe_float(row.get("Brutto") or row.get("brutto"))
+
+                    netto = cena_netto_ksiegowosc + zdrowotna
+                    brutto = netto * 1.23
 
                     cur.execute(
                         """
-                        INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
-                                             zdrowotna, netto, brutto)
+                        INSERT INTO cenniki (
+                            klucz,
+                            cena_netto_ksiegowosc,
+                            cena_za_dokument_ponad_limit,
+                            zdrowotna,
+                            netto,
+                            brutto
+                        )
                         VALUES (?, ?, ?, ?, ?, ?)
                         ON CONFLICT(klucz) DO UPDATE SET
                             cena_netto_ksiegowosc = excluded.cena_netto_ksiegowosc,
@@ -312,7 +325,7 @@ class GlobalSettingsLogic:
                         (
                             klucz,
                             cena_netto_ksiegowosc,
-                            cena_za_dokument_ponad_limit,
+                            cena_za_dokument,
                             zdrowotna,
                             netto,
                             brutto,
@@ -331,6 +344,12 @@ class GlobalSettingsLogic:
             header = [str(h).strip().lower() for h in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
             idx = {h: i for i, h in enumerate(header)}
 
+            def col(*names):
+                for n in names:
+                    if n in idx:
+                        return idx[n]
+                return None
+
             conn = get_conn()
             cur = conn.cursor()
 
@@ -338,17 +357,29 @@ class GlobalSettingsLogic:
                 if not any(row):
                     continue
 
-                klucz = str(row[idx["klucz"]]).strip()
-                cena_netto_ksiegowosc = safe_float(row[idx.get("cena netto księgowość", idx.get("cena_netto_ksiegowosc"))])
-                cena_za_dokument_ponad_limit = safe_float(row[idx.get("cena za dokument ponad limit", idx.get("cena_za_dokument_ponad_limit"))])
-                zdrowotna = safe_float(row[idx.get("zdrowotna")])
-                netto = safe_float(row[idx.get("netto")])
-                brutto = safe_float(row[idx.get("brutto")])
+                i_klucz = col("klucz")
+                i_cnk = col("cena netto 2024")
+                i_cpl = col("cena za dokument")
+                i_zdrowotna = col("zdrowotna")
+
+                klucz = str(row[i_klucz]).strip()
+                cena_netto_ksiegowosc = safe_float(row[i_cnk])
+                cena_za_dokument = safe_float(row[i_cpl])
+                zdrowotna = safe_float(row[i_zdrowotna])
+
+                netto = cena_netto_ksiegowosc + zdrowotna
+                brutto = netto * 1.23
 
                 cur.execute(
                     """
-                    INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
-                                         zdrowotna, netto, brutto)
+                    INSERT INTO cenniki (
+                        klucz,
+                        cena_netto_ksiegowosc,
+                        cena_za_dokument_ponad_limit,
+                        zdrowotna,
+                        netto,
+                        brutto
+                    )
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(klucz) DO UPDATE SET
                         cena_netto_ksiegowosc = excluded.cena_netto_ksiegowosc,
@@ -360,7 +391,7 @@ class GlobalSettingsLogic:
                     (
                         klucz,
                         cena_netto_ksiegowosc,
-                        cena_za_dokument_ponad_limit,
+                        cena_za_dokument,
                         zdrowotna,
                         netto,
                         brutto,

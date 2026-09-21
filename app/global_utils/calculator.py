@@ -70,15 +70,16 @@ def _get_docs_count_for_month(firma_id: int, miesiac: str) -> int:
 
 def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
     """
-    Pobiera wiersz z tabeli cenniki dla danego klucza:
-    klucz np. 'Ryczałt_N_20'
+    Pobiera wiersz z tabeli cenniki dla danego klucza.
+    Zwraca wartości zgodne ze schematem:
+      cena_netto_ksiegowosc, cena_brutto_ksiegowosc,
+      cena_za_dokument_ponad_limit, zdrowotna, netto, brutto
     """
     if not klucz:
         return {
-            "cena_netto_2024": None,
-            "wzrost_ilosci_dokumentow": 0,
-            "cena_za_dokument": None,
-            "za_przekroczenie_limitu_netto": 0.0,
+            "cena_netto_ksiegowosc": 0.0,
+            "cena_brutto_ksiegowosc": 0.0,
+            "cena_za_dokument_ponad_limit": 0.0,
             "zdrowotna": 0.0,
             "netto": 0.0,
             "brutto": 0.0
@@ -90,10 +91,9 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
 
     cur.execute("""
         SELECT
-            cena_netto_2024,
-            wzrost_ilosci_dokumentow,
-            cena_za_dokument,
-            za_przekroczenie_limitu_netto,
+            cena_netto_ksiegowosc,
+            cena_brutto_ksiegowosc,
+            cena_za_dokument_ponad_limit,
             zdrowotna,
             netto,
             brutto
@@ -105,23 +105,28 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
 
     if not row:
         return {
-            "cena_netto_2024": None,
-            "wzrost_ilosci_dokumentow": 0,
-            "cena_za_dokument": None,
-            "za_przekroczenie_limitu_netto": 0.0,
+            "cena_netto_ksiegowosc": 0.0,
+            "cena_brutto_ksiegowosc": 0.0,
+            "cena_za_dokument_ponad_limit": 0.0,
             "zdrowotna": 0.0,
             "netto": 0.0,
             "brutto": 0.0
         }
 
+    # defensywne rzutowania
+    def _f(x):
+        try:
+            return float(x) if x is not None else 0.0
+        except Exception:
+            return 0.0
+
     return {
-        "cena_netto_2024": row["cena_netto_2024"],
-        "wzrost_ilosci_dokumentow": int(row["wzrost_ilosci_dokumentow"] or 0),
-        "cena_za_dokument": float(row["cena_za_dokument"] or 0.0) if row["cena_za_dokument"] is not None else None,
-        "za_przekroczenie_limitu_netto": float(row["za_przekroczenie_limitu_netto"] or 0.0),
-        "zdrowotna": float(row["zdrowotna"] or 0.0),
-        "netto": float(row["netto"] or 0.0),
-        "brutto": float(row["brutto"] or 0.0),
+        "cena_netto_ksiegowosc": _f(row["cena_netto_ksiegowosc"]),
+        "cena_brutto_ksiegowosc": _f(row["cena_brutto_ksiegowosc"]),
+        "cena_za_dokument_ponad_limit": _f(row["cena_za_dokument_ponad_limit"]),
+        "zdrowotna": _f(row["zdrowotna"]),
+        "netto": _f(row["netto"]),
+        "brutto": _f(row["brutto"]),
     }
 
 
@@ -141,19 +146,18 @@ def oblicz_miesieczny_koszt(firma_id: int, miesiac: str) -> Dict[str, float]:
     klucz = firma["glowny_cennik"]
     pricing = _get_pricing_for_key(klucz)
 
-    limit = firma["limit_dokumentow"]
-    za_przekroczenie = pricing["za_przekroczenie_limitu_netto"] or 0.0
-    netto_podstawowe = pricing["netto"] or 0.0
-    zdrowotna = pricing["zdrowotna"] or 0.0
+    limit = int(firma.get("limit_dokumentow") or 0)
+    za_przekroczenie = float(pricing.get("cena_za_dokument_ponad_limit") or 0.0)
+    netto_podstawowe = float(pricing.get("netto") or pricing.get("cena_netto_ksiegowosc") or 0.0)
+    zdrowotna = float(pricing.get("zdrowotna") or 0.0)
 
+    extra_cost = 0.0
     if limit and docs_count > limit:
         extra_docs = docs_count - limit
         extra_cost = extra_docs * za_przekroczenie
-    else:
-        extra_cost = 0.0
 
     netto = netto_podstawowe + extra_cost
-    brutto = pricing["brutto"] or (netto * 1.23)
+    brutto = float(pricing.get("brutto") or pricing.get("cena_brutto_ksiegowosc") or (netto * 1.23))
 
     return {
         "netto": round(netto, 2),

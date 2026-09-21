@@ -23,22 +23,44 @@ def init_db():
             regon TEXT,
             krs TEXT,
             pesel TEXT,
+            
+            kraj TEXT,
+            wojewodztwo TEXT,
+            powiat TEXT,
+            gmina TEXT,
             miasto TEXT,
             kod_pocztowy TEXT,
             ulica TEXT,
             adres_budynek TEXT,
+            adres_lokal TEXT,
+
             forma_dzialalnosci TEXT,
             forma_opodatkowania TEXT,
             analityka_fk TEXT,
             osoba_kontaktowa TEXT,
             adres_email TEXT,
             nr_telefonu TEXT,
+            
+            adres_zam_kraj TEXT,
+            adres_zam_wojewodztwo TEXT,
+            adres_zam_powiat TEXT,
+            adres_zam_gmina TEXT,
             adres_zam_miasto TEXT,
             adres_zam_kod_pocztowy TEXT,
             adres_zam_ulica TEXT,
+            adres_zam_budynek TEXT,
+            adres_zam_lokal TEXT,
+            
+            adres_koresp_kraj TEXT,
+            adres_koresp_wojewodztwo TEXT,
+            adres_koresp_powiat TEXT,
+            adres_koresp_gmina TEXT,
             adres_koresp_miasto TEXT,
             adres_koresp_kod_pocztowy TEXT,
             adres_koresp_ulica TEXT,
+            adres_koresp_budynek TEXT,
+            adres_koresp_lokal TEXT,
+
             data_rozpoczecia_dg TEXT,
             data_rozpoczecia_sprzedazy TEXT,
             data_koniec_zus_start TEXT,
@@ -47,25 +69,24 @@ def init_db():
             data_koniec_a1 TEXT,
             data_rozpoczecia_obslugi TEXT,
             data_zakonczenia_obslugi TEXT,
+
             zawieszenia_dzialalnosci TEXT,
             kody_pkd TEXT,
+
             cennik_ksiegowy TEXT,
             cennik_kadrowy TEXT,
             cennik_czasowy TEXT,
+
             glowny_cennik TEXT,
             glowny_cennik_manualny INTEGER DEFAULT 0,
+
             limit_dokumentow INTEGER DEFAULT 0,
             liczba_pracownikow INTEGER DEFAULT 0,
 
-            -- stare pola kadrowe (zostawione dla kompatybilności)
-            uop INTEGER DEFAULT 0,
-            uz INTEGER DEFAULT 0,
-            uod INTEGER DEFAULT 0,
-
-            -- nowe kadry: ilości + klucze cennika dla każdego rodzaju umowy
             uop_ilosc INTEGER DEFAULT 0,
             uz_ilosc INTEGER DEFAULT 0,
             uod_ilosc INTEGER DEFAULT 0,
+
             uop_cennik TEXT,
             uz_cennik TEXT,
             uod_cennik TEXT,
@@ -74,11 +95,14 @@ def init_db():
             vat_czynny INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Aktywne',
 
-            -- automatyczny / ręczny wybór cennika księgowego (KPIR)
             cennik_kpir_auto TEXT,
             cena_ksiegowosc_auto REAL DEFAULT 0,
             cennik_kpir_manual TEXT,
-            manual_cennik_override INTEGER DEFAULT 0
+            manual_cennik_override INTEGER DEFAULT 0,
+
+            zdrowotna REAL DEFAULT 0,
+
+            fakturowac INTEGER DEFAULT 0
         );
     """)
 
@@ -135,7 +159,7 @@ def init_db():
         );
     """)
 
-    # cenniki księgowość (netto/brutto rozdzielone)
+    # cenniki księgowość
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,7 +177,7 @@ def init_db():
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_typ_klucz ON cenniki(typ, klucz);")
 
-    # cenniki kadry – rozdzielone netto/brutto (kompatybilne z migracją)
+    # cenniki kadry
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki_kadry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -516,13 +540,13 @@ def init_db():
     # indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_pracownicy_email ON pracownicy(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_firmy_nip ON firmy(nip);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(faktura_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
 
     # initial data
     cur.execute("SELECT COUNT(*) AS cnt FROM pracownicy")
@@ -533,27 +557,27 @@ def init_db():
         haslo = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
         cur.execute("""
-            INSERT INTO pracownicy (id, email, haslo_hash, imie, nazwisko, aktywny)
-            VALUES (1, 'admin@biuro.pl', ?, 'Główny', 'Administrator', 1)
-        """, (haslo,))
+                INSERT INTO pracownicy (id, email, haslo_hash, imie, nazwisko, aktywny)
+                VALUES (1, 'admin@biuro.pl', ?, 'Główny', 'Administrator', 1)
+            """, (haslo,))
 
         cur.execute("INSERT OR IGNORE INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma')")
 
         cur.execute("""
-            INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
-            VALUES (1, 1, 4)
-        """)
+                INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
+                VALUES (1, 1, 4)
+            """)
 
         cur.execute("""
-            UPDATE role
-            SET can_view_invoices=1,
-                can_edit_companies=1,
-                can_manage_users=1,
-                can_view_finances=1,
-                can_export_data=1,
-                can_access_admin_settings=1
-            WHERE id = 4
-        """)
+                UPDATE role
+                SET can_view_invoices=1,
+                    can_edit_companies=1,
+                    can_manage_users=1,
+                    can_view_finances=1,
+                    can_export_data=1,
+                    can_access_admin_settings=1
+                WHERE id = 4
+            """)
 
     conn.commit()
     conn.close()

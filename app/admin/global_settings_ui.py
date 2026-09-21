@@ -739,7 +739,6 @@ class GlobalSettingsPage(QWidget):
             cena_netto = float(row_get(r, "cena_netto_kadry", 0))
             cena_brutto = float(row_get(r, "cena_brutto_kadry", round(cena_netto * 1.23, 2)))
 
-            # opis cennika
             try:
                 opis = opis_cennika_z_klucza(klucz)
             except Exception:
@@ -747,7 +746,7 @@ class GlobalSettingsPage(QWidget):
 
             self.pricing_table_kadry.setItem(row_idx, 0, QTableWidgetItem(str(opis)))
             self.pricing_table_kadry.setItem(row_idx, 1, QTableWidgetItem(f"{cena_netto:.2f}"))
-            self.pricing_table_kadry.setItem(row_idx, 2, QTableWidgetItem(f"{cena_netto:.2f}"))  # netto = cena_netto_kadry
+            self.pricing_table_kadry.setItem(row_idx, 2, QTableWidgetItem(f"{cena_netto:.2f}"))
             self.pricing_table_kadry.setItem(row_idx, 3, QTableWidgetItem(f"{cena_brutto:.2f}"))
 
     def _import_pricing_kadry(self):

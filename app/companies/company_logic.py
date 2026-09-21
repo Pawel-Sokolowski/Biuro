@@ -1,6 +1,6 @@
 # app/companies/company_logic.py
 import sqlite3
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
 from app.companies.ceidg_api import get_ceidg_firma_by_nip
@@ -59,7 +59,7 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
     if not data or data.get("error"):
         return
 
-    if isinstance(data, dict) and "firma" in data and isinstance(data["firma"], list) and data["firma"]:
+    if isinstance(data, dict) and "firma" in data and data["firma"]:
         raw = data["firma"][0]
     else:
         raw = data
@@ -237,7 +237,123 @@ def ceidg_fetch(form):
 
 
 # -------------------------
-# CompanyLogic core
+# Cennik helpers
+# -------------------------
+def build_cennik_key(forma: str, vat_czynny: bool, limit: int) -> str:
+    """
+    Buduje sugerowany klucz cennika na podstawie:
+      - forma: "KPiR", "Ryczałt", "Księgi rachunkowe"
+      - vat_czynny: True/False
+      - limit: liczba dokumentów (ręczna)
+    Przykłady:
+      KPiR, vat True, limit 50 -> "KPIR_T_50"
+      Ryczałt, vat False, limit 10 -> "RYCZALT_N_10"
+      Księgi rachunkowe -> "KR_T_..."
+    """
+    if forma == "KPiR":
+        prefix = "KPIR"
+    elif forma == "Ryczałt":
+        prefix = "RYCZALT"
+    else:
+        prefix = "KR"
+
+    vat_part = "T" if vat_czynny else "N"
+
+    try:
+        lim = int(limit)
+    except Exception:
+        lim = 0
+
+    if lim > 0:
+        return f"{prefix}_{vat_part}_{lim}"
+    return f"{prefix}_{vat_part}"
+
+
+def _extract_limit_from_key(klucz: str) -> Optional[int]:
+    """
+    Wyciąga liczbę limitu z klucza, np. KPIR_T_50 -> 50
+    """
+    if not klucz:
+        return None
+    parts = klucz.split("_")
+    for p in reversed(parts):
+        try:
+            return int(p)
+        except Exception:
+            continue
+    return None
+
+
+def pick_cennik_by_key_or_limit(desired_key: str, limit: int, cenniki_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Wybiera najlepszy cennik:
+      1) jeśli istnieje dokładny klucz desired_key -> zwróć go
+      2) w przeciwnym razie znajdź cenniki o tym samym prefiksie i vat_part,
+         wybierz największy limit <= limit; jeśli brak, wybierz najmniejszy limit >= limit (zaokrąglenie w górę)
+      3) fallback: pierwszy pasujący prefiks
+    """
+    if not cenniki_rows:
+        return None
+
+    # exact match
+    for r in cenniki_rows:
+        if r.get("klucz") == desired_key:
+            return r
+
+    # parse desired prefix and vat part
+    parts = desired_key.split("_")
+    prefix = parts[0] if parts else desired_key
+    vat_part = parts[1] if len(parts) >= 2 else None
+
+    candidates = []
+    for r in cenniki_rows:
+        k = r.get("klucz", "")
+        kp = k.split("_")
+        if not kp:
+            continue
+        if kp[0] != prefix:
+            continue
+        if vat_part and len(kp) >= 2 and kp[1] != vat_part:
+            continue
+        candidates.append(r)
+
+    if not candidates:
+        return None
+
+    # collect limits
+    limits = []
+    for c in candidates:
+        lim = _extract_limit_from_key(c.get("klucz", ""))
+        if lim is not None:
+            limits.append((lim, c))
+    # sort by limit ascending
+    limits.sort(key=lambda x: x[0])
+
+    # try largest <= limit
+    chosen = None
+    for lim, row in reversed(limits):
+        if lim <= limit:
+            chosen = row
+            break
+
+    if chosen:
+        return chosen
+
+    # jeśli nie znaleziono <= limit, wybierz najmniejszy >= limit (zaokrąglenie w górę)
+    for lim, row in limits:
+        if lim >= limit:
+            return row
+
+    # fallback: jeśli żaden limit nie istnieje, zwróć pierwszy candidate
+    if not limits:
+        return candidates[0]
+
+    # final fallback
+    return limits[-1][1] if limits else candidates[0]
+
+
+# -------------------------
+# CompanyLogic core (rozszerzona wersja z oryginalnego pliku)
 # -------------------------
 class CompanyLogic:
     def __init__(self):

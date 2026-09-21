@@ -3,19 +3,70 @@ from typing import Optional, Dict, Any, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QTabWidget, QFormLayout, QScrollArea, QDateEdit,
-    QMessageBox, QGroupBox, QCheckBox, QSpinBox
+    QMessageBox, QGroupBox, QCheckBox, QSpinBox, QPlainTextEdit, QGridLayout
 )
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QFont
 
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import save_company
-from app.companies.company_logic import ceidg_fetch
+from app.db.dao_faktury import generate_monthly_invoices_for_month
+from app.companies.company_logic import ceidg_fetch, build_cennik_key, pick_cennik_by_key_or_limit
 
 
 class NoWheelDateEdit(QDateEdit):
     def wheelEvent(self, event):
         event.ignore()
+
+
+class MonthGrid(QWidget):
+    """
+    Simple grid of recent months (buttons). Select one month at a time.
+    """
+    def __init__(self, months_back: int = 36, parent=None):
+        super().__init__(parent)
+        self.layout = QGridLayout(self)
+        self.buttons = []
+        self.months = []
+        from datetime import datetime
+        now = datetime.now()
+        for i in range(months_back):
+            y = now.year
+            m = now.month - i
+            while m <= 0:
+                m += 12
+                y -= 1
+            label = f"{y}-{m:02d}"
+            self.months.append(label)
+
+        display = self.months[:12]
+        rows = 3
+        cols = 4
+        idx = 0
+        for r in range(rows):
+            for c in range(cols):
+                if idx >= len(display):
+                    break
+                btn = QPushButton(display[idx])
+                btn.setCheckable(True)
+                btn.clicked.connect(self._on_btn_clicked)
+                # basic white style; app stylesheet can override
+                btn.setStyleSheet("background-color: white;")
+                self.layout.addWidget(btn, r, c)
+                self.buttons.append(btn)
+                idx += 1
+
+    def _on_btn_clicked(self):
+        sender = self.sender()
+        for b in self.buttons:
+            if b is not sender:
+                b.setChecked(False)
+
+    def selected_month(self) -> Optional[str]:
+        for b in self.buttons:
+            if b.isChecked():
+                return b.text()
+        return None
 
 
 class CompanyForm(QWidget):
@@ -49,6 +100,8 @@ class CompanyForm(QWidget):
         self._build_dates_section()
         self._build_mikro_section()
         self._build_cenniki_section()
+        # Faktury settings: only the checkbox to enable monthly invoicing
+        self._build_faktury_settings_section()
 
         btn_row = QWidget()
         btn_l = QHBoxLayout(btn_row)
@@ -64,6 +117,7 @@ class CompanyForm(QWidget):
         final = QVBoxLayout(self)
         final.addWidget(scroll)
 
+        # load cenniki and populate after UI built
         self._load_cenniki()
         self._populate_from_data()
         self._update_cennik_auto()
@@ -91,7 +145,7 @@ class CompanyForm(QWidget):
         row = QWidget()
         rl = QHBoxLayout(row)
 
-        self.f_ident = QLineEdit(self.company_data.get("ident", ""))
+        self.f_ident = QLineEdit(self.company_data.get("nip", ""))
         self.f_ident.setPlaceholderText("NIP / REGON / PESEL")
         self.f_ident.textChanged.connect(self._on_ident_changed)
 
@@ -154,8 +208,6 @@ class CompanyForm(QWidget):
     # ---------------- ADDRESSES ----------------
     def _build_address_tabs(self):
         self.tabs = QTabWidget()
-
-        # działalność
         dz = QWidget()
         dz_form = QFormLayout(dz)
         self.dz_miasto = QLineEdit()
@@ -190,7 +242,6 @@ class CompanyForm(QWidget):
             "dz_kraj": self.dz_kraj,
         })
 
-        # korespondencja
         ko = QWidget()
         ko_form = QFormLayout(ko)
         self.ko_miasto = QLineEdit()
@@ -225,7 +276,6 @@ class CompanyForm(QWidget):
             "ko_kraj": self.ko_kraj,
         })
 
-        # zamieszkanie (ukrywane dla nie-JDG)
         zam = QWidget()
         zam_form = QFormLayout(zam)
         self.zam_miasto = QLineEdit()
@@ -248,7 +298,6 @@ class CompanyForm(QWidget):
         zam_form.addRow("Gmina", self.zam_gmi)
         zam_form.addRow("Kraj", self.zam_kraj)
 
-        # zam nie jest używany przez CEIDG logic, ale zapisujemy
         self.inputs.update({
             "zam_miasto": self.zam_miasto,
             "zam_kod": self.zam_kod,
@@ -269,28 +318,18 @@ class CompanyForm(QWidget):
         form = QFormLayout(box)
 
         self.f_forma = QComboBox()
-        self.f_forma.addItems(["JDG", "Spółka z o.o.", "Spółka cywilna", "Inna"])
+        self.f_forma.addItems(["KPiR", "Ryczałt", "Księgi rachunkowe"])
         self.f_forma.currentIndexChanged.connect(self._on_forma_changed)
-        form.addRow("Forma działalności", self.f_forma)
-
-        self.f_opodatk = QComboBox()
-        self.f_opodatk.addItems(["KPiR", "Ryczałt", "Księgi rachunkowe"])
-        self.f_opodatk.currentIndexChanged.connect(self._update_cennik_auto)
-        form.addRow("Forma opodatkowania", self.f_opodatk)
+        form.addRow("Forma rozliczenia", self.f_forma)
 
         self.VAT_checkbox = QCheckBox("VAT czynny")
         self.VAT_checkbox.stateChanged.connect(self._update_cennik_auto)
         form.addRow(self.VAT_checkbox)
 
-        self.f_analityka = QLineEdit(self.company_data.get("analityka_fk", ""))
-        form.addRow("Analityka FK", self.f_analityka)
-
         self.main_layout.addWidget(box)
 
     def _on_forma_changed(self, idx: int):
-        forma = self.f_forma.currentText()
-        # adres zamieszkania tylko dla JDG
-        self.tabs.setTabVisible(2, forma == "JDG")
+        pass
 
     # ---------------- CONTACT ----------------
     def _build_contact_section(self):
@@ -321,12 +360,29 @@ class CompanyForm(QWidget):
         box = QGroupBox("Daty")
         form = QFormLayout(box)
 
+        self.miesiac_combo = QComboBox()
+        self._populate_months_combo()
+        form.addRow("Miesiąc faktury (informacyjnie)", self.miesiac_combo)
+
         self.f_start = NoWheelDateEdit()
         self.f_start.setCalendarPopup(True)
         self.inputs["data_rozpoczecia_dg"] = self.f_start
         form.addRow("Data rozpoczęcia DG", self.f_start)
 
         self.main_layout.addWidget(box)
+
+    def _populate_months_combo(self, months_back: int = 36):
+        from datetime import datetime
+        self.miesiac_combo.clear()
+        now = datetime.now()
+        for i in range(months_back):
+            y = now.year
+            m = now.month - i
+            while m <= 0:
+                m += 12
+                y -= 1
+            label = f"{y}-{m:02d}"
+            self.miesiac_combo.addItem(label, label)
 
     # ---------------- MIKRORACHUNKI ----------------
     def _build_mikro_section(self):
@@ -363,21 +419,21 @@ class CompanyForm(QWidget):
         self.f_limit_dokumentow.setMaximum(1000000)
         self.f_limit_dokumentow.setValue(int(self.company_data.get("limit_dokumentow", 0)))
         self.f_limit_dokumentow.valueChanged.connect(self._update_cennik_auto)
-        form.addRow("Limit dokumentów", self.f_limit_dokumentow)
+        form.addRow("Limit dokumentów (ręcznie)", self.f_limit_dokumentow)
 
-        self.f_limit_kadry = QSpinBox()
-        self.f_limit_kadry.setMaximum(1000000)
-        self.f_limit_kadry.setValue(int(self.company_data.get("limit_kadry", 0)))
-        form.addRow("Limit kadry", self.f_limit_kadry)
-
-        self.f_limit_ryczalt = QSpinBox()
-        self.f_limit_ryczalt.setMaximum(1000000)
-        self.f_limit_ryczalt.setValue(int(self.company_data.get("limit_ryczalt", 0)))
-        form.addRow("Limit ryczałt", self.f_limit_ryczalt)
-
-        self.zdrowotna_checkbox = QCheckBox("Naliczaj zdrowotną")
+        self.zdrowotna_checkbox = QCheckBox("Naliczaj zdrowotną (wliczona w cenę)")
         self.zdrowotna_checkbox.setChecked(bool(self.company_data.get("zdrowotna", 0)))
         form.addRow(self.zdrowotna_checkbox)
+
+        self.main_layout.addWidget(box)
+
+    def _build_faktury_settings_section(self):
+        box = QGroupBox("Fakturowanie (ustawienia)")
+        form = QFormLayout(box)
+
+        self.f_fakturowac = QCheckBox("Fakturować firmę (automatyczne faktury miesięczne)")
+        self.f_fakturowac.setChecked(bool(self.company_data.get("fakturowac", 0)))
+        form.addRow(self.f_fakturowac)
 
         self.main_layout.addWidget(box)
 
@@ -471,35 +527,13 @@ class CompanyForm(QWidget):
             except Exception:
                 pass
 
-    def _pick_cennik_auto(self, forma: str, vat_czynny: bool, limit: int) -> Optional[Dict[str, Any]]:
-        allowed: List[Dict[str, Any]] = []
-        for r in self._cenniki_rows:
-            k = r["klucz"]
-            if forma == "KPiR":
-                if vat_czynny and k.startswith("KPIR_T"):
-                    allowed.append(r)
-                elif not vat_czynny and k.startswith("KPIR_N"):
-                    allowed.append(r)
-            elif forma == "Ryczałt":
-                if k.startswith("RYCZALT"):
-                    allowed.append(r)
-            elif forma == "Księgi rachunkowe":
-                if k.startswith("KR"):
-                    allowed.append(r)
-
-        if not allowed:
-            return None
-
-        # tu można dodać logikę po limicie dokumentów (np. zakresy w kluczu),
-        # na razie wybieramy pierwszy dopuszczalny
-        return allowed[0]
-
-    def _update_cennik_auto(self):
-        forma = self.f_opodatk.currentText()
+    def _pick_cennik_auto(self):
+        forma = self.f_forma.currentText()
         vat = self.VAT_checkbox.isChecked()
         limit = int(self.f_limit_dokumentow.value())
 
-        chosen = self._pick_cennik_auto(forma, vat, limit)
+        desired_key = build_cennik_key(forma, vat, limit)
+        chosen = pick_cennik_by_key_or_limit(desired_key, limit, self._cenniki_rows)
         if not chosen:
             return
 
@@ -508,23 +542,26 @@ class CompanyForm(QWidget):
         if idx >= 0:
             self.cennik_combo.setCurrentIndex(idx)
 
+    def _update_cennik_auto(self):
+        try:
+            self._pick_cennik_auto()
+        except Exception:
+            pass
+
     # ---------------- POPULATE ----------------
     def _populate_from_data(self):
         d = self.company_data
         if not d:
             return
 
-        # ident
         if d.get("nip"):
             self.f_ident.setText(d.get("nip", ""))
 
-        # main
         self.f_nazwa.setText(d.get("nazwa", ""))
         self.f_regon.setText(d.get("regon", ""))
         self.f_edoreczenia.setText(d.get("adres_doreczen_elektronicznych", ""))
         self.f_kody_pkd.setText(d.get("kody_pkd", ""))
 
-        # adres działalności
         self.dz_miasto.setText(d.get("miasto", ""))
         self.dz_kod.setText(d.get("kod_pocztowy", ""))
         self.dz_ulica.setText(d.get("ulica", ""))
@@ -535,7 +572,6 @@ class CompanyForm(QWidget):
         self.dz_gmi.setText(d.get("gmina", ""))
         self.dz_kraj.setText(d.get("kraj", ""))
 
-        # adres korespondencyjny
         self.ko_miasto.setText(d.get("adres_koresp_miasto", ""))
         self.ko_kod.setText(d.get("adres_koresp_kod_pocztowy", ""))
         self.ko_ulica.setText(d.get("adres_koresp_ulica", ""))
@@ -546,14 +582,12 @@ class CompanyForm(QWidget):
         self.ko_gmi.setText(d.get("adres_koresp_gmina", ""))
         self.ko_kraj.setText(d.get("adres_koresp_kraj", ""))
 
-        # adres zamieszkania
         self.zam_miasto.setText(d.get("adres_zam_miasto", ""))
         self.zam_kod.setText(d.get("adres_zam_kod_pocztowy", ""))
         self.zam_ulica.setText(d.get("adres_zam_ulica", ""))
         self.zam_budynek.setText(d.get("adres_zam_budynek", ""))
         self.zam_lokal.setText(d.get("adres_zam_lokal", ""))
 
-        # kontakt
         osoba = d.get("osoba_kontaktowa", "")
         if osoba:
             parts = osoba.split(" ", 1)
@@ -563,58 +597,42 @@ class CompanyForm(QWidget):
         self.kont_email.setText(d.get("adres_email", ""))
         self.kont_tel.setText(d.get("nr_telefonu", ""))
 
-        # forma
         if d.get("forma_dzialalnosci"):
             self.f_forma.setCurrentText(d.get("forma_dzialalnosci"))
-        if d.get("forma_opodatkowania"):
-            self.f_opodatk.setCurrentText(d.get("forma_opodatkowania"))
         self.VAT_checkbox.setChecked(bool(d.get("vat_czynny", 0)))
+        self.f_analityka = QLineEdit(d.get("analityka_fk", ""))
         self.f_analityka.setText(d.get("analityka_fk", ""))
 
-        # daty
         if d.get("data_rozpoczecia_dg"):
             try:
                 self.f_start.setDate(QDate.fromString(d["data_rozpoczecia_dg"], "yyyy-MM-dd"))
             except Exception:
                 pass
 
-        # mikrorachunki
         self.f_mikro_pit.setText(d.get("mikrorachunek_pit", ""))
         self.f_mikro_zus.setText(d.get("mikrorachunek_zus", ""))
 
-        # cennik
         gl = d.get("glowny_cennik")
         if gl:
             idx = self.cennik_combo.findData(gl)
             if idx >= 0:
                 self.cennik_combo.setCurrentIndex(idx)
 
-        # limity
         self.f_limit_dokumentow.setValue(int(d.get("limit_dokumentow", 0)))
-        self.f_limit_kadry.setValue(int(d.get("limit_kadry", 0)))
-        self.f_limit_ryczalt.setValue(int(d.get("limit_ryczalt", 0)))
-
-        zdrow = d.get("zdrowotna")
-        if zdrow is not None:
-            try:
-                self.zdrowotna_checkbox.setChecked(float(zdrow) > 0)
-            except Exception:
-                pass
+        self.zdrowotna_checkbox.setChecked(bool(d.get("zdrowotna", 0)))
+        self.f_fakturowac.setChecked(bool(d.get("fakturowac", 0)))
 
     # ---------------- SAVE ----------------
     def _save(self):
         payload: Dict[str, Any] = {}
 
-        # ident
         payload["nip"] = "".join(ch for ch in self.f_ident.text().strip() if ch.isdigit())
 
-        # main
         payload["nazwa"] = self.f_nazwa.text().strip()
         payload["regon"] = self.f_regon.text().strip()
         payload["adres_doreczen_elektronicznych"] = self.f_edoreczenia.text().strip()
         payload["kody_pkd"] = self.f_kody_pkd.text().strip()
 
-        # adres działalności
         payload["miasto"] = self.dz_miasto.text()
         payload["kod_pocztowy"] = self.dz_kod.text()
         payload["ulica"] = self.dz_ulica.text()
@@ -625,7 +643,6 @@ class CompanyForm(QWidget):
         payload["gmina"] = self.dz_gmi.text()
         payload["kraj"] = self.dz_kraj.text()
 
-        # adres korespondencyjny
         payload["adres_koresp_miasto"] = self.ko_miasto.text()
         payload["adres_koresp_kod_pocztowy"] = self.ko_kod.text()
         payload["adres_koresp_ulica"] = self.ko_ulica.text()
@@ -636,37 +653,30 @@ class CompanyForm(QWidget):
         payload["adres_koresp_gmina"] = self.ko_gmi.text()
         payload["adres_koresp_kraj"] = self.ko_kraj.text()
 
-        # adres zamieszkania
         payload["adres_zam_miasto"] = self.zam_miasto.text()
         payload["adres_zam_kod_pocztowy"] = self.zam_kod.text()
         payload["adres_zam_ulica"] = self.zam_ulica.text()
         payload["adres_zam_budynek"] = self.zam_budynek.text()
         payload["adres_zam_lokal"] = self.zam_lokal.text()
 
-        # kontakt
         payload["osoba_kontaktowa"] = (self.kont_imie.text().strip() + " " + self.kont_nazw.text().strip()).strip()
         payload["adres_email"] = self.kont_email.text().strip()
         payload["nr_telefonu"] = self.kont_tel.text().strip()
 
-        # forma
         payload["forma_dzialalnosci"] = self.f_forma.currentText()
-        payload["forma_opodatkowania"] = self.f_opodatk.currentText()
+        payload["forma_opodatkowania"] = self.f_forma.currentText()
         payload["vat_czynny"] = 1 if self.VAT_checkbox.isChecked() else 0
-        payload["analityka_fk"] = self.f_analityka.text().strip()
+        payload["analityka_fk"] = self.f_analityka.text().strip() if hasattr(self, "f_analityka") else ""
 
-        # daty
         payload["data_rozpoczecia_dg"] = self.f_start.date().toString("yyyy-MM-dd")
 
-        # mikrorachunki (ręczne)
         payload["mikrorachunek_pit"] = self.f_mikro_pit.text().strip()
         payload["mikrorachunek_zus"] = self.f_mikro_zus.text().strip()
 
-        # cennik i limity
         payload["glowny_cennik"] = self.cennik_combo.currentData()
         payload["limit_dokumentow"] = int(self.f_limit_dokumentow.value())
-        payload["limit_kadry"] = int(self.f_limit_kadry.value())
-        payload["limit_ryczalt"] = int(self.f_limit_ryczalt.value())
         payload["zdrowotna"] = 1 if self.zdrowotna_checkbox.isChecked() else 0
+        payload["fakturowac"] = 1 if self.f_fakturowac.isChecked() else 0
 
         if self.company_data.get("id"):
             payload["id"] = self.company_data["id"]
@@ -679,3 +689,10 @@ class CompanyForm(QWidget):
 
         QMessageBox.information(self, "Zapisano", "Dane firmy zostały zapisane.")
         self._close_parent()
+
+    # ---------------- FAKTURY (tylko ustawienia) ----------------
+    # (generowanie i wybór miesiąca przeniesione do zakładki Faktury)
+    # ---------------- DODATKOWE ----------------
+    def _build_faktury_section(self):
+        # kept for backward compatibility but not used for generation UI
+        pass

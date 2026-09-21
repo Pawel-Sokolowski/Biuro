@@ -1,6 +1,6 @@
 # app/invoices/faktury_logic.py
-import sqlite3
 import json
+import sqlite3
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -9,20 +9,14 @@ from app.db.dao_faktury import (
     get_invoice_for_company_month,
     create_or_update_invoice
 )
-from app.db.dao_companies import get_company
 
 
 class FakturyLogic:
-    """
-    Warstwa biznesowa generowania faktur:
-      - generowanie pozycji (ryczałt, ponad limit, zdrowotna, usługi dodatkowe, stoper)
-      - idempotentne scalanie pozycji (nadpisywanie wygenerowanych, zachowanie ręcznych)
-      - koordynacja zapisu przez DAO (create_or_update_invoice)
-      - pomocnicze funkcje do dodawania pojedynczych pozycji i walidacji
-    """
 
-    def _get_month_status(self, firma_id: int, miesiac: str) -> Optional[sqlite3.Row]:
+    # ---------------- STATUS MIESIĘCZNY ----------------
+    def _get_month_status(self, firma_id: int, miesiac: str) -> Optional[dict]:
         conn = get_conn()
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT *
@@ -31,10 +25,12 @@ class FakturyLogic:
         """, (firma_id, miesiac))
         row = cur.fetchone()
         conn.close()
-        return row
+        return dict(row) if row else None
 
-    def _get_extra_services(self, firma_id: int, miesiac: str) -> List[sqlite3.Row]:
+    # ---------------- USŁUGI DODATKOWE ----------------
+    def _get_extra_services(self, firma_id: int, miesiac: str) -> List[dict]:
         conn = get_conn()
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT u.nazwa, u.kategoria, u.stawka_vat, uf.ilosc, uf.cena_netto
@@ -45,25 +41,47 @@ class FakturyLogic:
         """, (firma_id, miesiac))
         rows = cur.fetchall()
         conn.close()
-        return rows
+        return [dict(r) for r in rows] if rows else []
 
-    def _get_company(self, firma_id: int) -> Optional[sqlite3.Row]:
+    # ---------------- FIRMA ----------------
+    def _get_company(self, firma_id: int) -> Optional[dict]:
         conn = get_conn()
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, nazwa, nip, miasto, glowny_cennik, limit_dokumentow,
-                   typ_rozliczenia, vat_czynny, limit_kadry, limit_ryczalt, zdrowotna
-            FROM firmy
-            WHERE id = ?
-        """, (firma_id,))
+        cur.execute("SELECT * FROM firmy WHERE id = ?", (firma_id,))
         row = cur.fetchone()
         conn.close()
-        return row
+        if not row:
+            return None
 
-    def _get_main_pricing(self, klucz: str) -> Optional[sqlite3.Row]:
+        company = dict(row)
+
+        # tylko pola istniejące w schema.py
+        company.setdefault("id", firma_id)
+        company.setdefault("nazwa", company.get("nazwa", "<brak nazwy>"))
+        company.setdefault("glowny_cennik", company.get("glowny_cennik"))
+        company.setdefault("limit_dokumentow", int(company.get("limit_dokumentow") or 0))
+        company.setdefault("zdrowotna", float(company.get("zdrowotna") or 0.0))
+        company.setdefault("vat_czynny", int(company.get("vat_czynny") or 0))
+        company.setdefault("typ_rozliczenia", company.get("typ_rozliczenia", "Ryczałt"))
+        company.setdefault("fakturowac", int(company.get("fakturowac") or 0))
+
+        # pola kadrowe
+        company.setdefault("uop_ilosc", int(company.get("uop_ilosc") or 0))
+        company.setdefault("uz_ilosc", int(company.get("uz_ilosc") or 0))
+        company.setdefault("uod_ilosc", int(company.get("uod_ilosc") or 0))
+        company.setdefault("uop_cennik", company.get("uop_cennik"))
+        company.setdefault("uz_cennik", company.get("uz_cennik"))
+        company.setdefault("uod_cennik", company.get("uod_cennik"))
+
+        return company
+
+    # ---------------- CENNIK ----------------
+    def _get_main_pricing(self, klucz: str) -> Optional[dict]:
         if not klucz:
             return None
         conn = get_conn()
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT
@@ -79,8 +97,9 @@ class FakturyLogic:
         """, (klucz,))
         row = cur.fetchone()
         conn.close()
-        return row
+        return dict(row) if row else None
 
+    # ---------------- HELPER ----------------
     def _to_float(self, v, default: float = 0.0) -> float:
         try:
             if v is None or v == "":
@@ -89,14 +108,8 @@ class FakturyLogic:
         except Exception:
             return float(default)
 
-    # -------------------------
-    # Generowanie pozycji
-    # -------------------------
+    # ---------------- GENEROWANIE POZYCJI ----------------
     def generate_invoice_positions(self, firma_id: int, miesiac: str) -> List[Dict[str, Any]]:
-        """
-        Generuje pozycje faktury dla pojedynczej firmy i miesiąca.
-        Każda pozycja generowana przez system otrzymuje pole "generated": True.
-        """
         company = self._get_company(firma_id)
         if not company:
             return []
@@ -106,133 +119,100 @@ class FakturyLogic:
 
         pozycje: List[Dict[str, Any]] = []
 
-        # 1. Usługa księgowa (ryczałt / główny cennik)
-        glowny = company["glowny_cennik"] if "glowny_cennik" in company.keys() else None
-        if glowny:
-            pricing = self._get_main_pricing(glowny)
-            if pricing:
-                netto_val = pricing["cena_netto_ksiegowosc"] if pricing["cena_netto_ksiegowosc"] is not None else pricing["netto"]
-                netto = self._to_float(netto_val, 0.0)
-                vat = 23
-                brutto = round(netto * 1.23, 2)
+        glowny = company.get("glowny_cennik")
+        pricing = self._get_main_pricing(glowny) if glowny else None
 
+        # ---------------- Usługa księgowa ----------------
+        if pricing and company.get("fakturowac", 0) == 1:
+            netto = self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
+            brutto = self._to_float(pricing.get("cena_brutto_ksiegowosc", round(netto * 1.23, 2)))
+            pozycje.append({
+                "nazwa": "Usługa księgowa",
+                "ilosc": 1,
+                "jednostka": "mc",
+                "netto": netto,
+                "vat": 23,
+                "brutto": brutto,
+                "kategoria": "księgowość",
+                "generated": True
+            })
+
+        # ---------------- Dokumenty ponad limit ----------------
+        if status and pricing and company.get("fakturowac", 0) == 1:
+            ilosc_dok = int(status.get("ilosc_dok") or 0)
+            limit = int(company.get("limit_dokumentow") or 0)
+            if ilosc_dok > limit:
+                ponad = ilosc_dok - limit
+                cena = self._to_float(pricing.get("cena_za_dokument_ponad_limit", 0.0))
+                netto = round(ponad * cena, 2)
+                brutto = round(netto * 1.23, 2)
                 pozycje.append({
-                    "nazwa": "Usługa księgowa",
-                    "ilosc": 1,
-                    "jednostka": "mc",
+                    "nazwa": "Dokumenty ponad limit",
+                    "ilosc": ponad,
+                    "jednostka": "szt.",
                     "netto": netto,
-                    "vat": vat,
+                    "vat": 23,
                     "brutto": brutto,
                     "kategoria": "księgowość",
                     "generated": True
                 })
 
-        # 2. Dokumenty ponad limit
-        if status:
-            ilosc_dok = status["ilosc_dok"] or 0
-            limit = company["limit_dokumentow"] or 0
+        # ---------------- Zdrowotna ----------------
+        if pricing and company.get("fakturowac", 0) == 1:
+            zdrowotna_val = self._to_float(pricing.get("zdrowotna", 0.0))
+            if zdrowotna_val > 0:
+                pozycje.append({
+                    "nazwa": "Zdrowotna",
+                    "ilosc": 1,
+                    "jednostka": "mc",
+                    "netto": zdrowotna_val,
+                    "vat": 0,
+                    "brutto": zdrowotna_val,
+                    "kategoria": "księgowość",
+                    "generated": True
+                })
 
-            if ilosc_dok > limit:
-                ponad = ilosc_dok - limit
-                pricing = self._get_main_pricing(glowny) if glowny else None
-                if pricing:
-                    cena_val = pricing["cena_za_dokument_ponad_limit"] if pricing["cena_za_dokument_ponad_limit"] is not None else pricing["netto"]
-                    cena = self._to_float(cena_val, 0.0)
-                    netto = round(ponad * cena, 2)
-                    vat = 23
-                    brutto = round(netto * 1.23, 2)
-
-                    pozycje.append({
-                        "nazwa": "Dokumenty ponad limit",
-                        "ilosc": ponad,
-                        "jednostka": "szt.",
-                        "netto": netto,
-                        "vat": vat,
-                        "brutto": brutto,
-                        "kategoria": "księgowość",
-                        "generated": True
-                    })
-
-        # 3. Zdrowotna
-        if glowny:
-            pricing = self._get_main_pricing(glowny)
-            if pricing:
-                zdrowotna_val = pricing.get("zdrowotna") if isinstance(pricing, dict) else pricing["zdrowotna"]
-                try:
-                    zdrowotna_num = float(zdrowotna_val) if zdrowotna_val is not None else 0.0
-                except Exception:
-                    zdrowotna_num = 0.0
-
-                if zdrowotna_num > 0:
-                    netto = zdrowotna_num
-                    vat = 0
-                    brutto = netto
-
-                    pozycje.append({
-                        "nazwa": "Zdrowotna",
-                        "ilosc": 1,
-                        "jednostka": "mc",
-                        "netto": netto,
-                        "vat": vat,
-                        "brutto": brutto,
-                        "kategoria": "księgowość",
-                        "generated": True
-                    })
-
-        # 4. Usługi dodatkowe
+        # ---------------- Usługi dodatkowe (zawsze) ----------------
         for u in extra:
-            ilosc = u["ilosc"] or 0
+            ilosc = int(u.get("ilosc") or 0)
             if ilosc == 0:
                 continue
-
-            try:
-                cena_netto = float(u["cena_netto"] or 0)
-            except Exception:
-                cena_netto = 0.0
-
+            cena_netto = self._to_float(u.get("cena_netto", 0.0))
             netto = round(cena_netto * ilosc, 2)
-
             stawka_raw = u.get("stawka_vat") or "0"
             if isinstance(stawka_raw, str):
                 stawka_raw = stawka_raw.replace("%", "").strip()
             try:
-                vat = int(stawka_raw)
+                vat = int(float(stawka_raw))
             except Exception:
-                try:
-                    vat = int(float(stawka_raw))
-                except Exception:
-                    vat = 0
-
+                vat = 0
             brutto = round(netto * (1 + vat / 100), 2)
-
             pozycje.append({
-                "nazwa": u["nazwa"],
+                "nazwa": u.get("nazwa"),
                 "ilosc": ilosc,
                 "jednostka": "szt.",
                 "netto": netto,
                 "vat": vat,
                 "brutto": brutto,
-                "kategoria": u["kategoria"],
+                "kategoria": u.get("kategoria"),
                 "generated": True
             })
 
-        # 5. Stoper księgowość / kadry
+        # ---------------- Praca księgowa / kadrowa ----------------
         if status:
-            sek_ks = status.get("sekundy_ksiegowosc") or 0
-            sek_kd = status.get("sekundy_kadry") or 0
+            sek_ks = int(status.get("sekundy_ksiegowosc") or 0)
+            sek_kd = int(status.get("sekundy_kadry") or 0)
 
             if sek_ks > 0:
                 godz = sek_ks / 3600
                 netto = round(godz * 150, 2)
-                vat = 23
                 brutto = round(netto * 1.23, 2)
-
                 pozycje.append({
                     "nazwa": "Praca księgowa",
                     "ilosc": round(godz, 2),
                     "jednostka": "godz.",
                     "netto": netto,
-                    "vat": vat,
+                    "vat": 23,
                     "brutto": brutto,
                     "kategoria": "księgowość",
                     "generated": True
@@ -241,15 +221,13 @@ class FakturyLogic:
             if sek_kd > 0:
                 godz = sek_kd / 3600
                 netto = round(godz * 120, 2)
-                vat = 23
                 brutto = round(netto * 1.23, 2)
-
                 pozycje.append({
                     "nazwa": "Praca kadrowa",
                     "ilosc": round(godz, 2),
                     "jednostka": "godz.",
                     "netto": netto,
-                    "vat": vat,
+                    "vat": 23,
                     "brutto": brutto,
                     "kategoria": "kadry",
                     "generated": True
@@ -257,17 +235,8 @@ class FakturyLogic:
 
         return pozycje
 
-    # -------------------------
-    # Scalanie pozycji (idempotencja)
-    # -------------------------
+    # ---------------- MERGE ----------------
     def _merge_positions(self, existing_positions: List[Dict[str, Any]], generated_positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Scalanie pozycji:
-        - istniejące pozycje z 'generated': True zostaną nadpisane przez odpowiadające generated_positions (po nazwie)
-        - istniejące pozycje bez 'generated' (ręczne) pozostają bez zmian
-        - nowe generated_positions, których nie ma w existing, zostaną dodane
-        - porównanie po 'nazwa' (można rozszerzyć o kategorię/jednostkę jeśli potrzeba)
-        """
         existing = existing_positions or []
         name_map = {}
         for idx, p in enumerate(existing):
@@ -301,24 +270,12 @@ class FakturyLogic:
 
         return result
 
-    # -------------------------
-    # Koordynacja zapisu
-    # -------------------------
+    # ---------------- SAVE SINGLE ----------------
     def generate_and_save_invoice(self, firma_id: int, miesiac: str) -> Dict[str, Any]:
-        """
-        Generuje pozycje i zapisuje fakturę. Jeśli faktura istnieje:
-         - scala istniejące pozycje z nowo wygenerowanymi (nadpisuje wygenerowane)
-         - nie duplikuje pozycji wygenerowanych wcześniej
-        Zwraca dict z informacją o id, created (True jeśli nowa), oraz sumach.
-        """
         generated_positions = self.generate_invoice_positions(firma_id, miesiac)
-
-        gen_netto = sum(float(p.get("netto", 0) or 0) for p in generated_positions)
-        gen_brutto = sum(float(p.get("brutto", 0) or 0) for p in generated_positions)
 
         existing = get_invoice_for_company_month(firma_id, miesiac)
         if existing:
-            existing_positions = []
             try:
                 existing_positions = json.loads(existing.get("pozycje_json") or "[]")
             except Exception:
@@ -326,8 +283,8 @@ class FakturyLogic:
 
             merged = self._merge_positions(existing_positions, generated_positions)
 
-            kwota_netto = round(sum(float(p.get("netto", 0) or 0) for p in merged), 2)
-            kwota_brutto = round(sum(float(p.get("brutto", 0) or 0) for p in merged), 2)
+            kwota_netto = round(sum(self._to_float(p.get("netto")) for p in merged), 2)
+            kwota_brutto = round(sum(self._to_float(p.get("brutto")) for p in merged), 2)
 
             invoice_id = create_or_update_invoice(
                 firma_id=firma_id,
@@ -351,8 +308,8 @@ class FakturyLogic:
             for p in generated_positions:
                 p.setdefault("generated", True)
 
-            kwota_netto = round(sum(float(p.get("netto", 0) or 0) for p in generated_positions), 2)
-            kwota_brutto = round(sum(float(p.get("brutto", 0) or 0) for p in generated_positions), 2)
+            kwota_netto = round(sum(self._to_float(p.get("netto")) for p in generated_positions), 2)
+            kwota_brutto = round(sum(self._to_float(p.get("brutto")) for p in generated_positions), 2)
 
             invoice_id = create_or_update_invoice(
                 firma_id=firma_id,
@@ -373,15 +330,13 @@ class FakturyLogic:
                 "kwota_brutto": kwota_brutto
             }
 
+    # ---------------- SAVE MONTH ----------------
     def generate_and_save_invoices_for_month(self, miesiac: str, only_active: bool = True) -> Dict[str, Any]:
-        """
-        Generuje i zapisuje faktury dla wszystkich firm za podany miesiąc.
-        Zwraca podsumowanie: {'processed': int, 'created': int, 'updated': int, 'errors': [str,...]}
-        """
         if not miesiac:
             return {"processed": 0, "created": 0, "updated": 0, "errors": ["Brak miesiąca."]}
 
         conn = get_conn()
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         if only_active:
             cur.execute("SELECT id FROM firmy WHERE status = 'Aktywne' OR status IS NULL")
@@ -397,13 +352,87 @@ class FakturyLogic:
 
         for r in rows:
             fid = r["id"]
+
             try:
-                result = self.generate_and_save_invoice(fid, miesiac)
-                processed += 1
-                if result.get("created"):
-                    created += 1
+                company = self._get_company(fid)
+                if not company:
+                    continue
+
+                fakturowac_flag = bool(company.get("fakturowac", 0))
+
+                if fakturowac_flag:
+                    # pełna faktura
+                    result = self.generate_and_save_invoice(fid, miesiac)
+                    processed += 1
+                    if result.get("created"):
+                        created += 1
+                    else:
+                        updated += 1
+
                 else:
-                    updated += 1
+                    # tylko dodatkowe usługi + praca stoper
+                    all_generated = self.generate_invoice_positions(fid, miesiac)
+
+                    filtered = []
+                    for p in all_generated:
+                        name = (p.get("nazwa") or "").lower()
+                        cat = (p.get("kategoria") or "").lower()
+
+                        if cat == "księgowość" and name in (
+                            "usługa księgowa",
+                            "zdrowotna",
+                            "dokumenty ponad limit",
+                            "praca księgowa"
+                        ):
+                            continue
+
+                        filtered.append(p)
+
+                    if not filtered:
+                        processed += 1
+                        continue
+
+                    existing = get_invoice_for_company_month(fid, miesiac)
+                    if existing:
+                        try:
+                            existing_positions = json.loads(existing.get("pozycje_json") or "[]")
+                        except Exception:
+                            existing_positions = []
+
+                        merged = self._merge_positions(existing_positions, filtered)
+                        kw_net = round(sum(self._to_float(p.get("netto")) for p in merged), 2)
+                        kw_br = round(sum(self._to_float(p.get("brutto")) for p in merged), 2)
+
+                        invoice_id = create_or_update_invoice(
+                            firma_id=fid,
+                            miesiac=miesiac,
+                            pozycje=merged,
+                            kwota_netto=kw_net,
+                            kwota_brutto=kw_br,
+                            existing_invoice_id=existing["id"]
+                        )
+
+                        processed += 1
+                        updated += 1
+
+                    else:
+                        for p in filtered:
+                            p.setdefault("generated", True)
+                        kw_net = round(sum(self._to_float(p.get("netto")) for p in filtered), 2)
+                        kw_br = round(sum(self._to_float(p.get("brutto")) for p in filtered), 2)
+
+                        invoice_id = create_or_update_invoice(
+                            firma_id=fid,
+                            miesiac=miesiac,
+                            pozycje=filtered,
+                            kwota_netto=kw_net,
+                            kwota_brutto=kw_br,
+                            existing_invoice_id=None
+                        )
+
+                        processed += 1
+                        created += 1
+
             except Exception as e:
                 errors.append(f"Firma {fid}: {e}")
 
@@ -414,16 +443,8 @@ class FakturyLogic:
             "errors": errors
         }
 
-    # -------------------------
-    # Dodatkowe pomocnicze operacje
-    # -------------------------
+    # ---------------- ADD SINGLE POSITION ----------------
     def add_single_position_to_invoice(self, firma_id: int, miesiac: str, position: Dict[str, Any], mark_generated: bool = True) -> Dict[str, Any]:
-        """
-        Dodaje pojedynczą pozycję do faktury (tworzy fakturę jeśli nie istnieje).
-        - mark_generated: jeśli True, pozycja zostanie oznaczona jako wygenerowana (generated=True)
-        - jeśli istnieje wygenerowana pozycja o tej samej nazwie, zostanie nadpisana
-        - jeśli istnieje ręczna pozycja o tej samej nazwie, nowa pozycja zostanie dodana
-        """
         existing = get_invoice_for_company_month(firma_id, miesiac)
 
         pos = dict(position)
@@ -436,30 +457,12 @@ class FakturyLogic:
                 existing_positions = []
 
             merged = self._merge_positions(existing_positions, [pos])
-            kw_net = round(sum(float(p.get("netto", 0) or 0) for p in merged), 2)
-            kw_br = round(sum(float(p.get("brutto", 0) or 0) for p in merged), 2)
+            kw_net = round(sum(self._to_float(p.get("netto")) for p in merged), 2)
+            kw_br = round(sum(self._to_float(p.get("brutto")) for p in merged), 2)
 
             invoice_id = create_or_update_invoice(
                 firma_id=firma_id,
                 miesiac=miesiac,
                 pozycje=merged,
                 kwota_netto=kw_net,
-                kwota_brutto=kw_br,
-                existing_invoice_id=existing["id"]
-            )
-
-            return {"id": invoice_id, "created": False, "pozycje": merged, "kwota_netto": kw_net, "kwota_brutto": kw_br}
-        else:
-            kw_net = round(float(pos.get("netto", 0) or 0), 2)
-            kw_br = round(float(pos.get("brutto", 0) or 0), 2)
-
-            invoice_id = create_or_update_invoice(
-                firma_id=firma_id,
-                miesiac=miesiac,
-                pozycje=[pos],
-                kwota_netto=kw_net,
-                kwota_brutto=kw_br,
-                existing_invoice_id=None
-            )
-
-            return {"id": invoice_id, "created": True, "pozycje": [pos], "kwota_netto": kw_net, "kwota_brutto": kw_br}
+                kwota_brutto=kw_br)

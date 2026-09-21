@@ -140,8 +140,7 @@ SALDEO_HEADERS = [
 # ============================================================
 # PROFESJONALNY EKSPORT SALDEO SMART
 # ============================================================
-
-def export_saldeo_csv(db_path: Optional[str], output_path: str, miesiac: str) -> None:
+def export_saldeo_csv(output_path: str, miesiac: str) -> None:
     conn = get_conn()
     cur = conn.cursor()
 
@@ -201,3 +200,4 @@ def export_saldeo_csv(db_path: Optional[str], output_path: str, miesiac: str) ->
                 first = False
 
             lp_counter += 1
+

@@ -1,5 +1,3 @@
-import datetime
-from typing import Optional
 from PyQt6.QtWidgets import QApplication
 from app.utils.ui_imports import *
 
@@ -10,7 +8,7 @@ from app.companies.company_ui import CompaniesPage
 from app.email.email_ui import EmailPage
 from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage
-from app.admin.global_settings_ui import GlobalSettingsPage
+from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
 
 

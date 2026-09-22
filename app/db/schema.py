@@ -1,7 +1,19 @@
 # app/db/schema.py
 import sqlite3
 import bcrypt
+from pathlib import Path
 from app.config import DB_NAME
+
+
+def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
+    """
+    Try to add a column to a table. Ignore if column already exists or other OperationalError.
+    column_def example: "can_edit_companies INTEGER DEFAULT 0"
+    """
+    try:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_def};")
+    except sqlite3.OperationalError:
+        pass
 
 
 def init_db():
@@ -13,7 +25,9 @@ def init_db():
     cur.execute("PRAGMA journal_mode = WAL;")
     cur.execute("PRAGMA synchronous = NORMAL;")
 
-    # firmy
+    # -------------------------
+    # FIRMY
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS firmy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +37,7 @@ def init_db():
             regon TEXT,
             krs TEXT,
             pesel TEXT,
-            
+
             kraj TEXT,
             wojewodztwo TEXT,
             powiat TEXT,
@@ -40,7 +54,7 @@ def init_db():
             osoba_kontaktowa TEXT,
             adres_email TEXT,
             nr_telefonu TEXT,
-            
+
             adres_zam_kraj TEXT,
             adres_zam_wojewodztwo TEXT,
             adres_zam_powiat TEXT,
@@ -50,7 +64,7 @@ def init_db():
             adres_zam_ulica TEXT,
             adres_zam_budynek TEXT,
             adres_zam_lokal TEXT,
-            
+
             adres_koresp_kraj TEXT,
             adres_koresp_wojewodztwo TEXT,
             adres_koresp_powiat TEXT,
@@ -106,7 +120,18 @@ def init_db():
         );
     """)
 
+    # ensure commonly referenced columns exist (backwards compatibility)
+    _safe_alter_add_column(cur, "firmy", "konto_bankowe TEXT")
+    _safe_alter_add_column(cur, "firmy", "uwagi TEXT")
+    _safe_alter_add_column(cur, "firmy", "kategoria_domyslna TEXT")
+    _safe_alter_add_column(cur, "firmy", "glowny_cennik TEXT")
+    _safe_alter_add_column(cur, "firmy", "limit_dokumentow INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "firmy", "vat_czynny INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "firmy", "glowny_cennik_manualny INTEGER DEFAULT 0")
+
+    # -------------------------
     # preferencje cennikowe
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS firma_cennik_preference (
             firma_id INTEGER PRIMARY KEY,
@@ -117,7 +142,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # statusy_miesieczne
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
             firma_id INTEGER NOT NULL,
@@ -132,7 +159,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # dokumenty
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS dokumenty (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,7 +188,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # cenniki księgowość
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,10 +205,12 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
-
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_typ_klucz ON cenniki(typ, klucz);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
 
+    # -------------------------
     # cenniki kadry
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cenniki_kadry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,8 +221,11 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
 
+    # -------------------------
     # usługi dodatkowe
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS uslugi_dodatkowe (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,7 +249,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # pracownicy
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownicy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -225,8 +263,11 @@ def init_db():
             data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_pracownicy_email ON pracownicy(email);")
 
+    # -------------------------
     # role
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS role (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,6 +280,13 @@ def init_db():
             can_access_admin_settings INTEGER DEFAULT 0
         );
     """)
+    # ensure role columns exist for older schemas
+    _safe_alter_add_column(cur, "role", "can_view_invoices INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "role", "can_edit_companies INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "role", "can_manage_users INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "role", "can_view_finances INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "role", "can_export_data INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "role", "can_access_admin_settings INTEGER DEFAULT 0")
 
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (1, 'księgowa');")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (2, 'kadrowa');")
@@ -246,7 +294,9 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (4, 'admin');")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (5, 'opiekun');")
 
+    # -------------------------
     # pracownik_firma
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownik_firma (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -260,7 +310,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # company_notes
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS company_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -273,7 +325,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # udzialowcy
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS udzialowcy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -284,7 +338,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # company_contacts
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS company_contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -298,7 +354,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # konta_email
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS konta_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -315,8 +373,11 @@ def init_db():
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE SET NULL
         );
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
 
+    # -------------------------
     # foldery_email
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS foldery_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -326,7 +387,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # wiadomosci_email
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS wiadomosci_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -344,8 +407,11 @@ def init_db():
             FOREIGN KEY(folder_id) REFERENCES foldery_email(id) ON DELETE SET NULL
         );
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
 
+    # -------------------------
     # email_attachments
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS email_attachments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -358,7 +424,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # pracownik_konto_email
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pracownik_konto_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -371,7 +439,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # reguly_filtrow
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS reguly_filtrow (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -391,7 +461,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # chat
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS konwersacje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -425,60 +497,101 @@ def init_db():
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE
         );
     """)
-
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja ON wiadomosci_chat(konwersacja_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
 
+    # -------------------------
     # faktury
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             firma_id INTEGER NOT NULL,
             miesiac TEXT NOT NULL,
+
             kwota_netto REAL NOT NULL,
             kwota_brutto REAL NOT NULL,
+
             data_wystawienia TEXT,
             data_sprzedazy TEXT,
             termin_platnosci TEXT,
+
+            metoda_kasowa TEXT DEFAULT '',
+            wyslij_do_ksef TEXT DEFAULT '',
+            wyslij_do_kontrahenta TEXT DEFAULT '',
+
+            nabywca_skrocona TEXT,
+            nabywca_pelna TEXT,
+            nabywca_adres TEXT,
+            nabywca_kod TEXT,
+            nabywca_miasto TEXT,
+            nabywca_nip TEXT,
+            nabywca_regon TEXT,
+            nabywca_kraj TEXT,
+            nabywca_email TEXT,
+
+            odbiorca_skrocona TEXT,
+            odbiorca_pelna TEXT,
+            odbiorca_rola TEXT DEFAULT 'Odbiorca',
+            odbiorca_adres TEXT,
+            odbiorca_kod TEXT,
+            odbiorca_miasto TEXT,
+            odbiorca_nip TEXT,
+            odbiorca_regon TEXT,
+            odbiorca_kraj TEXT,
+            odbiorca_email TEXT,
+
+            wystawca TEXT,
+
+            konto_bankowe TEXT,
+
+            gtu TEXT DEFAULT '',
+
             pozycje_json TEXT NOT NULL,
+
             eksportowana INTEGER DEFAULT 0,
             data_eksportu TEXT,
+
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
             UNIQUE(firma_id, miesiac)
         );
     """)
 
+    # faktury_pozycje (ensure single definition)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_pozycje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             faktura_id INTEGER NOT NULL,
+
             opis TEXT,
             ilosc REAL DEFAULT 1,
+            jednostka TEXT,
+
             cena_netto REAL,
+            cena_brutto REAL,
+
             stawka_vat TEXT,
+            pkwiu TEXT,
+            gtu TEXT,
+
             wartosc_netto REAL,
             wartosc_brutto REAL,
+
             generated INTEGER DEFAULT 0,
+
             FOREIGN KEY(faktura_id) REFERENCES faktury(id) ON DELETE CASCADE
         );
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(faktura_id);")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS faktury_archiwum (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            faktura_id INTEGER,
-            firma_id INTEGER,
-            miesiac TEXT,
-            pozycje_json TEXT,
-            kwota_netto REAL,
-            kwota_brutto REAL,
-            archived_at TEXT DEFAULT (datetime('now'))
-        );
-    """)
-
+    # -------------------------
     # tags
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -496,7 +609,9 @@ def init_db():
         );
     """)
 
+    # -------------------------
     # logs, settings, sessions, audit
+    # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -537,7 +652,9 @@ def init_db():
         );
     """)
 
-    # indexes
+    # -------------------------
+    # indexes (some already created above)
+    # -------------------------
     cur.execute("CREATE INDEX IF NOT EXISTS idx_pracownicy_email ON pracownicy(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_firmy_nip ON firmy(nip);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
@@ -548,7 +665,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
 
+    # -------------------------
     # initial data
+    # -------------------------
     cur.execute("SELECT COUNT(*) AS cnt FROM pracownicy")
     cnt_row = cur.fetchone()
     cnt = cnt_row["cnt"] if cnt_row else 0

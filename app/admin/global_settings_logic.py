@@ -502,6 +502,40 @@ class GlobalSettingsLogic:
         conn.close()
         return rows
 
+    def update_global_pricing_item(
+        self,
+        klucz: str,
+        cena_netto_ksiegowosc: float,
+        cena_za_dokument_ponad_limit: float,
+        zdrowotna: float,
+        netto: float,
+        brutto: float,
+    ) -> None:
+        conn = self._get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE cenniki
+            SET cena_netto_ksiegowosc = ?,
+                cena_za_dokument_ponad_limit = ?,
+                zdrowotna = ?,
+                netto = ?,
+                brutto = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE klucz = ?
+            """,
+            (
+                cena_netto_ksiegowosc,
+                cena_za_dokument_ponad_limit,
+                zdrowotna,
+                netto,
+                brutto,
+                klucz,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
     def import_global_pricing_from_csv(self, csv_path: str):
         path = Path(csv_path)
         if not path.exists():
@@ -650,6 +684,29 @@ class GlobalSettingsLogic:
         conn.close()
         return rows
 
+    def update_pricing_kadry_item(
+        self,
+        klucz: str,
+        cena_netto_kadry: float,
+        cena_brutto_kadry: float,
+        opis: str,
+    ) -> None:
+        conn = self._get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE cenniki_kadry
+            SET cena_netto_kadry = ?,
+                cena_brutto_kadry = ?,
+                opis = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE klucz = ?
+            """,
+            (cena_netto_kadry, cena_brutto_kadry, opis, klucz),
+        )
+        conn.commit()
+        conn.close()
+
     def import_pricing_kadry_from_csv(self, csv_path: str):
         path = Path(csv_path)
         if not path.exists():
@@ -771,6 +828,27 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute("DELETE FROM uslugi_dodatkowe WHERE id = ?", (usluga_id,))
+        conn.commit()
+        conn.close()
+
+    def update_extra_service_by_name(
+        self,
+        old_name: str,
+        nazwa: str,
+        cena_netto: float,
+        stawka_vat: str,
+        kategoria: str,
+    ) -> None:
+        conn = self._get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE uslugi_dodatkowe
+            SET nazwa = ?, cena_netto = ?, stawka_vat = ?, kategoria = ?
+            WHERE nazwa = ?
+            """,
+            (nazwa, cena_netto, stawka_vat, kategoria, old_name),
+        )
         conn.commit()
         conn.close()
 

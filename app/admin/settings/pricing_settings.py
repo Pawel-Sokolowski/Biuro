@@ -164,19 +164,14 @@ class PricingSettings(QWidget):
                 nettosum_f = float(e_nettosum.text().replace(",", "."))
                 brutto_f = float(e_brutto.text().replace(",", "."))
 
-                conn = self.logic._get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    UPDATE cenniki
-                    SET cena_netto_ksiegowosc = ?,
-                        cena_za_dokument_ponad_limit = ?,
-                        zdrowotna = ?,
-                        netto = ?,
-                        brutto = ?
-                    WHERE klucz = ?
-                """, (netto_f, ponad_f, zdrow_f, nettosum_f, brutto_f, klucz))
-                conn.commit()
-                conn.close()
+                self.logic.update_global_pricing_item(
+                    klucz=klucz,
+                    cena_netto_ksiegowosc=netto_f,
+                    cena_za_dokument_ponad_limit=ponad_f,
+                    zdrowotna=zdrow_f,
+                    netto=nettosum_f,
+                    brutto=brutto_f,
+                )
 
                 self.logic.set_setting("ksiegowosc_domyslny_vat", cb_vat.currentText())
                 self.logic.set_setting("ksiegowosc_domyslne_gtu", cb_gtu.currentText())

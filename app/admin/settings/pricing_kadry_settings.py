@@ -140,16 +140,12 @@ class PricingKadrySettings(QWidget):
                 vat_f = cb_vat.currentText()
                 gtu_f = cb_gtu.currentText()
 
-                # zapis do DB
-                conn = self.logic._get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    UPDATE cenniki_kadry
-                    SET cena_netto_kadry = ?, cena_brutto_kadry = ?, opis = ?
-                    WHERE klucz = ?
-                """, (netto_f, brutto_f, opis_f, klucz))
-                conn.commit()
-                conn.close()
+                self.logic.update_pricing_kadry_item(
+                    klucz=klucz,
+                    cena_netto_kadry=netto_f,
+                    cena_brutto_kadry=brutto_f,
+                    opis=opis_f,
+                )
 
                 # zapis VAT + GTU do app_settings
                 self.logic.set_setting("kadry_domyslny_vat", vat_f)

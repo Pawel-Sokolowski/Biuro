@@ -118,14 +118,12 @@ class ExtraServicesSettings(QWidget):
                 gtu = cb_gtu.currentText()
                 kat = cb_kat.currentText()
 
-                conn = self.logic._get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
-                    VALUES (?, ?, ?, ?)
-                """, (nazwa, cena, vat, kat))
-                conn.commit()
-                conn.close()
+                self.logic.add_extra_service(
+                    nazwa=nazwa,
+                    cena_netto=cena,
+                    stawka_vat=vat,
+                    kategoria=kat,
+                )
 
                 self.logic.set_setting("uslugi_domyslny_vat", vat)
                 self.logic.set_setting("uslugi_domyslne_gtu", gtu)
@@ -190,15 +188,13 @@ class ExtraServicesSettings(QWidget):
                 gtu_f = cb_gtu.currentText()
                 kat_f = cb_kat.currentText()
 
-                conn = self.logic._get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    UPDATE uslugi_dodatkowe
-                    SET nazwa = ?, cena_netto = ?, stawka_vat = ?, kategoria = ?
-                    WHERE nazwa = ?
-                """, (nazwa_f, cena_f, vat_f, kat_f, nazwa))
-                conn.commit()
-                conn.close()
+                self.logic.update_extra_service_by_name(
+                    old_name=nazwa,
+                    nazwa=nazwa_f,
+                    cena_netto=cena_f,
+                    stawka_vat=vat_f,
+                    kategoria=kat_f,
+                )
 
                 self.logic.set_setting("uslugi_domyslny_vat", vat_f)
                 self.logic.set_setting("uslugi_domyslne_gtu", gtu_f)

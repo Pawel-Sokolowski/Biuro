@@ -32,6 +32,7 @@ from app.db.dao_app_settings import (
     delete_setting as dao_delete_setting,
     list_settings as dao_list_settings,
 )
+from app.db import dao_global_settings
 
 
 def safe_float(val) -> float:
@@ -139,45 +140,10 @@ class GlobalSettingsLogic:
     # Role + uprawnienia
     # -------------------------
     def get_roles(self) -> List[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, nazwa,
-                   COALESCE(can_view_invoices, 0) AS can_view_invoices,
-                   COALESCE(can_edit_companies, 0) AS can_edit_companies,
-                   COALESCE(can_manage_users, 0) AS can_manage_users,
-                   COALESCE(can_view_finances, 0) AS can_view_finances,
-                   COALESCE(can_export_data, 0) AS can_export_data,
-                   COALESCE(can_access_admin_settings, 0) AS can_access_admin_settings
-            FROM role
-            ORDER BY id
-            """
-        )
-        rows = cur.fetchall()
-        conn.close()
-        return rows
+        return dao_global_settings.get_roles()
 
     def get_role(self, rid: int) -> Optional[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, nazwa,
-                   COALESCE(can_view_invoices, 0) AS can_view_invoices,
-                   COALESCE(can_edit_companies, 0) AS can_edit_companies,
-                   COALESCE(can_manage_users, 0) AS can_manage_users,
-                   COALESCE(can_view_finances, 0) AS can_view_finances,
-                   COALESCE(can_export_data, 0) AS can_export_data,
-                   COALESCE(can_access_admin_settings, 0) AS can_access_admin_settings
-            FROM role
-            WHERE id = ?
-            """,
-            (rid,),
-        )
-        row = cur.fetchone()
-        conn.close()
-        return row
+        return dao_global_settings.get_role(rid)
 
     def add_role(
         self,
@@ -189,85 +155,24 @@ class GlobalSettingsLogic:
         can_export_data: bool = False,
         can_access_admin_settings: bool = False,
     ) -> int:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO role (nazwa, can_view_invoices, can_edit_companies, can_manage_users,
-                              can_view_finances, can_export_data, can_access_admin_settings)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                nazwa,
-                int(can_view_invoices),
-                int(can_edit_companies),
-                int(can_manage_users),
-                int(can_view_finances),
-                int(can_export_data),
-                int(can_access_admin_settings),
-            ),
+        return dao_global_settings.add_role(
+            nazwa=nazwa,
+            can_view_invoices=can_view_invoices,
+            can_edit_companies=can_edit_companies,
+            can_manage_users=can_manage_users,
+            can_view_finances=can_view_finances,
+            can_export_data=can_export_data,
+            can_access_admin_settings=can_access_admin_settings,
         )
-        rid = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return rid
 
     def update_role(self, rid: int, nazwa: str, **perms):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                """
-                UPDATE role
-                SET nazwa = ?,
-                    can_view_invoices = COALESCE(?, can_view_invoices),
-                    can_edit_companies = COALESCE(?, can_edit_companies),
-                    can_manage_users = COALESCE(?, can_manage_users),
-                    can_view_finances = COALESCE(?, can_view_finances),
-                    can_export_data = COALESCE(?, can_export_data),
-                    can_access_admin_settings = COALESCE(?, can_access_admin_settings)
-                WHERE id = ?
-                """,
-                (
-                    nazwa,
-                    int(perms.get("can_view_invoices", 0)),
-                    int(perms.get("can_edit_companies", 0)),
-                    int(perms.get("can_manage_users", 0)),
-                    int(perms.get("can_view_finances", 0)),
-                    int(perms.get("can_export_data", 0)),
-                    int(perms.get("can_access_admin_settings", 0)),
-                    rid,
-                ),
-            )
-        except sqlite3.OperationalError:
-            cur.execute("UPDATE role SET nazwa = ? WHERE id = ?", (nazwa, rid))
-        conn.commit()
-        conn.close()
+        dao_global_settings.update_role(rid, nazwa, **perms)
 
     def delete_role(self, rola_id: int):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM role WHERE id = ?", (rola_id,))
-        conn.commit()
-        conn.close()
+        dao_global_settings.delete_role(rola_id)
 
     def get_user_permissions(self, pracownik_id: int) -> Dict[str, bool]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                MAX(COALESCE(r.can_view_invoices, 0)) AS can_view_invoices,
-                MAX(COALESCE(r.can_access_admin_settings, 0)) AS can_access_admin_settings,
-                MAX(COALESCE(r.can_manage_users, 0)) AS can_manage_users
-            FROM pracownik_firma pf
-            JOIN role r ON pf.rola_id = r.id
-            WHERE pf.pracownik_id = ?
-            """,
-            (pracownik_id,),
-        )
-        row = cur.fetchone()
-        conn.close()
+        row = dao_global_settings.get_user_permissions(pracownik_id)
         if not row:
             return {
                 "can_view_invoices": False,
@@ -281,28 +186,10 @@ class GlobalSettingsLogic:
         }
 
     def assign_role(self, uid: int, rid: int, firma_id: int = 1):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT OR REPLACE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
-            VALUES (?, ?, ?)
-            """,
-            (uid, firma_id, rid),
-        )
-        conn.commit()
-        conn.close()
+        dao_global_settings.assign_role(uid, rid, firma_id)
 
     def get_user_role(self, uid: int) -> Optional[int]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT rola_id FROM pracownik_firma WHERE pracownik_id = ?",
-            (uid,),
-        )
-        row = cur.fetchone()
-        conn.close()
-        return row["rola_id"] if row else None
+        return dao_global_settings.get_user_role(uid)
 
     # -------------------------
     # App settings (app_settings)
@@ -322,32 +209,10 @@ class GlobalSettingsLogic:
     # Konta email i przypisania
     # -------------------------
     def get_email_accounts(self) -> List[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                id,
-                pracownik_id,
-                email,
-                serwer_imap, port_imap, ssl_imap,
-                serwer_smtp, port_smtp, ssl_smtp,
-                haslo_enc, aktywne
-            FROM konta_email
-            ORDER BY id
-            """
-        )
-        rows = cur.fetchall()
-        conn.close()
-        return rows
+        return dao_global_settings.get_email_accounts()
 
     def get_email_account(self, acc_id: int) -> Optional[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM konta_email WHERE id = ?", (acc_id,))
-        row = cur.fetchone()
-        conn.close()
-        return row
+        return dao_global_settings.get_email_account(acc_id)
 
     def add_email_account(
         self,
@@ -363,33 +228,17 @@ class GlobalSettingsLogic:
         from app.utils.crypto import encrypt_password
 
         encrypted_pwd = encrypt_password(password)
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO konta_email (
-                email, haslo_enc,
-                serwer_imap, port_imap, ssl_imap,
-                serwer_smtp, port_smtp, ssl_smtp,
-                aktywne
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """,
-            (
-                email,
-                encrypted_pwd,
-                imap_server,
-                imap_port,
-                imap_ssl,
-                smtp_server,
-                smtp_port,
-                smtp_ssl,
-            ),
+        return dao_global_settings.add_email_account(
+            email=email,
+            imap_server=imap_server,
+            smtp_server=smtp_server,
+            haslo_enc=encrypted_pwd,
+            imap_port=imap_port,
+            smtp_port=smtp_port,
+            ssl_imap=imap_ssl,
+            ssl_smtp=smtp_ssl,
+            pracownik_id=None,
         )
-        konto_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return konto_id
 
     def update_email_account(
         self,
@@ -402,105 +251,37 @@ class GlobalSettingsLogic:
         ssl_imap: str,
         ssl_smtp: str,
     ):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE konta_email
-            SET email=?, serwer_imap=?, port_imap=?, serwer_smtp=?, port_smtp=?, ssl_imap=?, ssl_smtp=?
-            WHERE id=?
-            """,
-            (email, imap, imap_port, smtp, smtp_port, ssl_imap, ssl_smtp, acc_id),
+        dao_global_settings.update_email_account_connection(
+            acc_id=acc_id,
+            email=email,
+            imap=imap,
+            imap_port=imap_port,
+            smtp=smtp,
+            smtp_port=smtp_port,
+            ssl_imap=ssl_imap,
+            ssl_smtp=ssl_smtp,
         )
-        conn.commit()
-        conn.close()
 
     def toggle_email_account_active(self, acc_id: int):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT aktywne FROM konta_email WHERE id=?", (acc_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.close()
-            return
-        new_val = 0 if row["aktywne"] else 1
-        cur.execute(
-            "UPDATE konta_email SET aktywne=? WHERE id=?",
-            (new_val, acc_id),
-        )
-        conn.commit()
-        conn.close()
+        dao_global_settings.toggle_email_account_active(acc_id)
 
     def delete_email_account(self, konto_id: int):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM konta_email WHERE id = ?", (konto_id,))
-        cur.execute(
-            "DELETE FROM pracownik_konto_email WHERE konto_id = ?",
-            (konto_id,),
-        )
-        conn.commit()
-        conn.close()
+        dao_global_settings.delete_email_account(konto_id)
 
     def get_email_assignments(self) -> List[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT pke.konto_id, ke.email, pke.pracownik_id, pr.email AS pracownik_email
-            FROM pracownik_konto_email pke
-            JOIN konta_email ke ON pke.konto_id = ke.id
-            JOIN pracownicy pr ON pke.pracownik_id = pr.id
-            ORDER BY ke.email, pr.email
-            """
-        )
-        rows = cur.fetchall()
-        conn.close()
-        return rows
+        return dao_global_settings.get_email_assignments()
 
     def assign_email_to_employee(self, konto_id: int, pracownik_id: int):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO pracownik_konto_email (konto_id, pracownik_id)
-            VALUES (?, ?)
-            """,
-            (konto_id, pracownik_id),
-        )
-        conn.commit()
-        conn.close()
+        dao_global_settings.assign_email_to_employee(konto_id, pracownik_id)
 
     def remove_email_assignment(self, konto_id: int, pracownik_id: int):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM pracownik_konto_email
-            WHERE konto_id = ? AND pracownik_id = ?
-            """,
-            (konto_id, pracownik_id),
-        )
-        conn.commit()
-        conn.close()
+        dao_global_settings.remove_email_assignment(konto_id, pracownik_id)
 
     # -------------------------
     # Cennik księgowość (globalny)
     # -------------------------
     def get_global_pricing(self) -> List[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
-                   zdrowotna, netto, brutto, updated_at
-            FROM cenniki
-            ORDER BY klucz
-            """
-        )
-        rows = cur.fetchall()
-        conn.close()
-        return rows
+        return dao_global_settings.get_global_pricing()
 
     def update_global_pricing_item(
         self,
@@ -511,30 +292,14 @@ class GlobalSettingsLogic:
         netto: float,
         brutto: float,
     ) -> None:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE cenniki
-            SET cena_netto_ksiegowosc = ?,
-                cena_za_dokument_ponad_limit = ?,
-                zdrowotna = ?,
-                netto = ?,
-                brutto = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE klucz = ?
-            """,
-            (
-                cena_netto_ksiegowosc,
-                cena_za_dokument_ponad_limit,
-                zdrowotna,
-                netto,
-                brutto,
-                klucz,
-            ),
+        dao_global_settings.update_global_pricing_item(
+            klucz=klucz,
+            cena_netto_ksiegowosc=cena_netto_ksiegowosc,
+            cena_za_dokument_ponad_limit=cena_za_dokument_ponad_limit,
+            zdrowotna=zdrowotna,
+            netto=netto,
+            brutto=brutto,
         )
-        conn.commit()
-        conn.close()
 
     def import_global_pricing_from_csv(self, csv_path: str):
         path = Path(csv_path)
@@ -671,18 +436,7 @@ class GlobalSettingsLogic:
     # CENNIK KADRY
     # ============================
     def get_pricing_kadry(self) -> List[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, klucz, cena_netto_kadry, cena_brutto_kadry, opis, updated_at
-            FROM cenniki_kadry
-            ORDER BY klucz
-            """
-        )
-        rows = cur.fetchall()
-        conn.close()
-        return rows
+        return dao_global_settings.get_pricing_kadry()
 
     def update_pricing_kadry_item(
         self,
@@ -691,21 +445,12 @@ class GlobalSettingsLogic:
         cena_brutto_kadry: float,
         opis: str,
     ) -> None:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE cenniki_kadry
-            SET cena_netto_kadry = ?,
-                cena_brutto_kadry = ?,
-                opis = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE klucz = ?
-            """,
-            (cena_netto_kadry, cena_brutto_kadry, opis, klucz),
+        dao_global_settings.update_pricing_kadry_item(
+            klucz=klucz,
+            cena_netto_kadry=cena_netto_kadry,
+            cena_brutto_kadry=cena_brutto_kadry,
+            opis=opis,
         )
-        conn.commit()
-        conn.close()
 
     def import_pricing_kadry_from_csv(self, csv_path: str):
         path = Path(csv_path)
@@ -792,18 +537,7 @@ class GlobalSettingsLogic:
     # USŁUGI DODATKOWE
     # ============================
     def get_extra_services(self) -> List[sqlite3.Row]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, nazwa, cena_netto, stawka_vat, COALESCE(kategoria, '') AS kategoria
-            FROM uslugi_dodatkowe
-            ORDER BY nazwa
-            """
-        )
-        rows = cur.fetchall()
-        conn.close()
-        return rows
+        return dao_global_settings.get_extra_services()
 
     def add_extra_service(
         self,
@@ -812,24 +546,15 @@ class GlobalSettingsLogic:
         stawka_vat: str,
         kategoria: str,
     ):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO uslugi_dodatkowe (nazwa, cena_netto, stawka_vat, kategoria)
-            VALUES (?, ?, ?, ?)
-            """,
-            (nazwa, cena_netto, stawka_vat, kategoria),
+        dao_global_settings.add_extra_service(
+            nazwa=nazwa,
+            cena_netto=cena_netto,
+            stawka_vat=stawka_vat,
+            kategoria=kategoria,
         )
-        conn.commit()
-        conn.close()
 
     def delete_extra_service(self, usluga_id: int):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM uslugi_dodatkowe WHERE id = ?", (usluga_id,))
-        conn.commit()
-        conn.close()
+        dao_global_settings.delete_extra_service(usluga_id)
 
     def update_extra_service_by_name(
         self,
@@ -839,18 +564,13 @@ class GlobalSettingsLogic:
         stawka_vat: str,
         kategoria: str,
     ) -> None:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE uslugi_dodatkowe
-            SET nazwa = ?, cena_netto = ?, stawka_vat = ?, kategoria = ?
-            WHERE nazwa = ?
-            """,
-            (nazwa, cena_netto, stawka_vat, kategoria, old_name),
+        dao_global_settings.update_extra_service_by_name(
+            old_name=old_name,
+            nazwa=nazwa,
+            cena_netto=cena_netto,
+            stawka_vat=stawka_vat,
+            kategoria=kategoria,
         )
-        conn.commit()
-        conn.close()
 
     # -------------------------
     # Firmy

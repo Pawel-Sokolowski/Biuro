@@ -26,6 +26,7 @@ from typing import List, Dict, Any, Optional
 import xlsxwriter
 
 from app.db.dao_conn import get_conn
+from app.db.dao_app_settings import get_setting_bool
 
 
 # Nagłówki zgodne z Twoim wzorem
@@ -73,34 +74,8 @@ def _get_field(obj: Any, key: str, default: Any = "") -> Any:
             return default
 
 
-def _get_app_setting(key: str, default: Optional[str] = None) -> Optional[str]:
-    """Pobiera wartość z app_settings (wartosc jako string) lub default."""
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT wartosc FROM app_settings WHERE klucz = ?", (key,))
-        row = cur.fetchone()
-        if not row:
-            return default
-        try:
-            return row["wartosc"]
-        except Exception:
-            return row[0] if isinstance(row, (list, tuple)) and len(row) > 0 else default
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def _bool_from_setting(val) -> bool:
-    """Interpretuje ustawienie (string/int/bool) jako boolean."""
-    if val is None:
-        return False
-    if isinstance(val, bool):
-        return val
-    s = str(val).strip().lower()
-    return s in ("1", "true", "tak", "t", "yes", "y", "x")
+def _get_export_bool(*keys: str, default: bool = False) -> bool:
+    return get_setting_bool(keys, default=default)
 
 
 def format_amount_pl(amount: float) -> str:
@@ -132,11 +107,15 @@ def export_saldeo_xlsx(
 
     # jeśli parametry None -> pobierz z ustawień
     if metoda_kasowa is None:
-        metoda_kasowa = _bool_from_setting(_get_app_setting("eksport_kasowa", "0"))
+        metoda_kasowa = _get_export_bool("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa")
     if wysylac_do_ksef is None:
-        wysylac_do_ksef = _bool_from_setting(_get_app_setting("eksport_do_ksef", "0"))
+        wysylac_do_ksef = _get_export_bool("eksport_do_ksef", "faktury_ksef", "domyslnie_wysylac_do_ksef")
     if wysylac_do_kontrahenta is None:
-        wysylac_do_kontrahenta = _bool_from_setting(_get_app_setting("eksport_do_kontrahenta", "0"))
+        wysylac_do_kontrahenta = _get_export_bool(
+            "eksport_do_kontrahenta",
+            "faktury_wysylka_kontrahent",
+            "domyslnie_wysylac_do_kontrahenta",
+        )
 
     # wartość do wpisania
     mark_kasowa = "X" if metoda_kasowa else ""

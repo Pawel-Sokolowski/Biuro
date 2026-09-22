@@ -33,7 +33,7 @@ class InvoiceSettings(QWidget):
         # Metoda kasowa
         # -------------------------
         self.cb_metoda_kasowa = QCheckBox("Metoda kasowa (X w eksporcie Saldeo)")
-        val = self.logic.get_setting("faktury_metoda_kasowa") or ""
+        val = self._get_flag_value("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa")
         self.cb_metoda_kasowa.setChecked(val == "X")
         layout.addWidget(self.cb_metoda_kasowa)
 
@@ -41,7 +41,7 @@ class InvoiceSettings(QWidget):
         # Wysyłka do KSeF
         # -------------------------
         self.cb_ksef = QCheckBox("Automatyczna wysyłka do KSeF")
-        val = self.logic.get_setting("faktury_ksef") or ""
+        val = self._get_flag_value("eksport_do_ksef", "faktury_ksef", "domyslnie_wysylac_do_ksef")
         self.cb_ksef.setChecked(val == "X")
         layout.addWidget(self.cb_ksef)
 
@@ -49,7 +49,11 @@ class InvoiceSettings(QWidget):
         # Wysyłka do kontrahenta
         # -------------------------
         self.cb_kontrahent = QCheckBox("Automatyczna wysyłka do kontrahenta")
-        val = self.logic.get_setting("faktury_wysylka_kontrahent") or ""
+        val = self._get_flag_value(
+            "eksport_do_kontrahenta",
+            "faktury_wysylka_kontrahent",
+            "domyslnie_wysylac_do_kontrahenta",
+        )
         self.cb_kontrahent.setChecked(val == "X")
         layout.addWidget(self.cb_kontrahent)
 
@@ -97,26 +101,45 @@ class InvoiceSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+    def _get_flag_value(self, *keys: str) -> str:
+        for key in keys:
+            val = self.logic.get_setting(key)
+            if val is not None and str(val).strip() != "":
+                s = str(val).strip()
+                return "X" if s in ("1", "true", "True", "X") else ""
+        return ""
+
+    def _set_flag_value(self, enabled: bool, *keys: str) -> None:
+        val = "X" if enabled else ""
+        for key in keys:
+            self.logic.set_setting(key, val)
+
     # ----------------------------------------------------
     # ZAPIS USTAWIEŃ
     # ----------------------------------------------------
     def _save(self):
         # metoda kasowa
-        self.logic.set_setting(
+        self._set_flag_value(
+            self.cb_metoda_kasowa.isChecked(),
+            "eksport_kasowa",
             "faktury_metoda_kasowa",
-            "X" if self.cb_metoda_kasowa.isChecked() else ""
+            "domyslnie_metoda_kasowa",
         )
 
         # KSeF
-        self.logic.set_setting(
+        self._set_flag_value(
+            self.cb_ksef.isChecked(),
+            "eksport_do_ksef",
             "faktury_ksef",
-            "X" if self.cb_ksef.isChecked() else ""
+            "domyslnie_wysylac_do_ksef",
         )
 
         # wysyłka do kontrahenta
-        self.logic.set_setting(
+        self._set_flag_value(
+            self.cb_kontrahent.isChecked(),
+            "eksport_do_kontrahenta",
             "faktury_wysylka_kontrahent",
-            "X" if self.cb_kontrahent.isChecked() else ""
+            "domyslnie_wysylac_do_kontrahenta",
         )
 
         # GTU

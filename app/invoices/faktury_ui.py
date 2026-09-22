@@ -398,7 +398,7 @@ class FakturyPage(QWidget):
             conn.row_factory = None
             cur = conn.cursor()
             cur.execute("""
-                SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.pozycje_json
+                SELECT f.id, f.firma_id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.pozycje_json
                 FROM faktury f
                 JOIN firmy c ON f.firma_id = c.id
                 WHERE f.id IN ({})
@@ -409,11 +409,12 @@ class FakturyPage(QWidget):
             for r in rows:
                 invoices.append({
                     "id": r[0],
-                    "firma_nazwa": r[1],
-                    "miesiac": r[2],
-                    "kwota_netto": r[3],
-                    "kwota_brutto": r[4],
-                    "pozycje_json": r[5]
+                    "firma_id": r[1],
+                    "firma_nazwa": r[2],
+                    "miesiac": r[3],
+                    "kwota_netto": r[4],
+                    "kwota_brutto": r[5],
+                    "pozycje_json": r[6]
                 })
             export_saldeo_xlsx(invoices, path)
             mark_exported(list(ids))

@@ -26,6 +26,12 @@ from app.db.dao_employees import (
     set_employee_active,
     change_employee_password,
 )
+from app.db.dao_app_settings import (
+    get_setting as dao_get_setting,
+    set_setting as dao_set_setting,
+    delete_setting as dao_delete_setting,
+    list_settings as dao_list_settings,
+)
 
 
 def safe_float(val) -> float:
@@ -302,43 +308,16 @@ class GlobalSettingsLogic:
     # App settings (app_settings)
     # -------------------------
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT wartosc FROM app_settings WHERE klucz = ?", (key,))
-        row = cur.fetchone()
-        conn.close()
-        if not row:
-            return default
-        return row["wartosc"]
+        return dao_get_setting(key, default)
 
     def set_setting(self, key: str, value: str) -> None:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO app_settings (klucz, wartosc)
-            VALUES (?, ?)
-            ON CONFLICT(klucz) DO UPDATE SET wartosc = excluded.wartosc
-            """,
-            (key, value),
-        )
-        conn.commit()
-        conn.close()
+        dao_set_setting(key, value)
 
     def delete_setting(self, key: str) -> None:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM app_settings WHERE klucz = ?", (key,))
-        conn.commit()
-        conn.close()
+        dao_delete_setting(key)
 
     def list_settings(self) -> Dict[str, str]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT klucz, wartosc FROM app_settings ORDER BY klucz")
-        rows = cur.fetchall()
-        conn.close()
-        return {r["klucz"]: r["wartosc"] for r in rows}
+        return dao_list_settings()
     # -------------------------
     # Konta email i przypisania
     # -------------------------

@@ -17,7 +17,7 @@ from app.db.dao_faktury import (
     get_exported_invoices,
     mark_exported
 )
-from app.utils.saldeo_exporter import export_saldeo_csv
+from app.utils.saldeo_exporter import export_saldeo_xlsx
 
 
 class MonthYearDialog(QDialog):
@@ -389,7 +389,7 @@ class FakturyPage(QWidget):
             QMessageBox.information(self, "Eksport", "Brak poprawnych ID.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Zapisz CSV", "", "CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Zapisz XLSX", "", "Excel (*.xlsx)")
         if not path:
             return
 
@@ -415,7 +415,7 @@ class FakturyPage(QWidget):
                     "kwota_brutto": r[4],
                     "pozycje_json": r[5]
                 })
-            export_saldeo_csv(invoices, path)
+            export_saldeo_xlsx(invoices, path)
             mark_exported(list(ids))
             QMessageBox.information(self, "OK", "Faktury wyeksportowano.")
         except Exception as e:

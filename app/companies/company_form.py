@@ -1,4 +1,3 @@
-# app/companies/company_form.py
 from typing import Optional, Dict, Any, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -12,6 +11,7 @@ from app.db.dao_conn import get_conn
 from app.db.dao_companies import save_company
 from app.db.dao_faktury import generate_monthly_invoices_for_month
 from app.companies.company_logic import ceidg_fetch, build_cennik_key, pick_cennik_by_key_or_limit
+from app.admin.global_settings_logic import GlobalSettingsLogic
 
 
 class NoWheelDateEdit(QDateEdit):
@@ -20,9 +20,6 @@ class NoWheelDateEdit(QDateEdit):
 
 
 class MonthGrid(QWidget):
-    """
-    Simple grid of recent months (buttons). Select one month at a time.
-    """
     def __init__(self, months_back: int = 36, parent=None):
         super().__init__(parent)
         self.layout = QGridLayout(self)
@@ -50,7 +47,6 @@ class MonthGrid(QWidget):
                 btn = QPushButton(display[idx])
                 btn.setCheckable(True)
                 btn.clicked.connect(self._on_btn_clicked)
-                # basic white style; app stylesheet can override
                 btn.setStyleSheet("background-color: white;")
                 self.layout.addWidget(btn, r, c)
                 self.buttons.append(btn)
@@ -80,6 +76,8 @@ class CompanyForm(QWidget):
         self._ceidg_in_progress = False
         self.setMinimumWidth(1000)
 
+        self.settings_logic = GlobalSettingsLogic()
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         container = QWidget()
@@ -100,7 +98,6 @@ class CompanyForm(QWidget):
         self._build_dates_section()
         self._build_mikro_section()
         self._build_cenniki_section()
-        # Faktury settings: only the checkbox to enable monthly invoicing
         self._build_faktury_settings_section()
 
         btn_row = QWidget()
@@ -117,7 +114,6 @@ class CompanyForm(QWidget):
         final = QVBoxLayout(self)
         final.addWidget(scroll)
 
-        # load cenniki and populate after UI built
         self._load_cenniki()
         self._populate_from_data()
         self._update_cennik_auto()
@@ -137,7 +133,6 @@ class CompanyForm(QWidget):
             self.setParent(None)
             self.deleteLater()
 
-    # ---------------- IDENT ----------------
     def _build_ident_section(self):
         box = QGroupBox("Identyfikator podatnika")
         form = QFormLayout(box)
@@ -162,7 +157,6 @@ class CompanyForm(QWidget):
 
         form.addRow(row)
 
-        # CEIDG logic expects inputs["nip"]
         self.inputs["nip"] = self.f_ident
 
         self.main_layout.addWidget(box)
@@ -182,7 +176,6 @@ class CompanyForm(QWidget):
         self.id_type_label.setText(kind)
         self.btn_ceidg.setEnabled(kind == "NIP")
 
-    # ---------------- MAIN ----------------
     def _build_main_section(self):
         box = QGroupBox("Podstawowe dane")
         form = QFormLayout(box)
@@ -205,7 +198,6 @@ class CompanyForm(QWidget):
 
         self.main_layout.addWidget(box)
 
-    # ---------------- ADDRESSES ----------------
     def _build_address_tabs(self):
         self.tabs = QTabWidget()
         dz = QWidget()
@@ -312,7 +304,6 @@ class CompanyForm(QWidget):
 
         self.main_layout.addWidget(self.tabs)
 
-    # ---------------- FORMA ----------------
     def _build_forma_section(self):
         box = QGroupBox("Forma działalności i opodatkowanie")
         form = QFormLayout(box)
@@ -331,7 +322,6 @@ class CompanyForm(QWidget):
     def _on_forma_changed(self, idx: int):
         pass
 
-    # ---------------- CONTACT ----------------
     def _build_contact_section(self):
         box = QGroupBox("Kontakt")
         form = QFormLayout(box)
@@ -355,7 +345,6 @@ class CompanyForm(QWidget):
 
         self.main_layout.addWidget(box)
 
-    # ---------------- DATES ----------------
     def _build_dates_section(self):
         box = QGroupBox("Daty")
         form = QFormLayout(box)
@@ -384,7 +373,6 @@ class CompanyForm(QWidget):
             label = f"{y}-{m:02d}"
             self.miesiac_combo.addItem(label, label)
 
-    # ---------------- MIKRORACHUNKI ----------------
     def _build_mikro_section(self):
         box = QGroupBox("Mikrorachunki (ręczne wklejenie)")
         form = QFormLayout(box)
@@ -397,7 +385,6 @@ class CompanyForm(QWidget):
 
         self.main_layout.addWidget(box)
 
-    # ---------------- CENNIKI ----------------
     def _build_cenniki_section(self):
         box = QGroupBox("Cenniki i limity")
         form = QFormLayout(box)
@@ -434,6 +421,29 @@ class CompanyForm(QWidget):
         self.f_fakturowac = QCheckBox("Fakturować firmę (automatyczne faktury miesięczne)")
         self.f_fakturowac.setChecked(bool(self.company_data.get("fakturowac", 0)))
         form.addRow(self.f_fakturowac)
+
+        # domyślne z globalnych ustawień, jeśli brak w firmie
+        def default_bool(setting_key: str) -> bool:
+            val = self.settings_logic.get_setting(setting_key)
+            if val is None:
+                return False
+            return str(val).strip() in ("1", "true", "True", "X")
+
+        wys_ksef_val = self.company_data.get("wysylac_do_ksef")
+        wys_kontr_val = self.company_data.get("wysylac_do_kontrahenta")
+        metoda_kasowa_val = self.company_data.get("metoda_kasowa")
+
+        self.f_ksef = QCheckBox("Domyślnie wysyłać faktury do KSeF")
+        self.f_ksef.setChecked(bool(wys_ksef_val) if wys_ksef_val is not None else default_bool("domyslnie_wysylac_do_ksef"))
+        form.addRow(self.f_ksef)
+
+        self.f_kontrahent = QCheckBox("Domyślnie wysyłać faktury do kontrahenta")
+        self.f_kontrahent.setChecked(bool(wys_kontr_val) if wys_kontr_val is not None else default_bool("domyslnie_wysylac_do_kontrahenta"))
+        form.addRow(self.f_kontrahent)
+
+        self.f_metoda_kasowa = QCheckBox("Metoda kasowa")
+        self.f_metoda_kasowa.setChecked(bool(metoda_kasowa_val) if metoda_kasowa_val is not None else default_bool("domyslnie_metoda_kasowa"))
+        form.addRow(self.f_metoda_kasowa)
 
         self.main_layout.addWidget(box)
 
@@ -548,7 +558,6 @@ class CompanyForm(QWidget):
         except Exception:
             pass
 
-    # ---------------- POPULATE ----------------
     def _populate_from_data(self):
         d = self.company_data
         if not d:
@@ -622,7 +631,10 @@ class CompanyForm(QWidget):
         self.zdrowotna_checkbox.setChecked(bool(d.get("zdrowotna", 0)))
         self.f_fakturowac.setChecked(bool(d.get("fakturowac", 0)))
 
-    # ---------------- SAVE ----------------
+        self.f_ksef.setChecked(bool(d.get("wysylac_do_ksef", 0)))
+        self.f_kontrahent.setChecked(bool(d.get("wysylac_do_kontrahenta", 0)))
+        self.f_metoda_kasowa.setChecked(bool(d.get("metoda_kasowa", 0)))
+
     def _save(self):
         payload: Dict[str, Any] = {}
 
@@ -678,6 +690,10 @@ class CompanyForm(QWidget):
         payload["zdrowotna"] = 1 if self.zdrowotna_checkbox.isChecked() else 0
         payload["fakturowac"] = 1 if self.f_fakturowac.isChecked() else 0
 
+        payload["wysylac_do_ksef"] = 1 if self.f_ksef.isChecked() else 0
+        payload["wysylac_do_kontrahenta"] = 1 if self.f_kontrahent.isChecked() else 0
+        payload["metoda_kasowa"] = 1 if self.f_metoda_kasowa.isChecked() else 0
+
         if self.company_data.get("id"):
             payload["id"] = self.company_data["id"]
 
@@ -690,9 +706,5 @@ class CompanyForm(QWidget):
         QMessageBox.information(self, "Zapisano", "Dane firmy zostały zapisane.")
         self._close_parent()
 
-    # ---------------- FAKTURY (tylko ustawienia) ----------------
-    # (generowanie i wybór miesiąca przeniesione do zakładki Faktury)
-    # ---------------- DODATKOWE ----------------
     def _build_faktury_section(self):
-        # kept for backward compatibility but not used for generation UI
         pass

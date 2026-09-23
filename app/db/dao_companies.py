@@ -12,6 +12,7 @@ from app.db.dao_conn import get_conn
 FIRMA_FIELDS = [
     "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",
     "miasto", "kod_pocztowy", "ulica", "adres_budynek", "adres_lokal",
+    "kraj", "wojewodztwo", "powiat", "gmina",
 
     "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk",
     "osoba_kontaktowa", "adres_email", "nr_telefonu",
@@ -21,6 +22,10 @@ FIRMA_FIELDS = [
 
     "adres_koresp_miasto", "adres_koresp_kod_pocztowy", "adres_koresp_ulica",
     "adres_koresp_budynek", "adres_koresp_lokal",
+    "adres_koresp_kraj", "adres_koresp_wojewodztwo",
+    "adres_koresp_powiat", "adres_koresp_gmina",
+    "adres_zam_kraj", "adres_zam_wojewodztwo",
+    "adres_zam_powiat", "adres_zam_gmina",
 
     "data_rozpoczecia_dg", "data_rozpoczecia_sprzedazy",
     "data_koniec_zus_start", "data_koniec_zus_pref",
@@ -46,6 +51,10 @@ FIRMA_FIELDS = [
     "zdrowotna",
 
     "wojewodztwo", "powiat", "gmina", "kraj",
+
+    "wysylac_do_ksef",
+    "wysylac_do_kontrahenta",
+    "metoda_kasowa",
 
     "fakturowac"
 ]
@@ -173,6 +182,16 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "dz_lokal" in payload:
         mapped["adres_lokal"] = payload["dz_lokal"]
 
+    # dodatkowe pola adresowe działalności
+    if "dz_wojewodztwo" in payload:
+        mapped["wojewodztwo"] = payload["dz_wojewodztwo"]
+    if "dz_powiat" in payload:
+        mapped["powiat"] = payload["dz_powiat"]
+    if "dz_gmina" in payload:
+        mapped["gmina"] = payload["dz_gmina"]
+    if "dz_kraj" in payload:
+        mapped["kraj"] = payload["dz_kraj"]
+
     # korespondencja
     if "ko_miasto" in payload:
         mapped["adres_koresp_miasto"] = payload["ko_miasto"]
@@ -184,6 +203,15 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
         mapped["adres_koresp_budynek"] = payload["ko_budynek"]
     if "ko_lokal" in payload:
         mapped["adres_koresp_lokal"] = payload["ko_lokal"]
+
+    if "ko_wojewodztwo" in payload:
+        mapped["adres_koresp_wojewodztwo"] = payload["ko_wojewodztwo"]
+    if "ko_powiat" in payload:
+        mapped["adres_koresp_powiat"] = payload["ko_powiat"]
+    if "ko_gmina" in payload:
+        mapped["adres_koresp_gmina"] = payload["ko_gmina"]
+    if "ko_kraj" in payload:
+        mapped["adres_koresp_kraj"] = payload["ko_kraj"]
 
     # zamieszkanie
     if "zam_miasto" in payload:
@@ -197,6 +225,14 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "zam_lokal" in payload:
         mapped["adres_zam_lokal"] = payload["zam_lokal"]
 
+    if "zam_wojewodztwo" in payload:
+        mapped["adres_zam_wojewodztwo"] = payload["zam_wojewodztwo"]
+    if "zam_powiat" in payload:
+        mapped["adres_zam_powiat"] = payload["zam_powiat"]
+    if "zam_gmina" in payload:
+        mapped["adres_zam_gmina"] = payload["zam_gmina"]
+    if "zam_kraj" in payload:
+        mapped["adres_zam_kraj"] = payload["zam_kraj"]
     # kontakt
     imie = payload.get("kont_imie")
     nazw = payload.get("kont_nazw")

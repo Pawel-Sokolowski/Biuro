@@ -1,23 +1,4 @@
-# app/tools/saldeo_exporter.py
-"""
-Eksporter do formatu SaldeoSMART (XLSX).
-Ten plik zawiera jedną, kompletną funkcję `export_saldeo_xlsx(...)`
-która:
- - eksportuje listę faktur do pliku XLSX zgodnego z układem SaldeoSMART,
- - obsługuje faktury wielopozycyjne (pierwszy wiersz faktury zawiera numer Lp., kolejne wiersze mają puste Lp.),
- - wstawia "X" do kolumn: Metoda kasowa, Wyślij do KSeF, Wyślij do kontrahenta
-   tylko wtedy, gdy odpowiednie ustawienie jest włączone (lub flaga przekazana jawnie),
- - pobiera ustawienia z tabeli app_settings, jeśli flagi są None:
-     - eksport_kasowa
-     - eksport_do_ksef
-     - eksport_do_kontrahenta
- - działa defensywnie: obsługuje sqlite3.Row i dict, brakujące pola zastępuje pustymi wartościami,
- - pobiera dane firmy z tabeli `firmy` na podstawie pola `firma_id` (lub `id` w fakturze),
- - formatuje kwoty w stylu polskim (np. 1 234,56) dla kolumn cenowych.
-Użycie: wywołaj export_saldeo_xlsx(invoices, "C:/temp/saldeo.xlsx")
-gdzie invoices to lista słowników/rows reprezentujących faktury (z polem 'pozycje' lub 'pozycje_json').
-"""
-
+# app/utils/saldeo_exporter.py
 import json
 import re
 from pathlib import Path
@@ -96,31 +77,36 @@ def export_saldeo_xlsx(
     wysylac_do_ksef: Optional[bool] = None,
     wysylac_do_kontrahenta: Optional[bool] = None,
 ) -> None:
-    """
-    Eksport do XLSX (SaldeoSMART). Wszystkie flagi są opcjonalne:
-    - jeśli None -> pobierane z app_settings (eksport_kasowa, eksport_do_ksef, eksport_do_kontrahenta)
-    - jeśli True -> wpisuje "X" w odpowiedniej kolumnie
-    - jeśli False -> zostawia puste pole
-    invoices: lista faktur (dict lub sqlite3.Row). Każda faktura powinna zawierać pole 'pozycje' (lista) lub 'pozycje_json' (JSON string).
-    output_path: ścieżka do pliku .xlsx
-    """
 
-    # jeśli parametry None -> pobierz z ustawień
-    if metoda_kasowa is None:
-        metoda_kasowa = _get_export_bool("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa")
-    if wysylac_do_ksef is None:
-        wysylac_do_ksef = _get_export_bool("eksport_do_ksef", "faktury_ksef", "domyslnie_wysylac_do_ksef")
-    if wysylac_do_kontrahenta is None:
-        wysylac_do_kontrahenta = _get_export_bool(
-            "eksport_do_kontrahenta",
-            "faktury_wysylka_kontrahent",
-            "domyslnie_wysylac_do_kontrahenta",
-        )
+    # jeśli parametry None -> pobierz wartości domyślne z ustawień
+    default_metoda_kasowa = _get_export_bool("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa")
+    default_wysylac_do_ksef = _get_export_bool("eksport_do_ksef", "faktury_ksef", "domyslnie_wysylac_do_ksef")
+    default_wysylac_do_kontrahenta = _get_export_bool(
+        "eksport_do_kontrahenta",
+        "faktury_wysylka_kontrahent",
+        "domyslnie_wysylac_do_kontrahenta",
+    )
 
-    # wartość do wpisania
-    mark_kasowa = "X" if metoda_kasowa else ""
-    mark_ksef = "X" if wysylac_do_ksef else ""
-    mark_kontr = "X" if wysylac_do_kontrahenta else ""
+    # helper: bezpieczne rzutowanie na bool (obsługa "1","true","True","X", 1, True)
+    def _to_bool(v: Any) -> Optional[bool]:
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return v
+        try:
+            s = str(v).strip()
+        except Exception:
+            return None
+        if s == "":
+            return None
+        if s in ("1", "True", "true", "X", "x", "yes", "tak", "Tak"):
+            return True
+        if s in ("0", "False", "false", "No", "no", "Nie", "nie"):
+            return False
+        try:
+            return bool(int(s))
+        except Exception:
+            return None
 
     p = Path(output_path)
     workbook = xlsxwriter.Workbook(str(p))
@@ -161,7 +147,8 @@ def export_saldeo_xlsx(
                         miasto, kod_pocztowy, ulica,
                         adres_budynek, adres_lokal, adres_email,
                         konto_bankowe, uwagi, kategoria_domyslna,
-                        forma_opodatkowania, vat_czynny, glowny_cennik, limit_dokumentow
+                        forma_opodatkowania, vat_czynny, glowny_cennik, limit_dokumentow,
+                        wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa
                     FROM firmy WHERE id = ?
                     """,
                     (firma_id,),
@@ -211,7 +198,7 @@ def export_saldeo_xlsx(
         try:
             if not glowny_cennik:
                 # apply_default_main_pricing może być zaimplementowane w tym module lub innym
-                from app.tools.saldeo_exporter import apply_default_main_pricing  # noqa: F401
+                from app.utils.saldeo_exporter import apply_default_main_pricing  # noqa: F401
                 apply_default_main_pricing(cur, firma_id, len(pozycje))
                 cur.execute("SELECT glowny_cennik, limit_dokumentow FROM firmy WHERE id = ?", (firma_id,))
                 row_after = cur.fetchone()
@@ -227,6 +214,37 @@ def export_saldeo_xlsx(
 
         # numeracja Lp.: tylko w pierwszym wierszu faktury
         first = True
+
+        # --- per-invoice export flags (priorytet: faktura -> firma -> ustawienia domyślne) ---
+        inv_metoda_kasowa = _get_field(fv, "metoda_kasowa", None)
+        inv_wysylac_do_ksef = _get_field(fv, "wysylac_do_ksef", None)
+        inv_wysylac_do_kontrahenta = _get_field(fv, "wysylac_do_kontrahenta", None)
+
+        comp_metoda_kasowa = fr.get("metoda_kasowa") if isinstance(fr, dict) else None
+        comp_wysylac_do_ksef = fr.get("wysylac_do_ksef") if isinstance(fr, dict) else None
+        comp_wysylac_do_kontrahenta = fr.get("wysylac_do_kontrahenta") if isinstance(fr, dict) else None
+
+        resolved_metoda = _to_bool(inv_metoda_kasowa)
+        if resolved_metoda is None:
+            resolved_metoda = _to_bool(comp_metoda_kasowa)
+        if resolved_metoda is None:
+            resolved_metoda = bool(default_metoda_kasowa)
+
+        resolved_ksef = _to_bool(inv_wysylac_do_ksef)
+        if resolved_ksef is None:
+            resolved_ksef = _to_bool(comp_wysylac_do_ksef)
+        if resolved_ksef is None:
+            resolved_ksef = bool(default_wysylac_do_ksef)
+
+        resolved_kontr = _to_bool(inv_wysylac_do_kontrahenta)
+        if resolved_kontr is None:
+            resolved_kontr = _to_bool(comp_wysylac_do_kontrahenta)
+        if resolved_kontr is None:
+            resolved_kontr = bool(default_wysylac_do_kontrahenta)
+
+        mark_kasowa = "X" if resolved_metoda else ""
+        mark_ksef = "X" if resolved_ksef else ""
+        mark_kontr = "X" if resolved_kontr else ""
 
         for poz in pozycje:
             # defensywne pola pozycji
@@ -336,10 +354,6 @@ def export_saldeo_xlsx(
         pass
     workbook.close()
 
-
-# -------------------------
-# (Opcjonalnie) apply_default_main_pricing helper
-# -------------------------
 def apply_default_main_pricing(cur, firma_id: int, ilosc_dok: int) -> None:
     """
     Pomocnicza funkcja wyboru cennika głównego (jeśli chcesz automatycznie ustawiać).

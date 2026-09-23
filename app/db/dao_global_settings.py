@@ -5,10 +5,6 @@ from typing import Optional, List
 
 from app.db.dao_conn import get_conn
 
-
-# -------------------------
-# Role + uprawnienia
-# -------------------------
 def get_roles() -> List[sqlite3.Row]:
     conn = get_conn()
     try:

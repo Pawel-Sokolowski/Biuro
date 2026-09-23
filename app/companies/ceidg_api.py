@@ -19,12 +19,25 @@ def get_ceidg_firma_by_nip(nip: str):
     if not firma_list:
         return {"error": True}
 
-    f = firma_list[0]
+    # wybór wpisu aktywnego
+    f = None
+    for firma in firma_list:
+        if firma.get("status") == "AKTYWNY":
+            f = firma
+            break
+
+    # jeśli brak aktywnego → wybierz najnowszy po dacie rozpoczęcia
+    if f is None:
+        f = sorted(
+            firma_list,
+            key=lambda x: x.get("dataRozpoczecia", "1900-01-01"),
+            reverse=True
+        )[0]
 
     dz = f.get("adresDzialalnosci") or {}
     ko = f.get("adresKorespondencyjny") or {}
 
-    # automatyczne kopiowanie korespondencji → działalności, jeśli CEIDG nie ma adresu działalności
+    # jeśli CEIDG nie ma adresu działalności → kopiuj korespondencyjny
     if not dz.get("miasto"):
         dz = {
             "miasto": ko.get("miasto", ""),
@@ -49,7 +62,6 @@ def get_ceidg_firma_by_nip(nip: str):
         "pkd": pkd_codes,
         "data_rozpoczecia": f.get("dataRozpoczecia"),
 
-        # adres działalności
         "dz_miasto": dz.get("miasto", ""),
         "dz_kod": dz.get("kod", ""),
         "dz_ulica": dz.get("ulica", ""),
@@ -60,7 +72,6 @@ def get_ceidg_firma_by_nip(nip: str):
         "dz_gmina": dz.get("gmina", ""),
         "dz_kraj": dz.get("kraj", ""),
 
-        # adres korespondencji
         "koresp_miasto": ko.get("miasto", ""),
         "koresp_kod": ko.get("kod", ""),
         "koresp_ulica": ko.get("ulica", ""),
@@ -71,7 +82,6 @@ def get_ceidg_firma_by_nip(nip: str):
         "koresp_gmina": ko.get("gmina", ""),
         "koresp_kraj": ko.get("kraj", ""),
 
-        # kontakt
         "telefon": f.get("telefon", ""),
         "email": f.get("email", ""),
         "www": f.get("www", ""),

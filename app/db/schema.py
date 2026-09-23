@@ -116,8 +116,11 @@ def init_db():
 
             zdrowotna REAL DEFAULT 0,
 
-            fakturowac INTEGER DEFAULT 0
-        );
+            fakturowac INTEGER DEFAULT 0,
+            wysylac_do_ksef INTEGER DEFAULT 0,
+            wysylac_do_kontrahenta INTEGER DEFAULT 0,
+            metoda_kasowa INTEGER DEFAULT 0
+            );
     """)
 
     # ensure commonly referenced columns exist (backwards compatibility)

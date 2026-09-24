@@ -1,3 +1,4 @@
+# app/db/dao_app_settings.py
 from __future__ import annotations
 
 from typing import Dict, Iterable, Optional

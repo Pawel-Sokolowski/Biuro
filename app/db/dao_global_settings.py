@@ -1,3 +1,4 @@
+# app/db/dao_global_settings.py
 from __future__ import annotations
 
 import sqlite3
@@ -205,7 +206,6 @@ def get_email_accounts() -> List[sqlite3.Row]:
     finally:
         conn.close()
 
-
 def get_email_account(acc_id: int) -> Optional[sqlite3.Row]:
     conn = get_conn()
     try:
@@ -402,7 +402,6 @@ def get_global_pricing() -> List[sqlite3.Row]:
         return cur.fetchall()
     finally:
         conn.close()
-
 
 def get_pricing_kadry() -> List[sqlite3.Row]:
     conn = get_conn()

@@ -1,4 +1,4 @@
-# monthly_view_logic.py
+# app/monthly_view/monthly_view_logic.py
 import datetime
 import sqlite3
 from datetime import date, timedelta
@@ -13,6 +13,9 @@ from app.db.dao_invoices import add_invoice_item_for_service
 
 # timer utilities (separated logic)
 from app.utils.timer import TimerUtils
+
+# notes DAO
+from app.db.dao_notes import get_latest_notes_for_firms
 
 
 class MonthlyViewLogic:
@@ -62,7 +65,7 @@ class MonthlyViewLogic:
         cur = conn.cursor()
 
         cur.execute("""
-            SELECT f.id, f.nazwa, f.status, f.zawieszenia_dzialalnosci,
+            SELECT f.id, f.nazwa, f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
                    COALESCE(sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
@@ -95,21 +98,7 @@ class MonthlyViewLogic:
         firm_ids = [r["id"] for r in rows]
         notes_map = {}
         if firm_ids:
-            placeholders = ",".join("?" for _ in firm_ids)
-            conn3 = get_conn()
-            conn3.row_factory = sqlite3.Row
-            cur3 = conn3.cursor()
-            cur3.execute(f"""
-                SELECT firma_id, tresc
-                FROM company_notes
-                WHERE firma_id IN ({placeholders})
-                AND data_utworzenia = (
-                    SELECT MAX(data_utworzenia) FROM company_notes cn2 WHERE cn2.firma_id = company_notes.firma_id
-                )
-            """, tuple(firm_ids))
-            for r in cur3.fetchall():
-                notes_map[r["firma_id"]] = r["tresc"]
-            conn3.close()
+            notes_map = get_latest_notes_for_firms(firm_ids)
 
         for r in rows:
             # filtr statusu
@@ -123,11 +112,27 @@ class MonthlyViewLogic:
                     continue
 
             # notatka
-            t = notes_map.get(r["id"], "")
+            note = notes_map.get(r["id"])
+            if note:
+                t = note["tresc"] or ""
+                autor = note.get("autor_nazwa") or ""
+                data = note.get("data_utworzenia") or ""
+            else:
+                t = ""
+                autor = ""
+                data = ""
+
             snippet = (t[:120] + "…") if len(t) > 120 else t
 
             r["note_snippet"] = snippet
-            r["zawieszona_od"] = r.get("zawieszenia_dzialalnosci") or ""
+            r["note_full"] = t
+            r["note_autor"] = autor
+            r["note_data"] = data
+
+            # zachowujemy ilosc_dok, sekundy_ksiegowosc, sekundy_kadry
+            r["ilosc_dok"] = r.get("ilosc_dok", 0)
+            r["sekundy_ksiegowosc"] = r.get("sekundy_ksiegowosc", 0)
+            r["sekundy_kadry"] = r.get("sekundy_kadry", 0)
 
             result.append(r)
 
@@ -275,7 +280,7 @@ class MonthlyViewLogic:
     # helpery okien
     def open_notes_window(self, firma_id: int):
         from app.monthly_view.monthly_view_ui import InlineNotesWindow
-        InlineNotesWindow(firma_id).exec()
+        InlineNotesWindow(firma_id, parent=None, pracownik_id=self.pracownik_id).exec()
 
     def open_extra_service_window(self, firma_id: int):
         from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow

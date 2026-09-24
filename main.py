@@ -17,7 +17,6 @@ if __name__ == "__main__":
 
     init_db()
     app = QApplication(sys.argv)
-
     login_window = LoginWindow()
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id

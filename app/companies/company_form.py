@@ -9,7 +9,7 @@ from PyQt6.QtGui import QFont
 
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import save_company
-from app.db.dao_faktury import generate_monthly_invoices_for_month
+from app.db.dao_invoices import generate_monthly_invoices_for_month
 from app.companies.company_logic import ceidg_fetch, build_cennik_key, pick_cennik_by_key_or_limit
 from app.admin.global_settings_logic import GlobalSettingsLogic
 

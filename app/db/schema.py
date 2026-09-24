@@ -555,6 +555,8 @@ def init_db():
             eksportowana INTEGER DEFAULT 0,
             data_eksportu TEXT,
 
+            status TEXT DEFAULT '',
+
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
@@ -563,34 +565,34 @@ def init_db():
         );
     """)
 
-    # faktury_pozycje (ensure single definition)
+    # faktury_pozycje - zgodne z DAO (invoice_id) oraz kompatybilność z faktura_id
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_pozycje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            faktura_id INTEGER NOT NULL,
-
+            invoice_id INTEGER,          -- preferowana nazwa używana w DAO
+            faktura_id INTEGER,         -- starsze nazewnictwo / kompatybilność
+            usluga_id INTEGER,
+            nazwa TEXT,
             opis TEXT,
             ilosc REAL DEFAULT 1,
             jednostka TEXT,
-
             cena_netto REAL,
             cena_brutto REAL,
-
             stawka_vat TEXT,
             pkwiu TEXT,
             gtu TEXT,
-
             wartosc_netto REAL,
             wartosc_brutto REAL,
-
             generated INTEGER DEFAULT 0,
-
-            FOREIGN KEY(faktura_id) REFERENCES faktury(id) ON DELETE CASCADE
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(invoice_id) REFERENCES faktury(id) ON DELETE CASCADE,
+            FOREIGN KEY(faktura_id) REFERENCES faktury(id) ON DELETE CASCADE,
+            FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE SET NULL
         );
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(faktura_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(invoice_id);")
 
     # -------------------------
     # tags
@@ -663,7 +665,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(faktura_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(invoice_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")

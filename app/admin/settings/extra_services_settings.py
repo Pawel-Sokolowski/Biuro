@@ -64,11 +64,11 @@ class ExtraServicesSettings(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            nazwa = r.get("nazwa", "")
-            cena = float(r.get("cena_netto", 0))
-            vat = r.get("stawka_vat") or vat_default
+            nazwa = r["nazwa"] if "nazwa" in r.keys() else ""
+            cena = float(r["cena_netto"]) if "cena_netto" in r.keys() else 0
+            vat = r["stawka_vat"] if "stawka_vat" in r.keys() else vat_default
             gtu = gtu_default
-            kat = r.get("kategoria", "")
+            kat = r["kategoria"] if "kategoria" in r.keys() else ""
 
             self.table.setItem(row, 0, QTableWidgetItem(nazwa))
             self.table.setItem(row, 1, QTableWidgetItem(f"{cena:.2f}"))

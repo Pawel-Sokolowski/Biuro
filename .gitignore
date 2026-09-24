@@ -4,5 +4,6 @@ app/config.py
 *.csv
 script
 test_imap.py
+/ui/
+/tests
 /frontend
-/tests/

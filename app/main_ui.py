@@ -2,6 +2,8 @@ from PyQt6.QtWidgets import QApplication
 from app.utils.ui_imports import *
 
 from app.db.dao_employees import get_employee_info
+from app.db.dao_companies import get_company
+from app.db.dao_monthly import get_month_status
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
 from app.companies.company_ui import CompaniesPage
@@ -10,6 +12,10 @@ from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage
 from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
+
+from PyQt6.QtCore import QTimer
+from datetime import datetime
+from typing import Optional
 
 
 class LoginWindow(QDialog):
@@ -142,6 +148,11 @@ class OfficeManagerApp(QMainWindow):
 
         self.setWindowTitle("System Zarządzania Biurem Rachunkowego")
         self.resize(1400, 850)
+
+        # elementy dla nagłówkowego timera
+        self.lbl_live_timer = None
+        self._header_timer = None
+
         self._build_ui()
 
     def _show_login_dialog(self):
@@ -209,7 +220,27 @@ class OfficeManagerApp(QMainWindow):
         lbl_user = QLabel(f"<b>Zalogowany:</b> {name}")
         lbl_user.setStyleSheet("font-size: 16px;")
         header_layout.addWidget(lbl_user)
+
+        # --- Live timer widget (po prawej stronie nagłówka) ---
+        # kontener i layout
+        live_container = QWidget()
+        live_layout = QHBoxLayout(live_container)
+        live_layout.setContentsMargins(0, 0, 0, 0)
+        live_layout.setSpacing(8)
+
+        # tytuł
+        lbl_live_title = QLabel("Aktywny stoper:")
+        lbl_live_title.setStyleSheet("font-weight: bold;")
+        live_layout.addWidget(lbl_live_title)
+
+        # główna etykieta pokazująca: Nazwa firmy — czas — Czynność
+        self.lbl_live_timer = QLabel("Brak aktywnego stoperu")
+        self.lbl_live_timer.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_live_timer.setStyleSheet("font-size: 12px;")
+        live_layout.addWidget(self.lbl_live_timer)
+
         header_layout.addStretch()
+        header_layout.addWidget(live_container)
 
         content_layout.addWidget(header)
 
@@ -236,9 +267,72 @@ class OfficeManagerApp(QMainWindow):
         self.sidebar.setCurrentRow(0)
         self.pages.setCurrentIndex(0)
 
+        # Timer aktualizujący nagłówek co sekundę
+        self._header_timer = QTimer(self)
+        self._header_timer.setInterval(1000)
+        self._header_timer.timeout.connect(self._update_header_timer)
+        self._header_timer.start()
+
+    def _update_header_timer(self):
+        """
+        Odczytuje z MonthlyViewPage.logic aktywne stopery (ksiegowosc/kadry)
+        i aktualizuje tekst w nagłówku: "Nazwa firmy — HH:MM:SS — Czynność".
+        """
+        try:
+            logic = getattr(self.page_monthly, "logic", None)
+            if not logic:
+                if self.lbl_live_timer:
+                    self.lbl_live_timer.setText("Brak aktywnego stoperu")
+                return
+
+            now = datetime.now()
+
+            # priorytet: księgowość
+            if getattr(logic, "aktywna_firma_stoper_ks", None):
+                fid = logic.aktywna_firma_stoper_ks
+                base_seconds = 0
+                row = get_month_status(fid, logic.aktualny_miesiac)
+                if row:
+                    base_seconds = int(row.get("sekundy_ksiegowosc", 0) or 0)
+                delta = int((now - logic.czas_start_ks).total_seconds()) if logic.czas_start_ks else 0
+                total = base_seconds + delta
+                company = logic._get_company_data(fid) or {}
+                name = company.get("nazwa") or f"Firma {fid}"
+                text = f"{name} — {logic.format_seconds(total)} — Księgowość"
+                self.lbl_live_timer.setText(text)
+                return
+
+            # kadry
+            if getattr(logic, "aktywna_firma_stoper_kadry", None):
+                fid = logic.aktywna_firma_stoper_kadry
+                base_seconds = 0
+                row = get_month_status(fid, logic.aktualny_miesiac)
+                if row:
+                    base_seconds = int(row.get("sekundy_kadry", 0) or 0)
+                delta = int((now - logic.czas_start_kadry).total_seconds()) if logic.czas_start_kadry else 0
+                total = base_seconds + delta
+                company = logic._get_company_data(fid) or {}
+                name = company.get("nazwa") or f"Firma {fid}"
+                text = f"{name} — {logic.format_seconds(total)} — Kadry"
+                self.lbl_live_timer.setText(text)
+                return
+
+            # brak aktywnego stopera
+            self.lbl_live_timer.setText("Brak aktywnego stoperu")
+        except Exception:
+            # nie przerywamy UI; ewentualnie loguj
+            if self.lbl_live_timer:
+                self.lbl_live_timer.setText("Brak aktywnego stoperu")
+
     def zmien_zakladke(self, index):
         if 0 <= index < self.pages.count():
             self.pages.setCurrentIndex(index)
 
     def closeEvent(self, event):
+        # zatrzymaj timer przy zamykaniu
+        try:
+            if self._header_timer and self._header_timer.isActive():
+                self._header_timer.stop()
+        except Exception:
+            pass
         super().closeEvent(event)

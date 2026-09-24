@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from app.db.dao_conn import get_conn
-from app.db.dao_faktury import (
+from app.db.dao_invoices import (
     get_invoice_for_company_month,
     create_or_update_invoice
 )

@@ -1,4 +1,4 @@
-# app/monthly_view/monthly_view_logic.py
+# monthly_view_logic.py
 import datetime
 import sqlite3
 from datetime import date, timedelta
@@ -8,6 +8,12 @@ from app.db.dao_conn import get_conn
 from app.db.dao_companies import get_company, save_company
 from app.db.dao_monthly import get_month_status, save_month_status
 
+# invoice DAO - expected to exist in project
+from app.db.dao_invoices import add_invoice_item_for_service
+
+# timer utilities (separated logic)
+from app.utils.timer import TimerUtils
+
 
 class MonthlyViewLogic:
     def __init__(self, pracownik_id: int):
@@ -15,42 +21,41 @@ class MonthlyViewLogic:
         self.aktualny_miesiac = datetime.datetime.now().strftime("%Y-%m")
 
         # stopery
-        self.aktywna_firma_stoper_ks = None
-        self.aktywna_firma_stoper_kadry = None
-        self.czas_start_ks = None
-        self.czas_start_kadry = None
+        self.aktywna_firma_stoper_ks: Optional[int] = None
+        self.aktywna_firma_stoper_kadry: Optional[int] = None
+        self.czas_start_ks: Optional[datetime.datetime] = None
+        self.czas_start_kadry: Optional[datetime.datetime] = None
+
+        # dodatkowe informacje o aktywnej czynności (per stoper)
+        # struktura: {"typ_czynnosci":"ksiegowanie"|"kadry"|"extra", "usluga_id":int, "fakturowac":bool, "nazwa":str}
+        self.aktywna_firma_stoper_ks_activity: Optional[Dict[str, Any]] = None
+        self.aktywna_firma_stoper_kadry_activity: Optional[Dict[str, Any]] = None
 
         # ui
         self.status_widgets = {}
 
-        # auto-check zawieszenia
+        # auto-check zawieszenia (uruchamiany asynchronicznie w real app)
         self._auto_check_suspension()
 
-    # zmiana miesiąca
     def set_month(self, new_month: str):
         self.aktualny_miesiac = new_month
 
-    # lista pracowników
     def get_employee_filter_list(self) -> List:
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-
         cur.execute("""
             SELECT id, imie || ' ' || nazwisko AS label
             FROM pracownicy
             WHERE aktywny = 1
             ORDER BY nazwisko, imie
         """)
-
         rows = cur.fetchall()
         conn.close()
-
         result = [(0, "Wszyscy")]
         result.extend([(r["id"], r["label"]) for r in rows])
         return result
 
-    # główna lista miesięczna
     def get_monthly_rows(self, selected_month: str, selected_employee: Optional[int], selected_status: str) -> List[Dict[str, Any]]:
         conn = get_conn()
         conn.row_factory = sqlite3.Row
@@ -73,6 +78,39 @@ class MonthlyViewLogic:
 
         result = []
 
+        # prefetch assigned pairs to reduce DB hits
+        assigned_map = {}
+        if selected_employee:
+            conn2 = get_conn()
+            conn2.row_factory = sqlite3.Row
+            cur2 = conn2.cursor()
+            cur2.execute("""
+                SELECT firma_id FROM pracownik_firma WHERE pracownik_id = ?
+            """, (selected_employee,))
+            for r in cur2.fetchall():
+                assigned_map[r["firma_id"]] = True
+            conn2.close()
+
+        # prefetch latest notes for all firms in one query
+        firm_ids = [r["id"] for r in rows]
+        notes_map = {}
+        if firm_ids:
+            placeholders = ",".join("?" for _ in firm_ids)
+            conn3 = get_conn()
+            conn3.row_factory = sqlite3.Row
+            cur3 = conn3.cursor()
+            cur3.execute(f"""
+                SELECT firma_id, tresc
+                FROM company_notes
+                WHERE firma_id IN ({placeholders})
+                AND data_utworzenia = (
+                    SELECT MAX(data_utworzenia) FROM company_notes cn2 WHERE cn2.firma_id = company_notes.firma_id
+                )
+            """, tuple(firm_ids))
+            for r in cur3.fetchall():
+                notes_map[r["firma_id"]] = r["tresc"]
+            conn3.close()
+
         for r in rows:
             # filtr statusu
             if selected_status != "Wszystkie":
@@ -81,35 +119,12 @@ class MonthlyViewLogic:
 
             # filtr pracownika
             if selected_employee:
-                conn2 = get_conn()
-                cur2 = conn2.cursor()
-                cur2.execute("""
-                    SELECT 1 FROM pracownik_firma
-                    WHERE firma_id = ? AND pracownik_id = ?
-                """, (r["id"], selected_employee))
-                assigned = cur2.fetchone()
-                conn2.close()
-
-                if not assigned:
+                if not assigned_map.get(r["id"]):
                     continue
 
             # notatka
-            conn3 = get_conn()
-            cur3 = conn3.cursor()
-            cur3.execute("""
-                SELECT tresc
-                FROM company_notes
-                WHERE firma_id = ?
-                ORDER BY data_utworzenia DESC LIMIT 1
-            """, (r["id"],))
-            note_row = cur3.fetchone()
-            conn3.close()
-
-            if note_row:
-                t = note_row["tresc"]
-                snippet = (t[:120] + "…") if len(t) > 120 else t
-            else:
-                snippet = ""
+            t = notes_map.get(r["id"], "")
+            snippet = (t[:120] + "…") if len(t) > 120 else t
 
             r["note_snippet"] = snippet
             r["zawieszona_od"] = r.get("zawieszenia_dzialalnosci") or ""
@@ -117,20 +132,24 @@ class MonthlyViewLogic:
             result.append(r)
 
         return result
-    # format czasu
-    def format_seconds(self, sekundy: int) -> str:
-        return str(datetime.timedelta(seconds=sekundy or 0))
 
-    # autosave
+    def format_seconds(self, sekundy: int) -> str:
+        return TimerUtils.format_seconds(int(sekundy or 0))
+
     def schedule_status_autosave(self, firma_id: int):
+        if firma_id not in self.status_widgets:
+            return
         docs_widget, etap_widget = self.status_widgets[firma_id]
+        try:
+            ilosc = int(docs_widget.text()) if docs_widget.text().isdigit() else 0
+        except Exception:
+            ilosc = 0
         payload = {
             "etap": etap_widget.currentText(),
-            "ilosc_dok": int(docs_widget.text()) if docs_widget.text().isdigit() else 0,
+            "ilosc_dok": ilosc,
         }
         save_month_status(firma_id, self.aktualny_miesiac, payload)
 
-    # ensure status
     def _ensure_month_status(self, firma_id: int):
         row = get_month_status(firma_id, self.aktualny_miesiac)
         if row is None:
@@ -142,8 +161,13 @@ class MonthlyViewLogic:
                 "wartosc_uslug": 0.0
             })
 
-    # unified stoper
-    def toggle_stoper(self, firma_id: int, typ: str):
+    def toggle_stoper(self, firma_id: int, typ: str, activity_payload: Optional[Dict[str, Any]] = None):
+        """
+        Unified stoper. If starting, pass activity_payload describing the activity.
+        If stopping, pass activity_payload=None.
+        When stopping an 'extra' activity with fakturowac==True, add invoice item.
+        Minimal billing unit: 0.5h (rounded up).
+        """
         now = datetime.datetime.now()
         self._ensure_month_status(firma_id)
 
@@ -154,6 +178,7 @@ class MonthlyViewLogic:
             if self.aktywna_firma_stoper_ks is None:
                 self.aktywna_firma_stoper_ks = firma_id
                 self.czas_start_ks = now
+                self.aktywna_firma_stoper_ks_activity = activity_payload
                 conn.close()
                 return
 
@@ -166,10 +191,19 @@ class MonthlyViewLogic:
                 """, (delta, firma_id, self.aktualny_miesiac))
                 conn.commit()
                 conn.close()
+
+                act = self.aktywna_firma_stoper_ks_activity
+                if act and act.get("typ_czynnosci") == "extra" and act.get("fakturowac"):
+                    # convert seconds to hours and round up to 0.5h
+                    hours = TimerUtils.round_seconds_to_minimum_half(delta)
+                    add_invoice_item_for_service(firma_id, act["usluga_id"], hours, self.aktualny_miesiac, self.pracownik_id)
+
                 self.aktywna_firma_stoper_ks = None
                 self.czas_start_ks = None
+                self.aktywna_firma_stoper_ks_activity = None
                 return
 
+            # switching from previous firm to new one
             prev = self.aktywna_firma_stoper_ks
             delta_prev = int((now - self.czas_start_ks).total_seconds())
             cur.execute("""
@@ -178,8 +212,14 @@ class MonthlyViewLogic:
                 WHERE firma_id = ? AND miesiac = ?
             """, (delta_prev, prev, self.aktualny_miesiac))
 
+            prev_act = self.aktywna_firma_stoper_ks_activity
+            if prev_act and prev_act.get("typ_czynnosci") == "extra" and prev_act.get("fakturowac"):
+                hours_prev = TimerUtils.round_seconds_to_minimum_half(delta_prev)
+                add_invoice_item_for_service(prev, prev_act["usluga_id"], hours_prev, self.aktualny_miesiac, self.pracownik_id)
+
             self.aktywna_firma_stoper_ks = firma_id
             self.czas_start_ks = now
+            self.aktywna_firma_stoper_ks_activity = activity_payload
             conn.commit()
             conn.close()
             return
@@ -188,6 +228,7 @@ class MonthlyViewLogic:
             if self.aktywna_firma_stoper_kadry is None:
                 self.aktywna_firma_stoper_kadry = firma_id
                 self.czas_start_kadry = now
+                self.aktywna_firma_stoper_kadry_activity = activity_payload
                 conn.close()
                 return
 
@@ -200,8 +241,15 @@ class MonthlyViewLogic:
                 """, (delta, firma_id, self.aktualny_miesiac))
                 conn.commit()
                 conn.close()
+
+                act = self.aktywna_firma_stoper_kadry_activity
+                if act and act.get("typ_czynnosci") == "extra" and act.get("fakturowac"):
+                    hours = TimerUtils.round_seconds_to_minimum_half(delta)
+                    add_invoice_item_for_service(firma_id, act["usluga_id"], hours, self.aktualny_miesiac, self.pracownik_id)
+
                 self.aktywna_firma_stoper_kadry = None
                 self.czas_start_kadry = None
+                self.aktywna_firma_stoper_kadry_activity = None
                 return
 
             prev = self.aktywna_firma_stoper_kadry
@@ -212,13 +260,19 @@ class MonthlyViewLogic:
                 WHERE firma_id = ? AND miesiac = ?
             """, (delta_prev, prev, self.aktualny_miesiac))
 
+            prev_act = self.aktywna_firma_stoper_kadry_activity
+            if prev_act and prev_act.get("typ_czynnosci") == "extra" and prev_act.get("fakturowac"):
+                hours_prev = TimerUtils.round_seconds_to_minimum_half(delta_prev)
+                add_invoice_item_for_service(prev, prev_act["usluga_id"], hours_prev, self.aktualny_miesiac, self.pracownik_id)
+
             self.aktywna_firma_stoper_kadry = firma_id
             self.czas_start_kadry = now
+            self.aktywna_firma_stoper_kadry_activity = activity_payload
             conn.commit()
             conn.close()
             return
 
-    # okna
+    # helpery okien
     def open_notes_window(self, firma_id: int):
         from app.monthly_view.monthly_view_ui import InlineNotesWindow
         InlineNotesWindow(firma_id).exec()
@@ -227,7 +281,6 @@ class MonthlyViewLogic:
         from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
         InlineExtraServiceWindow(firma_id, self.aktualny_miesiac).exec()
 
-    # firma helpers
     def _get_company_data(self, firma_id: int) -> Optional[Dict[str, Any]]:
         row = get_company(firma_id)
         return dict(row) if row else None
@@ -258,37 +311,31 @@ class MonthlyViewLogic:
         form.on_saved = _on_saved
         layout.addWidget(form)
         dialog.exec()
-    # zawieszenia — ręczne
+
     def mark_company_suspended_manual(self, firma_id: int):
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("""
             UPDATE firmy
             SET status = 'Zawieszone',
                 zawieszenia_dzialalnosci = ?
             WHERE id = ?
         """, (today, firma_id))
-
         conn.commit()
         conn.close()
 
-    # przeniesienie do archiwalnych
     def move_company_to_archive(self, firma_id: int):
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("""
             UPDATE firmy
             SET status = 'Archiwalne'
             WHERE id = ?
         """, (firma_id,))
-
         conn.commit()
         conn.close()
 
-    # opcje dodatkowe
     def more_option_1(self, firma_id: int):
         print("Opcja 1:", firma_id)
 
@@ -298,9 +345,8 @@ class MonthlyViewLogic:
     def more_option_3(self, firma_id: int):
         print("Opcja 3:", firma_id)
 
-    # auto-check zawieszenia 1 i ostatniego dnia miesiąca
     def _auto_check_suspension(self):
-        today = datetime.date.today()
+        today = date.today()
         day = today.day
         last_day = self._last_day_of_month(today)
 
@@ -342,7 +388,6 @@ class MonthlyViewLogic:
 
         conn.close()
 
-    # ostatni dzień miesiąca
     def _last_day_of_month(self, d: date) -> int:
         next_month = d.replace(day=28) + timedelta(days=4)
         return (next_month - timedelta(days=next_month.day)).day

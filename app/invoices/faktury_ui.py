@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt
 
 from app.invoices.faktury_logic import FakturyLogic
 from app.db.dao_conn import get_conn
-from app.db.dao_faktury import (
+from app.db.dao_invoices import (
     get_invoice_for_company_month,
     get_exported_invoices,
     mark_exported

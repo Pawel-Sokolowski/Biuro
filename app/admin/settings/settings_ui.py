@@ -1,5 +1,4 @@
 # app/admin/settings/settings_ui.py
-
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTabWidget
 from PyQt6.QtGui import QFont
 
@@ -42,8 +41,6 @@ class GlobalSettingsPage(QWidget):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Add tabs based on permissions
-        # Users and roles require manage users permission
         if perms.get("can_manage_users"):
             t = UsersSettings()
             t.logic = self.logic
@@ -55,13 +52,11 @@ class GlobalSettingsPage(QWidget):
             r.pracownik_id = self.pracownik_id
             self.tabs.addTab(r, "Role")
 
-        # Email accounts available to admin settings
         e = EmailSettings()
         e.logic = self.logic
         e.pracownik_id = self.pracownik_id
         self.tabs.addTab(e, "Konta email")
 
-        # Pricing and kadry visible to users who can view invoices or access admin settings
         if perms.get("can_view_invoices") or perms.get("can_access_admin_settings"):
             p = PricingSettings()
             p.logic = self.logic
@@ -73,7 +68,6 @@ class GlobalSettingsPage(QWidget):
             pk.pracownik_id = self.pracownik_id
             self.tabs.addTab(pk, "Cennik kadry")
 
-        # Extra services and companies for admin settings
         ex = ExtraServicesSettings()
         ex.logic = self.logic
         ex.pracownik_id = self.pracownik_id
@@ -84,14 +78,12 @@ class GlobalSettingsPage(QWidget):
         comp.pracownik_id = self.pracownik_id
         self.tabs.addTab(comp, "Firmy")
 
-        # Invoice settings if user can view invoices
         if perms.get("can_view_invoices"):
             inv = InvoiceSettings()
             inv.logic = self.logic
             inv.pracownik_id = self.pracownik_id
             self.tabs.addTab(inv, "Faktury")
 
-        # Logs and system always available to admin
         logs = LogsSettings()
         logs.logic = self.logic
         logs.pracownik_id = self.pracownik_id
@@ -102,7 +94,6 @@ class GlobalSettingsPage(QWidget):
         sys_tab.pracownik_id = self.pracownik_id
         self.tabs.addTab(sys_tab, "System")
 
-        # Database settings (wybór pliku bazy) for admins
         db_tab = DatabaseSettings()
         db_tab.logic = self.logic
         db_tab.pracownik_id = self.pracownik_id

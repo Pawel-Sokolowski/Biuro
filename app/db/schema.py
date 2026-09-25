@@ -33,6 +33,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nazwa TEXT NOT NULL,
             nazwa_skrocona TEXT,
+            numer_klienta TEXT,
+
             nip TEXT,
             regon TEXT,
             krs TEXT,
@@ -47,13 +49,6 @@ def init_db():
             ulica TEXT,
             adres_budynek TEXT,
             adres_lokal TEXT,
-
-            forma_dzialalnosci TEXT,
-            forma_opodatkowania TEXT,
-            analityka_fk TEXT,
-            osoba_kontaktowa TEXT,
-            adres_email TEXT,
-            nr_telefonu TEXT,
 
             adres_zam_kraj TEXT,
             adres_zam_wojewodztwo TEXT,
@@ -74,6 +69,16 @@ def init_db():
             adres_koresp_ulica TEXT,
             adres_koresp_budynek TEXT,
             adres_koresp_lokal TEXT,
+
+            forma_dzialalnosci TEXT,
+            forma_opodatkowania TEXT,
+            analityka_fk TEXT,
+            osoba_kontaktowa TEXT,
+            adres_email TEXT,
+            nr_telefonu TEXT,
+
+            adres_doreczen_elektronicznych TEXT,
+            urzad_skarbowy TEXT,
 
             data_rozpoczecia_dg TEXT,
             data_rozpoczecia_sprzedazy TEXT,
@@ -119,8 +124,23 @@ def init_db():
             fakturowac INTEGER DEFAULT 0,
             wysylac_do_ksef INTEGER DEFAULT 0,
             wysylac_do_kontrahenta INTEGER DEFAULT 0,
-            metoda_kasowa INTEGER DEFAULT 0
-            );
+            metoda_kasowa INTEGER DEFAULT 0,
+
+            miesiac_dok_fakturowanie TEXT,
+            miesiac_prac_fakturowanie TEXT,
+            dzien_dostarczania_dokumentow INTEGER DEFAULT 7,
+
+            seria_fv TEXT,
+            seria_kfv TEXT,
+
+            sposob_zaplaty TEXT,
+
+            status_podatkowy TEXT,
+
+            konto_bankowe TEXT,
+            uwagi TEXT,
+            kategoria_domyslna TEXT
+        );
     """)
 
     # ensure commonly referenced columns exist (backwards compatibility)
@@ -131,6 +151,16 @@ def init_db():
     _safe_alter_add_column(cur, "firmy", "limit_dokumentow INTEGER DEFAULT 0")
     _safe_alter_add_column(cur, "firmy", "vat_czynny INTEGER DEFAULT 0")
     _safe_alter_add_column(cur, "firmy", "glowny_cennik_manualny INTEGER DEFAULT 0")
+    _safe_alter_add_column(cur, "firmy", "numer_klienta TEXT")
+    _safe_alter_add_column(cur, "firmy", "urzad_skarbowy TEXT")
+    _safe_alter_add_column(cur, "firmy", "adres_doreczen_elektronicznych TEXT")
+    _safe_alter_add_column(cur, "firmy", "miesiac_dok_fakturowanie TEXT")
+    _safe_alter_add_column(cur, "firmy", "miesiac_prac_fakturowanie TEXT")
+    _safe_alter_add_column(cur, "firmy", "dzien_dostarczania_dokumentow INTEGER DEFAULT 7")
+    _safe_alter_add_column(cur, "firmy", "seria_fv TEXT")
+    _safe_alter_add_column(cur, "firmy", "seria_kfv TEXT")
+    _safe_alter_add_column(cur, "firmy", "sposob_zaplaty TEXT")
+    _safe_alter_add_column(cur, "firmy", "status_podatkowy TEXT")
 
     # -------------------------
     # preferencje cennikowe
@@ -329,20 +359,48 @@ def init_db():
     """)
 
     # -------------------------
-    # udzialowcy
+    # udzialowcy (rozbudowani wspólnicy/reprezentanci)
     # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS udzialowcy (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             firma_id INTEGER NOT NULL,
-            imie_nazwisko TEXT NOT NULL,
-            procent REAL NOT NULL,
+
+            imie_pierwsze TEXT,
+            imie_drugie TEXT,
+            nazwisko TEXT,
+            nazwa_organizacji TEXT,
+
+            pesel TEXT,
+            nip TEXT,
+            regon TEXT,
+            krs TEXT,
+
+            ulica TEXT,
+            nr_domu TEXT,
+            nr_mieszkania TEXT,
+            wojewodztwo TEXT,
+            powiat TEXT,
+            gmina TEXT,
+            miejscowosc TEXT,
+            kod_pocztowy TEXT,
+            poczta TEXT,
+            panstwo TEXT,
+
+            email TEXT,
+            telefon TEXT,
+            data_urodzenia TEXT,
+
+            stanowisko TEXT,
+
+            procent REAL,
+
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
         );
     """)
 
     # -------------------------
-    # company_contacts
+    # company_contacts (osoby kontaktowe)
     # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS company_contacts (
@@ -569,8 +627,8 @@ def init_db():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_pozycje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            invoice_id INTEGER,          -- preferowana nazwa używana w DAO
-            faktura_id INTEGER,         -- starsze nazewnictwo / kompatybilność
+            invoice_id INTEGER,
+            faktura_id INTEGER,
             usluga_id INTEGER,
             nazwa TEXT,
             opis TEXT,
@@ -681,27 +739,27 @@ def init_db():
         haslo = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
         cur.execute("""
-                INSERT INTO pracownicy (id, email, haslo_hash, imie, nazwisko, aktywny)
-                VALUES (1, 'admin@biuro.pl', ?, 'Główny', 'Administrator', 1)
-            """, (haslo,))
+            INSERT INTO pracownicy (id, email, haslo_hash, imie, nazwisko, aktywny)
+            VALUES (1, 'admin@biuro.pl', ?, 'Główny', 'Administrator', 1)
+        """, (haslo,))
 
         cur.execute("INSERT OR IGNORE INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma')")
 
         cur.execute("""
-                INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
-                VALUES (1, 1, 4)
-            """)
+            INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
+            VALUES (1, 1, 4)
+        """)
 
         cur.execute("""
-                UPDATE role
-                SET can_view_invoices=1,
-                    can_edit_companies=1,
-                    can_manage_users=1,
-                    can_view_finances=1,
-                    can_export_data=1,
-                    can_access_admin_settings=1
-                WHERE id = 4
-            """)
+            UPDATE role
+            SET can_view_invoices=1,
+                can_edit_companies=1,
+                can_manage_users=1,
+                can_view_finances=1,
+                can_export_data=1,
+                can_access_admin_settings=1
+            WHERE id = 4
+        """)
 
     conn.commit()
     conn.close()

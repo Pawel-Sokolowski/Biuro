@@ -1,6 +1,8 @@
+# app/admin/settings/companies_settings.py
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
-    QPushButton, QHeaderView, QMessageBox, QHBoxLayout, QDialog, QVBoxLayout as QVBoxLayoutDialog
+    QPushButton, QHeaderView, QMessageBox, QHBoxLayout, QDialog,
+    QVBoxLayout as QVBoxLayoutDialog
 )
 from PyQt6.QtGui import QFont
 

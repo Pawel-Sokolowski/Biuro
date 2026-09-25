@@ -6,11 +6,13 @@ from datetime import datetime
 from app.db.dao_conn import get_conn
 
 # ============================================================
-#  FIELDS — zgodne z aktualnym schematem
+#  FIELDS — zgodne z aktualnym schematem (rozszerzone)
 # ============================================================
 
 FIRMA_FIELDS = [
-    "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",
+    "nazwa", "nazwa_skrocona", "numer_klienta",
+    "nip", "regon", "krs", "pesel",
+
     "miasto", "kod_pocztowy", "ulica", "adres_budynek", "adres_lokal",
     "kraj", "wojewodztwo", "powiat", "gmina",
 
@@ -19,13 +21,13 @@ FIRMA_FIELDS = [
 
     "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
     "adres_zam_budynek", "adres_zam_lokal",
+    "adres_zam_kraj", "adres_zam_wojewodztwo",
+    "adres_zam_powiat", "adres_zam_gmina",
 
     "adres_koresp_miasto", "adres_koresp_kod_pocztowy", "adres_koresp_ulica",
     "adres_koresp_budynek", "adres_koresp_lokal",
     "adres_koresp_kraj", "adres_koresp_wojewodztwo",
     "adres_koresp_powiat", "adres_koresp_gmina",
-    "adres_zam_kraj", "adres_zam_wojewodztwo",
-    "adres_zam_powiat", "adres_zam_gmina",
 
     "data_rozpoczecia_dg", "data_rozpoczecia_sprzedazy",
     "data_koniec_zus_start", "data_koniec_zus_pref",
@@ -50,14 +52,30 @@ FIRMA_FIELDS = [
 
     "zdrowotna",
 
-    "wojewodztwo", "powiat", "gmina", "kraj",
-
     "wysylac_do_ksef",
     "wysylac_do_kontrahenta",
     "metoda_kasowa",
+    "fakturowac",
 
-    "fakturowac"
+    "adres_doreczen_elektronicznych",
+    "urzad_skarbowy",
+
+    "miesiac_dok_fakturowanie",
+    "miesiac_prac_fakturowanie",
+    "dzien_dostarczania_dokumentow",
+
+    "seria_fv",
+    "seria_kfv",
+
+    "sposob_zaplaty",
+
+    "status_podatkowy",
+
+    "konto_bankowe",
+    "uwagi",
+    "kategoria_domyslna",
 ]
+
 
 # ============================================================
 #  LIST / FILTER
@@ -182,7 +200,6 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "dz_lokal" in payload:
         mapped["adres_lokal"] = payload["dz_lokal"]
 
-    # dodatkowe pola adresowe działalności
     if "dz_wojewodztwo" in payload:
         mapped["wojewodztwo"] = payload["dz_wojewodztwo"]
     if "dz_powiat" in payload:
@@ -233,6 +250,7 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
         mapped["adres_zam_gmina"] = payload["zam_gmina"]
     if "zam_kraj" in payload:
         mapped["adres_zam_kraj"] = payload["zam_kraj"]
+
     # kontakt
     imie = payload.get("kont_imie")
     nazw = payload.get("kont_nazw")
@@ -305,6 +323,8 @@ def delete_company(firma_id: int) -> None:
     cur.execute("DELETE FROM firmy WHERE id = ?", (firma_id,))
     cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ?", (firma_id,))
     cur.execute("DELETE FROM company_notes WHERE firma_id = ?", (firma_id,))
+    cur.execute("DELETE FROM udzialowcy WHERE firma_id = ?", (firma_id,))
+    cur.execute("DELETE FROM company_contacts WHERE firma_id = ?", (firma_id,))
     conn.commit()
     conn.close()
 
@@ -393,6 +413,7 @@ def get_company_employees(firma_id: int) -> List[Dict[str, Any]]:
 # ============================================================
 #  CENNIKI OGÓLNE
 # ============================================================
+
 def _sort_cenniki_rosnaco(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
     def extract(row):
         klucz = row["klucz"]
@@ -405,21 +426,6 @@ def _sort_cenniki_rosnaco(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
         return (typ, vat, limit, klucz)
 
     return [dict(r) for r in sorted(rows, key=extract)]
-
-def get_global_pricing() -> List[Dict[str, Any]]:
-    conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT klucz,
-               cena_netto_ksiegowosc AS netto,
-               brutto AS brutto,
-               cena_za_dokument_ponad_limit AS ponad_limit
-        FROM cenniki
-    """)
-    rows = cur.fetchall()
-    conn.close()
-    return _sort_cenniki_rosnaco(rows)
 
 
 def get_cennik_by_key(klucz: str) -> Optional[Dict[str, Any]]:
@@ -542,7 +548,6 @@ def get_ksiegowosc_options() -> List[Dict[str, Any]]:
     ]
 
 
-
 def get_ksiegowosc_by_key(klucz: str) -> Optional[Dict[str, Any]]:
     for item in get_ksiegowosc_options():
         if item["klucz"] == klucz:
@@ -584,6 +589,7 @@ def get_kpir_cenniki() -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     conn.close()
     return _sort_cenniki_rosnaco(rows)
+
 
 def _extract_limit_from_klucz(klucz: str) -> Optional[int]:
     if not klucz:
@@ -814,7 +820,20 @@ def ensure_company_columns_exist():
         "wojewodztwo": "TEXT",
         "powiat": "TEXT",
         "gmina": "TEXT",
-        "kraj": "TEXT"
+        "kraj": "TEXT",
+        "numer_klienta": "TEXT",
+        "adres_doreczen_elektronicznych": "TEXT",
+        "urzad_skarbowy": "TEXT",
+        "miesiac_dok_fakturowanie": "TEXT",
+        "miesiac_prac_fakturowanie": "TEXT",
+        "dzien_dostarczania_dokumentow": "INTEGER",
+        "seria_fv": "TEXT",
+        "seria_kfv": "TEXT",
+        "sposob_zaplaty": "TEXT",
+        "status_podatkowy": "TEXT",
+        "konto_bankowe": "TEXT",
+        "uwagi": "TEXT",
+        "kategoria_domyslna": "TEXT",
     }
     cur.execute("PRAGMA table_info(firmy)")
     existing = {r[1] for r in cur.fetchall()}
@@ -856,3 +875,117 @@ def import_companies_from_rows(rows: List[Dict[str, Any]]) -> int:
         except Exception:
             continue
     return count
+
+
+# ============================================================
+#  PARTNERS (udzialowcy) — pełny CRUD
+# ============================================================
+
+PARTNER_FIELDS = [
+    "imie_pierwsze", "imie_drugie", "nazwisko", "nazwa_organizacji",
+    "pesel", "nip", "regon", "krs",
+    "ulica", "nr_domu", "nr_mieszkania",
+    "wojewodztwo", "powiat", "gmina", "miejscowosc",
+    "kod_pocztowy", "poczta", "panstwo",
+    "email", "telefon", "data_urodzenia",
+    "stanowisko", "procent",
+]
+
+
+def get_partners(firma_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT *
+        FROM udzialowcy
+        WHERE firma_id = ?
+        ORDER BY id
+    """, (firma_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+
+    values = [data.get(f) for f in PARTNER_FIELDS]
+
+    if data.get("id"):
+        placeholders = ", ".join([f"{f} = ?" for f in PARTNER_FIELDS])
+        cur.execute(f"""
+            UPDATE udzialowcy SET {placeholders}
+            WHERE id = ?
+        """, values + [data["id"]])
+    else:
+        placeholders = ", ".join(["?" for _ in PARTNER_FIELDS])
+        cur.execute(f"""
+            INSERT INTO udzialowcy (firma_id, {", ".join(PARTNER_FIELDS)})
+            VALUES (?, {placeholders})
+        """, [firma_id] + values)
+
+    conn.commit()
+    conn.close()
+
+
+def delete_partner(partner_id: int) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM udzialowcy WHERE id = ?", (partner_id,))
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+#  CONTACTS (company_contacts) — pełny CRUD
+# ============================================================
+
+CONTACT_FIELDS = ["imie", "nazwisko", "email", "telefon", "rola"]
+
+
+def get_contacts(firma_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT *
+        FROM company_contacts
+        WHERE firma_id = ?
+        ORDER BY id
+    """, (firma_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_contact(firma_id: int, data: Dict[str, Any]) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+
+    values = [data.get(f) for f in CONTACT_FIELDS]
+
+    if data.get("id"):
+        placeholders = ", ".join([f"{f} = ?" for f in CONTACT_FIELDS])
+        cur.execute(f"""
+            UPDATE company_contacts SET {placeholders}
+            WHERE id = ?
+        """, values + [data["id"]])
+    else:
+        placeholders = ", ".join(["?" for _ in CONTACT_FIELDS])
+        cur.execute(f"""
+            INSERT INTO company_contacts (firma_id, {", ".join(CONTACT_FIELDS)})
+            VALUES (?, {placeholders})
+        """, [firma_id] + values)
+
+    conn.commit()
+    conn.close()
+
+
+def delete_contact(contact_id: int) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM company_contacts WHERE id = ?", (contact_id,))
+    conn.commit()
+    conn.close()

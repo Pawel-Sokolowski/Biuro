@@ -120,6 +120,7 @@ def init_db():
             manual_cennik_override INTEGER DEFAULT 0,
 
             zdrowotna REAL DEFAULT 0,
+            wliczac_zdrowotna INTEGER DEFAULT 0,
 
             fakturowac INTEGER DEFAULT 0,
             wysylac_do_ksef INTEGER DEFAULT 0,

@@ -1,916 +1,765 @@
 # app/companies/company_form.py
 from typing import Dict, Any, Optional, List
 
-import sqlite3
-from datetime import datetime
-
-from PyQt6.QtCore import Qt, QDate
-from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
-    QLineEdit, QComboBox, QCheckBox, QSpinBox, QDateEdit, QPushButton,
-    QTabWidget, QScrollArea, QMessageBox, QTableWidget, QTableWidgetItem,
-    QDialog, QVBoxLayout as QVBoxLayoutDialog, QHBoxLayout as QHBoxLayoutDialog,
-    QHeaderView, QTextEdit
+    QDialog,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QTabWidget,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QDoubleSpinBox,
+    QComboBox,
+    QTextEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QMessageBox,
 )
-
-from app.companies.constants import (
-    FORMA_DZIALALNOSCI, FORMA_OPODATKOWANIA, STATUS_PODATKOWY,
-    URZEDY_SKARBOWE, MIESIACE_FAKTUROWANIE, SPOSOB_ZAPLATY,
-    DEFAULT_SERIA_FV, DEFAULT_SERIA_KFV,
-    PARTNER_FIELDS, CONTACT_FIELDS
-)
+from PyQt6.QtCore import Qt
 
 from app.db.dao_companies import (
-    save_company, get_company,
-    save_partner, delete_partner, get_partners,
-    save_contact, delete_contact, get_contacts
+    get_company,
+    save_company,
+    get_contacts,
+    save_contact,
+    delete_contact,
+    get_partners,
+    save_partner,
+    delete_partner,
+    get_company_notes,
+    get_pricing_kadry,
+    get_ksiegowosc_options,
 )
-
 from app.db.dao_conn import get_conn
-from app.admin.global_settings_logic import GlobalSettingsLogic
-from app.companies.ceidg_api import get_ceidg_firma_by_nip
+from app.companies.company_logic import CompanyLogic, ceidg_fetch
 
 
-# ============================================================
-#  CUSTOM DATE EDIT (no wheel)
-# ============================================================
-
-class NoWheelDateEdit(QDateEdit):
-    def wheelEvent(self, event):
-        event.ignore()
-
-
-# ============================================================
-#  DIALOG — WSPÓLNIK / REPREZENTANT
-# ============================================================
-
-class PartnerEditDialog(QDialog):
-    def __init__(self, parent=None, data: Optional[Dict[str, Any]] = None):
+class CompanyForm(QDialog):
+    def __init__(self, firma_id: Optional[int] = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Wspólnik / Reprezentant")
-        self.resize(650, 650)
-        self.result_data: Optional[Dict[str, Any]] = None
-
-        layout = QVBoxLayoutDialog(self)
-
-        form_box = QGroupBox("Dane wspólnika / reprezentanta")
-        form = QFormLayout(form_box)
-
-        self.fields: Dict[str, QLineEdit] = {}
-
-        for field in PARTNER_FIELDS:
-            edit = QLineEdit()
-            self.fields[field] = edit
-            label = field.replace("_", " ").capitalize()
-            form.addRow(label, edit)
-
-        layout.addWidget(form_box)
-
-        btn_row = QHBoxLayoutDialog()
-        btn_ok = QPushButton("Zapisz")
-        btn_cancel = QPushButton("Anuluj")
-        btn_row.addStretch()
-        btn_row.addWidget(btn_ok)
-        btn_row.addWidget(btn_cancel)
-        layout.addLayout(btn_row)
-
-        btn_ok.clicked.connect(self._on_ok)
-        btn_cancel.clicked.connect(self.reject)
-
-        if data:
-            self._populate(data)
-
-    def _populate(self, d: Dict[str, Any]):
-        for field in PARTNER_FIELDS:
-            if field in d:
-                self.fields[field].setText(str(d[field]))
-
-    def _on_ok(self):
-        self.result_data = {
-            field: self.fields[field].text().strip()
-            for field in PARTNER_FIELDS
-        }
-        self.accept()
-
-    def get_data(self) -> Optional[Dict[str, Any]]:
-        return self.result_data
-
-
-# ============================================================
-#  DIALOG — OSOBA KONTAKTOWA
-# ============================================================
-
-class ContactEditDialog(QDialog):
-    def __init__(self, parent=None, data: Optional[Dict[str, Any]] = None):
-        super().__init__(parent)
-        self.setWindowTitle("Osoba kontaktowa")
-        self.resize(450, 300)
-        self.result_data: Optional[Dict[str, Any]] = None
-
-        layout = QVBoxLayoutDialog(self)
-
-        form_box = QGroupBox("Dane kontaktowe")
-        form = QFormLayout(form_box)
-
-        self.fields: Dict[str, QLineEdit] = {}
-
-        for field in CONTACT_FIELDS:
-            edit = QLineEdit()
-            self.fields[field] = edit
-            label = field.replace("_", " ").capitalize()
-            form.addRow(label, edit)
-
-        layout.addWidget(form_box)
-
-        btn_row = QHBoxLayoutDialog()
-        btn_ok = QPushButton("Zapisz")
-        btn_cancel = QPushButton("Anuluj")
-        btn_row.addStretch()
-        btn_row.addWidget(btn_ok)
-        btn_row.addWidget(btn_cancel)
-        layout.addLayout(btn_row)
-
-        btn_ok.clicked.connect(self._on_ok)
-        btn_cancel.clicked.connect(self.reject)
-
-        if data:
-            self._populate(data)
-
-    def _populate(self, d: Dict[str, Any]):
-        for field in CONTACT_FIELDS:
-            if field in d:
-                self.fields[field].setText(str(d[field]))
-
-    def _on_ok(self):
-        self.result_data = {
-            field: self.fields[field].text().strip()
-            for field in CONTACT_FIELDS
-        }
-        self.accept()
-
-    def get_data(self) -> Optional[Dict[str, Any]]:
-        return self.result_data
-
-
-# ============================================================
-#  COMPANY FORM — MAIN CLASS
-# ============================================================
-
-class CompanyForm(QWidget):
-    def __init__(self, pracownik_id: int, company_data: Optional[dict], parent=None):
-        super().__init__(parent)
-        self.pracownik_id = pracownik_id
-        self.company_data = company_data or {}
-        self.settings_logic = GlobalSettingsLogic()
-
+        self.firma_id = firma_id
+        self.logic = CompanyLogic()
         self.inputs: Dict[str, Any] = {}
-        self.partners: List[Dict[str, Any]] = []
-        self.contacts: List[Dict[str, Any]] = []
+        self._ceidg_in_progress = False
+        self._last_ceidg_raw: Dict[str, Any] = {}
 
-        self.setMinimumWidth(1200)
+        self.setWindowTitle("Firma")
+        self.resize(1000, 750)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        scroll.setWidget(container)
+        main_layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
 
-        self.main_layout = QVBoxLayout(container)
-        self.main_layout.setContentsMargins(20, 20, 20, 20)
-        self.main_layout.setSpacing(12)
+        self._build_tab_dane()
+        self._build_tab_adresy()
+        self._build_tab_cenniki()
+        self._build_tab_kadry()
+        self._build_tab_kontakty()
+        self._build_tab_wspolnicy()
+        self._build_tab_notatki()
 
-        header = QLabel("Edycja danych Firmy")
-        header.setFont(QFont("Arial", 20, QFont.Weight.Bold))
-        self.main_layout.addWidget(header)
+        btn_layout = QHBoxLayout()
+        self.btn_ceidg = QPushButton("Pobierz z CEIDG")
+        self.btn_save = QPushButton("Zapisz")
+        self.btn_cancel = QPushButton("Anuluj")
+        btn_layout.addWidget(self.btn_ceidg)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        main_layout.addLayout(btn_layout)
 
-        # KOLEJNOŚĆ BUDOWY SEKCJI
-        self._build_ident_section()
-        self._build_basic_section()
-        self._build_activity_section()
-        self._build_address_tabs()
-        self._build_pricing_section()
-        self._build_invoicing_section()
-        self._build_partners_section()
-        self._build_contacts_section()
-        self._build_notes_section()
-        self._build_save_buttons()
+        self.btn_ceidg.clicked.connect(self._on_ceidg)
+        self.btn_save.clicked.connect(self._on_save)
+        self.btn_cancel.clicked.connect(self.reject)
 
-        # Ładowanie danych
-        self._load_existing_data()
+        if self.firma_id:
+            self._load_company()
+            self._load_contacts()
+            self._load_partners()
+            self._load_notes()
 
-        final = QVBoxLayout(self)
-        final.addWidget(scroll)
+    def _build_tab_dane(self):
+        w = QWidget()
+        layout = QFormLayout(w)
 
-    # ============================================================
-    #  SEKCJA IDENTYFIKATORA
-    # ============================================================
+        nazwa = QLineEdit()
+        nazwa_skrocona = QLineEdit()
+        numer_klienta = QLineEdit()
+        nip = QLineEdit()
+        regon = QLineEdit()
+        krs = QLineEdit()
+        pesel = QLineEdit()
 
-    def _build_ident_section(self):
-        box = QGroupBox("Identyfikator podatnika")
-        form = QFormLayout(box)
+        forma_dzialalnosci = QLineEdit()
+        forma_opodatkowania = QLineEdit()
+        analityka_fk = QLineEdit()
 
-        self.id_type_combo = QComboBox()
-        self.id_type_combo.addItems(["NIP", "REGON", "KRS", "PESEL"])
+        kody_pkd = QLineEdit()
 
-        self.f_nip = QLineEdit()
-        self.f_regon = QLineEdit()
-        self.f_krs = QLineEdit()
-        self.f_pesel = QLineEdit()
+        typ_rozliczenia = QComboBox()
+        typ_rozliczenia.addItems(["Ryczałt", "KPiR", "Księgi rachunkowe"])
 
-        self.btn_ceidg = QPushButton("Pobierz z CEIDG (NIP)")
-        self.btn_ceidg.clicked.connect(self._fetch_ceidg)
+        vat_czynny = QComboBox()
+        vat_czynny.addItems(["0", "1"])
 
-        form.addRow("Rodzaj identyfikatora", self.id_type_combo)
-        form.addRow("NIP", self.f_nip)
-        form.addRow("REGON", self.f_regon)
-        form.addRow("KRS", self.f_krs)
-        form.addRow("PESEL", self.f_pesel)
-        form.addRow(self.btn_ceidg)
+        status = QComboBox()
+        status.addItems(["Aktywne", "Zawieszone", "Archiwalne"])
 
-        self.main_layout.addWidget(box)
+        adres_doreczen_elektronicznych = QLineEdit()
+        urzad_skarbowy = QLineEdit()
 
-    def _fetch_ceidg(self):
-        nip = "".join(ch for ch in self.f_nip.text().strip() if ch.isdigit())
-        if not nip or len(nip) != 10:
-            QMessageBox.warning(self, "CEIDG", "Podaj poprawny NIP (10 cyfr).")
-            return
+        miesiac_dok_fakturowanie = QLineEdit()
+        miesiac_prac_fakturowanie = QLineEdit()
+        dzien_dostarczania_dokumentow = QSpinBox()
+        dzien_dostarczania_dokumentow.setRange(1, 31)
 
-        try:
-            data = get_ceidg_firma_by_nip(nip)
-        except Exception as e:
-            QMessageBox.critical(self, "CEIDG", f"Błąd pobierania danych: {e}")
-            return
+        seria_fv = QLineEdit()
+        seria_kfv = QLineEdit()
+        sposob_zaplaty = QLineEdit()
+        status_podatkowy = QLineEdit()
 
-        if not data or data.get("error"):
-            QMessageBox.warning(self, "CEIDG", "Nie znaleziono firmy w CEIDG.")
-            return
+        konto_bankowe = QLineEdit()
+        uwagi = QTextEdit()
+        kategoria_domyslna = QLineEdit()
 
-        self.f_nazwa.setText(data.get("nazwa", ""))
-        self.f_nazwa_skrocona.setText(data.get("nazwa_skrocona", ""))
-        self.f_kody_pkd.setText(data.get("kody_pkd", ""))
+        layout.addRow("Nazwa:", nazwa)
+        layout.addRow("Nazwa skrócona:", nazwa_skrocona)
+        layout.addRow("Numer klienta:", numer_klienta)
+        layout.addRow("NIP:", nip)
+        layout.addRow("REGON:", regon)
+        layout.addRow("KRS:", krs)
+        layout.addRow("PESEL:", pesel)
+        layout.addRow("Forma działalności:", forma_dzialalnosci)
+        layout.addRow("Forma opodatkowania:", forma_opodatkowania)
+        layout.addRow("Analityka FK:", analityka_fk)
+        layout.addRow("Kody PKD:", kody_pkd)
+        layout.addRow("Typ rozliczenia:", typ_rozliczenia)
+        layout.addRow("VAT czynny:", vat_czynny)
+        layout.addRow("Status:", status)
+        layout.addRow("Adres e-doręczeń:", adres_doreczen_elektronicznych)
+        layout.addRow("Urząd skarbowy:", urzad_skarbowy)
+        layout.addRow("Miesiąc dok. fakturowanie:", miesiac_dok_fakturowanie)
+        layout.addRow("Miesiąc prac. fakturowanie:", miesiac_prac_fakturowanie)
+        layout.addRow("Dzień dostarczania dokumentów:", dzien_dostarczania_dokumentow)
+        layout.addRow("Seria FV:", seria_fv)
+        layout.addRow("Seria KFV:", seria_kfv)
+        layout.addRow("Sposób zapłaty:", sposob_zaplaty)
+        layout.addRow("Status podatkowy:", status_podatkowy)
+        layout.addRow("Konto bankowe:", konto_bankowe)
+        layout.addRow("Uwagi:", uwagi)
+        layout.addRow("Kategoria domyślna:", kategoria_domyslna)
 
-        self.dz_miasto.setText(data.get("miasto", ""))
-        self.dz_kod.setText(data.get("kod_pocztowy", ""))
-        self.dz_ulica.setText(data.get("ulica", ""))
-        self.dz_budynek.setText(data.get("adres_budynek", ""))
-        self.dz_lokal.setText(data.get("adres_lokal", ""))
-        self.dz_woj.setText(data.get("wojewodztwo", ""))
-        self.dz_pow.setText(data.get("powiat", ""))
-        self.dz_gmi.setText(data.get("gmina", ""))
-        self.dz_kraj.setText(data.get("kraj", ""))
+        self.inputs["nazwa"] = nazwa
+        self.inputs["nazwa_skrocona"] = nazwa_skrocona
+        self.inputs["numer_klienta"] = numer_klienta
+        self.inputs["nip"] = nip
+        self.inputs["regon"] = regon
+        self.inputs["krs"] = krs
+        self.inputs["pesel"] = pesel
+        self.inputs["forma_dzialalnosci"] = forma_dzialalnosci
+        self.inputs["forma_opodatkowania"] = forma_opodatkowania
+        self.inputs["analityka_fk"] = analityka_fk
+        self.inputs["kody_pkd"] = kody_pkd
+        self.inputs["typ_rozliczenia"] = typ_rozliczenia
+        self.inputs["vat_czynny"] = vat_czynny
+        self.inputs["status"] = status
+        self.inputs["adres_doreczen_elektronicznych"] = adres_doreczen_elektronicznych
+        self.inputs["urzad_skarbowy"] = urzad_skarbowy
+        self.inputs["miesiac_dok_fakturowanie"] = miesiac_dok_fakturowanie
+        self.inputs["miesiac_prac_fakturowanie"] = miesiac_prac_fakturowanie
+        self.inputs["dzien_dostarczania_dokumentow"] = dzien_dostarczania_dokumentow
+        self.inputs["seria_fv"] = seria_fv
+        self.inputs["seria_kfv"] = seria_kfv
+        self.inputs["sposob_zaplaty"] = sposob_zaplaty
+        self.inputs["status_podatkowy"] = status_podatkowy
+        self.inputs["konto_bankowe"] = konto_bankowe
+        self.inputs["uwagi"] = uwagi
+        self.inputs["kategoria_domyslna"] = kategoria_domyslna
 
-    # ============================================================
-    #  SEKCJA PODSTAWOWA
-    # ============================================================
+        self.tabs.addTab(w, "Dane")
 
-    def _build_basic_section(self):
-        box = QGroupBox("Podstawowe dane")
-        form = QFormLayout(box)
+    def _build_tab_adresy(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
 
-        self.f_nazwa = QLineEdit()
-        self.f_nazwa_skrocona = QLineEdit()
-        self.f_numer_klienta = QLineEdit()
+        dz_form = QFormLayout()
+        dz_miasto = QLineEdit()
+        dz_kod = QLineEdit()
+        dz_ulica = QLineEdit()
+        dz_budynek = QLineEdit()
+        dz_lokal = QLineEdit()
+        dz_wojewodztwo = QLineEdit()
+        dz_powiat = QLineEdit()
+        dz_gmina = QLineEdit()
+        dz_kraj = QLineEdit()
+        dz_form.addRow(QLabel("Działalność"))
+        dz_form.addRow("Miasto:", dz_miasto)
+        dz_form.addRow("Kod pocztowy:", dz_kod)
+        dz_form.addRow("Ulica:", dz_ulica)
+        dz_form.addRow("Budynek:", dz_budynek)
+        dz_form.addRow("Lokal:", dz_lokal)
+        dz_form.addRow("Województwo:", dz_wojewodztwo)
+        dz_form.addRow("Powiat:", dz_powiat)
+        dz_form.addRow("Gmina:", dz_gmina)
+        dz_form.addRow("Kraj:", dz_kraj)
 
+        ko_form = QFormLayout()
+        ko_miasto = QLineEdit()
+        ko_kod = QLineEdit()
+        ko_ulica = QLineEdit()
+        ko_budynek = QLineEdit()
+        ko_lokal = QLineEdit()
+        ko_wojewodztwo = QLineEdit()
+        ko_powiat = QLineEdit()
+        ko_gmina = QLineEdit()
+        ko_kraj = QLineEdit()
+        ko_form.addRow(QLabel("Korespondencja"))
+        ko_form.addRow("Miasto:", ko_miasto)
+        ko_form.addRow("Kod pocztowy:", ko_kod)
+        ko_form.addRow("Ulica:", ko_ulica)
+        ko_form.addRow("Budynek:", ko_budynek)
+        ko_form.addRow("Lokal:", ko_lokal)
+        ko_form.addRow("Województwo:", ko_wojewodztwo)
+        ko_form.addRow("Powiat:", ko_powiat)
+        ko_form.addRow("Gmina:", ko_gmina)
+        ko_form.addRow("Kraj:", ko_kraj)
+
+        zam_form = QFormLayout()
+        zam_miasto = QLineEdit()
+        zam_kod = QLineEdit()
+        zam_ulica = QLineEdit()
+        zam_budynek = QLineEdit()
+        zam_lokal = QLineEdit()
+        zam_wojewodztwo = QLineEdit()
+        zam_powiat = QLineEdit()
+        zam_gmina = QLineEdit()
+        zam_kraj = QLineEdit()
+        zam_form.addRow(QLabel("Zamieszkanie"))
+        zam_form.addRow("Miasto:", zam_miasto)
+        zam_form.addRow("Kod pocztowy:", zam_kod)
+        zam_form.addRow("Ulica:", zam_ulica)
+        zam_form.addRow("Budynek:", zam_budynek)
+        zam_form.addRow("Lokal:", zam_lokal)
+        zam_form.addRow("Województwo:", zam_wojewodztwo)
+        zam_form.addRow("Powiat:", zam_powiat)
+        zam_form.addRow("Gmina:", zam_gmina)
+        zam_form.addRow("Kraj:", zam_kraj)
+
+        layout.addLayout(dz_form)
+        layout.addSpacing(10)
+        layout.addLayout(ko_form)
+        layout.addSpacing(10)
+        layout.addLayout(zam_form)
+
+        self.inputs["dz_miasto"] = dz_miasto
+        self.inputs["dz_kod"] = dz_kod
+        self.inputs["dz_ulica"] = dz_ulica
+        self.inputs["dz_budynek"] = dz_budynek
+        self.inputs["dz_lokal"] = dz_lokal
+        self.inputs["dz_wojewodztwo"] = dz_wojewodztwo
+        self.inputs["dz_powiat"] = dz_powiat
+        self.inputs["dz_gmina"] = dz_gmina
+        self.inputs["dz_kraj"] = dz_kraj
+
+        self.inputs["ko_miasto"] = ko_miasto
+        self.inputs["ko_kod"] = ko_kod
+        self.inputs["ko_ulica"] = ko_ulica
+        self.inputs["ko_budynek"] = ko_budynek
+        self.inputs["ko_lokal"] = ko_lokal
+        self.inputs["ko_wojewodztwo"] = ko_wojewodztwo
+        self.inputs["ko_powiat"] = ko_powiat
+        self.inputs["ko_gmina"] = ko_gmina
+        self.inputs["ko_kraj"] = ko_kraj
+
+        self.inputs["zam_miasto"] = zam_miasto
+        self.inputs["zam_kod"] = zam_kod
+        self.inputs["zam_ulica"] = zam_ulica
+        self.inputs["zam_budynek"] = zam_budynek
+        self.inputs["zam_lokal"] = zam_lokal
+        self.inputs["zam_wojewodztwo"] = zam_wojewodztwo
+        self.inputs["zam_powiat"] = zam_powiat
+        self.inputs["zam_gmina"] = zam_gmina
+        self.inputs["zam_kraj"] = zam_kraj
+
+        self.tabs.addTab(w, "Adresy")
+
+    def _build_tab_cenniki(self):
+        w = QWidget()
+        layout = QFormLayout(w)
+
+        glowny_cennik = QComboBox()
+        ks_opts = get_ksiegowosc_options()
+        glowny_cennik.addItem("", "")
+        for item in ks_opts:
+            glowny_cennik.addItem(item["klucz"], item["klucz"])
+
+        limit_dokumentow = QSpinBox()
+        limit_dokumentow.setRange(0, 100000)
+
+        zdrowotna = QDoubleSpinBox()
+        zdrowotna.setRange(0, 100000)
+        zdrowotna.setDecimals(2)
+
+        wysylac_do_ksef = QComboBox()
+        wysylac_do_ksef.addItems(["0", "1"])
+
+        wysylac_do_kontrahenta = QComboBox()
+        wysylac_do_kontrahenta.addItems(["0", "1"])
+
+        metoda_kasowa = QComboBox()
+        metoda_kasowa.addItems(["0", "1"])
+
+        fakturowac = QComboBox()
+        fakturowac.addItems(["0", "1"])
+
+        layout.addRow("Główny cennik:", glowny_cennik)
+        layout.addRow("Limit dokumentów:", limit_dokumentow)
+        layout.addRow("Zdrowotna:", zdrowotna)
+        layout.addRow("Wysyłać do KSeF:", wysylac_do_ksef)
+        layout.addRow("Wysyłać do kontrahenta:", wysylac_do_kontrahenta)
+        layout.addRow("Metoda kasowa:", metoda_kasowa)
+        layout.addRow("Fakturować:", fakturowac)
+
+        self.inputs["glowny_cennik"] = glowny_cennik
+        self.inputs["limit_dokumentow"] = limit_dokumentow
+        self.inputs["zdrowotna"] = zdrowotna
+        self.inputs["wysylac_do_ksef"] = wysylac_do_ksef
+        self.inputs["wysylac_do_kontrahenta"] = wysylac_do_kontrahenta
+        self.inputs["metoda_kasowa"] = metoda_kasowa
+        self.inputs["fakturowac"] = fakturowac
+
+        self.tabs.addTab(w, "Cenniki")
+
+    def _build_tab_kadry(self):
+        w = QWidget()
+        layout = QFormLayout(w)
+
+        kadry_opts = get_pricing_kadry()
+
+        uop_ilosc = QSpinBox()
+        uop_ilosc.setRange(0, 10000)
+        uop_cennik = QComboBox()
+        uop_cennik.addItem("", "")
+        for item in kadry_opts:
+            uop_cennik.addItem(item["klucz"], item["klucz"])
+
+        uz_ilosc = QSpinBox()
+        uz_ilosc.setRange(0, 10000)
+        uz_cennik = QComboBox()
+        uz_cennik.addItem("", "")
+        for item in kadry_opts:
+            uz_cennik.addItem(item["klucz"], item["klucz"])
+
+        uod_ilosc = QSpinBox()
+        uod_ilosc.setRange(0, 10000)
+        uod_cennik = QComboBox()
+        uod_cennik.addItem("", "")
+        for item in kadry_opts:
+            uod_cennik.addItem(item["klucz"], item["klucz"])
+
+        layout.addRow("UoP ilość:", uop_ilosc)
+        layout.addRow("UoP cennik:", uop_cennik)
+        layout.addRow("UZ ilość:", uz_ilosc)
+        layout.addRow("UZ cennik:", uz_cennik)
+        layout.addRow("UoD ilość:", uod_ilosc)
+        layout.addRow("UoD cennik:", uod_cennik)
+
+        self.inputs["uop_ilosc"] = uop_ilosc
+        self.inputs["uop_cennik"] = uop_cennik
+        self.inputs["uz_ilosc"] = uz_ilosc
+        self.inputs["uz_cennik"] = uz_cennik
+        self.inputs["uod_ilosc"] = uod_ilosc
+        self.inputs["uod_cennik"] = uod_cennik
+
+        self.tabs.addTab(w, "Kadry")
+
+    def _build_tab_kontakty(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        self.contacts_table = QTableWidget(0, 5)
+        self.contacts_table.setHorizontalHeaderLabels(["Imię", "Nazwisko", "Email", "Telefon", "Rola"])
+        self.contacts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        form = QFormLayout()
         self.kont_imie = QLineEdit()
         self.kont_nazw = QLineEdit()
         self.kont_email = QLineEdit()
         self.kont_tel = QLineEdit()
+        self.kont_rola = QLineEdit()
+        form.addRow("Imię:", self.kont_imie)
+        form.addRow("Nazwisko:", self.kont_nazw)
+        form.addRow("Email:", self.kont_email)
+        form.addRow("Telefon:", self.kont_tel)
+        form.addRow("Rola:", self.kont_rola)
+
+        btn_layout = QHBoxLayout()
+        btn_add = QPushButton("Dodaj kontakt")
+        btn_del = QPushButton("Usuń kontakt")
+        btn_save_row = QPushButton("Zapisz zaznaczony")
+        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_del)
+        btn_layout.addWidget(btn_save_row)
 
-        self.f_edoreczenia = QLineEdit()
-
-        form.addRow("Nazwa", self.f_nazwa)
-        form.addRow("Nazwa skrócona", self.f_nazwa_skrocona)
-        form.addRow("Numer klienta", self.f_numer_klienta)
-
-        form.addRow("Imię kontaktowe", self.kont_imie)
-        form.addRow("Nazwisko kontaktowe", self.kont_nazw)
-        form.addRow("Email kontaktowy", self.kont_email)
-        form.addRow("Telefon kontaktowy", self.kont_tel)
-
-        form.addRow("Adres e-doręczeń", self.f_edoreczenia)
-
-        self.main_layout.addWidget(box)
-
-    # ============================================================
-    #  SEKCJA FORMA DZIAŁALNOŚCI / OPODATKOWANIE
-    # ============================================================
-
-    def _build_activity_section(self):
-        box = QGroupBox("Forma działalności i opodatkowanie")
-        form = QFormLayout(box)
-
-        self.f_forma_dzial = QComboBox()
-        self.f_forma_dzial.addItems(FORMA_DZIALALNOSCI)
-
-        self.f_forma_opodatk = QComboBox()
-        self.f_forma_opodatk.addItems(FORMA_OPODATKOWANIA)
-
-        self.f_urzad_skarbowy = QComboBox()
-        self.f_urzad_skarbowy.addItems(URZEDY_SKARBOWE)
-
-        self.f_kody_pkd = QLineEdit()
-
-        self.VAT_checkbox = QCheckBox("VAT czynny")
-
-        self.f_start = NoWheelDateEdit()
-        self.f_start.setCalendarPopup(True)
-        self.f_start.setDate(QDate.currentDate())
-
-        form.addRow("Forma działalności", self.f_forma_dzial)
-        form.addRow("Forma opodatkowania", self.f_forma_opodatk)
-        form.addRow("Urząd skarbowy", self.f_urzad_skarbowy)
-        form.addRow("Kody PKD", self.f_kody_pkd)
-        form.addRow(self.VAT_checkbox)
-        form.addRow("Data rozpoczęcia działalności", self.f_start)
-
-        self.main_layout.addWidget(box)
-
-    # ============================================================
-    #  SEKCJA ADRESÓW (3 zakładki)
-    # ============================================================
-
-    def _build_address_tabs(self):
-        self.tabs = QTabWidget()
-
-        dz = QWidget()
-        dz_form = QFormLayout(dz)
-
-        self.dz_kraj = QLineEdit()
-        self.dz_woj = QLineEdit()
-        self.dz_gmi = QLineEdit()
-        self.dz_pow = QLineEdit()
-        self.dz_miasto = QLineEdit()
-        self.dz_ulica = QLineEdit()
-        self.dz_budynek = QLineEdit()
-        self.dz_lokal = QLineEdit()
-        self.dz_kod = QLineEdit()
-
-        dz_form.addRow("Kraj", self.dz_kraj)
-        dz_form.addRow("Województwo", self.dz_woj)
-        dz_form.addRow("Gmina", self.dz_gmi)
-        dz_form.addRow("Powiat", self.dz_pow)
-        dz_form.addRow("Miasto", self.dz_miasto)
-        dz_form.addRow("Ulica", self.dz_ulica)
-        dz_form.addRow("Budynek", self.dz_budynek)
-        dz_form.addRow("Lokal", self.dz_lokal)
-        dz_form.addRow("Kod pocztowy", self.dz_kod)
-
-        ko = QWidget()
-        ko_form = QFormLayout(ko)
-
-        self.ko_kraj = QLineEdit()
-        self.ko_woj = QLineEdit()
-        self.ko_gmi = QLineEdit()
-        self.ko_pow = QLineEdit()
-        self.ko_miasto = QLineEdit()
-        self.ko_ulica = QLineEdit()
-        self.ko_budynek = QLineEdit()
-        self.ko_lokal = QLineEdit()
-        self.ko_kod = QLineEdit()
-
-        ko_form.addRow("Kraj", self.ko_kraj)
-        ko_form.addRow("Województwo", self.ko_woj)
-        ko_form.addRow("Gmina", self.ko_gmi)
-        ko_form.addRow("Powiat", self.ko_pow)
-        ko_form.addRow("Miasto", self.ko_miasto)
-        ko_form.addRow("Ulica", self.ko_ulica)
-        ko_form.addRow("Budynek", self.ko_budynek)
-        ko_form.addRow("Lokal", self.ko_lokal)
-        ko_form.addRow("Kod pocztowy", self.ko_kod)
-
-        zam = QWidget()
-        zam_form = QFormLayout(zam)
-
-        self.zam_kraj = QLineEdit()
-        self.zam_woj = QLineEdit()
-        self.zam_gmi = QLineEdit()
-        self.zam_pow = QLineEdit()
-        self.zam_miasto = QLineEdit()
-        self.zam_ulica = QLineEdit()
-        self.zam_budynek = QLineEdit()
-        self.zam_lokal = QLineEdit()
-        self.zam_kod = QLineEdit()
-
-        zam_form.addRow("Kraj", self.zam_kraj)
-        zam_form.addRow("Województwo", self.zam_woj)
-        zam_form.addRow("Gmina", self.zam_gmi)
-        zam_form.addRow("Powiat", self.zam_pow)
-        zam_form.addRow("Miasto", self.zam_miasto)
-        zam_form.addRow("Ulica", self.zam_ulica)
-        zam_form.addRow("Budynek", self.zam_budynek)
-        zam_form.addRow("Lokal", self.zam_lokal)
-        zam_form.addRow("Kod pocztowy", self.zam_kod)
-
-        self.tabs.addTab(dz, "Adres działalności")
-        self.tabs.addTab(ko, "Adres korespondencji")
-        self.tabs.addTab(zam, "Adres zamieszkania")
-
-        self.main_layout.addWidget(self.tabs)
-
-    # ============================================================
-    #  CENNIKI / LIMITY
-    # ============================================================
-
-    def _build_pricing_section(self):
-        box = QGroupBox("Cenniki i limity")
-        form = QFormLayout(box)
-
-        self.f_glowny_cennik = QLineEdit()
-        self.f_glowny_cennik_manualny = QCheckBox("Cennik ustawiony ręcznie")
-
-        self.f_limit_dokumentow = QSpinBox()
-        self.f_limit_dokumentow.setRange(0, 999999)
-        self.f_limit_dokumentow.setValue(0)
-
-        self.f_liczba_pracownikow = QSpinBox()
-        self.f_liczba_pracownikow.setRange(0, 9999)
-
-        self.f_uop_ilosc = QSpinBox()
-        self.f_uz_ilosc = QSpinBox()
-        self.f_uod_ilosc = QSpinBox()
-
-        self.f_uop_cennik = QLineEdit()
-        self.f_uz_cennik = QLineEdit()
-        self.f_uod_cennik = QLineEdit()
-
-        form.addRow("Główny cennik", self.f_glowny_cennik)
-        form.addRow(self.f_glowny_cennik_manualny)
-        form.addRow("Limit dokumentów", self.f_limit_dokumentow)
-        form.addRow("Liczba pracowników", self.f_liczba_pracownikow)
-
-        form.addRow("UoP - ilość", self.f_uop_ilosc)
-        form.addRow("UoP - cennik", self.f_uop_cennik)
-
-        form.addRow("UZ - ilość", self.f_uz_ilosc)
-        form.addRow("UZ - cennik", self.f_uz_cennik)
-
-        form.addRow("UoD - ilość", self.f_uod_ilosc)
-        form.addRow("UoD - cennik", self.f_uod_cennik)
-
-        self.main_layout.addWidget(box)
-
-    def _load_pricing_data(self, d: Dict[str, Any]):
-        self.f_glowny_cennik.setText(d.get("glowny_cennik", ""))
-        self.f_glowny_cennik_manualny.setChecked(bool(d.get("glowny_cennik_manualny", 0)))
-
-        self.f_limit_dokumentow.setValue(int(d.get("limit_dokumentow", 0)))
-        self.f_liczba_pracownikow.setValue(int(d.get("liczba_pracownikow", 0)))
-
-        self.f_uop_ilosc.setValue(int(d.get("uop_ilosc", 0)))
-        self.f_uz_ilosc.setValue(int(d.get("uz_ilosc", 0)))
-        self.f_uod_ilosc.setValue(int(d.get("uod_ilosc", 0)))
-
-        self.f_uop_cennik.setText(d.get("uop_cennik", ""))
-        self.f_uz_cennik.setText(d.get("uz_cennik", ""))
-        self.f_uod_cennik.setText(d.get("uod_cennik", ""))
-
-    # ============================================================
-    #  FAKTUROWANIE
-    # ============================================================
-
-    def _build_invoicing_section(self):
-        box = QGroupBox("Fakturowanie")
-        form = QFormLayout(box)
-
-        self.f_fakturowac = QCheckBox("Generować faktury")
-        self.f_wysylac_do_ksef = QCheckBox("Wysyłać do KSeF")
-        self.f_wysylac_do_kontrahenta = QCheckBox("Wysyłać do kontrahenta")
-        self.f_metoda_kasowa = QCheckBox("Metoda kasowa")
-
-        self.f_miesiac_dok = QComboBox()
-        self.f_miesiac_dok.addItems(MIESIACE_FAKTUROWANIE)
-
-        self.f_miesiac_prac = QComboBox()
-        self.f_miesiac_prac.addItems(MIESIACE_FAKTUROWANIE)
-
-        self.f_dzien_dok = QSpinBox()
-        self.f_dzien_dok.setRange(1, 31)
-        self.f_dzien_dok.setValue(7)
-
-        self.f_seria_fv = QLineEdit()
-        self.f_seria_kfv = QLineEdit()
-
-        self.f_sposob_zaplaty = QComboBox()
-        self.f_sposob_zaplaty.addItems(SPOSOB_ZAPLATY)
-
-        form.addRow(self.f_fakturowac)
-        form.addRow(self.f_wysylac_do_ksef)
-        form.addRow(self.f_wysylac_do_kontrahenta)
-        form.addRow(self.f_metoda_kasowa)
-
-        form.addRow("Miesiąc dokumentów", self.f_miesiac_dok)
-        form.addRow("Miesiąc pracowników", self.f_miesiac_prac)
-        form.addRow("Dzień dostarczania dokumentów", self.f_dzien_dok)
-
-        form.addRow("Seria FV", self.f_seria_fv)
-        form.addRow("Seria KFV", self.f_seria_kfv)
-
-        form.addRow("Sposób zapłaty", self.f_sposob_zaplaty)
-
-        self.main_layout.addWidget(box)
-
-    def _load_invoicing_data(self, d: Dict[str, Any]):
-        self.f_fakturowac.setChecked(bool(d.get("fakturowac", 0)))
-        self.f_wysylac_do_ksef.setChecked(bool(d.get("wysylac_do_ksef", 0)))
-        self.f_wysylac_do_kontrahenta.setChecked(bool(d.get("wysylac_do_kontrahenta", 0)))
-        self.f_metoda_kasowa.setChecked(bool(d.get("metoda_kasowa", 0)))
-
-        if d.get("miesiac_dok_fakturowanie") in MIESIACE_FAKTUROWANIE:
-            self.f_miesiac_dok.setCurrentText(d["miesiac_dok_fakturowanie"])
-        if d.get("miesiac_prac_fakturowanie") in MIESIACE_FAKTUROWANIE:
-            self.f_miesiac_prac.setCurrentText(d["miesiac_prac_fakturowanie"])
-
-        self.f_dzien_dok.setValue(int(d.get("dzien_dostarczania_dokumentow", 7)))
-
-        self.f_seria_fv.setText(d.get("seria_fv", DEFAULT_SERIA_FV))
-        self.f_seria_kfv.setText(d.get("seria_kfv", DEFAULT_SERIA_KFV))
-
-        if d.get("sposob_zaplaty") in SPOSOB_ZAPLATY:
-            self.f_sposob_zaplaty.setCurrentText(d["sposob_zaplaty"])
-
-    # ============================================================
-    #  WSPÓLNICY
-    # ============================================================
-
-    def _build_partners_section(self):
-        box = QGroupBox("Wspólnicy / reprezentanci")
-        layout = QVBoxLayout(box)
-
-        self.partners_table = QTableWidget(0, len(PARTNER_FIELDS) + 1)
-        self.partners_table.setHorizontalHeaderLabels(
-            [f.replace("_", " ").capitalize() for f in PARTNER_FIELDS] + ["Usuń"]
-        )
-        self.partners_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
-        btn_add = QPushButton("Dodaj wspólnika")
-        btn_add.clicked.connect(self._add_partner)
-
-        layout.addWidget(self.partners_table)
-        layout.addWidget(btn_add)
-
-        self.main_layout.addWidget(box)
-
-    def _refresh_partners_table(self):
-        self.partners_table.setRowCount(0)
-        for p in self.partners:
-            row = self.partners_table.rowCount()
-            self.partners_table.insertRow(row)
-
-            for col, field in enumerate(PARTNER_FIELDS):
-                item = QTableWidgetItem(str(p.get(field, "")))
-                self.partners_table.setItem(row, col, item)
-
-            btn_del = QPushButton("Usuń")
-            btn_del.clicked.connect(lambda _, pid=p.get("id"): self._delete_partner(pid))
-            self.partners_table.setCellWidget(row, len(PARTNER_FIELDS), btn_del)
-
-    def _add_partner(self):
-        dlg = PartnerEditDialog(self)
-        if dlg.exec():
-            data = dlg.get_data()
-            if data:
-                self.partners.append(data)
-                self._refresh_partners_table()
-
-    def _delete_partner(self, partner_id: Optional[int]):
-        if partner_id:
-            delete_partner(partner_id)
-        self.partners = [p for p in self.partners if p.get("id") != partner_id]
-        self._refresh_partners_table()
-
-    # ============================================================
-    #  OSOBY KONTAKTOWE
-    # ============================================================
-
-    def _build_contacts_section(self):
-        box = QGroupBox("Osoby kontaktowe")
-        layout = QVBoxLayout(box)
-
-        self.contacts_table = QTableWidget(0, len(CONTACT_FIELDS) + 1)
-        self.contacts_table.setHorizontalHeaderLabels(
-            [f.replace("_", " ").capitalize() for f in CONTACT_FIELDS] + ["Usuń"]
-        )
-        self.contacts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
-        btn_add = QPushButton("Dodaj osobę kontaktową")
         btn_add.clicked.connect(self._add_contact)
+        btn_del.clicked.connect(self._delete_contact)
+        btn_save_row.clicked.connect(self._save_selected_contact)
 
         layout.addWidget(self.contacts_table)
+        layout.addLayout(form)
+        layout.addLayout(btn_layout)
+
+        self.inputs["kont_imie"] = self.kont_imie
+        self.inputs["kont_nazw"] = self.kont_nazw
+        self.inputs["kont_email"] = self.kont_email
+        self.inputs["kont_tel"] = self.kont_tel
+
+        self.tabs.addTab(w, "Kontakty")
+
+    def _build_tab_wspolnicy(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        self.partners_table = QTableWidget(0, 4)
+        self.partners_table.setHorizontalHeaderLabels(["Imię pierwsze", "Imię drugie", "Nazwisko", "Procent"])
+        self.partners_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        form = QFormLayout()
+        self.partner_imie1 = QLineEdit()
+        self.partner_imie2 = QLineEdit()
+        self.partner_nazwisko = QLineEdit()
+        self.partner_procent = QDoubleSpinBox()
+        self.partner_procent.setRange(0, 100)
+        self.partner_procent.setDecimals(2)
+        form.addRow("Imię pierwsze:", self.partner_imie1)
+        form.addRow("Imię drugie:", self.partner_imie2)
+        form.addRow("Nazwisko:", self.partner_nazwisko)
+        form.addRow("Procent:", self.partner_procent)
+
+        btn_layout = QHBoxLayout()
+        btn_add = QPushButton("Dodaj wspólnika")
+        btn_del = QPushButton("Usuń wspólnika")
+        btn_save_row = QPushButton("Zapisz zaznaczonego")
+        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_del)
+        btn_layout.addWidget(btn_save_row)
+
+        btn_add.clicked.connect(self._add_partner)
+        btn_del.clicked.connect(self._delete_partner)
+        btn_save_row.clicked.connect(self._save_selected_partner)
+
+        layout.addWidget(self.partners_table)
+        layout.addLayout(form)
+        layout.addLayout(btn_layout)
+
+        self.tabs.addTab(w, "Wspólnicy")
+
+    def _build_tab_notatki(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        self.notes_table = QTableWidget(0, 3)
+        self.notes_table.setHorizontalHeaderLabels(["Treść", "Autor", "Data"])
+        self.notes_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        self.note_edit = QTextEdit()
+        btn_add = QPushButton("Dodaj notatkę")
+        btn_add.clicked.connect(self._add_note)
+
+        layout.addWidget(self.notes_table)
+        layout.addWidget(QLabel("Nowa notatka:"))
+        layout.addWidget(self.note_edit)
         layout.addWidget(btn_add)
 
-        self.main_layout.addWidget(box)
+        self.tabs.addTab(w, "Notatki")
 
-    def _refresh_contacts_table(self):
-        self.contacts_table.setRowCount(0)
-        for c in self.contacts:
-            row = self.contacts_table.rowCount()
-            self.contacts_table.insertRow(row)
-
-            for col, field in enumerate(CONTACT_FIELDS):
-                item = QTableWidgetItem(str(c.get(field, "")))
-                self.contacts_table.setItem(row, col, item)
-
-            btn_del = QPushButton("Usuń")
-            btn_del.clicked.connect(lambda _, cid=c.get("id"): self._delete_contact(cid))
-            self.contacts_table.setCellWidget(row, len(CONTACT_FIELDS), btn_del)
-
-    def _add_contact(self):
-        dlg = ContactEditDialog(self)
-        if dlg.exec():
-            data = dlg.get_data()
-            if data:
-                self.contacts.append(data)
-                self._refresh_contacts_table()
-
-    def _delete_contact(self, contact_id: Optional[int]):
-        if contact_id:
-            delete_contact(contact_id)
-        self.contacts = [c for c in self.contacts if c.get("id") != contact_id]
-        self._refresh_contacts_table()
-
-    # ============================================================
-    #  NOTATKI
-    # ============================================================
-
-    def _build_notes_section(self):
-        box = QGroupBox("Notatki")
-        layout = QVBoxLayout(box)
-
-        self.notes_edit = QTextEdit()
-        layout.addWidget(self.notes_edit)
-
-        self.main_layout.addWidget(box)
-
-    def _load_notes(self, d: Dict[str, Any]):
-        self.notes_edit.setText(d.get("uwagi", ""))
-
-    # ============================================================
-    #  PRZYCISKI ZAPISU
-    # ============================================================
-
-    def _build_save_buttons(self):
-        row = QHBoxLayout()
-        btn_save = QPushButton("Zapisz firmę")
-        btn_save.clicked.connect(self._save)
-
-        btn_cancel = QPushButton("Anuluj")
-        btn_cancel.clicked.connect(self._cancel)
-
-        row.addStretch()
-        row.addWidget(btn_save)
-        row.addWidget(btn_cancel)
-
-        self.main_layout.addLayout(row)
-
-    # ============================================================
-    #  ŁADOWANIE DANYCH
-    # ============================================================
-
-    def _load_existing_data(self):
-        d = self.company_data
-        if not d:
+    def _load_company(self):
+        data = get_company(self.firma_id)
+        if not data:
             return
 
-        self.f_nip.setText(d.get("nip", ""))
-        self.f_regon.setText(d.get("regon", ""))
-        self.f_krs.setText(d.get("krs", ""))
-        self.f_pesel.setText(d.get("pesel", ""))
+        def set_text(name: str, value: Any):
+            w = self.inputs.get(name)
+            if w is None:
+                return
+            if isinstance(w, QLineEdit):
+                w.setText(str(value or ""))
+            elif isinstance(w, QTextEdit):
+                w.setPlainText(str(value or ""))
+            elif isinstance(w, QSpinBox):
+                w.setValue(int(value or 0))
+            elif isinstance(w, QDoubleSpinBox):
+                w.setValue(float(value or 0))
+            elif isinstance(w, QComboBox):
+                if value is None:
+                    return
+                text = str(value)
+                idx = w.findText(text)
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
 
-        self.f_nazwa.setText(d.get("nazwa", ""))
-        self.f_nazwa_skrocona.setText(d.get("nazwa_skrocona", ""))
-        self.f_numer_klienta.setText(d.get("numer_klienta", ""))
+        for key, val in data.items():
+            if key in self.inputs:
+                set_text(key, val)
 
-        osoba = d.get("osoba_kontaktowa", "")
-        if osoba:
-            parts = osoba.split()
-            if len(parts) >= 1:
-                self.kont_imie.setText(parts[0])
-            if len(parts) >= 2:
-                self.kont_nazw.setText(" ".join(parts[1:]))
+        set_text("dz_miasto", data.get("miasto"))
+        set_text("dz_kod", data.get("kod_pocztowy"))
+        set_text("dz_ulica", data.get("ulica"))
+        set_text("dz_budynek", data.get("adres_budynek"))
+        set_text("dz_lokal", data.get("adres_lokal"))
+        set_text("dz_wojewodztwo", data.get("wojewodztwo"))
+        set_text("dz_powiat", data.get("powiat"))
+        set_text("dz_gmina", data.get("gmina"))
+        set_text("dz_kraj", data.get("kraj"))
 
-        self.kont_email.setText(d.get("adres_email", ""))
-        self.kont_tel.setText(d.get("nr_telefonu", ""))
+        set_text("ko_miasto", data.get("adres_koresp_miasto"))
+        set_text("ko_kod", data.get("adres_koresp_kod_pocztowy"))
+        set_text("ko_ulica", data.get("adres_koresp_ulica"))
+        set_text("ko_budynek", data.get("adres_koresp_budynek"))
+        set_text("ko_lokal", data.get("adres_koresp_lokal"))
+        set_text("ko_wojewodztwo", data.get("adres_koresp_wojewodztwo"))
+        set_text("ko_powiat", data.get("adres_koresp_powiat"))
+        set_text("ko_gmina", data.get("adres_koresp_gmina"))
+        set_text("ko_kraj", data.get("adres_koresp_kraj"))
 
-        self.f_edoreczenia.setText(d.get("adres_doreczen_elektronicznych", ""))
-
-        if d.get("forma_dzialalnosci") in FORMA_DZIALALNOSCI:
-            self.f_forma_dzial.setCurrentText(d["forma_dzialalnosci"])
-        if d.get("forma_opodatkowania") in FORMA_OPODATKOWANIA:
-            self.f_forma_opodatk.setCurrentText(d["forma_opodatkowania"])
-
-        if d.get("urzad_skarbowy") in URZEDY_SKARBOWE:
-            self.f_urzad_skarbowy.setCurrentText(d["urzad_skarbowy"])
-
-        self.f_kody_pkd.setText(d.get("kody_pkd", ""))
-
-        self.VAT_checkbox.setChecked(bool(d.get("vat_czynny", 0)))
-
-        if d.get("data_rozpoczecia_dg"):
-            try:
-                dt = QDate.fromString(d["data_rozpoczecia_dg"], "yyyy-MM-dd")
-                if dt.isValid():
-                    self.f_start.setDate(dt)
-            except Exception:
-                pass
-
-        self.dz_kraj.setText(d.get("kraj", ""))
-        self.dz_woj.setText(d.get("wojewodztwo", ""))
-        self.dz_pow.setText(d.get("powiat", ""))
-        self.dz_gmi.setText(d.get("gmina", ""))
-        self.dz_miasto.setText(d.get("miasto", ""))
-        self.dz_ulica.setText(d.get("ulica", ""))
-        self.dz_budynek.setText(d.get("adres_budynek", ""))
-        self.dz_lokal.setText(d.get("adres_lokal", ""))
-        self.dz_kod.setText(d.get("kod_pocztowy", ""))
-
-        self.ko_kraj.setText(d.get("adres_koresp_kraj", ""))
-        self.ko_woj.setText(d.get("adres_koresp_wojewodztwo", ""))
-        self.ko_pow.setText(d.get("adres_koresp_powiat", ""))
-        self.ko_gmi.setText(d.get("adres_koresp_gmina", ""))
-        self.ko_miasto.setText(d.get("adres_koresp_miasto", ""))
-        self.ko_ulica.setText(d.get("adres_koresp_ulica", ""))
-        self.ko_budynek.setText(d.get("adres_koresp_budynek", ""))
-        self.ko_lokal.setText(d.get("adres_koresp_lokal", ""))
-        self.ko_kod.setText(d.get("adres_koresp_kod_pocztowy", ""))
-
-        self.zam_kraj.setText(d.get("adres_zam_kraj", ""))
-        self.zam_woj.setText(d.get("adres_zam_wojewodztwo", ""))
-        self.zam_pow.setText(d.get("adres_zam_powiat", ""))
-        self.zam_gmi.setText(d.get("adres_zam_gmina", ""))
-        self.zam_miasto.setText(d.get("adres_zam_miasto", ""))
-        self.zam_ulica.setText(d.get("adres_zam_ulica", ""))
-        self.zam_budynek.setText(d.get("adres_zam_budynek", ""))
-        self.zam_lokal.setText(d.get("adres_zam_lokal", ""))
-        self.zam_kod.setText(d.get("adres_zam_kod_pocztowy", ""))
-
-        self._load_pricing_data(d)
-        self._load_invoicing_data(d)
-
-        self.partners = get_partners(d["id"]) if d.get("id") else []
-        self._refresh_partners_table()
-
-        self.contacts = get_contacts(d["id"]) if d.get("id") else []
-        self._refresh_contacts_table()
-
-        self._load_notes(d)
-
-    # ============================================================
-    #  ZBIERANIE DANYCH Z FORMULARZA
-    # ============================================================
+        set_text("zam_miasto", data.get("adres_zam_miasto"))
+        set_text("zam_kod", data.get("adres_zam_kod_pocztowy"))
+        set_text("zam_ulica", data.get("adres_zam_ulica"))
+        set_text("zam_budynek", data.get("adres_zam_budynek"))
+        set_text("zam_lokal", data.get("adres_zam_lokal"))
+        set_text("zam_wojewodztwo", data.get("adres_zam_wojewodztwo"))
+        set_text("zam_powiat", data.get("adres_zam_powiat"))
+        set_text("zam_gmina", data.get("adres_zam_gmina"))
+        set_text("zam_kraj", data.get("adres_zam_kraj"))
 
     def _collect_payload(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {}
+        payload: Dict[str, Any] = {}
+        if self.firma_id:
+            payload["id"] = self.firma_id
 
-        d["nip"] = self.f_nip.text().strip()
-        d["regon"] = self.f_regon.text().strip()
-        d["krs"] = self.f_krs.text().strip()
-        d["pesel"] = self.f_pesel.text().strip()
+        for name, w in self.inputs.items():
+            if isinstance(w, QLineEdit):
+                payload[name] = w.text().strip()
+            elif isinstance(w, QTextEdit):
+                payload[name] = w.toPlainText().strip()
+            elif isinstance(w, QSpinBox):
+                payload[name] = w.value()
+            elif isinstance(w, QDoubleSpinBox):
+                payload[name] = w.value()
+            elif isinstance(w, QComboBox):
+                if name in ("typ_rozliczenia", "status", "glowny_cennik"):
+                    payload[name] = w.currentText()
+                else:
+                    try:
+                        payload[name] = int(w.currentText())
+                    except Exception:
+                        payload[name] = w.currentText()
 
-        d["nazwa"] = self.f_nazwa.text().strip()
-        d["nazwa_skrocona"] = self.f_nazwa_skrocona.text().strip()
-        d["numer_klienta"] = self.f_numer_klienta.text().strip()
+        return payload
 
-        imie = self.kont_imie.text().strip()
-        nazw = self.kont_nazw.text().strip()
-        d["osoba_kontaktowa"] = " ".join([x for x in [imie, nazw] if x]).strip()
-        d["adres_email"] = self.kont_email.text().strip()
-        d["nr_telefonu"] = self.kont_tel.text().strip()
-
-        d["adres_doreczen_elektronicznych"] = self.f_edoreczenia.text().strip()
-
-        d["forma_dzialalnosci"] = self.f_forma_dzial.currentText()
-        d["forma_opodatkowania"] = self.f_forma_opodatk.currentText()
-        d["urzad_skarbowy"] = self.f_urzad_skarbowy.currentText()
-        d["kody_pkd"] = self.f_kody_pkd.text().strip()
-
-        d["vat_czynny"] = 1 if self.VAT_checkbox.isChecked() else 0
-
-        d["data_rozpoczecia_dg"] = self.f_start.date().toString("yyyy-MM-dd")
-
-        d["kraj"] = self.dz_kraj.text().strip()
-        d["wojewodztwo"] = self.dz_woj.text().strip()
-        d["powiat"] = self.dz_pow.text().strip()
-        d["gmina"] = self.dz_gmi.text().strip()
-        d["miasto"] = self.dz_miasto.text().strip()
-        d["ulica"] = self.dz_ulica.text().strip()
-        d["adres_budynek"] = self.dz_budynek.text().strip()
-        d["adres_lokal"] = self.dz_lokal.text().strip()
-        d["kod_pocztowy"] = self.dz_kod.text().strip()
-
-        d["adres_koresp_kraj"] = self.ko_kraj.text().strip()
-        d["adres_koresp_wojewodztwo"] = self.ko_woj.text().strip()
-        d["adres_koresp_powiat"] = self.ko_pow.text().strip()
-        d["adres_koresp_gmina"] = self.ko_gmi.text().strip()
-        d["adres_koresp_miasto"] = self.ko_miasto.text().strip()
-        d["adres_koresp_ulica"] = self.ko_ulica.text().strip()
-        d["adres_koresp_budynek"] = self.ko_budynek.text().strip()
-        d["adres_koresp_lokal"] = self.ko_lokal.text().strip()
-        d["adres_koresp_kod_pocztowy"] = self.ko_kod.text().strip()
-
-        d["adres_zam_kraj"] = self.zam_kraj.text().strip()
-        d["adres_zam_wojewodztwo"] = self.zam_woj.text().strip()
-        d["adres_zam_powiat"] = self.zam_pow.text().strip()
-        d["adres_zam_gmina"] = self.zam_gmi.text().strip()
-        d["adres_zam_miasto"] = self.zam_miasto.text().strip()
-        d["adres_zam_ulica"] = self.zam_ulica.text().strip()
-        d["adres_zam_budynek"] = self.zam_budynek.text().strip()
-        d["adres_zam_lokal"] = self.zam_lokal.text().strip()
-        d["adres_zam_kod_pocztowy"] = self.zam_kod.text().strip()
-
-        d["glowny_cennik"] = self.f_glowny_cennik.text().strip()
-        d["glowny_cennik_manualny"] = 1 if self.f_glowny_cennik_manualny.isChecked() else 0
-
-        d["limit_dokumentow"] = self.f_limit_dokumentow.value()
-        d["liczba_pracownikow"] = self.f_liczba_pracownikow.value()
-
-        d["uop_ilosc"] = self.f_uop_ilosc.value()
-        d["uz_ilosc"] = self.f_uz_ilosc.value()
-        d["uod_ilosc"] = self.f_uod_ilosc.value()
-
-        d["uop_cennik"] = self.f_uop_cennik.text().strip()
-        d["uz_cennik"] = self.f_uz_cennik.text().strip()
-        d["uod_cennik"] = self.f_uod_cennik.text().strip()
-
-        d["fakturowac"] = 1 if self.f_fakturowac.isChecked() else 0
-        d["wysylac_do_ksef"] = 1 if self.f_wysylac_do_ksef.isChecked() else 0
-        d["wysylac_do_kontrahenta"] = 1 if self.f_wysylac_do_kontrahenta.isChecked() else 0
-        d["metoda_kasowa"] = 1 if self.f_metoda_kasowa.isChecked() else 0
-
-        d["miesiac_dok_fakturowanie"] = self.f_miesiac_dok.currentText()
-        d["miesiac_prac_fakturowanie"] = self.f_miesiac_prac.currentText()
-        d["dzien_dostarczania_dokumentow"] = self.f_dzien_dok.value()
-
-        d["seria_fv"] = self.f_seria_fv.text().strip()
-        d["seria_kfv"] = self.f_seria_kfv.text().strip()
-
-        d["sposob_zaplaty"] = self.f_sposob_zaplaty.currentText()
-
-        d["status_podatkowy"] = self.f_forma_opodatk.currentText()
-
-        d["uwagi"] = self.notes_edit.toPlainText().strip()
-
-        if self.company_data.get("id"):
-            d["id"] = self.company_data["id"]
-
-        return d
-
-    # ============================================================
-    #  WALIDACJE
-    # ============================================================
-
-    def _validate(self, d: Dict[str, Any]) -> bool:
-        if not d.get("nazwa"):
-            QMessageBox.warning(self, "Błąd", "Nazwa firmy jest wymagana.")
-            return False
-
-        nip = d.get("nip", "")
-        if nip and not nip.isdigit():
-            QMessageBox.warning(self, "Błąd", "NIP musi zawierać tylko cyfry.")
-            return False
-
-        return True
-
-    # ============================================================
-    #  ZAPIS FIRMY + WSPÓLNIKÓW + KONTAKTÓW
-    # ============================================================
-
-    def _save(self):
+    def _on_save(self):
         payload = self._collect_payload()
-
-        if not self._validate(payload):
-            return
-
         try:
             firma_id = save_company(payload)
+            self.firma_id = firma_id
+            self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać firmy:\n{e}")
+            QMessageBox.critical(self, "Błąd zapisu", str(e))
+
+    def _on_ceidg(self):
+        try:
+            ceidg_fetch(self)
+        except Exception as e:
+            QMessageBox.warning(self, "CEIDG", str(e))
+
+    def _load_contacts(self):
+        if not self.firma_id:
             return
+        rows = get_contacts(self.firma_id)
+        self.contacts_table.setRowCount(0)
+        for r in rows:
+            row = self.contacts_table.rowCount()
+            self.contacts_table.insertRow(row)
+            self.contacts_table.setItem(row, 0, QTableWidgetItem(r.get("imie") or ""))
+            self.contacts_table.setItem(row, 1, QTableWidgetItem(r.get("nazwisko") or ""))
+            self.contacts_table.setItem(row, 2, QTableWidgetItem(r.get("email") or ""))
+            self.contacts_table.setItem(row, 3, QTableWidgetItem(r.get("telefon") or ""))
+            self.contacts_table.setItem(row, 4, QTableWidgetItem(r.get("rola") or ""))
+            self.contacts_table.setVerticalHeaderItem(row, QTableWidgetItem(str(r.get("id") or "")))
 
-        for p in self.partners:
-            p["firma_id"] = firma_id
-            save_partner(firma_id, p)
+    def _add_contact(self):
+        if not self.firma_id:
+            QMessageBox.information(self, "Kontakt", "Najpierw zapisz firmę.")
+            return
+        data = {
+            "imie": self.kont_imie.text().strip(),
+            "nazwisko": self.kont_nazw.text().strip(),
+            "email": self.kont_email.text().strip(),
+            "telefon": self.kont_tel.text().strip(),
+            "rola": self.kont_rola.text().strip(),
+        }
+        try:
+            save_contact(self.firma_id, data)
+            self.kont_imie.clear()
+            self.kont_nazw.clear()
+            self.kont_email.clear()
+            self.kont_tel.clear()
+            self.kont_rola.clear()
+            self._load_contacts()
+        except Exception as e:
+            QMessageBox.critical(self, "Kontakt", str(e))
 
-        for c in self.contacts:
-            c["firma_id"] = firma_id
-            save_contact(firma_id, c)
+    def _delete_contact(self):
+        row = self.contacts_table.currentRow()
+        if row < 0:
+            return
+        header_item = self.contacts_table.verticalHeaderItem(row)
+        if not header_item:
+            return
+        try:
+            contact_id = int(header_item.text())
+        except Exception:
+            return
+        try:
+            delete_contact(contact_id)
+            self._load_contacts()
+        except Exception as e:
+            QMessageBox.critical(self, "Kontakt", str(e))
 
-        QMessageBox.information(self, "OK", "Firma została zapisana.")
-        self.close()
+    def _save_selected_contact(self):
+        row = self.contacts_table.currentRow()
+        if row < 0 or not self.firma_id:
+            return
+        header_item = self.contacts_table.verticalHeaderItem(row)
+        if not header_item:
+            return
+        try:
+            contact_id = int(header_item.text())
+        except Exception:
+            contact_id = None
+        data = {
+            "id": contact_id,
+            "imie": self.contacts_table.item(row, 0).text() if self.contacts_table.item(row, 0) else "",
+            "nazwisko": self.contacts_table.item(row, 1).text() if self.contacts_table.item(row, 1) else "",
+            "email": self.contacts_table.item(row, 2).text() if self.contacts_table.item(row, 2) else "",
+            "telefon": self.contacts_table.item(row, 3).text() if self.contacts_table.item(row, 3) else "",
+            "rola": self.contacts_table.item(row, 4).text() if self.contacts_table.item(row, 4) else "",
+        }
+        try:
+            save_contact(self.firma_id, data)
+            self._load_contacts()
+        except Exception as e:
+            QMessageBox.critical(self, "Kontakt", str(e))
 
-    # ============================================================
-    #  ANULOWANIE
-    # ============================================================
+    def _load_partners(self):
+        if not self.firma_id:
+            return
+        rows = get_partners(self.firma_id)
+        self.partners_table.setRowCount(0)
+        for r in rows:
+            row = self.partners_table.rowCount()
+            self.partners_table.insertRow(row)
+            self.partners_table.setItem(row, 0, QTableWidgetItem(r.get("imie_pierwsze") or ""))
+            self.partners_table.setItem(row, 1, QTableWidgetItem(r.get("imie_drugie") or ""))
+            self.partners_table.setItem(row, 2, QTableWidgetItem(r.get("nazwisko") or ""))
+            self.partners_table.setItem(row, 3, QTableWidgetItem(str(r.get("procent") or "")))
+            self.partners_table.setVerticalHeaderItem(row, QTableWidgetItem(str(r.get("id") or "")))
 
-    def _cancel(self):
-        self.close()
+    def _add_partner(self):
+        if not self.firma_id:
+            QMessageBox.information(self, "Wspólnik", "Najpierw zapisz firmę.")
+            return
+        data = {
+            "imie_pierwsze": self.partner_imie1.text().strip(),
+            "imie_drugie": self.partner_imie2.text().strip(),
+            "nazwisko": self.partner_nazwisko.text().strip(),
+            "procent": self.partner_procent.value(),
+        }
+        try:
+            save_partner(self.firma_id, data)
+            self.partner_imie1.clear()
+            self.partner_imie2.clear()
+            self.partner_nazwisko.clear()
+            self.partner_procent.setValue(0.0)
+            self._load_partners()
+        except Exception as e:
+            QMessageBox.critical(self, "Wspólnik", str(e))
 
-    # ============================================================
-    #  DEBUG — PRINT PAYLOAD (opcjonalnie)
-    # ============================================================
+    def _delete_partner(self):
+        row = self.partners_table.currentRow()
+        if row < 0:
+            return
+        header_item = self.partners_table.verticalHeaderItem(row)
+        if not header_item:
+            return
+        try:
+            partner_id = int(header_item.text())
+        except Exception:
+            return
+        try:
+            delete_partner(partner_id)
+            self._load_partners()
+        except Exception as e:
+            QMessageBox.critical(self, "Wspólnik", str(e))
 
-    def debug_print_payload(self):
-        payload = self._collect_payload()
-        print("=== PAYLOAD ===")
-        for k, v in payload.items():
-            print(f"{k}: {v}")
-        print("=== END ===")
+    def _save_selected_partner(self):
+        row = self.partners_table.currentRow()
+        if row < 0 or not self.firma_id:
+            return
+        header_item = self.partners_table.verticalHeaderItem(row)
+        if not header_item:
+            return
+        try:
+            partner_id = int(header_item.text())
+        except Exception:
+            partner_id = None
+        data = {
+            "id": partner_id,
+            "imie_pierwsze": self.partners_table.item(row, 0).text() if self.partners_table.item(row, 0) else "",
+            "imie_drugie": self.partners_table.item(row, 1).text() if self.partners_table.item(row, 1) else "",
+            "nazwisko": self.partners_table.item(row, 2).text() if self.partners_table.item(row, 2) else "",
+            "procent": float(self.partners_table.item(row, 3).text()) if self.partners_table.item(row, 3) else 0.0,
+        }
+        try:
+            save_partner(self.firma_id, data)
+            self._load_partners()
+        except Exception as e:
+            QMessageBox.critical(self, "Wspólnik", str(e))
+
+    def _load_notes(self):
+        if not self.firma_id:
+            return
+        rows = get_company_notes(self.firma_id, limit=50)
+        self.notes_table.setRowCount(0)
+        for r in rows:
+            row = self.notes_table.rowCount()
+            self.notes_table.insertRow(row)
+            self.notes_table.setItem(row, 0, QTableWidgetItem(r.get("tresc") or ""))
+            self.notes_table.setItem(row, 1, QTableWidgetItem(str(r.get("autor_id") or "")))
+            self.notes_table.setItem(row, 2, QTableWidgetItem(r.get("data_utworzenia") or ""))
+
+    def _add_note(self):
+        if not self.firma_id:
+            QMessageBox.information(self, "Notatka", "Najpierw zapisz firmę.")
+            return
+        text = self.note_edit.toPlainText().strip()
+        if not text:
+            return
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO company_notes (firma_id, tresc) VALUES (?, ?)",
+                (self.firma_id, text),
+            )
+            conn.commit()
+            conn.close()
+            self.note_edit.clear()
+            self._load_notes()
+        except Exception as e:
+            QMessageBox.critical(self, "Notatka", str(e))

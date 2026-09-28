@@ -6,7 +6,7 @@ from app.db.dao_companies import get_company
 from app.db.dao_monthly import get_month_status
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
-from app.companies.company_ui import CompaniesPage
+from app.companies.company_ui import CompanyUI
 from app.email.email_ui import EmailPage
 from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage
@@ -249,7 +249,7 @@ class OfficeManagerApp(QMainWindow):
         main_layout.addWidget(content)
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
-        self.page_companies = CompaniesPage(self.pracownik_id)
+        self.page_companies = CompanyUI(self.pracownik_id)
         self.page_email = EmailPage(self.pracownik_id)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_faktury = FakturyPage(self.pracownik_id)

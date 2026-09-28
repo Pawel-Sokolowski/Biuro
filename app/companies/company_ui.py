@@ -1,149 +1,181 @@
-from typing import Optional, Dict, Any
+# app/companies/company_ui.py
+from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
-    QPushButton, QHeaderView, QMessageBox, QDialog
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QComboBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QMessageBox,
 )
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt
 
-from app.companies.company_logic import CompanyLogic
+from app.db.dao_companies import (
+    list_companies,
+    get_companies_filtered,
+    delete_company,
+)
 from app.companies.company_form import CompanyForm
 
 
-class CompaniesPage(QWidget):
-    def __init__(self, pracownik_id: int, parent=None):
+class CompanyUI(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.pracownik_id = pracownik_id
-        self.logic = CompanyLogic()
+        self.setWindowTitle("Firmy")
+        self.resize(1100, 700)
 
         layout = QVBoxLayout(self)
 
-        title = QLabel("Firmy – pełna edycja")
-        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        layout.addWidget(title)
+        # -------------------------
+        # FILTRY
+        # -------------------------
+        filter_layout = QHBoxLayout()
 
-        self.table = QTableWidget(0, 5)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Szukaj po nazwie lub NIP...")
+
+        self.status_filter = QComboBox()
+        self.status_filter.addItems(["Wszystkie", "Aktywne", "Zawieszone", "Archiwalne"])
+
+        self.btn_search = QPushButton("Szukaj")
+        self.btn_clear = QPushButton("Wyczyść")
+
+        filter_layout.addWidget(self.search_input)
+        filter_layout.addWidget(self.status_filter)
+        filter_layout.addWidget(self.btn_search)
+        filter_layout.addWidget(self.btn_clear)
+
+        layout.addLayout(filter_layout)
+
+        # -------------------------
+        # TABELA
+        # -------------------------
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Nazwa", "NIP", "Miasto", "VAT czynny"
+            "ID", "Nazwa", "NIP", "Miasto", "Status",
+            "Cennik", "Limit dokumentów"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
         layout.addWidget(self.table)
 
-        btn_row = QHBoxLayout()
+        # -------------------------
+        # PRZYCISKI
+        # -------------------------
+        btn_layout = QHBoxLayout()
 
-        btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self._refresh)
-        btn_row.addWidget(btn_refresh)
+        self.btn_add = QPushButton("Dodaj firmę")
+        self.btn_edit = QPushButton("Edytuj firmę")
+        self.btn_delete = QPushButton("Usuń firmę")
+        self.btn_refresh = QPushButton("Odśwież")
 
-        btn_add = QPushButton("Dodaj firmę")
-        btn_add.clicked.connect(self._add_company)
-        btn_row.addWidget(btn_add)
+        btn_layout.addWidget(self.btn_add)
+        btn_layout.addWidget(self.btn_edit)
+        btn_layout.addWidget(self.btn_delete)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_refresh)
 
-        btn_edit = QPushButton("Edytuj wybraną")
-        btn_edit.clicked.connect(self._edit_selected)
-        btn_row.addWidget(btn_edit)
+        layout.addLayout(btn_layout)
 
-        btn_delete = QPushButton("Usuń wybraną")
-        btn_delete.clicked.connect(self._delete_selected)
-        btn_row.addWidget(btn_delete)
-
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        # -------------------------
+        # SYGNAŁY
+        # -------------------------
+        self.btn_search.clicked.connect(self._search)
+        self.btn_clear.clicked.connect(self._clear_filters)
+        self.btn_add.clicked.connect(self._add_company)
+        self.btn_edit.clicked.connect(self._edit_company)
+        self.btn_delete.clicked.connect(self._delete_company)
+        self.btn_refresh.clicked.connect(self._refresh)
 
         self._refresh()
 
+    # ============================================================
+    #  LOAD TABLE
+    # ============================================================
     def _refresh(self):
-        rows = self.logic.get_all_companies()
+        rows = list_companies()
+        self._load_table(rows)
+
+    def _load_table(self, rows: List[Dict[str, Any]]):
         self.table.setRowCount(0)
-        for f in rows:
+        for r in rows:
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            fid = f.get("id", "")
-            nazwa = f.get("nazwa", "")
-            nip = f.get("nip", "")
-            miasto = f.get("miasto", "")
-            vat_czynny = "Tak" if f.get("vat_czynny", 0) else "Nie"
+            self.table.setItem(row, 0, QTableWidgetItem(str(r.get("id", ""))))
+            self.table.setItem(row, 1, QTableWidgetItem(r.get("nazwa") or ""))
+            self.table.setItem(row, 2, QTableWidgetItem(r.get("nip") or ""))
+            self.table.setItem(row, 3, QTableWidgetItem(r.get("miasto") or ""))
+            self.table.setItem(row, 4, QTableWidgetItem(r.get("status") or ""))
+            self.table.setItem(row, 5, QTableWidgetItem(r.get("glowny_cennik") or ""))
+            self.table.setItem(row, 6, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
 
-            self.table.setItem(row, 0, QTableWidgetItem(str(fid)))
-            self.table.setItem(row, 1, QTableWidgetItem(nazwa))
-            self.table.setItem(row, 2, QTableWidgetItem(nip))
-            self.table.setItem(row, 3, QTableWidgetItem(miasto))
-            self.table.setItem(row, 4, QTableWidgetItem(vat_czynny))
+    # ============================================================
+    #  FILTERS
+    # ============================================================
+    def _search(self):
+        search = self.search_input.text().strip()
+        status = self.status_filter.currentText()
+        rows = get_companies_filtered(search, status, None)
+        self._load_table(rows)
 
-    def _get_selected_id(self) -> Optional[int]:
-        row = self.table.currentRow()
-        if row < 0:
-            return None
-        item = self.table.item(row, 0)
-        if not item:
-            return None
-        try:
-            return int(item.text())
-        except Exception:
-            return None
+    def _clear_filters(self):
+        self.search_input.clear()
+        self.status_filter.setCurrentIndex(0)
+        self._refresh()
 
+    # ============================================================
+    #  CRUD
+    # ============================================================
     def _add_company(self):
-        self._open_form_dialog(None)
-
-    def _edit_selected(self):
-        fid = self._get_selected_id()
-        if fid is None:
-            QMessageBox.information(self, "Firmy", "Wybierz firmę.")
-            return
-        firma = self.logic.get_company(fid)
-        if not firma:
-            QMessageBox.critical(self, "Błąd", "Nie znaleziono firmy.")
-            return
-        self._open_form_dialog(firma)
-
-    def _delete_selected(self):
-        fid = self._get_selected_id()
-        if fid is None:
-            QMessageBox.information(self, "Firmy", "Wybierz firmę.")
-            return
-        if QMessageBox.question(
-            self,
-            "Usuń firmę",
-            "Czy na pewno chcesz usunąć tę firmę?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        ) == QMessageBox.StandardButton.Yes:
-            try:
-                self.logic.delete_company(fid)
-                self._refresh()
-            except Exception as e:
-                QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć: {e}")
-
-    def _open_form_dialog(self, company_data: Optional[Dict[str, Any]]):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Edycja firmy")
-        layout = QVBoxLayout(dlg)
-
-        form = CompanyForm(self.pracownik_id, company_data, parent=dlg)
-
-        def on_saved():
-            dlg.accept()
+        dlg = CompanyForm(None, self)
+        if dlg.exec():
             self._refresh()
 
-        dlg.on_saved = on_saved
-        layout.addWidget(form)
+    def _edit_company(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Firma", "Wybierz firmę do edycji.")
+            return
+        try:
+            firma_id = int(self.table.item(row, 0).text())
+        except Exception:
+            QMessageBox.warning(self, "Firma", "Nie można odczytać ID firmy.")
+            return
 
-        dlg.resize(1000, 700)
-        dlg.exec()
+        dlg = CompanyForm(firma_id, self)
+        if dlg.exec():
+            self._refresh()
 
+    def _delete_company(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Firma", "Wybierz firmę do usunięcia.")
+            return
+        try:
+            firma_id = int(self.table.item(row, 0).text())
+        except Exception:
+            QMessageBox.warning(self, "Firma", "Nie można odczytać ID firmy.")
+            return
 
-def open_company_form_dialog(pracownik_id: int, company_data: Optional[Dict[str, Any]], parent=None) -> QDialog:
-    dlg = QDialog(parent)
-    dlg.setWindowTitle("Edycja firmy")
-    layout = QVBoxLayout(dlg)
+        confirm = QMessageBox.question(
+            self,
+            "Usuń firmę",
+            f"Czy na pewno chcesz usunąć firmę ID {firma_id}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
 
-    form = CompanyForm(pracownik_id, company_data, parent=dlg)
-
-    def on_saved():
-        dlg.accept()
-
-    dlg.on_saved = on_saved
-    layout.addWidget(form)
-
-    dlg.resize(1000, 700)
-    return dlg
+        try:
+            delete_company(firma_id)
+            self._refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", str(e))

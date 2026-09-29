@@ -1,4 +1,3 @@
-# timer.py
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -30,9 +29,7 @@ class TimerUtils:
         """
         if hours <= 0:
             return 0.0
-        # number of half-hours
-        half_units = int((hours * 2) + (0 if (hours * 2).is_integer() else 0))
-        # if exact multiple of 0.5, keep it; otherwise round up
+        half_units = int(hours * 2)
         if (hours * 2) != half_units:
             half_units = int((hours * 2) // 1 + 1)
         return round(half_units * 0.5, 2)

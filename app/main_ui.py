@@ -249,7 +249,7 @@ class OfficeManagerApp(QMainWindow):
         main_layout.addWidget(content)
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
-        self.page_companies = CompanyUI(self.pracownik_id)
+        self.page_companies = CompanyUI(self)
         self.page_email = EmailPage(self.pracownik_id)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_faktury = FakturyPage(self.pracownik_id)
@@ -271,6 +271,7 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer = QTimer(self)
         self._header_timer.setInterval(1000)
         self._header_timer.timeout.connect(self._update_header_timer)
+        self._header_timer.timeout.connect(self.page_monthly._reload_rows)
         self._header_timer.start()
 
     def _update_header_timer(self):

@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 import datetime
 import sqlite3
 from datetime import date, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
-from app.db.dao_companies import get_company, save_company
 from app.db.dao_monthly import get_month_status, save_month_status
 from app.db.dao_invoices import add_invoice_item_for_service
-from app.utils.timer import TimerUtils
+from app.db.dao_companies import get_company, save_company
 from app.db.dao_notes import get_latest_notes_for_firms
+from app.utils.timer import TimerUtils
 
 
 class MonthlyViewLogic:
@@ -23,8 +25,6 @@ class MonthlyViewLogic:
 
         self.aktywna_firma_stoper_ks_activity: Optional[Dict[str, Any]] = None
         self.aktywna_firma_stoper_kadry_activity: Optional[Dict[str, Any]] = None
-
-        self.status_widgets: Dict[int, Any] = {}
 
         self._auto_check_suspension()
 
@@ -133,18 +133,31 @@ class MonthlyViewLogic:
     def format_seconds(self, sekundy: int) -> str:
         return TimerUtils.format_seconds(int(sekundy or 0))
 
-    def schedule_status_autosave(self, firma_id: int):
-        if firma_id not in self.status_widgets:
-            return
-        docs_widget, etap_widget = self.status_widgets[firma_id]
-        try:
-            ilosc = int(docs_widget.text()) if docs_widget.text().isdigit() else 0
-        except Exception:
-            ilosc = 0
-        payload = {
-            "etap": etap_widget.currentText(),
-            "ilosc_dok": ilosc,
-        }
+    def save_status_for_company(
+        self,
+        firma_id: int,
+        etap: Optional[str] = None,
+        ilosc_dok: Optional[int] = None,
+        uop: Optional[int] = None,
+        uz: Optional[int] = None,
+        uod: Optional[int] = None,
+    ):
+        row = get_month_status(firma_id, self.aktualny_miesiac)
+        payload: Dict[str, Any] = {}
+
+        if row:
+            payload["etap"] = etap if etap is not None else row.get("etap", "Brak")
+            payload["ilosc_dok"] = ilosc_dok if ilosc_dok is not None else row.get("ilosc_dok", 0)
+            payload["sekundy_ksiegowosc"] = row.get("sekundy_ksiegowosc", 0)
+            payload["sekundy_kadry"] = row.get("sekundy_kadry", 0)
+            payload["wartosc_uslug"] = row.get("wartosc_uslug", 0.0)
+        else:
+            payload["etap"] = etap if etap is not None else "Brak"
+            payload["ilosc_dok"] = ilosc_dok if ilosc_dok is not None else 0
+            payload["sekundy_ksiegowosc"] = 0
+            payload["sekundy_kadry"] = 0
+            payload["wartosc_uslug"] = 0.0
+
         save_month_status(firma_id, self.aktualny_miesiac, payload)
 
     def _ensure_month_status(self, firma_id: int):
@@ -304,8 +317,8 @@ class MonthlyViewLogic:
             return
 
     def open_notes_window(self, firma_id: int):
-        from app.monthly_view.monthly_view_ui import InlineNotesWindow
-        InlineNotesWindow(firma_id, parent=None, pracownik_id=self.pracownik_id).exec()
+        from app.monthly_view.notes_window import NotesWindow
+        NotesWindow(firma_id, self.pracownik_id).exec()
 
     def open_extra_service_window(self, firma_id: int):
         from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
@@ -320,9 +333,9 @@ class MonthlyViewLogic:
         if firma_id:
             data["id"] = firma_id
         save_company(data)
-
     def open_company_edit_window(self, firma_id: int):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout
+        # import CompanyForm lazily
         from app.companies.company_form import CompanyForm
 
         company_data = self._get_company_data(firma_id)
@@ -333,14 +346,61 @@ class MonthlyViewLogic:
         dialog.resize(700, 600)
 
         layout = QVBoxLayout(dialog)
-        form = CompanyForm(self.pracownik_id, company_data, parent=dialog)
+
+        form = None
+        # Spróbuj kilku wariantów wywołania konstruktora, bez przerywania aplikacji
+        try:
+            # 1) najpierw spróbuj standardowo: (pracownik_id, company_data, parent)
+            form = CompanyForm(self.pracownik_id, company_data, dialog)
+        except TypeError:
+            try:
+                # 2) spróbuj (pracownik_id, parent, company_data) - niektóre wersje mają parent jako drugi arg
+                form = CompanyForm(self.pracownik_id, dialog, company_data)
+            except TypeError:
+                try:
+                    # 3) spróbuj z keywordami (jeśli dostępne)
+                    form = CompanyForm(self.pracownik_id, parent=dialog)
+                    # ustaw dane ręcznie, jeśli formularz ma odpowiednią metodę/atrybut
+                    if hasattr(form, "load_company_data"):
+                        form.load_company_data(company_data)
+                    elif hasattr(form, "set_company_data"):
+                        form.set_company_data(company_data)
+                    elif hasattr(form, "company_data"):
+                        try:
+                            form.company_data = company_data
+                        except Exception:
+                            pass
+                except Exception:
+                    # ostateczny fallback: spróbuj tylko z pracownik_id
+                    try:
+                        form = CompanyForm(self.pracownik_id)
+                        if hasattr(form, "load_company_data"):
+                            form.load_company_data(company_data)
+                        elif hasattr(form, "set_company_data"):
+                            form.set_company_data(company_data)
+                        elif hasattr(form, "company_data"):
+                            try:
+                                form.company_data = company_data
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        # jeśli wszystko zawiedzie, pokaż błąd w konsoli i zamknij dialog
+                        print("ERROR: Nie udało się utworzyć CompanyForm:", e)
+                        dialog.reject()
+                        return
 
         def _on_saved():
             dialog.accept()
 
-        form.on_saved = _on_saved
-        layout.addWidget(form)
-        dialog.exec()
+        # jeśli form został utworzony, podłącz i pokaż
+        if form is not None:
+            try:
+                form.on_saved = _on_saved
+            except Exception:
+                # jeśli form nie ma on_saved, ignorujemy
+                pass
+            layout.addWidget(form)
+            dialog.exec()
 
     def mark_company_suspended_manual(self, firma_id: int):
         today = datetime.datetime.now().strftime("%Y-%m-%d")

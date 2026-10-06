@@ -3,8 +3,8 @@ from __future__ import annotations
 import datetime
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QIntValidator
+from PyQt6.QtCore import Qt, QModelIndex, QTimer
+from PyQt6.QtGui import QAction, QIntValidator, QCursor
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -13,8 +13,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QPushButton,
     QTabWidget,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QHeaderView,
     QAbstractItemView,
     QLineEdit,
@@ -27,10 +26,20 @@ from PyQt6.QtWidgets import (
 )
 
 from app.monthly_view.monthly_view_logic import MonthlyViewLogic
-from app.db.dao_notes import get_notes_for_company, save_company_note, update_company_note, delete_company_note
+from app.db.dao_notes import (
+    get_notes_for_company,
+    save_company_note,
+    update_company_note,
+    delete_company_note,
+)
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.utils.timer import TimerUtils
+from app.monthly_view.monthly_view_model import MonthlyViewModel
+from app.monthly_view.monthly_view_delegates import ButtonDelegate, ScrollableNotesDelegate
+
+from app.monthly_view.notes_window import NotesWindow
+from app.monthly_view.note_edit_dialog import NoteEditDialog
 
 COMPANY_STAGE_OPTIONS = ["Brak", "W trakcie", "Zakończone"]
 COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
@@ -41,145 +50,13 @@ class HoverScrollTextEdit(QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setMinimumHeight(40)
-        self.setMaximumHeight(80)
+        self.setMaximumHeight(120)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setStyleSheet("QTextEdit { background: #f9f9f9; }")
 
     def set_text(self, text: str):
         self.setPlainText(text or "")
-
-
-class InlineNotesWindow(QDialog):
-    def __init__(self, firma_id: int, parent=None, pracownik_id: Optional[int] = None):
-        super().__init__(parent)
-        self.firma_id = firma_id
-        self.pracownik_id = pracownik_id
-
-        self.setWindowTitle("Notatki firmy")
-        self.resize(900, 600)
-
-        layout = QVBoxLayout(self)
-
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Użytkownik", "Data", "Treść"])
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.itemDoubleClicked.connect(self._on_edit_clicked)
-        layout.addWidget(self.table)
-
-        btn_layout = QHBoxLayout()
-        self.btn_add = QPushButton("Dodaj")
-        self.btn_edit = QPushButton("Edytuj")
-        self.btn_delete = QPushButton("Usuń")
-        self.btn_cancel = QPushButton("Anuluj")
-
-        self.btn_add.clicked.connect(self._on_add_clicked)
-        self.btn_edit.clicked.connect(self._on_edit_clicked)
-        self.btn_delete.clicked.connect(self._on_delete_clicked)
-        self.btn_cancel.clicked.connect(self.reject)
-
-        btn_layout.addWidget(self.btn_add)
-        btn_layout.addWidget(self.btn_edit)
-        btn_layout.addWidget(self.btn_delete)
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.btn_cancel)
-
-        layout.addLayout(btn_layout)
-
-        self._load_notes()
-
-    def _load_notes(self):
-        notes = get_notes_for_company(self.firma_id)
-        self.table.setRowCount(0)
-        for n in notes:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(n["autor_nazwa"]))
-            self.table.setItem(row, 1, QTableWidgetItem(n["data_utworzenia"]))
-            self.table.setItem(row, 2, QTableWidgetItem(n["tresc"][:200]))
-
-    def _get_selected_note(self) -> Optional[Dict[str, Any]]:
-        row = self.table.currentRow()
-        if row < 0:
-            return None
-        notes = get_notes_for_company(self.firma_id)
-        if row >= len(notes):
-            return None
-        return notes[row]
-
-    def _on_add_clicked(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Dodaj notatkę")
-        dlg.resize(600, 400)
-        layout = QVBoxLayout(dlg)
-        text = QTextEdit()
-        layout.addWidget(text)
-        btns = QHBoxLayout()
-        btn_ok = QPushButton("Zapisz")
-        btn_cancel = QPushButton("Anuluj")
-        btn_ok.clicked.connect(lambda: self._save_new(dlg, text))
-        btn_cancel.clicked.connect(dlg.reject)
-        btns.addStretch()
-        btns.addWidget(btn_ok)
-        btns.addWidget(btn_cancel)
-        layout.addLayout(btns)
-        dlg.exec()
-
-    def _save_new(self, dlg: QDialog, text_widget: QTextEdit):
-        tresc = text_widget.toPlainText().strip()
-        if not tresc:
-            QMessageBox.warning(self, "Błąd", "Treść notatki nie może być pusta.")
-            return
-        save_company_note(self.firma_id, tresc, self.pracownik_id)
-        dlg.accept()
-        self._load_notes()
-
-    def _on_edit_clicked(self):
-        note = self._get_selected_note()
-        if not note:
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Edytuj notatkę")
-        dlg.resize(600, 400)
-        layout = QVBoxLayout(dlg)
-        text = QTextEdit()
-        text.setPlainText(note["tresc"])
-        layout.addWidget(text)
-        btns = QHBoxLayout()
-        btn_ok = QPushButton("Zapisz")
-        btn_cancel = QPushButton("Anuluj")
-        btn_ok.clicked.connect(lambda: self._save_edit(dlg, text, note["id"]))
-        btn_cancel.clicked.connect(dlg.reject)
-        btns.addStretch()
-        btns.addWidget(btn_ok)
-        btns.addWidget(btn_cancel)
-        layout.addLayout(btns)
-        dlg.exec()
-
-    def _save_edit(self, dlg: QDialog, text_widget: QTextEdit, note_id: int):
-        tresc = text_widget.toPlainText().strip()
-        if not tresc:
-            QMessageBox.warning(self, "Błąd", "Treść notatki nie może być pusta.")
-            return
-        update_company_note(note_id, tresc)
-        dlg.accept()
-        self._load_notes()
-
-    def _on_delete_clicked(self):
-        note = self._get_selected_note()
-        if not note:
-            return
-        confirm = QMessageBox.question(
-            self,
-            "Usuń notatkę",
-            "Czy na pewno chcesz usunąć tę notatkę?",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-        delete_company_note(note["id"])
-        self._load_notes()
 
 
 class ActivitySelectionDialog(QDialog):
@@ -321,34 +198,6 @@ class InlineExtraServiceWindow(QDialog):
         self.accept()
 
 
-class ActivityDialog(QDialog):
-    def __init__(self, firma_id: int, miesiac: str, parent=None):
-        super().__init__(parent)
-        self.firma_id = firma_id
-        self.miesiac = miesiac
-
-        self.setWindowTitle("Aktywności firmy")
-        self.resize(800, 500)
-
-        layout = QVBoxLayout(self)
-        self.text = QTextEdit()
-        self.text.setReadOnly(True)
-        layout.addWidget(self.text)
-
-        btn_layout = QHBoxLayout()
-        self.btn_close = QPushButton("Zamknij")
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.btn_close)
-        layout.addLayout(btn_layout)
-
-        self.btn_close.clicked.connect(self.reject)
-
-        self._load_activities()
-
-    def _load_activities(self):
-        self.text.setPlainText("Tu będzie lista aktywności dla firmy.")
-
-
 class MonthlyViewPage(QWidget):
     def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
@@ -357,8 +206,12 @@ class MonthlyViewPage(QWidget):
 
         self._rows: List[Dict[str, Any]] = []
 
+        self.model_ks = MonthlyViewModel([], "ksiegowosc", self)
+        self.model_kadry = MonthlyViewModel([], "kadry", self)
+
         self._build_ui()
         self._load_initial_data()
+        self._setup_timer()
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -389,23 +242,37 @@ class MonthlyViewPage(QWidget):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        self.table_ks = QTableWidget()
-        self.table_ks.setColumnCount(9)
-        self.table_ks.setHorizontalHeaderLabels(
-            ["Firma", "Etap", "Ilość dok.", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯"]
-        )
+        self.table_ks = QTableView()
+        self.table_ks.setModel(self.model_ks)
         self.table_ks.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table_ks.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_ks.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self.table_ks.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_ks, "Księgowość")
 
-        self.table_kadry = QTableWidget()
-        self.table_kadry.setColumnCount(10)
-        self.table_kadry.setHorizontalHeaderLabels(
-            ["Firma", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
-        )
+        self.table_kadry = QTableView()
+        self.table_kadry.setModel(self.model_kadry)
         self.table_kadry.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table_kadry.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_kadry.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
+
+        # delegaty – przyciski i notatki (ScrollableNotesDelegate dla kolumny notatek)
+        self.table_ks.setItemDelegateForColumn(4, ButtonDelegate(self.table_ks, "▶", "stoper_ks"))
+        self.table_ks.setItemDelegateForColumn(6, ButtonDelegate(self.table_ks, "➕", "extra_ks"))
+        self.table_ks.setItemDelegateForColumn(7, ButtonDelegate(self.table_ks, "✏️", "edit_ks"))
+        self.table_ks.setItemDelegateForColumn(8, ButtonDelegate(self.table_ks, "⋯", "more_ks"))
+        self.table_ks.setItemDelegateForColumn(5, ScrollableNotesDelegate(self.table_ks))
+
+        self.table_kadry.setItemDelegateForColumn(6, ButtonDelegate(self.table_kadry, "▶", "stoper_kadry"))
+        self.table_kadry.setItemDelegateForColumn(8, ButtonDelegate(self.table_kadry, "➕", "extra_kadry"))
+        self.table_kadry.setItemDelegateForColumn(9, ButtonDelegate(self.table_kadry, "✏️", "edit_kadry"))
+        self.table_kadry.setItemDelegateForColumn(7, ScrollableNotesDelegate(self.table_kadry))
 
         self._setup_column_widths()
 
@@ -417,17 +284,26 @@ class MonthlyViewPage(QWidget):
     def _setup_column_widths(self):
         header_ks = self.table_ks.horizontalHeader()
         header_ks.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header_ks.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header_ks.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header_ks.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header_ks.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header_ks.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header_ks.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        for col in [2, 3, 4, 6, 7, 8]:
-            header_ks.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header_ks.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        header_ks.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        header_ks.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
 
         header_kadry = self.table_kadry.horizontalHeader()
         header_kadry.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header_kadry.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header_kadry.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         header_kadry.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        for col in [2, 3, 4, 5, 6, 8, 9]:
-            header_kadry.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        header_kadry.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
 
     def _populate_months(self):
         now = datetime.datetime.now()
@@ -441,6 +317,11 @@ class MonthlyViewPage(QWidget):
     def _load_initial_data(self):
         self._load_employee_filter()
         self._reload_rows()
+
+    def _setup_timer(self):
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_running_timer)
+        self._timer.start(1000)
 
     def _load_employee_filter(self):
         self.employee_combo.clear()
@@ -470,182 +351,81 @@ class MonthlyViewPage(QWidget):
         emp_id = self._current_employee_id()
         status = self._current_status_filter()
 
+        # full reload only on explicit refresh or filter change
         self._rows = self.logic.get_monthly_rows(month, emp_id, status)
         self._render_tables()
 
     def _render_tables(self):
-        self._render_table_ks()
-        self._render_table_kadry()
+        rows_prepared: List[Dict[str, Any]] = []
+        for r in self._rows:
+            rr = dict(r)
+            sekundy_ks = rr.get("sekundy_ksiegowosc", 0)
+            sekundy_kadry = rr.get("sekundy_kadry", 0)
+            rr["czas_ks_str"] = self.logic.format_seconds(sekundy_ks)
+            rr["czas_kadry_str"] = self.logic.format_seconds(sekundy_kadry)
+            rr.setdefault("uop", 0)
+            rr.setdefault("uz", 0)
+            rr.setdefault("uod", 0)
+            rows_prepared.append(rr)
 
-    def _row_background_color(self, status: str, etap: str) -> str:
-        if status == "Zawieszone":
-            return "#dddddd"
-        if status == "Archiwalne":
-            return "rgba(200, 200, 200, 120)"
-        if etap == "W trakcie":
-            return "#fff8c4"
-        if etap == "Zakończone":
-            return "#d9ffd9"
-        return "#ffffff"
+        # set_rows resets model once per reload (explicit)
+        self.model_ks.set_rows(rows_prepared)
+        self.model_kadry.set_rows(rows_prepared)
 
-    def _apply_row_style(self, table: QTableWidget, row_idx: int, status: str, etap: str):
-        color = self._row_background_color(status, etap)
-        for col in range(table.columnCount()):
-            item = table.item(row_idx, col)
-            if item:
-                item.setBackground(Qt.GlobalColor.white)
-        table.setRowHeight(row_idx, 32)
-        table.setStyleSheet("QTableWidget::item:selected { background-color: #cde4ff; }")
+    def _update_running_timer(self):
+        now = datetime.datetime.now()
 
-    def _render_table_ks(self):
-        self.table_ks.setRowCount(0)
-        self.logic.status_widgets.clear()
+        # update only the single cell for active księgowość timer
+        if self.logic.aktywna_firma_stoper_ks and self.logic.czas_start_ks:
+            fid = self.logic.aktywna_firma_stoper_ks
+            delta = int((now - self.logic.czas_start_ks).total_seconds())
+            for row_idx in range(self.model_ks.rowCount()):
+                row = self.model_ks.get_row(row_idx)
+                if row and row.get("id") == fid:
+                    row["czas_ks_str"] = TimerUtils.format_seconds(delta)
+                    idx = self.model_ks.index(row_idx, 3)
+                    self.model_ks.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
+                    break
 
-        for row_idx, r in enumerate(self._rows):
-            self.table_ks.insertRow(row_idx)
+        # update only the single cell for active kadry timer
+        if self.logic.aktywna_firma_stoper_kadry and self.logic.czas_start_kadry:
+            fid = self.logic.aktywna_firma_stoper_kadry
+            delta = int((now - self.logic.czas_start_kadry).total_seconds())
+            for row_idx in range(self.model_kadry.rowCount()):
+                row = self.model_kadry.get_row(row_idx)
+                if row and row.get("id") == fid:
+                    row["czas_kadry_str"] = TimerUtils.format_seconds(delta)
+                    idx = self.model_kadry.index(row_idx, 5)
+                    self.model_kadry.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
+                    break
 
-            firma_id = r["id"]
-            nazwa = r.get("nazwa", "")
-            etap = r.get("etap", "Brak")
-            ilosc_dok = r.get("ilosc_dok", 0)
-            sekundy_ks = r.get("sekundy_ksiegowosc", 0)
-            note_snippet = r.get("note_snippet", "")
-            status = r.get("status", "Aktywne")
+    def handle_button_click(self, index: QModelIndex, role: str):
+        print("DEBUG: handle_button_click", role, index.row())
+        row = index.model().get_row(index.row())
+        if not row:
+            return
+        firma_id = row["id"]
 
-            item_firma = QTableWidgetItem(nazwa)
-            item_firma.setData(Qt.ItemDataRole.UserRole, firma_id)
-            item_firma.setToolTip(f"Firma: {nazwa}\nStatus: {status}\nEtap: {etap}")
-            self.table_ks.setItem(row_idx, 0, item_firma)
+        if role == "stoper_ks":
+            self._on_toggle_stoper_ks(firma_id)
+        elif role == "stoper_kadry":
+            self._on_toggle_stoper_kadry(firma_id)
+        elif role in ("extra_ks", "extra_kadry"):
+            self._on_extra_service(firma_id)
+        elif role in ("edit_ks", "edit_kadry"):
+            self._on_edit_company(firma_id)
+        elif role == "more_ks":
+            self._on_more_menu(firma_id)
 
-            etap_combo = QComboBox()
-            etap_combo.addItems(COMPANY_STAGE_OPTIONS)
-            etap_combo.setCurrentText(etap)
-            etap_combo.setToolTip("Etap pracy nad firmą w danym miesiącu.")
-            etap_combo.currentTextChanged.connect(lambda _t, fid=firma_id: self._on_etap_changed(fid))
-            self.table_ks.setCellWidget(row_idx, 1, etap_combo)
-
-            docs_edit = QLineEdit(str(ilosc_dok))
-            docs_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            docs_edit.setValidator(QIntValidator(0, 9999, docs_edit))
-            docs_edit.setToolTip("Ilość dokumentów księgowych w miesiącu.")
-            docs_edit.textChanged.connect(lambda _t, fid=firma_id: self._on_docs_changed(fid))
-            self.table_ks.setCellWidget(row_idx, 2, docs_edit)
-
-            czas_str = self.logic.format_seconds(sekundy_ks)
-            item_czas = QTableWidgetItem(czas_str)
-            item_czas.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item_czas.setToolTip(f"Czas pracy księgowości: {czas_str}")
-            self.table_ks.setItem(row_idx, 3, item_czas)
-
-            btn_stoper = QPushButton("▶")
-            btn_stoper.setMaximumWidth(40)
-            btn_stoper.setToolTip("Stoper księgowości (start/stop).")
-            btn_stoper.clicked.connect(lambda _checked, fid=firma_id: self._on_toggle_stoper_ks(fid))
-            self.table_ks.setCellWidget(row_idx, 4, btn_stoper)
-
-            note_widget = HoverScrollTextEdit()
-            note_widget.set_text(note_snippet)
-            note_widget.setToolTip("Podwójne kliknięcie: pełne okno notatek.")
-            note_widget.mouseDoubleClickEvent = lambda event, fid=firma_id: self._open_notes(fid)
-            self.table_ks.setCellWidget(row_idx, 5, note_widget)
-
-            btn_extra = QPushButton("➕")
-            btn_extra.setMaximumWidth(40)
-            btn_extra.setToolTip("Dodaj usługę dodatkową.")
-            btn_extra.clicked.connect(lambda _checked, fid=firma_id: self._on_extra_service(fid))
-            self.table_ks.setCellWidget(row_idx, 6, btn_extra)
-
-            btn_edit = QPushButton("✏️")
-            btn_edit.setToolTip("Edytuj dane firmy.")
-            btn_edit.clicked.connect(lambda _checked, fid=firma_id: self._on_edit_company(fid))
-            self.table_ks.setCellWidget(row_idx, 7, btn_edit)
-
-            btn_more = QPushButton("⋯")
-            btn_more.setMaximumWidth(40)
-            btn_more.setToolTip("Więcej opcji dla firmy.")
-            btn_more.clicked.connect(lambda _checked, fid=firma_id, btn=btn_more: self._on_more_menu(fid, btn))
-            self.table_ks.setCellWidget(row_idx, 8, btn_more)
-
-            self.logic.status_widgets[firma_id] = (docs_edit, etap_combo)
-
-            self._apply_row_style(self.table_ks, row_idx, status, etap)
-
-    def _render_table_kadry(self):
-        self.table_kadry.setRowCount(0)
-
-        for row_idx, r in enumerate(self._rows):
-            self.table_kadry.insertRow(row_idx)
-
-            firma_id = r["id"]
-            nazwa = r.get("nazwa", "")
-            etap = r.get("etap", "Brak")
-            sekundy_kadry = r.get("sekundy_kadry", 0)
-            note_snippet = r.get("note_snippet", "")
-            status = r.get("status", "Aktywne")
-
-            item_firma = QTableWidgetItem(nazwa)
-            item_firma.setData(Qt.ItemDataRole.UserRole, firma_id)
-            item_firma.setToolTip(f"Firma: {nazwa}\nStatus: {status}\nEtap: {etap}")
-            self.table_kadry.setItem(row_idx, 0, item_firma)
-
-            etap_combo = QComboBox()
-            etap_combo.addItems(COMPANY_STAGE_OPTIONS)
-            etap_combo.setCurrentText(etap)
-            etap_combo.setToolTip("Etap pracy kadr w danym miesiącu.")
-            etap_combo.currentTextChanged.connect(lambda _t, fid=firma_id: self._on_etap_changed(fid))
-            self.table_kadry.setCellWidget(row_idx, 1, etap_combo)
-
-            uop_edit = QLineEdit("0")
-            uz_edit = QLineEdit("0")
-            uod_edit = QLineEdit("0")
-            for label, w, col in [
-                ("UoP", uop_edit, 2),
-                ("UZ", uz_edit, 3),
-                ("UoD", uod_edit, 4),
-            ]:
-                w.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                w.setValidator(QIntValidator(0, 9999, w))
-                w.setToolTip(f"Liczba umów {label} w miesiącu.")
-                w.textChanged.connect(lambda _t, fid=firma_id: self._on_kadry_changed(fid))
-                self.table_kadry.setCellWidget(row_idx, col, w)
-
-            czas_str = self.logic.format_seconds(sekundy_kadry)
-            item_czas = QTableWidgetItem(czas_str)
-            item_czas.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item_czas.setToolTip(f"Czas pracy kadr: {czas_str}")
-            self.table_kadry.setItem(row_idx, 5, item_czas)
-
-            btn_stoper = QPushButton("▶")
-            btn_stoper.setMaximumWidth(40)
-            btn_stoper.setToolTip("Stoper kadr (start/stop).")
-            btn_stoper.clicked.connect(lambda _checked, fid=firma_id: self._on_toggle_stoper_kadry(fid))
-            self.table_kadry.setCellWidget(row_idx, 6, btn_stoper)
-
-            note_widget = HoverScrollTextEdit()
-            note_widget.set_text(note_snippet)
-            note_widget.setToolTip("Podwójne kliknięcie: pełne okno notatek.")
-            note_widget.mouseDoubleClickEvent = lambda event, fid=firma_id: self._open_notes(fid)
-            self.table_kadry.setCellWidget(row_idx, 7, note_widget)
-
-            btn_extra = QPushButton("➕")
-            btn_extra.setMaximumWidth(40)
-            btn_extra.setToolTip("Dodaj usługę dodatkową.")
-            btn_extra.clicked.connect(lambda _checked, fid=firma_id: self._on_extra_service(fid))
-            self.table_kadry.setCellWidget(row_idx, 8, btn_extra)
-
-            btn_edit = QPushButton("✏️")
-            btn_edit.setToolTip("Edytuj dane firmy.")
-            btn_edit.clicked.connect(lambda _checked, fid=firma_id: self._on_edit_company(fid))
-            self.table_kadry.setCellWidget(row_idx, 9, btn_edit)
-
-            self._apply_row_style(self.table_kadry, row_idx, status, etap)
+    def handle_notes_dblclick(self, index: QModelIndex):
+        row = index.model().get_row(index.row())
+        if not row:
+            return
+        firma_id = row["id"]
+        self._open_notes(firma_id)
 
     def _open_notes(self, firma_id: int):
-        dlg = InlineNotesWindow(
-            firma_id,
-            parent=self,
-            pracownik_id=self.pracownik_id,
-        )
+        dlg = NotesWindow(firma_id, self.pracownik_id, parent=self)
         dlg.exec()
 
     def _on_etap_changed(self, firma_id: int):
@@ -659,6 +439,7 @@ class MonthlyViewPage(QWidget):
 
     def _on_toggle_stoper_ks(self, firma_id: int):
         if self.logic.aktywna_firma_stoper_ks == firma_id:
+            # stopping — persist and reload to reflect saved seconds
             self.logic.toggle_stoper(firma_id, "ksiegowosc", None)
             self._reload_rows()
             return
@@ -666,8 +447,8 @@ class MonthlyViewPage(QWidget):
         dlg = ActivitySelectionDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
+            # starting — do not reload; timer will update the single cell
             self.logic.toggle_stoper(firma_id, "ksiegowosc", payload)
-            self._reload_rows()
 
     def _on_toggle_stoper_kadry(self, firma_id: int):
         if self.logic.aktywna_firma_stoper_kadry == firma_id:
@@ -679,7 +460,6 @@ class MonthlyViewPage(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "kadry", payload)
-            self._reload_rows()
 
     def _on_extra_service(self, firma_id: int):
         dlg = InlineExtraServiceWindow(
@@ -693,7 +473,7 @@ class MonthlyViewPage(QWidget):
         self.logic.open_company_edit_window(firma_id)
         self._reload_rows()
 
-    def _on_more_menu(self, firma_id: int, button: QPushButton):
+    def _on_more_menu(self, firma_id: int):
         menu = QMenu(self)
 
         act_suspend = QAction("Oznacz jako zawieszoną", self)
@@ -709,8 +489,7 @@ class MonthlyViewPage(QWidget):
         act_archive.triggered.connect(lambda: self._on_move_archive(firma_id))
         act_activity.triggered.connect(lambda: self._on_show_activity(firma_id))
 
-        pos = button.mapToGlobal(button.rect().bottomLeft())
-        menu.exec(pos)
+        menu.exec(QCursor.pos())
 
     def _on_mark_suspended(self, firma_id: int):
         self.logic.mark_company_suspended_manual(firma_id)

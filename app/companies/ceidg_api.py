@@ -1,5 +1,10 @@
-import requests
-from app.config import CEIDG_API_KEY, CEIDG_BASE_URL
+import requests, os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CEIDG_API_KEY = os.getenv("CEIDG_API_KEY")
+CEIDG_BASE_URL = os.getenv("CEIDG_BASE_URL")
 
 
 def get_ceidg_firma_by_nip(nip: str):

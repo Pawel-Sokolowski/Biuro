@@ -1,7 +1,11 @@
 # app/chat/chat_model.py
 import sqlite3
 from typing import List, Dict, Any, Optional
-from app.config import DB_NAME
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
 
 
 def _get_conn():

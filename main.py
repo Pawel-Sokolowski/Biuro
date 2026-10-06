@@ -1,10 +1,19 @@
+from dotenv import load_dotenv
+load_dotenv()
+
+
 from PyQt6.QtWidgets import (QApplication, QDialog)
 
+
+import sys, os
+import traceback
+
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 from app.main_ui import LoginWindow
 from app.main_ui import OfficeManagerApp
 from app.db.schema import init_db
-import sys
-import traceback
 
 def excepthook(type, value, tb):
     print("=== PYQT EXCEPTION CAUGHT ===")

@@ -1,9 +1,12 @@
 # app/reports/reports_logic.py
 import sqlite3
 from typing import List, Dict, Any
-from app.config import DB_NAME
 from app.global_utils.calculator import oblicz_miesieczny_koszt
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
 
 # ============================================================
 # LISTA FIRM

@@ -2,7 +2,11 @@
 import sqlite3
 import bcrypt
 from pathlib import Path
-from app.config import DB_NAME
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
 
 
 def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):

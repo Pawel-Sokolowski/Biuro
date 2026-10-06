@@ -7,3 +7,4 @@ test_imap.py
 /ui/
 /tests
 /frontend
+.env

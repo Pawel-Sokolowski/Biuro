@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import datetime
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QModelIndex, QTimer
-from PyQt6.QtGui import QAction, QIntValidator, QCursor
+from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent
+from PyQt6.QtGui import QAction, QIntValidator, QCursor, QIcon, QColor, QPainter
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -23,26 +24,62 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QMessageBox,
     QCheckBox,
+    QStyledItemDelegate, QStyle,
 )
 
 from app.monthly_view.monthly_view_logic import MonthlyViewLogic
-from app.db.dao_notes import (
-    get_notes_for_company,
-    save_company_note,
-    update_company_note,
-    delete_company_note,
-)
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.utils.timer import TimerUtils
 from app.monthly_view.monthly_view_model import MonthlyViewModel
-from app.monthly_view.monthly_view_delegates import ButtonDelegate, ScrollableNotesDelegate
-
 from app.monthly_view.notes_window import NotesWindow
-from app.monthly_view.note_edit_dialog import NoteEditDialog
 
-COMPANY_STAGE_OPTIONS = ["Brak", "W trakcie", "Zakończone"]
 COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
+
+
+def icon_path(name: str) -> str:
+    return os.path.join(os.path.dirname(__file__), "..", "icons", name)
+
+
+class IconButtonDelegate(QStyledItemDelegate):
+    def __init__(self, parent, icon_name: str, role: str):
+        super().__init__(parent)
+        self.icon = QIcon(icon_path(icon_name))
+        self.role = role
+
+    def paint(self, painter, option, index):
+        painter.save()
+        rect = option.rect.adjusted(4, 4, -4, -4)
+
+        bg = QColor("#e6e6e6")
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = QColor("#d0d0d0")
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(bg)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 4, 4)
+
+        self.icon.paint(painter, rect, Qt.AlignmentFlag.AlignCenter)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        return False
+
+
+class ScrollableNotesDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        painter.save()
+        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        painter.drawText(
+            option.rect.adjusted(4, 4, -4, -4),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            text,
+        )
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        return False
 
 
 class HoverScrollTextEdit(QTextEdit):
@@ -75,7 +112,8 @@ class ActivitySelectionDialog(QDialog):
         self._load_extra_services()
 
         self.input_cena = QLineEdit()
-        self.input_cena.setReadOnly(True)
+        self.input_cena.setPlaceholderText("Cena netto")
+        self.input_cena.setEnabled(True)
 
         self.chk_fakturowac = QCheckBox("Fakturować?")
 
@@ -97,13 +135,29 @@ class ActivitySelectionDialog(QDialog):
         layout.addLayout(btns)
 
         self.cb_usluga.currentIndexChanged.connect(self._on_service_changed)
+        self.cb_typ.currentIndexChanged.connect(self._update_visibility)
+        self._update_visibility()
+
 
     def _load_extra_services(self):
         logic = GlobalSettingsLogic()
         rows = logic.get_extra_services()
         self.cb_usluga.clear()
         for r in rows:
-            self.cb_usluga.addItem(r.get("nazwa", ""), r.get("id"))
+            self.cb_usluga.addItem(r["nazwa"], r["id"])
+
+    def _update_visibility(self):
+        typ = self.cb_typ.currentText()
+        is_extra = (typ == "Czynności dodatkowe")
+
+        self.cb_usluga.setVisible(is_extra)
+        self.input_cena.setVisible(is_extra)
+        self.chk_fakturowac.setVisible(is_extra)
+
+        if not is_extra:
+            self.input_cena.clear()
+
+
 
     def _on_service_changed(self, idx: int):
         logic = GlobalSettingsLogic()
@@ -111,8 +165,12 @@ class ActivitySelectionDialog(QDialog):
         if idx < 0 or idx >= len(rows):
             self.input_cena.setText("")
             return
-        cena = float(rows[idx].get("cena_netto") or 0.0)
-        self.input_cena.setText(f"{cena:.2f}")
+        cena = rows[idx]["cena_netto"]
+        try:
+            cena = float(cena)
+        except:
+            cena = 0.0
+        self.input_cena.setText(str(cena))
 
     def get_payload(self) -> Dict[str, Any]:
         typ_txt = self.cb_typ.currentText()
@@ -152,11 +210,18 @@ class InlineExtraServiceWindow(QDialog):
         self.input_ilosc = QLineEdit("1")
         self.input_ilosc.setValidator(QIntValidator(0, 9999, self))
 
+        self.input_cena = QLineEdit()
+        self.input_cena.setPlaceholderText("Cena netto")
+        self.input_cena.setEnabled(True)
+
+        self._update_price()
+
         self.chk_fakturowac = QCheckBox("Fakturować?")
 
         form.addRow("Usługa:", self.cb_usluga)
         form.addRow("Jednostka:", self.cb_jednostka)
         form.addRow("Ilość:", self.input_ilosc)
+        form.addRow("Cena netto:", self.input_cena)
         form.addRow(self.chk_fakturowac)
 
         layout.addLayout(form)
@@ -172,12 +237,27 @@ class InlineExtraServiceWindow(QDialog):
         self.btn_add.clicked.connect(self._on_add)
         self.btn_cancel.clicked.connect(self.reject)
 
+        self.cb_usluga.currentIndexChanged.connect(self._update_price)
+
+    def _update_price(self):
+        logic = GlobalSettingsLogic()
+        rows = logic.get_extra_services()
+        idx = self.cb_usluga.currentIndex()
+        if idx < 0 or idx >= len(rows):
+            self.input_cena.setText("")
+            return
+        cena = rows[idx]["cena_netto"]
+        try:
+            cena = float(cena)
+        except:
+            cena = 0.0
+        self.input_cena.setText(str(cena))
     def _load_extra_services(self):
         logic = GlobalSettingsLogic()
         rows = logic.get_extra_services()
         self.cb_usluga.clear()
         for r in rows:
-            self.cb_usluga.addItem(r.get("nazwa", ""), r.get("id"))
+            self.cb_usluga.addItem(r["nazwa"], r["id"])
 
     def _on_add(self):
         usluga_id = self.cb_usluga.currentData()
@@ -193,7 +273,12 @@ class InlineExtraServiceWindow(QDialog):
             return
 
         if self.chk_fakturowac.isChecked():
-            add_invoice_item_for_service(self.firma_id, usluga_id, ilosc, self.miesiac, None)
+            try:
+                cena = float(self.input_cena.text().replace(",", "."))
+            except:
+                cena = None
+
+            add_invoice_item_for_service(self.firma_id, usluga_id, ilosc, self.miesiac, cena)
             QMessageBox.information(self, "OK", "Dodano pozycję do faktury.")
         self.accept()
 
@@ -262,17 +347,19 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
 
-        # delegaty – przyciski i notatki (ScrollableNotesDelegate dla kolumny notatek)
-        self.table_ks.setItemDelegateForColumn(4, ButtonDelegate(self.table_ks, "▶", "stoper_ks"))
-        self.table_ks.setItemDelegateForColumn(6, ButtonDelegate(self.table_ks, "➕", "extra_ks"))
-        self.table_ks.setItemDelegateForColumn(7, ButtonDelegate(self.table_ks, "✏️", "edit_ks"))
-        self.table_ks.setItemDelegateForColumn(8, ButtonDelegate(self.table_ks, "⋯", "more_ks"))
+        self.table_ks.setItemDelegateForColumn(4, IconButtonDelegate(self.table_ks, "play.png", "stoper_ks"))
+        self.table_ks.setItemDelegateForColumn(6, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
+        self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
+        self.table_ks.setItemDelegateForColumn(8, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
         self.table_ks.setItemDelegateForColumn(5, ScrollableNotesDelegate(self.table_ks))
 
-        self.table_kadry.setItemDelegateForColumn(6, ButtonDelegate(self.table_kadry, "▶", "stoper_kadry"))
-        self.table_kadry.setItemDelegateForColumn(8, ButtonDelegate(self.table_kadry, "➕", "extra_kadry"))
-        self.table_kadry.setItemDelegateForColumn(9, ButtonDelegate(self.table_kadry, "✏️", "edit_kadry"))
+        self.table_kadry.setItemDelegateForColumn(6, IconButtonDelegate(self.table_kadry, "play.png", "stoper_kadry"))
+        self.table_kadry.setItemDelegateForColumn(8, IconButtonDelegate(self.table_kadry, "add.png", "extra_kadry"))
+        self.table_kadry.setItemDelegateForColumn(9, IconButtonDelegate(self.table_kadry, "edit.png", "edit_kadry"))
         self.table_kadry.setItemDelegateForColumn(7, ScrollableNotesDelegate(self.table_kadry))
+
+        self.table_ks.viewport().installEventFilter(self)
+        self.table_kadry.viewport().installEventFilter(self)
 
         self._setup_column_widths()
 
@@ -280,6 +367,22 @@ class MonthlyViewPage(QWidget):
         self.employee_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.status_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.btn_refresh.clicked.connect(self._reload_rows)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonRelease:
+            if obj in (self.table_ks.viewport(), self.table_kadry.viewport()):
+                table = self.table_ks if obj is self.table_ks.viewport() else self.table_kadry
+                index = table.indexAt(event.pos())
+                if not index.isValid():
+                    return super().eventFilter(obj, event)
+
+                delegate = table.itemDelegateForColumn(index.column())
+                if not hasattr(delegate, "role"):
+                    return super().eventFilter(obj, event)
+
+                self.handle_button_click(index, delegate.role)
+                return True
+        return super().eventFilter(obj, event)
 
     def _setup_column_widths(self):
         header_ks = self.table_ks.horizontalHeader()
@@ -350,8 +453,6 @@ class MonthlyViewPage(QWidget):
         month = self._current_month()
         emp_id = self._current_employee_id()
         status = self._current_status_filter()
-
-        # full reload only on explicit refresh or filter change
         self._rows = self.logic.get_monthly_rows(month, emp_id, status)
         self._render_tables()
 
@@ -368,14 +469,12 @@ class MonthlyViewPage(QWidget):
             rr.setdefault("uod", 0)
             rows_prepared.append(rr)
 
-        # set_rows resets model once per reload (explicit)
         self.model_ks.set_rows(rows_prepared)
         self.model_kadry.set_rows(rows_prepared)
 
     def _update_running_timer(self):
         now = datetime.datetime.now()
 
-        # update only the single cell for active księgowość timer
         if self.logic.aktywna_firma_stoper_ks and self.logic.czas_start_ks:
             fid = self.logic.aktywna_firma_stoper_ks
             delta = int((now - self.logic.czas_start_ks).total_seconds())
@@ -387,7 +486,6 @@ class MonthlyViewPage(QWidget):
                     self.model_ks.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
                     break
 
-        # update only the single cell for active kadry timer
         if self.logic.aktywna_firma_stoper_kadry and self.logic.czas_start_kadry:
             fid = self.logic.aktywna_firma_stoper_kadry
             delta = int((now - self.logic.czas_start_kadry).total_seconds())
@@ -400,7 +498,6 @@ class MonthlyViewPage(QWidget):
                     break
 
     def handle_button_click(self, index: QModelIndex, role: str):
-        print("DEBUG: handle_button_click", role, index.row())
         row = index.model().get_row(index.row())
         if not row:
             return
@@ -439,7 +536,6 @@ class MonthlyViewPage(QWidget):
 
     def _on_toggle_stoper_ks(self, firma_id: int):
         if self.logic.aktywna_firma_stoper_ks == firma_id:
-            # stopping — persist and reload to reflect saved seconds
             self.logic.toggle_stoper(firma_id, "ksiegowosc", None)
             self._reload_rows()
             return
@@ -447,7 +543,6 @@ class MonthlyViewPage(QWidget):
         dlg = ActivitySelectionDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
-            # starting — do not reload; timer will update the single cell
             self.logic.toggle_stoper(firma_id, "ksiegowosc", payload)
 
     def _on_toggle_stoper_kadry(self, firma_id: int):
@@ -470,7 +565,16 @@ class MonthlyViewPage(QWidget):
         dlg.exec()
 
     def _on_edit_company(self, firma_id: int):
+        # zatrzymaj timer aby UI nie odświeżał się co sekundę
+        if hasattr(self, "_timer"):
+            self._timer.stop()
+
         self.logic.open_company_edit_window(firma_id)
+
+        # po zamknięciu okna edycji wznów timer
+        if hasattr(self, "_timer"):
+            self._timer.start(1000)
+
         self._reload_rows()
 
     def _on_more_menu(self, firma_id: int):

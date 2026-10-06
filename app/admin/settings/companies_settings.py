@@ -10,38 +10,31 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.companies.company_form import CompanyForm
-from app.utils.importers import import_companies_from_excel_file, import_companies_fast_from_excel_file
+from app.utils.importers import import_companies_from_excel_file_payloads
 
 
+# ============================================================
+# WORKER — IMPORT PAYLOADÓW (NIE zapisuje do DB)
+# ============================================================
 class ImportWorker(QThread):
-    """
-    Wątek wykonujący import pliku, żeby nie blokować GUI.
-    Emituje sygnał finished_with_result po zakończeniu.
-    """
-    finished_with_result = pyqtSignal(dict, name="finished_with_result")
+    finished_with_result = pyqtSignal(object, name="finished_with_result")
     error = pyqtSignal(str, name="error")
-    progress = pyqtSignal(int, name="progress")
 
-    def __init__(self, filepath: str, db_path: str = None, use_fast: bool = True):
+    def __init__(self, filepath: str):
         super().__init__()
         self.filepath = filepath
-        self.db_path = db_path
-        self.use_fast = use_fast
 
     def run(self):
         try:
-            if self.db_path:
-                res = import_companies_from_excel_file(self.filepath, db_path=self.db_path)
-            else:
-                res = import_companies_from_excel_file(self.filepath)
-            # Upewnij się, że res jest dict
-            if not isinstance(res, dict):
-                res = {"created": 0, "updated": 0, "warnings": [f"Nieoczekiwany wynik importera: {res}"]}
-            self.finished_with_result.emit(res)
+            payloads, warnings = import_companies_from_excel_file_payloads(self.filepath)
+            self.finished_with_result.emit((payloads, warnings))
         except Exception as e:
             self.error.emit(str(e))
 
 
+# ============================================================
+# COMPANIES SETTINGS — PANEL ADMINA
+# ============================================================
 class CompaniesSettings(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,12 +46,15 @@ class CompaniesSettings(QWidget):
         title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(title)
 
+        # Tabela firm
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["ID", "Nazwa", "NIP", "Miasto"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
 
+        # Przyciski
         btn_row = QHBoxLayout()
+
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self._refresh)
         btn_row.addWidget(btn_refresh)
@@ -75,8 +71,7 @@ class CompaniesSettings(QWidget):
         btn_delete.clicked.connect(self._delete_selected)
         btn_row.addWidget(btn_delete)
 
-        # Przyciski importu
-        btn_import = QPushButton("Importuj z pliku")
+        btn_import = QPushButton("Importuj z pliku (wizard)")
         btn_import.clicked.connect(self._import_from_file)
         btn_row.addWidget(btn_import)
 
@@ -85,10 +80,12 @@ class CompaniesSettings(QWidget):
 
         self._refresh()
 
-        # Przechowujemy referencję do workerów, żeby nie były GC'owane
         self._current_worker = None
         self._progress_dialog = None
 
+    # ============================================================
+    # TABELA — ODSWIEŻANIE
+    # ============================================================
     def _refresh(self):
         rows = self.logic.get_companies()
         self.table.setRowCount(0)
@@ -115,6 +112,9 @@ class CompaniesSettings(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(nip))
             self.table.setItem(row, 3, QTableWidgetItem(miasto))
 
+    # ============================================================
+    # POBIERANIE ID ZAZNACZONEJ FIRMY
+    # ============================================================
     def _get_selected_id(self):
         row = self.table.currentRow()
         if row < 0:
@@ -127,20 +127,23 @@ class CompaniesSettings(QWidget):
         except Exception:
             return None
 
+    # ============================================================
+    # DODAWANIE FIRMY
+    # ============================================================
     def _add_company(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Dodaj firmę")
         lay = QVBoxLayoutDialog(dlg)
-        # Uwaga: CompanyForm może oczekiwać parent jako pierwszy argument — używamy pozycyjnego dlg
-        form = CompanyForm(dlg, pracownik_id=0, company_data=None)
+
+        form = CompanyForm(None, dlg)
         lay.addWidget(form)
 
-        def on_saved():
-            self._refresh()
-        dlg.on_saved = on_saved
-
         dlg.exec()
+        self._refresh()
 
+    # ============================================================
+    # EDYCJA FIRMY
+    # ============================================================
     def _edit_selected(self):
         fid = self._get_selected_id()
         if fid is None:
@@ -155,16 +158,16 @@ class CompaniesSettings(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("Edytuj firmę")
         lay = QVBoxLayoutDialog(dlg)
-        # Uwaga: CompanyForm może oczekiwać parent jako pierwszy argument — używamy pozycyjnego dlg
-        form = CompanyForm(dlg, pracownik_id=0, company_data=firma)
+
+        form = CompanyForm(firma["id"], dlg)
         lay.addWidget(form)
 
-        def on_saved():
-            self._refresh()
-        dlg.on_saved = on_saved
-
         dlg.exec()
+        self._refresh()
 
+    # ============================================================
+    # USUWANIE FIRMY
+    # ============================================================
     def _delete_selected(self):
         fid = self._get_selected_id()
         if fid is None:
@@ -187,6 +190,9 @@ class CompaniesSettings(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć firmy: {e}")
 
+    # ============================================================
+    # IMPORT — URUCHOMIENIE WORKERA
+    # ============================================================
     def _import_from_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -197,73 +203,41 @@ class CompaniesSettings(QWidget):
         if not path:
             return
 
-        # Pokaż dialog postępu z zakresem (0..100)
-        self._progress_dialog = QProgressDialog("Importuję plik...", "", 0, 100, self)
-        self._progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self._progress_dialog.setCancelButton(None)
-        self._progress_dialog.setMinimumDuration(200)
-        self._progress_dialog.setValue(0)
-        self._progress_dialog.show()
-
-        # Uruchom worker w tle (domyślnie szybki importer)
-        worker = ImportWorker(path, use_fast=True)
+        worker = ImportWorker(path)
         worker.finished_with_result.connect(self._on_import_finished)
         worker.error.connect(self._on_import_error)
-        worker.finished.connect(self._cleanup_worker)
-        worker.progress.connect(self._on_import_progress)
         worker.start()
 
-        # Trzymaj referencję
         self._current_worker = worker
 
-    def _cleanup_worker(self):
-        # zamknij progress i usuń referencję
-        if self._progress_dialog:
-            try:
-                self._progress_dialog.close()
-            except Exception:
-                pass
-            self._progress_dialog = None
-        self._current_worker = None
+    def _on_import_error(self, msg):
+        QMessageBox.critical(self, "Błąd importu", msg)
 
-    def _on_import_progress(self, value: int):
-        if self._progress_dialog:
-            try:
-                self._progress_dialog.setValue(max(0, min(100, value)))
-            except Exception:
-                pass
-    def _on_import_error(self, err_msg: str):
-        self._cleanup_worker()
-        QMessageBox.critical(self, "Błąd importu", f"Wystąpił błąd podczas importu:\n{err_msg}")
+    # ============================================================
+    # IMPORT — ZAKOŃCZENIE
+    # ============================================================
+    def _on_import_finished(self, result):
+        payloads, warnings = result
 
-    def _on_import_finished(self, result: dict):
-        self._cleanup_worker()
-
-        created = result.get("created", 0)
-        updated = result.get("updated", 0)
-        warnings = result.get("warnings", []) or []
-
-        msg_lines = [f"Utworzono: {created}", f"Zaktualizowano: {updated}"]
         if warnings:
-            msg_lines.append("")
-            msg_lines.append("Ostrzeżenia:")
-            msg_lines.extend(warnings)
+            QMessageBox.information(self, "Ostrzeżenia importu", "\n".join(warnings))
 
-        QMessageBox.information(self, "Wynik importu", "\n".join(msg_lines))
+        self._run_import_wizard(payloads)
+    # ============================================================
+    # WIZARD — URUCHOMIENIE
+    # ============================================================
+    def _run_import_wizard(self, payloads):
+        from app.utils.import_wizard import ImportWizard
 
-        # Wyciągnij nierozpoznanych pracowników i zaproponuj dodanie
-        unresolved = self._extract_unresolved_from_warnings(warnings)
-        if unresolved:
-            self._handle_unresolved_employees(unresolved)
+        wizard = ImportWizard(payloads, self)
+        wizard.exec()
 
         self._refresh()
 
+    # ============================================================
+    # OSTRZEŻENIA — WYCIĄGANIE NIERZOPZNANYCH PRACOWNIKÓW
+    # ============================================================
     def _extract_unresolved_from_warnings(self, warnings):
-        """
-        Szuka w ostrzeżeniach fragmentów typu:
-        "Wiersz X: nie znaleziono pracowników A, B, C."
-        i zwraca listę unikalnych nazw pracowników.
-        """
         unresolved = []
         for w in warnings:
             try:
@@ -281,12 +255,10 @@ class CompaniesSettings(QWidget):
                 continue
         return unresolved
 
+    # ============================================================
+    # DIALOG DODAWANIA NIEROZPOZNANYCH PRACOWNIKÓW
+    # ============================================================
     def _handle_unresolved_employees(self, unresolved):
-        """
-        Pokazuje dialog z listą nierozpoznanych pracowników i opcją dodania ich.
-        Próbuje wywołać self.logic.add_employee(name) dla wybranych pozycji.
-        Jeśli metoda nie istnieje, dialog pozwala na ręczne wprowadzenie.
-        """
         dlg = QDialog(self)
         dlg.setWindowTitle("Nierozpoznani pracownicy")
         lay = QVBoxLayoutDialog(dlg)
@@ -327,7 +299,6 @@ class CompaniesSettings(QWidget):
                     except Exception as e:
                         failed.append(f"{name} ({e})")
             else:
-                # Brak metody - pokaż prostą formę dodawania ręcznego
                 self._manual_add_employees(selected)
                 dlg.accept()
                 return
@@ -345,11 +316,10 @@ class CompaniesSettings(QWidget):
 
         dlg.exec()
 
+    # ============================================================
+    # RĘCZNE DODAWANIE PRACOWNIKÓw
+    # ============================================================
     def _manual_add_employees(self, names):
-        """
-        Prosty dialog do ręcznego dodania pracownika, jeśli logic.add_employee nie istnieje.
-        Pozwala wprowadzić imię/nazwisko i opcjonalnie email dla pierwszego z listy.
-        """
         dlg = QDialog(self)
         dlg.setWindowTitle("Ręczne dodawanie pracowników")
         lay = QVBoxLayoutDialog(dlg)

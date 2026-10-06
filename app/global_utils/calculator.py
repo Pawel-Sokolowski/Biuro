@@ -1,7 +1,13 @@
 # app/globals/calculator.py
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
+
 import sqlite3
 from typing import Dict, Any
-from app.config import DB_NAME
+
 
 
 def _get_company_basic(firma_id: int) -> Dict[str, Any]:

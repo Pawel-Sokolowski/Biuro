@@ -14,7 +14,7 @@ Globalne stałe używane w całej aplikacji:
 # ============================================================
 
 FORMA_DZIALALNOSCI = [
-    "JD",
+    "JDG",
     "Spółka z o.o.",
     "Spółka cywilna",
     "Spółka jawna",
@@ -32,11 +32,11 @@ FORMA_OPODATKOWANIA = [
     "Ryczałt",
     "KPiR",
     "Księgi rachunkowe",
+    "Karta podatkowa",
 ]
 
 # ============================================================
 #  STATUS PODATKOWY
-# ============================================================
 
 STATUS_PODATKOWY = [
     "Zwykły podmiot",
@@ -49,15 +49,7 @@ STATUS_PODATKOWY = [
 # ============================================================
 
 URZEDY_SKARBOWE = [
-    "Brak",
-    "US Szczecin",
-    "US Warszawa",
-    "US Poznań",
-    "US Kraków",
-    "US Gdańsk",
-    "US Wrocław",
-    "US Białystok",
-    "US Rzeszów",
+
 ]
 
 # ============================================================

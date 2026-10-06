@@ -4,10 +4,15 @@ from PyQt6.QtWidgets import (
     QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox,
     QScrollArea, QSizePolicy, QFrame
 )
+
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QDateTime
 from typing import Optional
-from app.config import DB_NAME
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
 from app.chat.chat_model import get_conversations, get_messages, add_message, create_conversation
 
 import sqlite3

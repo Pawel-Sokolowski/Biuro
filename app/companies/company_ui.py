@@ -52,9 +52,6 @@ class CompanyUI(QWidget):
 
         layout.addLayout(filter_layout)
 
-        # -------------------------
-        # TABELA
-        # -------------------------
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([
             "ID", "Nazwa", "NIP", "Miasto", "Status",

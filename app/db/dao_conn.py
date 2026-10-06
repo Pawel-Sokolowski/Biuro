@@ -1,11 +1,16 @@
 # app/db/dao_conn.py
+import os
 import sqlite3
-from app.config import DB_NAME
+from dotenv import load_dotenv
+
+# Load .env once when module is imported
+load_dotenv()
+
+DB_NAME = os.getenv("DB_NAME")
 
 def get_conn():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
-    # enable foreign keys
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
     except Exception:

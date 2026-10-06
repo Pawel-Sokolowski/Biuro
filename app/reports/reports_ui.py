@@ -1,4 +1,10 @@
 # app/reports/reports_ui.py
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
+
 from app.utils.ui_imports import *
 from PyQt6.QtCharts import (
     QChart, QChartView,

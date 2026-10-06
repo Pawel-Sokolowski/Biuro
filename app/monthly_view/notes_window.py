@@ -1,10 +1,9 @@
-# app/monthly_view/notes_window.py
-
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QMessageBox
 )
+from PyQt6.QtCore import Qt
 from app.db.dao_notes import (
     get_notes_for_company,
     save_company_note,
@@ -63,9 +62,11 @@ class NotesWindow(QDialog):
         for n in notes:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(n["autor_nazwa"]))
-            self.table.setItem(row, 1, QTableWidgetItem(n["data_utworzenia"]))
-            self.table.setItem(row, 2, QTableWidgetItem(n["tresc"][:200]))
+            self.table.setItem(row, 0, QTableWidgetItem(n.get("autor_nazwa", "")))
+            self.table.setItem(row, 1, QTableWidgetItem(n.get("data_utworzenia", "")))
+            item = QTableWidgetItem(n.get("tresc", "")[:200])
+            item.setToolTip(n.get("tresc", ""))
+            self.table.setItem(row, 2, item)
 
     def _add_note(self):
         dlg = NoteEditDialog(self.firma_id, self.pracownik_id, parent=self)
@@ -78,6 +79,8 @@ class NotesWindow(QDialog):
             return
 
         notes = get_notes_for_company(self.firma_id)
+        if row >= len(notes):
+            return
         note = notes[row]
 
         dlg = NoteEditDialog(self.firma_id, self.pracownik_id, note, parent=self)
@@ -90,6 +93,8 @@ class NotesWindow(QDialog):
             return
 
         notes = get_notes_for_company(self.firma_id)
+        if row >= len(notes):
+            return
         note = notes[row]
 
         confirm = QMessageBox.question(

@@ -11,34 +11,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from email.message import Message
 from app.db.dao_conn import get_conn
 from app.config import EMAIL_LOCAL_LIMIT
+from app.email.email_helpers import (
+    normalize_folder_name, denormalize_folder_name, safe_header,
+    extract_html, get_attachments,
+)
 
 logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"[^@]+@[^@]+\.[^@]+")
 
 # mapowania folderów (lokalne <-> serwer)
-SERVER_TO_LOCAL = {
-    "INBOX": "Odebrane",
-    "INBOX.Sent": "Wysłane",
-    "INBOX.spam": "Spam",
-    "INBOX.Spam": "Spam",
-    "INBOX.Junk": "Spam",
-    "INBOX.Drafts": "Szkice",
-    "INBOX.Archive": "Archiwum",
-}
-LOCAL_TO_SERVER = {
-    "Odebrane": "INBOX",
-    "Wysłane": "INBOX.Sent",
-    "Spam": "INBOX.spam",
-    "Szkice": "INBOX.Drafts",
-    "Archiwum": "INBOX.Archive",
-}
-
-def normalize_folder_name(server_name: str) -> str:
-    return SERVER_TO_LOCAL.get(server_name, server_name)
-
-def denormalize_folder_name(local_name: str) -> str:
-    return LOCAL_TO_SERVER.get(local_name, local_name)
-
 # helper do bezpiecznego dekodowania nagłówków
 def safe_header(value: str) -> str:
     if not value:
@@ -584,45 +565,6 @@ def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message
             return None
     finally:
         conn.close()
-
-def extract_html(msg: email.message.Message) -> Optional[str]:
-    if msg is None:
-        return None
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/html":
-                try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="replace")
-                except Exception:
-                    try:
-                        return part.get_payload(decode=True).decode("utf-8", errors="replace")
-                    except Exception:
-                        return None
-    else:
-        if msg.get_content_type() == "text/html":
-            try:
-                return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="replace")
-            except Exception:
-                return None
-    return None
-
-def get_attachments(msg: email.message.Message) -> List[Dict[str, Any]]:
-    if msg is None:
-        return []
-    attachments: List[Dict[str, Any]] = []
-    idx = 0
-    for part in msg.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
-        cd = part.get("Content-Disposition")
-        if cd is None:
-            continue
-        filename = part.get_filename()
-        if not filename:
-            continue
-        attachments.append({"index": idx, "filename": safe_header(filename)})
-        idx += 1
-    return attachments
 
 def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optional[str]:
     msg = load_message(konto_id, folder, uid)

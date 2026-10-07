@@ -821,6 +821,23 @@ def init_db():
         );
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS import_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_type TEXT NOT NULL,
+            source_path TEXT,
+            created_count INTEGER NOT NULL DEFAULT 0,
+            updated_count INTEGER NOT NULL DEFAULT 0,
+            warning_count INTEGER NOT NULL DEFAULT 0,
+            user_id INTEGER,
+            started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            details TEXT,
+            FOREIGN KEY(user_id) REFERENCES pracownicy(id) ON DELETE SET NULL
+        );
+    """)
+
     # -------------------------
     # indexes (some already created above)
     # -------------------------
@@ -833,6 +850,11 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_dokumenty_firma_data ON dokumenty(firma_id, data_wyst);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_statusy_miesieczne_firma_miesiac ON statusy_miesieczne(firma_id, miesiac);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_czasomierze_firma_miesiac ON czasomierze(firma_id, miesiac);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_data ON audit_log(data DESC);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_import_history_started ON import_history(started_at DESC);")
 
     # -------------------------
     # initial data

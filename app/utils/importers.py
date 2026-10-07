@@ -13,6 +13,7 @@ from app.utils.parsing import (
     parse_date_value,
     resolve_employee_ids,
 )
+from app.db.dao_audit import record_import
 
 
 # ============================================================
@@ -648,7 +649,9 @@ def import_companies_from_excel_file(
                     pass
 
         conn.commit()
-        return {"created": created_count, "updated": updated_count, "warnings": warnings}
+        result = {"created": created_count, "updated": updated_count, "warnings": warnings}
+        record_import("firmy", filepath, result)
+        return result
     finally:
         conn.close()
 
@@ -706,7 +709,9 @@ def import_companies_fast_from_excel_file(
                 updated += 1
 
         conn.commit()
-        return {"created": created, "updated": updated, "warnings": warnings}
+        result = {"created": created, "updated": updated, "warnings": warnings}
+        record_import("firmy_fast", filepath, result)
+        return result
     finally:
         conn.close()
 

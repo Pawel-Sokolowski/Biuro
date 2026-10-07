@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
+from app.utils.months import month_bounds
 from app.db.dao_monthly import get_month_status, save_month_status
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_companies import get_company, save_company
@@ -51,6 +52,7 @@ class MonthlyViewLogic:
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
+        month_start, month_end = month_bounds(selected_month)
         cur.execute(
             """
             SELECT id, imie || ' ' || nazwisko AS label
@@ -86,12 +88,12 @@ class MonthlyViewLogic:
             LEFT JOIN (
                 SELECT firma_id, COUNT(*) AS ilosc_dok
                 FROM dokumenty
-                WHERE substr(data_wyst, 1, 7) = ?
+                WHERE data_wyst >= ? AND data_wyst < ?
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
             ORDER BY f.nazwa
         """,
-            (selected_month, selected_month),
+            (selected_month, month_start, month_end),
         )
 
         rows = [dict(r) for r in cur.fetchall()]

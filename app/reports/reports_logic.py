@@ -1,8 +1,9 @@
 # app/reports/reports_logic.py
 import sqlite3
 from typing import List, Dict, Any
-from app.global_utils.calculator import oblicz_miesieczny_koszt
+from app.services.calculator import oblicz_miesieczny_koszt
 from app.db.dao_conn import get_conn
+from app.utils.months import month_bounds
 
 # ============================================================
 # LISTA FIRM
@@ -154,7 +155,8 @@ def build_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
 
     placeholders_firm = ",".join("?" for _ in firma_ids)
     placeholders_month = ",".join("?" for _ in months)
-    params = [*firma_ids, *months]
+    range_start = month_bounds(min(months))[0]
+    range_end = month_bounds(max(months))[1]
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -166,7 +168,7 @@ def build_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
                 SELECT firma_id, substr(data_wyst, 1, 7) AS miesiac, COUNT(*) AS dokumenty
                 FROM dokumenty
                 WHERE firma_id IN ({placeholders_firm})
-                  AND substr(data_wyst, 1, 7) IN ({placeholders_month})
+                  AND data_wyst >= ? AND data_wyst < ?
                 GROUP BY firma_id, substr(data_wyst, 1, 7)
             ),
             extras AS (
@@ -196,7 +198,12 @@ def build_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
             LEFT JOIN cenniki c ON c.klucz = f.glowny_cennik
             WHERE f.id IN ({placeholders_firm})
             """,
-            [*months, *firma_ids, *months, *firma_ids, *months, *firma_ids],
+            [
+                *months,
+                *firma_ids, range_start, range_end,
+                *firma_ids, *months,
+                *firma_ids,
+            ],
         ).fetchall()
     finally:
         conn.close()

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton,
     QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit,
-    QToolButton, QStyle
+    QToolButton, QStyle, QLineEdit
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -84,6 +84,15 @@ class EmailPage(QWidget):
         btn_refresh = QPushButton("Odśwież widok")
         btn_refresh.clicked.connect(self.refresh_all)
         toolbar.addWidget(btn_refresh)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Szukaj w temacie, nadawcy lub odbiorcy...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(
+            lambda: self.load_mail_list_from_db(self.current_folder_local)
+            if self.current_folder_local else None
+        )
+        toolbar.addWidget(self.search_input, 2)
 
         toolbar.addStretch()
         main_layout.addLayout(toolbar)
@@ -325,6 +334,16 @@ class EmailPage(QWidget):
             rows = refresh_email_list(konto_id, local_folder)
         except Exception:
             rows = []
+
+        query = self.search_input.text().strip().casefold()
+        if query:
+            rows = [
+                row for row in rows
+                if query in " ".join(
+                    str(row.get(field) or "")
+                    for field in ("temat", "nadawca", "od", "do")
+                ).casefold()
+            ]
 
         subject_counts = Counter(
             (r.get("temat") or "").strip().casefold()

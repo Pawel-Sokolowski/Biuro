@@ -71,15 +71,20 @@ def parse_cennik_ksiegowy(text: str) -> Dict[str, Any]:
 
     t = text.lower()
 
-    m = re.search(r"limit\s+(\d+)", t)
+    m = re.search(r"(?:limit|do)\s+(\d+)\s*(?:szt|dok|dokument)?", t)
     if m:
         out["limit_dokumentow"] = int(m.group(1))
 
-    m = re.search(r"ponad\s+limit.*?(\d+[,.]\d+)", t)
+    m = re.search(
+        r"(?:ponad\s+limit|powyżej\s+limitu).*?"
+        r"(?:\d+\s*(?:szt|dok|dokument\w*)?[\s,:-]*)?"
+        r"(\d+[,.]\d+)\s*(?:zł|pln)?",
+        t,
+    )
     if m:
         out["cena_za_dokument"] = float(m.group(1).replace(",", "."))
 
-    m = re.search(r"ryczałt.*?(\d+[,.]\d+)", t)
+    m = re.search(r"ryczałt(?!\s+do\s+\d+).*?(\d+[,.]\d+)", t)
     if m:
         out["ryczalt_ksiegowy"] = float(m.group(1).replace(",", "."))
 
@@ -460,12 +465,13 @@ def _ensure_accounting_cennik(
     return key
 
 
-def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> None:
+def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Dict[str, str]:
     parsed = payload.get("cennik_kadrowy_parsed") or {}
     text = str(payload.get("cennik_kadrowy") or "").strip()
     if not text:
-        return
+        return {}
 
+    keys: Dict[str, str] = {}
     for service, price in (
         ("ZDROWOTNA", parsed.get("zdrowotna")),
         ("UOP", parsed.get("uop_cennik")),
@@ -498,6 +504,8 @@ def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) ->
             """,
             (key, price, round(price * 1.23, 2), f"Import z Excela: {service}"),
         )
+        keys[service] = key
+    return keys
 
 
 def _assign_employees(
@@ -549,7 +557,10 @@ def _apply_payload_to_db(
         company_id = row_db[0] if row_db else None
 
     accounting_key = _ensure_accounting_cennik(cursor, payload)
-    _ensure_employee_cenniki(cursor, payload)
+    employee_keys = _ensure_employee_cenniki(cursor, payload)
+    payload["uop_cennik"] = employee_keys.get("UOP", payload.get("uop_cennik"))
+    payload["uz_cennik"] = employee_keys.get("UZ", payload.get("uz_cennik"))
+    payload["uod_cennik"] = employee_keys.get("UOD", payload.get("uod_cennik"))
 
     company_fields = [
         "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",

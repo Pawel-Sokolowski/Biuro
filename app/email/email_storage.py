@@ -266,6 +266,70 @@ def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+
+def ensure_contact_email_filters(firma_id: int, folder_name: str) -> int:
+    """Create sender rules for all company contacts on every active mail account."""
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        contacts = conn.execute(
+            """
+            SELECT DISTINCT LOWER(TRIM(email)) AS email
+            FROM company_contacts
+            WHERE firma_id = ? AND email IS NOT NULL AND TRIM(email) <> ''
+            """,
+            (firma_id,),
+        ).fetchall()
+        accounts = conn.execute(
+            """
+            SELECT ke.id,
+                   COALESCE(ke.pracownik_id, pke.pracownik_id) AS pracownik_id,
+                   ke.email
+            FROM konta_email ke
+            LEFT JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
+            WHERE ke.aktywne = 1
+            """
+        ).fetchall()
+        created = 0
+        for contact in contacts:
+            sender = contact["email"]
+            for account in accounts:
+                if account["pracownik_id"] is None:
+                    continue
+                exists = conn.execute(
+                    """
+                    SELECT 1
+                    FROM reguly_filtrow
+                    WHERE konto_id = ? AND firma_id = ?
+                      AND LOWER(COALESCE(od, nadawca_zawiera, '')) = ?
+                    LIMIT 1
+                    """,
+                    (account["id"], firma_id, sender),
+                ).fetchone()
+                if exists:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO reguly_filtrow (
+                        pracownik_id, konto_id, firma_id, od, folder_docelowy, aktywna
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        account["pracownik_id"],
+                        account["id"],
+                        firma_id,
+                        sender,
+                        folder_name,
+                    ),
+                )
+                created += 1
+        conn.commit()
+        return created
+    finally:
+        conn.close()
+
+
 def add_email_filter(
     konto_id: int,
     firma_id: Optional[int],

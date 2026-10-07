@@ -22,6 +22,7 @@ from app.email.email_storage import (
     get_email_filters_for_company,
     add_email_filter,
     delete_email_filter_for_company,
+    ensure_contact_email_filters,
 )
 
 
@@ -739,6 +740,7 @@ class CompanyForm(QDialog):
         # ============================================================
         if self.firma_id:
             self._load_company()
+            self._load_contacts()
             self._load_email_filters()
 
     # ============================================================
@@ -776,6 +778,13 @@ class CompanyForm(QDialog):
         return payload
 
     def _load_email_filters(self):
+        company = get_company(self.firma_id)
+        folder_name = (
+            (company or {}).get("nazwa_skrocona")
+            or (company or {}).get("nazwa")
+            or str(self.firma_id)
+        )
+        ensure_contact_email_filters(self.firma_id, folder_name)
         self.email_filters_table.setRowCount(0)
         for rule in get_email_filters_for_company(self.firma_id):
             row = self.email_filters_table.rowCount()
@@ -821,7 +830,8 @@ class CompanyForm(QDialog):
     def _on_save(self):
         payload = self._collect_payload()
         try:
-            save_company(payload)
+            self.firma_id = save_company(payload)
+            self._sync_contact_email_filters()
             self.accept()
         except Exception as e:
             print("Save error:", e)
@@ -911,6 +921,7 @@ class CompanyForm(QDialog):
             self.contacts_table.insertRow(row)
             for col, key in enumerate(["imie", "nazwisko", "email", "telefon", "rola"]):
                 self.contacts_table.setItem(row, col, QTableWidgetItem(str(r.get(key, ""))))
+            self.contacts_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
 
     def _add_contact(self):
         if not self.firma_id:
@@ -923,7 +934,8 @@ class CompanyForm(QDialog):
             "telefon": self.inputs["kont_tel"].text().strip(),
             "rola": self.inputs["kont_rola"].text().strip(),
         }
-        save_contact(payload)
+        save_contact(self.firma_id, payload)
+        self._sync_contact_email_filters()
         self._load_contacts()
 
     def _delete_contact(self):
@@ -931,7 +943,9 @@ class CompanyForm(QDialog):
         if row < 0:
             return
         email = self.contacts_table.item(row, 2).text()
-        delete_contact(self.firma_id, email)
+        contact_id = self.contacts_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        if contact_id:
+            delete_contact(int(contact_id))
         self._load_contacts()
 
     def _save_selected_contact(self):
@@ -946,8 +960,23 @@ class CompanyForm(QDialog):
             "telefon": self.contacts_table.item(row, 3).text(),
             "rola": self.contacts_table.item(row, 4).text(),
         }
-        save_contact(payload)
+        contact_id = self.contacts_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        if contact_id:
+            payload["id"] = int(contact_id)
+        save_contact(self.firma_id, payload)
+        self._sync_contact_email_filters()
         self._load_contacts()
+
+    def _sync_contact_email_filters(self):
+        company = get_company(self.firma_id) or {}
+        folder_name = (
+            company.get("nazwa_skrocona")
+            or self.inputs["nazwa_skrocona"].text().strip()
+            or company.get("nazwa")
+            or self.inputs["nazwa"].text().strip()
+            or str(self.firma_id)
+        )
+        ensure_contact_email_filters(self.firma_id, folder_name)
 
     # ============================================================
     # WSPÓLNICY

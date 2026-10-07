@@ -472,6 +472,32 @@ def download_all_attachments(konto_id: int, folder: str, uid: str, attachments: 
     for att in attachments:
         open_attachment(konto_id, folder, uid, att["index"])
 
+
+def get_email_storage_stats(konto_id: Optional[int] = None) -> Dict[str, int]:
+    """Return SQLite payload sizes without loading message bodies into Python."""
+    conn = get_conn()
+    try:
+        where = "WHERE konto_id = ?" if konto_id is not None else ""
+        params = (konto_id,) if konto_id is not None else ()
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS messages,
+                   COALESCE(SUM(length(tresc)), 0) AS body_bytes,
+                   COALESCE(SUM(length(temat) + length(nadawca) + length(odbiorca)), 0)
+                       AS header_bytes
+            FROM wiadomosci_email
+            {where}
+            """,
+            params,
+        ).fetchone()
+        return {
+            "messages": int(row["messages"] or 0),
+            "body_bytes": int(row["body_bytes"] or 0),
+            "header_bytes": int(row["header_bytes"] or 0),
+        }
+    finally:
+        conn.close()
+
 # -----------------------------
 # SINGLE MESSAGE STORE (minimal)
 # -----------------------------

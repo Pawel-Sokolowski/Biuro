@@ -503,6 +503,14 @@ def init_db():
         );
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_account_folder_date "
+        "ON wiadomosci_email(konto_id, folder_id, data DESC);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_attachments_message "
+        "ON email_attachments(wiadomosc_id);"
+    )
 
     # -------------------------
     # email_attachments

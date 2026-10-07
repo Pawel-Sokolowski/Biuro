@@ -31,6 +31,7 @@ from app.monthly_view.monthly_view_logic import MonthlyViewLogic
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_services import add_company_extra_service
+from app.db.dao_tasks import list_tasks
 from app.utils.timer import TimerUtils
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.notes_window import NotesWindow
@@ -98,7 +99,7 @@ class HoverScrollTextEdit(QTextEdit):
 
 
 class ActivitySelectionDialog(QDialog):
-    def __init__(self, mode: str, parent=None):
+    def __init__(self, mode: str, firma_id: int, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Wybór czynności")
         self.resize(500, 300)
@@ -116,6 +117,11 @@ class ActivitySelectionDialog(QDialog):
         self.cb_usluga = QComboBox()
         self._load_extra_services()
 
+        self.cb_task = QComboBox()
+        self.cb_task.addItem("Brak zadania", None)
+        for task in list_tasks(firma_id=firma_id, status="W toku"):
+            self.cb_task.addItem(task["tytul"], task["id"])
+
         self.input_cena = QLineEdit()
         self.input_cena.setPlaceholderText("Cena netto")
         self.input_cena.setEnabled(True)
@@ -124,6 +130,7 @@ class ActivitySelectionDialog(QDialog):
 
         form.addRow("Typ pracy:", self.cb_typ)
         form.addRow("Usługa dodatkowa:", self.cb_usluga)
+        form.addRow("Zadanie:", self.cb_task)
         form.addRow("Cena domyślna netto:", self.input_cena)
         form.addRow(self.chk_fakturowac)
 
@@ -191,6 +198,8 @@ class ActivitySelectionDialog(QDialog):
             "typ_czynnosci": typ,
             "usluga_id": usluga_id,
             "fakturowac": self.chk_fakturowac.isChecked(),
+            "task_id": self.cb_task.currentData(),
+            "task_title": self.cb_task.currentText() if self.cb_task.currentData() else None,
         }
 
 
@@ -606,7 +615,7 @@ class MonthlyViewPage(QWidget):
             self._reload_rows()
             return
 
-        dlg = ActivitySelectionDialog("ksiegowosc", self)
+        dlg = ActivitySelectionDialog("ksiegowosc", firma_id, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "ksiegowosc", payload)
@@ -618,7 +627,7 @@ class MonthlyViewPage(QWidget):
             self._reload_rows()
             return
 
-        dlg = ActivitySelectionDialog("kadry", self)
+        dlg = ActivitySelectionDialog("kadry", firma_id, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "kadry", payload)

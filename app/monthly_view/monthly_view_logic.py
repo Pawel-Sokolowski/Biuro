@@ -52,7 +52,6 @@ class MonthlyViewLogic:
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        month_start, month_end = month_bounds(selected_month)
         cur.execute(
             """
             SELECT id, imie || ' ' || nazwisko AS label
@@ -73,6 +72,7 @@ class MonthlyViewLogic:
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
+        month_start, month_end = month_bounds(selected_month)
 
         cur.execute(
             """
@@ -174,12 +174,43 @@ class MonthlyViewLogic:
         return int(saved_seconds or 0) + self.get_running_seconds(typ)
 
     def get_active_timer_labels(self) -> List[str]:
-        labels: List[str] = []
+        return [
+            f"{item['task']} | {item['company']} - {item['department']} - {item['elapsed']}"
+            for item in self.get_active_timer_details()
+        ]
+
+    def get_active_timer_details(self) -> List[Dict[str, str]]:
+        details: List[Dict[str, str]] = []
         for typ, label in (("ksiegowosc", "Księgowość"), ("kadry", "Kadry")):
             fields = self._TIMER_FIELDS[typ]
-            if getattr(self, fields[0]) is not None:
-                labels.append(f"{label}: {self.format_seconds(self.get_running_seconds(typ))}")
-        return labels
+            firma_id = getattr(self, fields[0])
+            if firma_id is None:
+                continue
+            conn = get_conn()
+            conn.row_factory = sqlite3.Row
+            try:
+                company = conn.execute(
+                    "SELECT COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa "
+                    "FROM firmy WHERE id = ?",
+                    (firma_id,),
+                ).fetchone()
+                activity = getattr(self, fields[2]) or {}
+                task_name = activity.get("task_title")
+                if not task_name and activity.get("task_id"):
+                    task = conn.execute(
+                        "SELECT tytul FROM zadania WHERE id = ?",
+                        (activity["task_id"],),
+                    ).fetchone()
+                    task_name = task["tytul"] if task else None
+                details.append({
+                    "task": task_name or label,
+                    "company": company["nazwa"] if company else "Nieznana firma",
+                    "department": label,
+                    "elapsed": self.format_seconds(self.get_running_seconds(typ)),
+                })
+            finally:
+                conn.close()
+        return details
 
     def save_status_for_company(
         self,
@@ -245,8 +276,8 @@ class MonthlyViewLogic:
             """
             INSERT INTO czasomierze (
                 firma_id, pracownik_id, miesiac, typ, usluga_id, fakturowac,
-                rozpoczecie, zakonczenie, sekundy
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                task_id, rozpoczecie, zakonczenie, sekundy
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 firma_id,
@@ -255,6 +286,7 @@ class MonthlyViewLogic:
                 typ,
                 (activity or {}).get("usluga_id"),
                 1 if (activity or {}).get("fakturowac") else 0,
+                (activity or {}).get("task_id"),
                 start.isoformat(timespec="seconds"),
                 now.isoformat(timespec="seconds"),
                 delta,

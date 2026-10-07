@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
 from app.db.dao_conn import get_conn
+from app.security.authorization import assigned_company_ids, can, is_administrator
 
 DATE_FMT = "%Y-%m-%d"
 DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -70,20 +71,28 @@ def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def get_exported_invoices() -> List[Dict[str, Any]]:
+def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
+        sql = """
             SELECT f.*, c.nazwa AS firma_nazwa
             FROM faktury f
             JOIN firmy c ON f.firma_id = c.id
             WHERE COALESCE(f.eksportowana, 0) = 1
-            ORDER BY f.updated_at DESC, f.created_at DESC
         """
-        )
+        params: List[Any] = []
+        if pracownik_id and not (
+            is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
+        ):
+            ids = assigned_company_ids(pracownik_id)
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            sql += f" AND f.firma_id IN ({placeholders})"
+            params.extend(sorted(ids))
+        cur.execute(sql + " ORDER BY f.updated_at DESC, f.created_at DESC", params)
         rows = cur.fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -384,17 +393,28 @@ def create_or_update_invoice(
         conn.close()
 
 
-def mark_exported(invoice_ids: List[int]):
+def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     if not invoice_ids:
         return
     conn = get_conn()
     cur = conn.cursor()
     try:
         placeholders = ",".join(["?"] * len(invoice_ids))
-        cur.execute(
-            f"UPDATE faktury SET eksportowana = 1, data_eksportu = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
-            invoice_ids,
+        params: List[Any] = list(invoice_ids)
+        sql = (
+            f"UPDATE faktury SET eksportowana = 1, data_eksportu = CURRENT_TIMESTAMP "
+            f"WHERE id IN ({placeholders})"
         )
+        if pracownik_id and not (
+            is_administrator(pracownik_id) or can(pracownik_id, "can_export_data")
+        ):
+            sql += (
+                " AND EXISTS ("
+                "SELECT 1 FROM pracownik_firma pf "
+                "WHERE pf.firma_id = faktury.firma_id AND pf.pracownik_id = ?)"
+            )
+            params.append(pracownik_id)
+        cur.execute(sql, params)
         conn.commit()
     finally:
         conn.close()

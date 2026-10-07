@@ -19,6 +19,7 @@ from app.db.dao_invoices import (
     mark_exported
 )
 from app.utils.saldeo_exporter import export_saldeo_xlsx
+from app.security.authorization import can, is_administrator
 
 
 class MonthYearDialog(QDialog):
@@ -106,7 +107,19 @@ class FakturyPage(QWidget):
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
+        if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
+            cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
+        else:
+            cur.execute(
+                """
+                SELECT DISTINCT f.id, f.nazwa
+                FROM firmy f
+                JOIN pracownik_firma pf ON pf.firma_id = f.id
+                WHERE pf.pracownik_id = ?
+                ORDER BY f.nazwa
+                """,
+                (self.pracownik_id,),
+            )
         for r in cur.fetchall():
             fid = r[0]
             name = r[1]
@@ -253,21 +266,41 @@ class FakturyPage(QWidget):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         if firma_id:
-            cur.execute("""
-                SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
-                FROM faktury f
-                JOIN firmy c ON f.firma_id = c.id
-                WHERE f.firma_id = ? AND f.miesiac = ?
-                ORDER BY f.miesiac DESC, f.created_at DESC
-            """, (firma_id, miesiac))
+            if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
+                cur.execute("""
+                    SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
+                    FROM faktury f
+                    JOIN firmy c ON f.firma_id = c.id
+                    WHERE f.firma_id = ? AND f.miesiac = ?
+                    ORDER BY f.miesiac DESC, f.created_at DESC
+                """, (firma_id, miesiac))
+            else:
+                cur.execute("""
+                    SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
+                    FROM faktury f
+                    JOIN firmy c ON f.firma_id = c.id
+                    JOIN pracownik_firma pf ON pf.firma_id = f.firma_id
+                    WHERE f.firma_id = ? AND f.miesiac = ? AND pf.pracownik_id = ?
+                    ORDER BY f.miesiac DESC, f.created_at DESC
+                """, (firma_id, miesiac, self.pracownik_id))
         else:
-            cur.execute("""
+            if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
+                cur.execute("""
                 SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
                 FROM faktury f
                 JOIN firmy c ON f.firma_id = c.id
                 WHERE f.miesiac = ?
                 ORDER BY f.firma_id, f.miesiac DESC
-            """, (miesiac,))
+                """, (miesiac,))
+            else:
+                cur.execute("""
+                    SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
+                    FROM faktury f
+                    JOIN firmy c ON f.firma_id = c.id
+                    JOIN pracownik_firma pf ON pf.firma_id = f.firma_id
+                    WHERE f.miesiac = ? AND pf.pracownik_id = ?
+                    ORDER BY f.firma_id, f.miesiac DESC
+                """, (miesiac, self.pracownik_id))
         rows = cur.fetchall()
         conn.close()
         for inv in rows:
@@ -371,6 +404,16 @@ class FakturyPage(QWidget):
 
     # ---------------- export ----------------
     def _export_selected(self):
+        if not (
+            is_administrator(self.pracownik_id)
+            or can(self.pracownik_id, "can_export_data")
+        ):
+            QMessageBox.warning(
+                self,
+                "Brak uprawnień",
+                "Nie masz uprawnień do eksportowania danych.",
+            )
+            return
         selected = self.faktury_table.selectedItems()
         if not selected:
             QMessageBox.information(self, "Eksport", "Zaznacz faktury do eksportu.")
@@ -401,7 +444,18 @@ class FakturyPage(QWidget):
                 FROM faktury f
                 JOIN firmy c ON f.firma_id = c.id
                 WHERE f.id IN ({})
-            """.format(",".join("?" * len(ids))), tuple(ids))
+                  AND (
+                    ? = 1
+                    OR EXISTS (
+                        SELECT 1 FROM pracownik_firma pf
+                        WHERE pf.firma_id = f.firma_id AND pf.pracownik_id = ?
+                    )
+                  )
+            """.format(",".join("?" * len(ids))),
+                tuple(ids) + (
+                    int(is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data")),
+                    self.pracownik_id,
+                ))
             rows = cur.fetchall()
             conn.close()
             invoices = []
@@ -416,7 +470,7 @@ class FakturyPage(QWidget):
                     "pozycje_json": r[6]
                 })
             export_saldeo_xlsx(invoices, path)
-            mark_exported(list(ids))
+            mark_exported(list(ids), self.pracownik_id)
             QMessageBox.information(self, "OK", "Faktury wyeksportowano.")
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się wyeksportować faktur: {e}")
@@ -425,7 +479,7 @@ class FakturyPage(QWidget):
         self._refresh_exportowane()
 
     def _refresh_exportowane(self):
-        invoices = get_exported_invoices()
+        invoices = get_exported_invoices(self.pracownik_id)
         self.exported_table.setRowCount(0)
         for inv in invoices:
             row = self.exported_table.rowCount()

@@ -4,20 +4,40 @@ from typing import List, Dict, Any
 from app.services.calculator import oblicz_miesieczny_koszt
 from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
+from app.security.authorization import assigned_company_ids, can, is_administrator
 
 # ============================================================
 # LISTA FIRM
 # ============================================================
-def get_all_companies() -> List[Dict[str, Any]]:
+def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
+    sql = "SELECT id, nazwa FROM firmy"
+    params: List[int] = []
+    if pracownik_id and not (
+        is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
+    ):
+        ids = assigned_company_ids(pracownik_id)
+        if not ids:
+            conn.close()
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        sql += f" WHERE id IN ({placeholders})"
+        params.extend(sorted(ids))
+    cur.execute(sql + " ORDER BY nazwa", params)
     rows = cur.fetchall()
     conn.close()
 
     return [{"id": r["id"], "nazwa": r["nazwa"]} for r in rows]
+
+
+def _authorized_company_ids(firma_ids: List[int], pracownik_id: int | None) -> List[int]:
+    if not pracownik_id or is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances"):
+        return firma_ids
+    allowed = assigned_company_ids(pracownik_id)
+    return [firma_id for firma_id in firma_ids if firma_id in allowed]
 
 
 # ============================================================
@@ -87,8 +107,13 @@ def get_extra_services_value(firma_id: int, miesiac: str) -> float:
     return float(row["suma"] or 0)
 
 
-def build_summary_report(firma_ids: List[int], months: List[str]) -> List[Dict[str, Any]]:
+def build_summary_report(
+    firma_ids: List[int],
+    months: List[str],
+    pracownik_id: int | None = None,
+) -> List[Dict[str, Any]]:
     """Return employee-attributed work rows for the Reports/Zestawienie view."""
+    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
     if not firma_ids or not months:
         return []
 
@@ -149,7 +174,12 @@ def build_summary_report(firma_ids: List[int], months: List[str]) -> List[Dict[s
 # ============================================================
 # RAPORT MIESIĘCZNY — POPRAWIONY
 # ============================================================
-def build_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
+def build_report(
+    firma_ids: List[int],
+    months: List[str],
+    pracownik_id: int | None = None,
+) -> Dict[str, Any]:
+    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
     if not firma_ids or not months:
         return {}
 
@@ -242,7 +272,12 @@ def build_yearly_report(firma_id: int, year: int) -> Dict[str, Any]:
 # ============================================================
 # PORÓWNANIE FIRM — POPRAWIONE
 # ============================================================
-def compare_companies(firma_ids: List[int], miesiac: str) -> Dict[str, Any]:
+def compare_companies(
+    firma_ids: List[int],
+    miesiac: str,
+    pracownik_id: int | None = None,
+) -> Dict[str, Any]:
+    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
     out = {}
 
     for firma_id in firma_ids:
@@ -269,7 +304,12 @@ def compare_companies(firma_ids: List[int], miesiac: str) -> Dict[str, Any]:
 # ============================================================
 # ZAROBEK NA GODZINĘ — POPRAWIONY
 # ============================================================
-def build_profit_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
+def build_profit_report(
+    firma_ids: List[int],
+    months: List[str],
+    pracownik_id: int | None = None,
+) -> Dict[str, Any]:
+    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()

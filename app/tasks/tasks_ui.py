@@ -81,7 +81,7 @@ class TasksPage(QWidget):
         layout.addLayout(actions)
 
     def _load_reference_data(self):
-        self.companies = list_companies()
+        self.companies = list_companies(self.pracownik_id)
         self.employees = list_employees()
         for employee in self.employees:
             label = f"{employee.get('imie', '')} {employee.get('nazwisko', '')}".strip()
@@ -90,7 +90,7 @@ class TasksPage(QWidget):
     def _refresh(self):
         status = self.status_filter.currentData()
         employee_id = self.assignee_filter.currentData()
-        rows = list_tasks(status=status, pracownik_id=employee_id)
+        rows = list_tasks(status=status, pracownik_id=employee_id, viewer_id=self.pracownik_id)
         self.table.setRowCount(0)
         for task in rows:
             row = self.table.rowCount()
@@ -122,9 +122,18 @@ class TasksPage(QWidget):
         task_id = self._selected_id()
         if not task_id:
             return
-        task = next((t for t in list_tasks() if t["id"] == task_id), None)
+        task = next(
+            (t for t in list_tasks(viewer_id=self.pracownik_id) if t["id"] == task_id),
+            None,
+        )
         if task:
-            TaskDialog(self, self.pracownik_id, self.companies, self.employees, task).exec()
+            TaskDialog(
+                self,
+                self.pracownik_id,
+                self.companies,
+                self.employees,
+                task,
+            ).exec()
             self._refresh()
 
     def _delete_selected(self):
@@ -133,8 +142,11 @@ class TasksPage(QWidget):
             return
         if QMessageBox.question(self, "Usuń zadanie", "Usunąć wybrane zadanie?") != QMessageBox.StandardButton.Yes:
             return
-        delete_task(task_id)
-        self._refresh()
+        try:
+            delete_task(task_id, actor_id=self.pracownik_id)
+            self._refresh()
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
 
 
 class TaskDialog(QDialog):
@@ -195,6 +207,7 @@ class TaskDialog(QDialog):
                 self.employee.currentData(),
                 self.created_by,
                 self.task.get("id"),
+                actor_id=self.created_by,
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Błąd", str(exc))

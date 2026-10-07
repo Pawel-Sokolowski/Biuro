@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from app.db.dao_conn import get_conn
+from app.security.authorization import assigned_company_ids, can, is_administrator
 
 # ============================================================
 #  FIELDS — zgodne z aktualnym schematem (rozszerzone)
@@ -81,23 +82,37 @@ FIRMA_FIELDS = [
 #  LIST / FILTER
 # ============================================================
 
-def list_companies() -> List[Dict[str, Any]]:
+def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("""
+    sql = """
         SELECT id, nazwa, nip, miasto, status,
                glowny_cennik, limit_dokumentow,
                typ_rozliczenia, vat_czynny
         FROM firmy
-        ORDER BY nazwa
-    """)
+    """
+    params: List[Any] = []
+    if actor_id and not is_administrator(actor_id):
+        ids = assigned_company_ids(actor_id)
+        if not ids:
+            conn.close()
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        sql += f" WHERE id IN ({placeholders})"
+        params.extend(sorted(ids))
+    cur.execute(sql + " ORDER BY nazwa", params)
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def get_companies_filtered(search: str, status: str, employee_id: Optional[int]) -> List[Dict[str, Any]]:
+def get_companies_filtered(
+    search: str,
+    status: str,
+    employee_id: Optional[int],
+    actor_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -115,6 +130,10 @@ def get_companies_filtered(search: str, status: str, employee_id: Optional[int])
         base_from += " JOIN pracownik_firma pf ON pf.firma_id = f.id"
         where.append("pf.pracownik_id = ?")
         params.append(employee_id)
+    elif actor_id and not is_administrator(actor_id):
+        base_from += " JOIN pracownik_firma pf_actor ON pf_actor.firma_id = f.id"
+        where.append("pf_actor.pracownik_id = ?")
+        params.append(actor_id)
 
     if search:
         where.append("(LOWER(f.nazwa) LIKE ? OR LOWER(f.nip) LIKE ?)")
@@ -298,7 +317,7 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
 #  SAVE COMPANY
 # ============================================================
 
-def save_company(payload: Dict[str, Any]) -> int:
+def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -307,8 +326,16 @@ def save_company(payload: Dict[str, Any]) -> int:
     data = {f: mapped.get(f) for f in FIRMA_FIELDS if mapped.get(f) is not None}
 
     try:
+        if actor_id and not can(actor_id, "can_edit_companies"):
+            raise PermissionError("Brak uprawnień do edycji firm.")
         if mapped.get("id"):
             firma_id = int(mapped["id"])
+            if (
+                actor_id
+                and not is_administrator(actor_id)
+                and firma_id not in assigned_company_ids(actor_id)
+            ):
+                raise PermissionError("Brak dostępu do tej firmy.")
             if data:
                 set_clause = ", ".join([f"{col} = ?" for col in data.keys()])
                 params = [data[col] for col in data.keys()] + [firma_id]
@@ -343,9 +370,19 @@ def save_company(payload: Dict[str, Any]) -> int:
 #  DELETE / STATUS
 # ============================================================
 
-def delete_company(firma_id: int) -> None:
+def delete_company(firma_id: int, actor_id: Optional[int] = None) -> None:
     conn = get_conn()
     cur = conn.cursor()
+    if actor_id and not can(actor_id, "can_edit_companies"):
+        conn.close()
+        raise PermissionError("Brak uprawnień do usuwania firm.")
+    if (
+        actor_id
+        and not is_administrator(actor_id)
+        and firma_id not in assigned_company_ids(actor_id)
+    ):
+        conn.close()
+        raise PermissionError("Brak dostępu do tej firmy.")
     cur.execute("DELETE FROM firmy WHERE id = ?", (firma_id,))
     cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ?", (firma_id,))
     cur.execute("DELETE FROM company_notes WHERE firma_id = ?", (firma_id,))

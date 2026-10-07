@@ -27,6 +27,9 @@ class MonthlyViewPage(QWidget):
         self.table_ksiegowosc = None
         self.table_kadry = None
         self.month_tabs = None
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._refresh_running_timer)
+        self._refresh_timer.start(1000)
 
         self._build_ui()
 
@@ -110,6 +113,10 @@ class MonthlyViewPage(QWidget):
         ])
         self.table_ksiegowosc.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_ksiegowosc.cellDoubleClicked.connect(self.on_table_cell_click)
+        self.table_ksiegowosc.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_ksiegowosc.customContextMenuRequested.connect(
+            lambda pos: self._show_company_status_menu(self.table_ksiegowosc, pos)
+        )
         ks_layout.addWidget(self.table_ksiegowosc)
         self.month_tabs.addTab(tab_ks, "📋 Księgowość")
 
@@ -128,6 +135,10 @@ class MonthlyViewPage(QWidget):
         ])
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_kadry.cellDoubleClicked.connect(self.on_table_cell_click)
+        self.table_kadry.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_kadry.customContextMenuRequested.connect(
+            lambda pos: self._show_company_status_menu(self.table_kadry, pos)
+        )
         kadry_layout.addWidget(self.table_kadry)
         self.month_tabs.addTab(tab_kadry, "💼 Kadry")
 
@@ -136,6 +147,81 @@ class MonthlyViewPage(QWidget):
 
     def _change_month(self):
         logger.debug(f"Month changed to {self.month_selector.currentText()}")
+        self.logic.set_month(self.month_selector.currentText())
+        self.refresh_tables()
+
+    def _refresh_running_timer(self):
+        if self.logic.aktywna_firma_stoper_ks is not None:
+            self._refresh_time_cell(
+                self.table_ksiegowosc,
+                self.logic.aktywna_firma_stoper_ks,
+                self.logic.czas_start_ks,
+                "sekundy_ksiegowosc",
+            )
+        if self.logic.aktywna_firma_stoper_kadry is not None:
+            self._refresh_time_cell(
+                self.table_kadry,
+                self.logic.aktywna_firma_stoper_kadry,
+                self.logic.czas_start_kadry,
+                "sekundy_kadry",
+            )
+
+    def _refresh_time_cell(self, table, firma_id, start_time, seconds_key):
+        if not start_time:
+            return
+
+        for row in range(table.rowCount()):
+            id_item = table.item(row, 0)
+            if id_item is None or id_item.text() != str(firma_id):
+                continue
+
+            current = self.logic.get_monthly_rows(
+                self.month_selector.currentText(),
+                self.month_employee_filter.currentData(),
+                self.status_filter.currentText(),
+            )
+            row_data = next((item for item in current if item["id"] == firma_id), None)
+            if row_data is None:
+                return
+
+            elapsed = row_data.get(seconds_key, 0)
+            time_column = 4
+            time_item = table.item(row, time_column)
+            if time_item is None:
+                time_item = QTableWidgetItem()
+                table.setItem(row, time_column, time_item)
+            time_item.setText(self.logic.format_seconds(elapsed))
+            return
+
+    def _show_company_status_menu(self, table, position):
+        item = table.itemAt(position)
+        if item is None:
+            return
+
+        id_item = table.item(item.row(), 0)
+        if id_item is None:
+            return
+
+        try:
+            firma_id = int(id_item.text())
+        except ValueError:
+            return
+
+        menu = QMenu(self)
+        for label, status in (
+            ("Oznacz jako aktywną", "Aktywne"),
+            ("Oznacz jako zawieszoną", "Zawieszone"),
+            ("Przenieś do archiwum", "Archiwalne"),
+        ):
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda checked=False, status=status, firma_id=firma_id:
+                self._set_company_status(firma_id, status)
+            )
+        menu.exec(table.viewport().mapToGlobal(position))
+
+    def _set_company_status(self, firma_id: int, status: str):
+        self.logic.set_company_status(firma_id, status)
         self.refresh_tables()
 
     def refresh_tables(self):
@@ -159,7 +245,15 @@ class MonthlyViewPage(QWidget):
 
             for row_idx, row_data in enumerate(rows):
                 self.table_ksiegowosc.insertRow(row_idx)
-                for col_idx, value in enumerate(row_data):
+                values = (
+                    row_data["id"],
+                    row_data["nazwa"],
+                    row_data["etap"],
+                    row_data["ilosc_dok"],
+                    self.logic.format_seconds(row_data["sekundy_ksiegowosc"]),
+                    row_data.get("wartosc_uslug", 0),
+                )
+                for col_idx, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
                     self.table_ksiegowosc.setItem(row_idx, col_idx, item)
 
@@ -174,7 +268,15 @@ class MonthlyViewPage(QWidget):
 
             for row_idx, row_data in enumerate(rows):
                 self.table_kadry.insertRow(row_idx)
-                for col_idx, value in enumerate(row_data):
+                values = (
+                    row_data["id"],
+                    row_data["nazwa"],
+                    row_data["etap"],
+                    row_data["ilosc_dok"],
+                    self.logic.format_seconds(row_data["sekundy_kadry"]),
+                    row_data.get("wartosc_uslug", 0),
+                )
+                for col_idx, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
                     self.table_kadry.setItem(row_idx, col_idx, item)
 
@@ -184,3 +286,19 @@ class MonthlyViewPage(QWidget):
 
     def on_table_cell_click(self, row: int, col: int):
         logger.debug(f"Table cell clicked: row={row}, col={col}")
+        table = self.sender()
+        if not isinstance(table, QTableWidget):
+            return
+
+        item = table.item(row, 0)
+        if item is None:
+            return
+
+        try:
+            firma_id = int(item.text())
+        except ValueError:
+            logger.error("Invalid company id in monthly table row %s", row)
+            return
+
+        self.logic.open_company_edit_window(firma_id)
+        self.refresh_tables()

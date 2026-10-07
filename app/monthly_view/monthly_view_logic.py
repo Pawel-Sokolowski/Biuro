@@ -18,6 +18,7 @@ class MonthlyViewLogic:
         self.aktywna_firma_stoper_kadry = None
         self.czas_start_ks = None
         self.czas_start_kadry = None
+        self.timer_month = None
 
         # ui
         self.status_widgets = {}
@@ -112,6 +113,12 @@ class MonthlyViewLogic:
             r["note_snippet"] = snippet
             r["zawieszona_od"] = r.get("zawieszenia_dzialalnosci") or ""
 
+            if selected_month == self.timer_month:
+                if r["id"] == self.aktywna_firma_stoper_ks and self.czas_start_ks:
+                    r["sekundy_ksiegowosc"] += self._running_seconds(self.czas_start_ks)
+                if r["id"] == self.aktywna_firma_stoper_kadry and self.czas_start_kadry:
+                    r["sekundy_kadry"] += self._running_seconds(self.czas_start_kadry)
+
             result.append(r)
 
         return result
@@ -119,6 +126,10 @@ class MonthlyViewLogic:
     # format czasu
     def format_seconds(self, sekundy: int) -> str:
         return str(datetime.timedelta(seconds=sekundy or 0))
+
+    @staticmethod
+    def _running_seconds(start_time: datetime.datetime) -> int:
+        return max(0, int((datetime.datetime.now() - start_time).total_seconds()))
 
     # autosave
     def schedule_status_autosave(self, firma_id: int):
@@ -146,79 +157,79 @@ class MonthlyViewLogic:
 
     # unified stoper
     def toggle_stoper(self, firma_id: int, typ: str):
-        now = datetime.date.now()
+        if typ not in ("ksiegowosc", "kadry"):
+            raise ValueError(f"Unsupported timer type: {typ}")
+
+        now = datetime.datetime.now()
         self._ensure_month_status(firma_id)
 
         conn = get_conn()
         cur = conn.cursor()
 
+        active_type = self._active_timer_type()
+        active_firma_id = self._active_timer_company()
+
+        if active_type and active_firma_id == firma_id and active_type == typ:
+            self._persist_active_timer(cur, now)
+            conn.commit()
+            conn.close()
+            self._clear_active_timer()
+            return
+
+        if active_type:
+            self._persist_active_timer(cur, now)
+            self._clear_active_timer()
+
         if typ == "ksiegowosc":
-            if self.aktywna_firma_stoper_ks is None:
-                self.aktywna_firma_stoper_ks = firma_id
-                self.czas_start_ks = now
-                conn.close()
-                return
-
-            if self.aktywna_firma_stoper_ks == firma_id:
-                delta = int((now - self.czas_start_ks).total_seconds())
-                cur.execute("""
-                    UPDATE statusy_miesieczne
-                    SET sekundy_ksiegowosc = sekundy_ksiegowosc + ?
-                    WHERE firma_id = ? AND miesiac = ?
-                """, (delta, firma_id, self.aktualny_miesiac))
-                conn.commit()
-                conn.close()
-                self.aktywna_firma_stoper_ks = None
-                self.czas_start_ks = None
-                return
-
-            prev = self.aktywna_firma_stoper_ks
-            delta_prev = int((now - self.czas_start_ks).total_seconds())
-            cur.execute("""
-                UPDATE statusy_miesieczne
-                SET sekundy_ksiegowosc = sekundy_ksiegowosc + ?
-                WHERE firma_id = ? AND miesiac = ?
-            """, (delta_prev, prev, self.aktualny_miesiac))
-
             self.aktywna_firma_stoper_ks = firma_id
             self.czas_start_ks = now
-            conn.commit()
-            conn.close()
-            return
-
-        if typ == "kadry":
-            if self.aktywna_firma_stoper_kadry is None:
-                self.aktywna_firma_stoper_kadry = firma_id
-                self.czas_start_kadry = now
-                conn.close()
-                return
-
-            if self.aktywna_firma_stoper_kadry == firma_id:
-                delta = int((now - self.czas_start_kadry).total_seconds())
-                cur.execute("""
-                    UPDATE statusy_miesieczne
-                    SET sekundy_kadry = sekundy_kadry + ?
-                    WHERE firma_id = ? AND miesiac = ?
-                """, (delta, firma_id, self.aktualny_miesiac))
-                conn.commit()
-                conn.close()
-                self.aktywna_firma_stoper_kadry = None
-                self.czas_start_kadry = None
-                return
-
-            prev = self.aktywna_firma_stoper_kadry
-            delta_prev = int((now - self.czas_start_kadry).total_seconds())
-            cur.execute("""
-                UPDATE statusy_miesieczne
-                SET sekundy_kadry = sekundy_kadry + ?
-                WHERE firma_id = ? AND miesiac = ?
-            """, (delta_prev, prev, self.aktualny_miesiac))
-
+        else:
             self.aktywna_firma_stoper_kadry = firma_id
             self.czas_start_kadry = now
-            conn.commit()
-            conn.close()
+        self.timer_month = self.aktualny_miesiac
+
+        conn.commit()
+        conn.close()
+
+    def _active_timer_type(self) -> Optional[str]:
+        if self.aktywna_firma_stoper_ks is not None:
+            return "ksiegowosc"
+        if self.aktywna_firma_stoper_kadry is not None:
+            return "kadry"
+        return None
+
+    def _active_timer_company(self) -> Optional[int]:
+        if self.aktywna_firma_stoper_ks is not None:
+            return self.aktywna_firma_stoper_ks
+        return self.aktywna_firma_stoper_kadry
+
+    def _persist_active_timer(self, cur, now: datetime.datetime):
+        timer_type = self._active_timer_type()
+        firma_id = self._active_timer_company()
+        if not timer_type or firma_id is None:
             return
+
+        start_time = self.czas_start_ks if timer_type == "ksiegowosc" else self.czas_start_kadry
+        timer_month = self.timer_month
+        seconds_column = (
+            "sekundy_ksiegowosc" if timer_type == "ksiegowosc" else "sekundy_kadry"
+        )
+        delta = max(0, int((now - start_time).total_seconds()))
+        cur.execute(
+            f"""
+            UPDATE statusy_miesieczne
+            SET {seconds_column} = {seconds_column} + ?
+            WHERE firma_id = ? AND miesiac = ?
+            """,
+            (delta, firma_id, timer_month),
+        )
+
+    def _clear_active_timer(self):
+        self.aktywna_firma_stoper_ks = None
+        self.aktywna_firma_stoper_kadry = None
+        self.czas_start_ks = None
+        self.czas_start_kadry = None
+        self.timer_month = None
     # okna
     # def open_notes_window(self, firma_id: int):
     #     from app.monthly_view.monthly_view_ui import InlineNotesWindow
@@ -262,33 +273,33 @@ class MonthlyViewLogic:
 
     # zawieszenia — ręczne
     def mark_company_suspended_manual(self, firma_id: int):
-        today = datetime.date.today().strftime("%Y-%m-%d")
+        self.set_company_status(firma_id, "Zawieszone")
+
+    def set_company_status(self, firma_id: int, status: str):
+        if status not in ("Aktywne", "Zawieszone", "Archiwalne"):
+            raise ValueError(f"Unsupported company status: {status}")
+
+        suspended_at = (
+            datetime.date.today().strftime("%Y-%m-%d")
+            if status == "Zawieszone"
+            else None
+        )
         conn = get_conn()
         cur = conn.cursor()
 
         cur.execute("""
             UPDATE firmy
-            SET status = 'Zawieszone',
+            SET status = ?,
                 zawieszenia_dzialalnosci = ?
             WHERE id = ?
-        """, (today, firma_id))
+        """, (status, suspended_at, firma_id))
 
         conn.commit()
         conn.close()
 
     # przeniesienie do archiwalnych
     def move_company_to_archive(self, firma_id: int):
-        conn = get_conn()
-        cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE firmy
-            SET status = 'Archiwalne'
-            WHERE id = ?
-        """, (firma_id,))
-
-        conn.commit()
-        conn.close()
+        self.set_company_status(firma_id, "Archiwalne")
 
     # opcje dodatkowe
     def more_option_1(self, firma_id: int):

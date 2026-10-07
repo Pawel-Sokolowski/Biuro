@@ -2,7 +2,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QTabWidget, QFormLayout, QScrollArea, QDateEdit,
-    QMessageBox, QGroupBox, QCheckBox
+    QMessageBox, QGroupBox, QCheckBox, QFileDialog
 )
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QFont
@@ -115,9 +115,13 @@ class CompanyForm(QWidget):
         btn_save = QPushButton("Zapisz")
         btn_save.clicked.connect(self._save)
 
+        btn_contract = QPushButton("Generuj umowę")
+        btn_contract.clicked.connect(self._generate_contract)
+
         btn_cancel = QPushButton("Anuluj")
         btn_cancel.clicked.connect(lambda: self.parent().close() if self.parent() else None)
 
+        btn_layout.addWidget(btn_contract)
         btn_layout.addWidget(btn_save)
         btn_layout.addWidget(btn_cancel)
 
@@ -392,6 +396,44 @@ class CompanyForm(QWidget):
     # ============================
     # ZAPIS
     # ============================
+    def _generate_contract(self):
+        template_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz szablon umowy",
+            "",
+            "Dokument Word (*.docx)",
+        )
+        if not template_path:
+            return
+
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Wybierz folder zapisu umowy",
+        )
+        if not output_dir:
+            return
+
+        from app.companies.contract_generator import generate_contract
+
+        try:
+            output_path = generate_contract(
+                template_path,
+                output_dir,
+                self.company_data,
+            )
+        except (FileNotFoundError, NotADirectoryError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Błąd", str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się wygenerować umowy: {exc}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Umowa wygenerowana",
+            f"Dokument zapisano w:\n{output_path}",
+        )
+
     def _save(self):
         payload = {
             "nazwa": self.f_nazwa.text(),

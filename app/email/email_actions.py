@@ -14,52 +14,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 from app.db.dao_conn import get_conn
+from app.config import EMAIL_LOCAL_LIMIT
 from app.email.email_storage import (
     get_email_accounts_for_employee,
     get_email_filters_for_message,
+    prune_email_storage,
+)
+from app.email.email_helpers import (
+    SERVER_TO_LOCAL, LOCAL_TO_SERVER, normalize_folder_name,
+    denormalize_folder_name, safe_header, extract_html, get_attachments,
 )
 from app.utils.crypto import decrypt_password
 
 # MAPOWANIE NAZW FOLDERÓW
-SERVER_TO_LOCAL = {
-    "INBOX": "Odebrane",
-    "INBOX.Sent": "Wysłane",
-    "INBOX.spam": "Spam",
-    "INBOX.Spam": "Spam",
-    "INBOX.Junk": "Spam",
-    "INBOX.Drafts": "Szkice",
-    "INBOX.Archive": "Archiwum",
-}
-LOCAL_TO_SERVER = {
-    "Odebrane": "INBOX",
-    "Wysłane": "INBOX.Sent",
-    "Spam": "INBOX.spam",
-    "Szkice": "INBOX.Drafts",
-    "Archiwum": "INBOX.Archive",
-}
-
-# HELPERY
-def safe_header(value: str) -> str:
-    if not value:
-        return ""
-    try:
-        decoded = email.header.decode_header(value)
-        parts: List[str] = []
-        for b, enc in decoded:
-            if isinstance(b, str):
-                parts.append(b)
-            else:
-                enc = enc or "utf-8"
-                if enc.lower() in ("unknown-8bit", "x-unknown", "unknown"):
-                    enc = "latin-1"
-                try:
-                    parts.append(b.decode(enc, errors="replace"))
-                except Exception:
-                    parts.append(b.decode("latin-1", errors="replace"))
-        return "".join(parts)
-    except Exception:
-        return value
-
 def parse_mailbox_name(raw: bytes) -> str:
     s = raw.decode(errors="replace")
     first_quote = s.find('"')
@@ -69,19 +36,18 @@ def parse_mailbox_name(raw: bytes) -> str:
             return s[first_quote + 1:last_quote]
     return s.split()[-1].strip('"')
 
-def normalize_folder_name(server_name: str) -> str:
-    return SERVER_TO_LOCAL.get(server_name, server_name)
-
-def denormalize_folder_name(local_name: str) -> str:
-    return LOCAL_TO_SERVER.get(local_name, local_name)
-
 # KONTA I LOGOWANIE IMAP
 def _get_account_by_id(konto_id: int) -> Optional[Dict[str, Any]]:
-    accounts = get_email_accounts_for_employee(None)
-    for acc in accounts:
-        if acc.get("id") == konto_id:
-            return acc
-    return None
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM konta_email WHERE id = ? AND COALESCE(aktywne, 1) = 1",
+            (konto_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 def _open_imap_for_account(acc: Dict[str, Any]) -> Optional[imaplib.IMAP4_SSL]:
     email_addr = acc.get("email")
@@ -216,57 +182,6 @@ def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message
     finally:
         conn.close()
 
-# -----------------------------
-# EKSTRAKCJA HTML
-# -----------------------------
-def extract_html(msg: email.message.Message) -> Optional[str]:
-    if msg is None:
-        return None
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/html":
-                try:
-                    return part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8",
-                        errors="replace",
-                    )
-                except Exception:
-                    try:
-                        return part.get_payload(decode=True).decode("utf-8", errors="replace")
-                    except Exception:
-                        return None
-    else:
-        if msg.get_content_type() == "text/html":
-            try:
-                return msg.get_payload(decode=True).decode(
-                    msg.get_content_charset() or "utf-8",
-                    errors="replace",
-                )
-            except Exception:
-                return None
-    return None
-
-# -----------------------------
-# ZAŁĄCZNIKI (z DB)
-# -----------------------------
-def get_attachments(msg: email.message.Message) -> List[Dict[str, Any]]:
-    if msg is None:
-        return []
-    attachments: List[Dict[str, Any]] = []
-    idx = 0
-    for part in msg.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
-        cd = part.get("Content-Disposition")
-        if cd is None:
-            continue
-        filename = part.get_filename()
-        if not filename:
-            continue
-        attachments.append({"index": idx, "filename": safe_header(filename)})
-        idx += 1
-    return attachments
-
 def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optional[str]:
     msg = load_message(konto_id, folder, uid)
     if not msg:
@@ -390,6 +305,9 @@ def fetch_headers_from_imap_and_store(konto_id: int, server_folder: str, imap_ho
             imap.logout()
             raise RuntimeError("search failed")
         uids = data[0].split()
+        # Headers are retained only for the newest local window. The server
+        # remains authoritative for older UIDs and full message bodies.
+        uids = uids[-EMAIL_LOCAL_LIMIT:]
         fetched = 0
         updated = 0
         for uid in uids:
@@ -438,6 +356,7 @@ def fetch_headers_from_imap_and_store(konto_id: int, server_folder: str, imap_ho
                 conn.commit()
             except Exception:
                 continue
+        prune_email_storage(konto_id)
         imap.logout()
         return fetched, updated
     finally:
@@ -995,7 +914,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
                     if typ != "OK":
                         continue
                     uids = data[0].split()
-                    uids = uids[-200:]
+                    uids = uids[-EMAIL_LOCAL_LIMIT:]
                     for uid in uids:
                         try:
                             uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
@@ -1005,7 +924,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
                             )
                             if cur.fetchone():
                                 continue
-                            typ, msg_data = imap.fetch(uid, "(BODY[])")
+                            typ, msg_data = imap.fetch(uid, "(BODY.PEEK[HEADER])")
                             if typ != "OK" or not msg_data or not msg_data[0]:
                                 continue
                             raw = msg_data[0][1]
@@ -1050,7 +969,6 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                 if rule.get("usun"):
                                     usunieta = 1
                                 break
-                            raw_s = raw_bytes.decode("utf-8", errors="replace")
                             cur.execute(
                                 """
                                 INSERT INTO wiadomosci_email
@@ -1065,7 +983,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                     email_addr,
                                     temat,
                                     data_hdr,
-                                    raw_s,
+                                    None,
                                     przeczytana,
                                     usunieta,
                                 ),
@@ -1075,6 +993,10 @@ def sync_all_emails(pracownik_id: int) -> bool:
                 conn.commit()
             finally:
                 conn.close()
+            try:
+                prune_email_storage(acc["id"])
+            except Exception:
+                pass
             try:
                 imap.logout()
             except Exception:

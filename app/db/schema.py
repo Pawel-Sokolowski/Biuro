@@ -4,10 +4,7 @@ import bcrypt
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
-
+from app.config import get_database
 
 def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
     """
@@ -16,12 +13,13 @@ def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
     """
     try:
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_def};")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(get_database(), timeout=30)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
@@ -216,6 +214,10 @@ def init_db():
     """)
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_czasomierze_month ON czasomierze(miesiac, firma_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_statusy_miesieczne_miesiac "
+        "ON statusy_miesieczne(miesiac, firma_id)"
     )
 
     # -------------------------
@@ -596,6 +598,10 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_urzedy_skarbowe_name "
         "ON urzedy_skarbowe(nazwa);"
     )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dokumenty_firma_data "
+        "ON dokumenty(firma_id, data_wyst);"
+    )
 
     # -------------------------
     # chat
@@ -655,6 +661,10 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_zadania_status ON zadania(status, termin)"
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja ON wiadomosci_chat(konwersacja_id);")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja_data "
+        "ON wiadomosci_chat(konwersacja_id, data_wysylki);"
+    )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
 
     # -------------------------
@@ -811,6 +821,23 @@ def init_db():
         );
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS import_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_type TEXT NOT NULL,
+            source_path TEXT,
+            created_count INTEGER NOT NULL DEFAULT 0,
+            updated_count INTEGER NOT NULL DEFAULT 0,
+            warning_count INTEGER NOT NULL DEFAULT 0,
+            user_id INTEGER,
+            started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            details TEXT,
+            FOREIGN KEY(user_id) REFERENCES pracownicy(id) ON DELETE SET NULL
+        );
+    """)
+
     # -------------------------
     # indexes (some already created above)
     # -------------------------
@@ -823,6 +850,11 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_dokumenty_firma_data ON dokumenty(firma_id, data_wyst);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_statusy_miesieczne_firma_miesiac ON statusy_miesieczne(firma_id, miesiac);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_czasomierze_firma_miesiac ON czasomierze(firma_id, miesiac);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_data ON audit_log(data DESC);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_import_history_started ON import_history(started_at DESC);")
 
     # -------------------------
     # initial data

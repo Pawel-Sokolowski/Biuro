@@ -1,0 +1,7 @@
+PyQt6
+bcrypt
+cryptography
+openpyxl
+python-dotenv
+requests
+xlsxwriter

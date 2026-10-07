@@ -13,7 +13,6 @@ DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 from app.main_ui import LoginWindow
 from app.main_ui import OfficeManagerApp
-from app.db.schema import init_db
 
 def excepthook(type, value, tb):
     print("=== PYQT EXCEPTION CAUGHT ===")
@@ -24,7 +23,6 @@ sys.excepthook = excepthook
 
 if __name__ == "__main__":
 
-    init_db()
     app = QApplication(sys.argv)
     login_window = LoginWindow()
     if login_window.exec() == QDialog.DialogCode.Accepted:

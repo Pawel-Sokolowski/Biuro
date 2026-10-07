@@ -1,16 +1,14 @@
 # app/chat/chat_model.py
 import sqlite3
 from typing import List, Dict, Any, Optional
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
+from app.config import get_database
 
 
 def _get_conn():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(get_database(), timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -22,10 +20,15 @@ def get_conversations(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, nazwa, pracownik_creator_id, data_utworzenia, ostatnia_aktualizacja
-        FROM konwersacje
+        SELECT DISTINCT k.id, k.nazwa, k.pracownik_creator_id,
+                        k.data_utworzenia, k.ostatnia_aktualizacja
+        FROM konwersacje k
+        LEFT JOIN uczestnicy_chat uc ON uc.konwersacja_id = k.id
+        WHERE ? IS NULL
+           OR k.pracownik_creator_id = ?
+           OR uc.pracownik_id = ?
         ORDER BY datetime(data_utworzenia) DESC
-    """)
+    """, (pracownik_id, pracownik_id, pracownik_id))
     rows = cur.fetchall()
     conn.close()
     return [{k: row[k] for k in row.keys()} for row in rows]
@@ -64,6 +67,10 @@ def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
         INSERT INTO wiadomosci_chat (konwersacja_id, pracownik_id, tresc, data_wysylki)
         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
     """, (konwersacja_id, pracownik_id, tresc))
+    cur.execute(
+        "UPDATE konwersacje SET ostatnia_aktualizacja = CURRENT_TIMESTAMP WHERE id = ?",
+        (konwersacja_id,),
+    )
     conn.commit()
     last_id = cur.lastrowid
     conn.close()

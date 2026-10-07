@@ -1,10 +1,10 @@
 biuro.db
 *.db
-app/config.py
 *.csv
 script
 test_imap.py
 /ui/
-/tests
 /frontend
 .env
+__pycache__/
+*.py[cod]

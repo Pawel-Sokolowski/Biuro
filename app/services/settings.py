@@ -1,10 +1,9 @@
 # app/global/settings.py
-import sqlite3
-from app.config import DB_NAME
+from app.db.dao_conn import get_conn
 
 
 def is_admin(pracownik_id: int) -> bool:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT rola_id FROM pracownik_firma
@@ -16,7 +15,7 @@ def is_admin(pracownik_id: int) -> bool:
 
 
 def get_global_roles():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id, nazwa FROM role ORDER BY id")
     rows = cur.fetchall()
@@ -25,7 +24,7 @@ def get_global_roles():
 
 
 def get_email_settings():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT id, pracownik_id, email, serwer_imap, serwer_smtp

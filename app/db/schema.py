@@ -4,7 +4,7 @@ import bcrypt
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-from app.config import DB_NAME
+from app.config import get_database
 
 def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
     """
@@ -19,7 +19,7 @@ def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
 
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(get_database(), timeout=30)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 

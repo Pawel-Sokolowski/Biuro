@@ -203,6 +203,7 @@ def init_db():
             miesiac TEXT NOT NULL,
             typ TEXT NOT NULL,
             usluga_id INTEGER,
+            task_id INTEGER,
             fakturowac INTEGER DEFAULT 0,
             rozpoczecie TEXT NOT NULL,
             zakonczenie TEXT NOT NULL,
@@ -212,6 +213,7 @@ def init_db():
             FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE SET NULL
         );
     """)
+    _safe_alter_add_column(cur, "czasomierze", "task_id INTEGER")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_czasomierze_month ON czasomierze(miesiac, firma_id)"
     )
@@ -505,6 +507,26 @@ def init_db():
             FOREIGN KEY(folder_id) REFERENCES foldery_email(id) ON DELETE SET NULL
         );
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS email_message_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL,
+            employee_id INTEGER,
+            company_id INTEGER,
+            UNIQUE(message_id, employee_id, company_id),
+            FOREIGN KEY(message_id) REFERENCES wiadomosci_email(id) ON DELETE CASCADE,
+            FOREIGN KEY(employee_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
+            FOREIGN KEY(company_id) REFERENCES firmy(id) ON DELETE CASCADE
+        );
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_assignments_employee "
+        "ON email_message_assignments(employee_id, message_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_assignments_company "
+        "ON email_message_assignments(company_id, message_id)"
+    )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_account_folder_date "

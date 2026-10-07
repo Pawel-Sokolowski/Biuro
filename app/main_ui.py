@@ -267,8 +267,20 @@ class OfficeManagerApp(QMainWindow):
             "Zadania",
             "Ustawienia"
         ])
+        for row in range(self.sidebar.count()):
+            item = self.sidebar.item(row)
+            item.setData(Qt.ItemDataRole.UserRole, item.text())
         self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
-        main_layout.addWidget(self.sidebar)
+        self.sidebar_collapsed = False
+        sidebar_panel = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar_panel)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        self.sidebar_toggle = QPushButton("☰  Menu")
+        self.sidebar_toggle.setToolTip("Zwiń lub rozwiń menu")
+        self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
+        sidebar_layout.addWidget(self.sidebar_toggle)
+        sidebar_layout.addWidget(self.sidebar)
+        main_layout.addWidget(sidebar_panel)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -293,15 +305,17 @@ class OfficeManagerApp(QMainWindow):
         live_layout.setSpacing(8)
 
         # tytuł
-        lbl_live_title = QLabel("Aktywny stoper:")
+        lbl_live_title = QLabel(name)
         lbl_live_title.setStyleSheet("font-weight: bold;")
         live_layout.addWidget(lbl_live_title)
 
-        # główna etykieta pokazująca: Nazwa firmy — czas — Czynność
-        self.lbl_live_timer = QLabel("Brak aktywnego stoperu")
-        self.lbl_live_timer.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_live_timer.setStyleSheet("font-size: 12px;")
-        live_layout.addWidget(self.lbl_live_timer)
+        self.lbl_live_task = QLabel("Zadanie")
+        self.lbl_live_context = QLabel("Firma")
+        self.lbl_live_timer = QLabel("00:00:00")
+        for label in (self.lbl_live_task, self.lbl_live_context, self.lbl_live_timer):
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            label.setStyleSheet("font-size: 12px;")
+            live_layout.addWidget(label)
 
         header_layout.addStretch()
         header_layout.addWidget(live_container)
@@ -341,6 +355,25 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer.timeout.connect(self._update_header_timer)
         self._header_timer.start()
 
+    def _toggle_sidebar(self):
+        self.sidebar_collapsed = not self.sidebar_collapsed
+        if self.sidebar_collapsed:
+            self.sidebar.setFixedWidth(58)
+            self.sidebar_toggle.setText("☰")
+            self.sidebar.setToolTip("Rozwiń menu")
+            for row in range(self.sidebar.count()):
+                item = self.sidebar.item(row)
+                item.setToolTip(item.data(Qt.ItemDataRole.UserRole))
+                item.setText("")
+        else:
+            self.sidebar.setFixedWidth(240)
+            self.sidebar_toggle.setText("☰  Menu")
+            self.sidebar.setToolTip("")
+            for row in range(self.sidebar.count()):
+                item = self.sidebar.item(row)
+                item.setText(item.data(Qt.ItemDataRole.UserRole))
+                item.setToolTip("")
+
     def _update_header_timer(self):
         """
         Odczytuje z MonthlyViewPage.logic aktywne stopery (ksiegowosc/kadry)
@@ -354,11 +387,24 @@ class OfficeManagerApp(QMainWindow):
                 return
 
             labels = logic.get_active_timer_labels()
-            self.lbl_live_timer.setText(" | ".join(labels) if labels else "Brak aktywnego stoperu")
+            details = logic.get_active_timer_details()
+            if details:
+                first = details[0]
+                self.lbl_live_task.setText(first["task"])
+                self.lbl_live_context.setText(
+                    f"{first['company']} - {first['department']}"
+                )
+                self.lbl_live_timer.setText(first["elapsed"])
+            else:
+                self.lbl_live_task.setText("Brak aktywnego zadania")
+                self.lbl_live_context.setText("")
+                self.lbl_live_timer.setText("00:00:00")
         except Exception:
             # nie przerywamy UI; ewentualnie loguj
             if self.lbl_live_timer:
-                self.lbl_live_timer.setText("Brak aktywnego stoperu")
+                self.lbl_live_task.setText("Brak aktywnego zadania")
+                self.lbl_live_context.setText("")
+                self.lbl_live_timer.setText("00:00:00")
 
     def zmien_zakladke(self, index):
         if 0 <= index < self.pages.count():

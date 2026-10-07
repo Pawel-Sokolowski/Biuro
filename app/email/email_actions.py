@@ -948,27 +948,10 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                 acc["id"], nadawca, temat, raw_bytes.decode("utf-8", errors="replace")
                             )
                             for rule in matching_rules:
-                                target_folder = (rule.get("folder_docelowy") or "").strip()
-                                if not target_folder:
-                                    continue
-                                cur.execute(
-                                    "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
-                                    (acc["id"], target_folder),
-                                )
-                                target_row = cur.fetchone()
-                                if target_row:
-                                    folder_id = target_row["id"] if isinstance(target_row, sqlite3.Row) else target_row[0]
-                                else:
-                                    cur.execute(
-                                        "INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)",
-                                        (acc["id"], target_folder),
-                                    )
-                                    folder_id = cur.lastrowid
                                 if rule.get("oznacz_jako_przeczytane"):
                                     przeczytana = 1
                                 if rule.get("usun"):
                                     usunieta = 1
-                                break
                             cur.execute(
                                 """
                                 INSERT INTO wiadomosci_email
@@ -988,6 +971,19 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                     usunieta,
                                 ),
                             )
+                            message_id = cur.lastrowid
+                            for rule in matching_rules:
+                                employee_id = rule.get("pracownik_id")
+                                company_id = rule.get("firma_id")
+                                if employee_id is not None or company_id is not None:
+                                    cur.execute(
+                                        """
+                                        INSERT OR IGNORE INTO email_message_assignments
+                                            (message_id, employee_id, company_id)
+                                        VALUES (?, ?, ?)
+                                        """,
+                                        (message_id, employee_id, company_id),
+                                    )
                         except Exception:
                             pass
                 conn.commit()

@@ -4,8 +4,16 @@ import os
 import datetime
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent, QPoint
-from PyQt6.QtGui import QAction, QIntValidator, QCursor, QIcon, QColor, QPainter
+from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent
+from PyQt6.QtGui import (
+    QAction,
+    QIntValidator,
+    QCursor,
+    QIcon,
+    QColor,
+    QPainter,
+    QFontMetrics,
+)
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -70,15 +78,67 @@ class IconButtonDelegate(QStyledItemDelegate):
 
 
 class ScrollableNotesDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._offsets: Dict[tuple, int] = {}
+
     def paint(self, painter, option, index):
         painter.save()
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        rect = option.rect.adjusted(4, 4, -4, -4)
+        key = self._key(index)
+        line_height = painter.fontMetrics().lineSpacing()
+        content_height = painter.fontMetrics().boundingRect(
+            rect.width(),
+            0,
+            rect.width(),
+            100000,
+            Qt.TextFlag.TextWordWrap,
+            text,
+        ).height()
+        max_offset = max(0, content_height - rect.height())
+        offset = min(self._offsets.get(key, 0), max_offset)
+        self._offsets[key] = offset
+
+        painter.setClipRect(rect)
+        painter.translate(0, -offset)
         painter.drawText(
-            option.rect.adjusted(4, 4, -4, -4),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            rect.x(),
+            rect.y() + max(0, line_height // 4),
+            rect.width(),
+            content_height,
+            Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignLeft,
             text,
         )
         painter.restore()
+
+    def _key(self, index: QModelIndex) -> tuple:
+        row = index.model().data(index, Qt.ItemDataRole.UserRole) or {}
+        return id(index.model()), row.get("id", index.row())
+
+    def scroll(self, index: QModelIndex, delta: int, width: int, height: int) -> bool:
+        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        rect_width = max(1, width - 8)
+        rect_height = max(1, height - 8)
+        content_height = QFontMetrics(index.model().parent().font()).boundingRect(
+            rect_width,
+            0,
+            rect_width,
+            100000,
+            Qt.TextFlag.TextWordWrap,
+            text,
+        ).height()
+        max_offset = max(0, content_height - rect_height)
+        if max_offset == 0:
+            return False
+
+        key = self._key(index)
+        old_offset = self._offsets.get(key, 0)
+        new_offset = max(0, min(max_offset, old_offset - delta))
+        if new_offset == old_offset:
+            return False
+        self._offsets[key] = new_offset
+        return True
 
     def editorEvent(self, event, model, option, index):
         return False
@@ -386,18 +446,19 @@ class MonthlyViewPage(QWidget):
         self.table_ks.setItemDelegateForColumn(6, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
         self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
         self.table_ks.setItemDelegateForColumn(8, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
-        self.table_ks.setItemDelegateForColumn(5, ScrollableNotesDelegate(self.table_ks))
+        self.notes_delegate_ks = ScrollableNotesDelegate(self.table_ks)
+        self.table_ks.setItemDelegateForColumn(5, self.notes_delegate_ks)
 
         self.table_kadry.setItemDelegateForColumn(6, IconButtonDelegate(self.table_kadry, "play.png", "stoper_kadry"))
         self.table_kadry.setItemDelegateForColumn(8, IconButtonDelegate(self.table_kadry, "add.png", "extra_kadry"))
         self.table_kadry.setItemDelegateForColumn(9, IconButtonDelegate(self.table_kadry, "edit.png", "edit_kadry"))
-        self.table_kadry.setItemDelegateForColumn(7, ScrollableNotesDelegate(self.table_kadry))
+        self.notes_delegate_kadry = ScrollableNotesDelegate(self.table_kadry)
+        self.table_kadry.setItemDelegateForColumn(7, self.notes_delegate_kadry)
 
         self.table_ks.viewport().installEventFilter(self)
         self.table_kadry.viewport().installEventFilter(self)
         self.table_ks.doubleClicked.connect(self._on_table_double_click)
         self.table_kadry.doubleClicked.connect(self._on_table_double_click)
-        self._note_popup: Optional[QTextEdit] = None
 
         self._setup_column_widths()
 
@@ -407,17 +468,26 @@ class MonthlyViewPage(QWidget):
         self.btn_refresh.clicked.connect(self._reload_rows)
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.MouseMove:
+        if event.type() == QEvent.Type.Wheel:
             table = self.table_ks if obj is self.table_ks.viewport() else self.table_kadry
-            index = table.indexAt(event.pos())
+            index = table.indexAt(event.position().toPoint())
             note_col = 5 if table is self.table_ks else 7
             if index.isValid() and index.column() == note_col:
-                row = index.model().get_row(index.row())
-                text = (row or {}).get("note_full", "")
-                if text:
-                    self._show_note_popup(table, index, text)
-            else:
-                self._hide_note_popup()
+                delegate = (
+                    self.notes_delegate_ks
+                    if table is self.table_ks
+                    else self.notes_delegate_kadry
+                )
+                delta = event.pixelDelta().y() or event.angleDelta().y()
+                if delegate.scroll(
+                    index,
+                    delta,
+                    table.columnWidth(note_col),
+                    table.rowHeight(index.row()),
+                ):
+                    table.viewport().update(table.visualRect(index))
+                    event.accept()
+                    return True
         if event.type() == QEvent.Type.MouseButtonRelease:
             if obj in (self.table_ks.viewport(), self.table_kadry.viewport()):
                 table = self.table_ks if obj is self.table_ks.viewport() else self.table_kadry
@@ -431,25 +501,6 @@ class MonthlyViewPage(QWidget):
                 self.handle_button_click(index, delegate.role)
                 return True
         return super().eventFilter(obj, event)
-
-    def _show_note_popup(self, table: QTableView, index: QModelIndex, text: str):
-        if self._note_popup is None:
-            self._note_popup = QTextEdit(self)
-            self._note_popup.setReadOnly(True)
-            self._note_popup.setWindowFlags(Qt.WindowType.ToolTip)
-            self._note_popup.setStyleSheet(
-                "QTextEdit { background: #fffef2; border: 1px solid #a0a0a0; padding: 4px; }"
-            )
-        self._note_popup.setPlainText(text)
-        self._note_popup.verticalScrollBar().setValue(0)
-        self._note_popup.resize(max(280, table.columnWidth(index.column())), 140)
-        position = table.viewport().mapToGlobal(table.visualRect(index).bottomLeft())
-        self._note_popup.move(position + QPoint(0, 2))
-        self._note_popup.show()
-
-    def _hide_note_popup(self):
-        if self._note_popup:
-            self._note_popup.hide()
 
     def _on_table_double_click(self, index: QModelIndex):
         table = self.sender()

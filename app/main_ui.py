@@ -1,3 +1,5 @@
+import os
+
 from PyQt6.QtWidgets import QApplication, QFileDialog
 from PyQt6.QtCore import QSettings
 from app.utils.ui_imports import *
@@ -26,7 +28,7 @@ class LoginWindow(QDialog):
         self.setWindowTitle("Logowanie")
         self.setMinimumSize(520, 380)
         self.pracownik_id: Optional[int] = None
-        self.database_path = get_database()
+        self.database_path = self._last_database() or get_database()
         self._build_ui()
 
     def _build_ui(self):
@@ -90,10 +92,20 @@ class LoginWindow(QDialog):
     def _database_history() -> list[str]:
         settings = QSettings("Biuro", "OfficeManager")
         values = settings.value("databases", [], type=list)
-        paths = [str(value) for value in values if str(value).strip()]
+        if isinstance(values, str):
+            values = [values]
+        paths = [str(value).strip() for value in values if str(value).strip()]
+        last_database = str(settings.value("last_database", "") or "").strip()
+        if last_database:
+            paths = [last_database] + [path for path in paths if path != last_database]
         if DEFAULT_DB_NAME not in paths:
             paths.insert(0, DEFAULT_DB_NAME)
         return paths
+
+    @staticmethod
+    def _last_database() -> str:
+        settings = QSettings("Biuro", "OfficeManager")
+        return str(settings.value("last_database", "") or "").strip()
 
     def _choose_database(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -107,11 +119,14 @@ class LoginWindow(QDialog):
 
     def _remember_database(self, path: str):
         settings = QSettings("Biuro", "OfficeManager")
-        paths = [path]
+        selected = os.path.abspath(os.path.expanduser(path))
+        paths = [selected]
         for existing in self._database_history():
-            if existing != path:
+            if existing != selected:
                 paths.append(existing)
         settings.setValue("databases", paths[:10])
+        settings.setValue("last_database", selected)
+        settings.sync()
 
     def _on_login(self):
         from app.utils.crypto import login_user

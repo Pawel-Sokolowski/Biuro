@@ -1,10 +1,9 @@
 # app/global/services.py
-import sqlite3
-from app.config import DB_NAME
+from app.db.dao_conn import get_conn
 
 
 def pobierz_uslugi_globalne():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id, nazwa, cena_netto, stawka_vat FROM uslugi_dodatkowe ORDER BY nazwa")
     rows = cur.fetchall()
@@ -13,7 +12,7 @@ def pobierz_uslugi_globalne():
 
 
 def pobierz_uslugi_firmy(firma_id: int, miesiac: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT u.nazwa, f.ilosc, f.cena_netto, u.stawka_vat

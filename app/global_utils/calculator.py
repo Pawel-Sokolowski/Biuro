@@ -1,12 +1,7 @@
 # app/globals/calculator.py
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
-
 import sqlite3
 from typing import Dict, Any
+from app.db.dao_conn import get_conn
 
 
 
@@ -18,7 +13,7 @@ def _get_company_basic(firma_id: int) -> Dict[str, Any]:
     - limit_dokumentow
     - glowny_cennik (klucz cennika)
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
@@ -57,7 +52,7 @@ def _get_docs_count_for_month(firma_id: int, miesiac: str) -> int:
     Zakładamy, że data_wyst jest w formacie YYYY-MM-DD.
     miesiac = '2026-08'
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
@@ -91,7 +86,7 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
             "brutto": 0.0
         }
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 

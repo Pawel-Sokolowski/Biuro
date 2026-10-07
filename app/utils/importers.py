@@ -5,10 +5,7 @@ import re
 import os
 import hashlib
 from typing import Dict, Any, List, Optional, Tuple
-from dotenv import load_dotenv
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
+from app.config import DB_NAME
 
 from app.utils.parsing import (
     normalize_identifier,

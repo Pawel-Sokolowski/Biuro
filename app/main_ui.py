@@ -273,7 +273,6 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer = QTimer(self)
         self._header_timer.setInterval(1000)
         self._header_timer.timeout.connect(self._update_header_timer)
-        self._header_timer.timeout.connect(self.page_monthly._reload_rows)
         self._header_timer.start()
 
     def _update_header_timer(self):

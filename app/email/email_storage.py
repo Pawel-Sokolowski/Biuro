@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from email.message import Message
 from app.db.dao_conn import get_conn
+from app.config import EMAIL_LOCAL_LIMIT
 
 logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"[^@]+@[^@]+\.[^@]+")
@@ -465,12 +466,60 @@ def refresh_email_list(konto_id: int, folder: str) -> List[Dict[str, Any]]:
             SELECT id, uid, nadawca, temat, data, przeczytana
             FROM wiadomosci_email
             WHERE konto_id = ? AND folder_id = ? AND usunieta = 0
-            ORDER BY data DESC
+            ORDER BY datetime(data) DESC, id DESC
+            LIMIT ?
             """,
-            (konto_id, folder_id),
+            (konto_id, folder_id, EMAIL_LOCAL_LIMIT),
         )
         rows = cur.fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def prune_email_storage(
+    konto_id: Optional[int] = None,
+    limit: int = EMAIL_LOCAL_LIMIT,
+) -> int:
+    """Keep only the newest local message rows per account and folder.
+
+    The IMAP server remains the source of truth. Older messages can be
+    downloaded again on demand by UID, while SQLite remains bounded.
+    """
+    if limit < 1:
+        raise ValueError("Email storage limit must be at least 1.")
+
+    conn = get_conn()
+    try:
+        account_clause = "WHERE konto_id = ?" if konto_id is not None else ""
+        params = (konto_id,) if konto_id is not None else ()
+        rows = conn.execute(
+            f"""
+            SELECT id, konto_id, folder_id
+            FROM wiadomosci_email
+            {account_clause}
+            ORDER BY konto_id, folder_id, datetime(data) DESC, id DESC
+            """,
+            params,
+        ).fetchall()
+
+        kept: Dict[Tuple[int, Optional[int]], int] = {}
+        delete_ids: List[int] = []
+        for row in rows:
+            key = (int(row["konto_id"]), row["folder_id"])
+            count = kept.get(key, 0)
+            if count >= limit:
+                delete_ids.append(int(row["id"]))
+            else:
+                kept[key] = count + 1
+
+        if delete_ids:
+            conn.executemany(
+                "DELETE FROM wiadomosci_email WHERE id = ?",
+                ((message_id,) for message_id in delete_ids),
+            )
+            conn.commit()
+        return len(delete_ids)
     finally:
         conn.close()
 

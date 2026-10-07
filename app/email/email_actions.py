@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 from app.db.dao_conn import get_conn
+from app.config import EMAIL_LOCAL_LIMIT
 from app.email.email_storage import (
     get_email_accounts_for_employee,
     get_email_filters_for_message,
+    prune_email_storage,
 )
 from app.utils.crypto import decrypt_password
 
@@ -77,11 +79,16 @@ def denormalize_folder_name(local_name: str) -> str:
 
 # KONTA I LOGOWANIE IMAP
 def _get_account_by_id(konto_id: int) -> Optional[Dict[str, Any]]:
-    accounts = get_email_accounts_for_employee(None)
-    for acc in accounts:
-        if acc.get("id") == konto_id:
-            return acc
-    return None
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM konta_email WHERE id = ? AND COALESCE(aktywne, 1) = 1",
+            (konto_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 def _open_imap_for_account(acc: Dict[str, Any]) -> Optional[imaplib.IMAP4_SSL]:
     email_addr = acc.get("email")
@@ -390,6 +397,9 @@ def fetch_headers_from_imap_and_store(konto_id: int, server_folder: str, imap_ho
             imap.logout()
             raise RuntimeError("search failed")
         uids = data[0].split()
+        # Headers are retained only for the newest local window. The server
+        # remains authoritative for older UIDs and full message bodies.
+        uids = uids[-EMAIL_LOCAL_LIMIT:]
         fetched = 0
         updated = 0
         for uid in uids:
@@ -438,6 +448,7 @@ def fetch_headers_from_imap_and_store(konto_id: int, server_folder: str, imap_ho
                 conn.commit()
             except Exception:
                 continue
+        prune_email_storage(konto_id)
         imap.logout()
         return fetched, updated
     finally:
@@ -995,7 +1006,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
                     if typ != "OK":
                         continue
                     uids = data[0].split()
-                    uids = uids[-200:]
+                    uids = uids[-EMAIL_LOCAL_LIMIT:]
                     for uid in uids:
                         try:
                             uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
@@ -1005,7 +1016,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
                             )
                             if cur.fetchone():
                                 continue
-                            typ, msg_data = imap.fetch(uid, "(BODY[])")
+                            typ, msg_data = imap.fetch(uid, "(BODY.PEEK[HEADER])")
                             if typ != "OK" or not msg_data or not msg_data[0]:
                                 continue
                             raw = msg_data[0][1]
@@ -1050,7 +1061,6 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                 if rule.get("usun"):
                                     usunieta = 1
                                 break
-                            raw_s = raw_bytes.decode("utf-8", errors="replace")
                             cur.execute(
                                 """
                                 INSERT INTO wiadomosci_email
@@ -1065,7 +1075,7 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                     email_addr,
                                     temat,
                                     data_hdr,
-                                    raw_s,
+                                    None,
                                     przeczytana,
                                     usunieta,
                                 ),
@@ -1075,6 +1085,10 @@ def sync_all_emails(pracownik_id: int) -> bool:
                 conn.commit()
             finally:
                 conn.close()
+            try:
+                prune_email_storage(acc["id"])
+            except Exception:
+                pass
             try:
                 imap.logout()
             except Exception:

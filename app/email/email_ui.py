@@ -250,7 +250,7 @@ class EmailPage(QWidget):
 
         companies_root = QTreeWidgetItem(["Companies"])
         root.addChild(companies_root)
-        for company in list_companies():
+        for company in list_companies(self.pracownik_id):
             item = QTreeWidgetItem([
                 company.get("nazwa_skrocona") or company.get("nazwa") or "Company"
             ])

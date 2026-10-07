@@ -329,7 +329,7 @@ class OfficeManagerApp(QMainWindow):
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
         self.page_dashboard = DashboardPage(self.pracownik_id)
-        self.page_companies = CompanyUI(self)
+        self.page_companies = CompanyUI(self.pracownik_id, self)
         self.page_email = EmailPage(self.pracownik_id)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_faktury = FakturyPage(self.pracownik_id)

@@ -24,8 +24,9 @@ from app.companies.company_form import CompanyForm
 
 
 class CompanyUI(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
+        self.pracownik_id = pracownik_id
         self.setWindowTitle("Firmy")
         self.resize(1100, 700)
 
@@ -97,7 +98,7 @@ class CompanyUI(QWidget):
     #  LOAD TABLE
     # ============================================================
     def _refresh(self):
-        rows = list_companies()
+        rows = list_companies(self.pracownik_id)
         self._load_table(rows)
 
     def _load_table(self, rows: List[Dict[str, Any]]):
@@ -120,7 +121,7 @@ class CompanyUI(QWidget):
     def _search(self):
         search = self.search_input.text().strip()
         status = self.status_filter.currentText()
-        rows = get_companies_filtered(search, status, None)
+        rows = get_companies_filtered(search, status, None, self.pracownik_id)
         self._load_table(rows)
 
     def _clear_filters(self):
@@ -132,7 +133,7 @@ class CompanyUI(QWidget):
     #  CRUD
     # ============================================================
     def _add_company(self):
-        dlg = CompanyForm(None, self)
+        dlg = CompanyForm(None, self, actor_id=self.pracownik_id)
         if dlg.exec():
             self._refresh()
 
@@ -147,7 +148,7 @@ class CompanyUI(QWidget):
             QMessageBox.warning(self, "Firma", "Nie można odczytać ID firmy.")
             return
 
-        dlg = CompanyForm(firma_id, self)
+        dlg = CompanyForm(firma_id, self, actor_id=self.pracownik_id)
         if dlg.exec():
             self._refresh()
 
@@ -172,7 +173,9 @@ class CompanyUI(QWidget):
             return
 
         try:
-            delete_company(firma_id)
+            delete_company(firma_id, actor_id=self.pracownik_id)
             self._refresh()
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
         except Exception as e:
             QMessageBox.critical(self, "Błąd", str(e))

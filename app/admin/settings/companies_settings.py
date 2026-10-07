@@ -162,7 +162,7 @@ class CompaniesSettings(QWidget):
         dlg.setWindowTitle("Dodaj firmę")
         lay = QVBoxLayoutDialog(dlg)
 
-        form = CompanyForm(None, dlg)
+        form = CompanyForm(None, dlg, actor_id=self.pracownik_id)
         lay.addWidget(form)
 
         dlg.exec()
@@ -186,7 +186,7 @@ class CompaniesSettings(QWidget):
         dlg.setWindowTitle("Edytuj firmę")
         lay = QVBoxLayoutDialog(dlg)
 
-        form = CompanyForm(firma["id"], dlg)
+        form = CompanyForm(firma["id"], dlg, actor_id=self.pracownik_id)
         lay.addWidget(form)
 
         dlg.exec()
@@ -299,7 +299,7 @@ class CompaniesSettings(QWidget):
     def _run_import_wizard(self, payloads):
         from app.utils.import_wizard import ImportWizard
 
-        wizard = ImportWizard(payloads, self)
+        wizard = ImportWizard(payloads, self, actor_id=self.pracownik_id)
         wizard.exec()
 
         self._refresh()

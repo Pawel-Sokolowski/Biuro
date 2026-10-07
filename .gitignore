@@ -8,3 +8,6 @@ test_imap.py
 .env
 __pycache__/
 *.py[cod]
+build/
+dist/
+installer/output/

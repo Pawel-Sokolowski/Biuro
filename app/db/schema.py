@@ -4,10 +4,7 @@ import bcrypt
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
-
+from app.config import DB_NAME
 
 def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
     """
@@ -16,8 +13,9 @@ def _safe_alter_add_column(cur: sqlite3.Cursor, table: str, column_def: str):
     """
     try:
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_def};")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def init_db():
@@ -216,6 +214,10 @@ def init_db():
     """)
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_czasomierze_month ON czasomierze(miesiac, firma_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_statusy_miesieczne_miesiac "
+        "ON statusy_miesieczne(miesiac, firma_id)"
     )
 
     # -------------------------
@@ -596,6 +598,10 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_urzedy_skarbowe_name "
         "ON urzedy_skarbowe(nazwa);"
     )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dokumenty_firma_data "
+        "ON dokumenty(firma_id, data_wyst);"
+    )
 
     # -------------------------
     # chat
@@ -655,6 +661,10 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_zadania_status ON zadania(status, termin)"
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja ON wiadomosci_chat(konwersacja_id);")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja_data "
+        "ON wiadomosci_chat(konwersacja_id, data_wysylki);"
+    )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
 
     # -------------------------

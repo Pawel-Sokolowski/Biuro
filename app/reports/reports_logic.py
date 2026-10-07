@@ -2,12 +2,7 @@
 import sqlite3
 from typing import List, Dict, Any
 from app.global_utils.calculator import oblicz_miesieczny_koszt
-import os
-from dotenv import load_dotenv
 from app.db.dao_conn import get_conn
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
 
 # ============================================================
 # LISTA FIRM
@@ -49,7 +44,7 @@ def get_months_range(start: str, end: str) -> List[str]:
 # GODZINY DLA FIRMY I MIESIĄCA
 # ============================================================
 def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
@@ -222,7 +217,7 @@ def compare_companies(firma_ids: List[int], miesiac: str) -> Dict[str, Any]:
 # ZAROBEK NA GODZINĘ — POPRAWIONY
 # ============================================================
 def build_profit_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 

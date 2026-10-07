@@ -77,29 +77,21 @@ class MonthlyViewLogic:
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
                    f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
-                   CASE
-                       WHEN (
-                           SELECT COUNT(*)
-                           FROM dokumenty d
-                           WHERE d.firma_id = f.id
-                             AND substr(d.data_wyst, 1, 7) = ?
-                       ) > 0
-                       THEN (
-                           SELECT COUNT(*)
-                           FROM dokumenty d
-                           WHERE d.firma_id = f.id
-                             AND substr(d.data_wyst, 1, 7) = ?
-                       )
-                       ELSE COALESCE(sm.ilosc_dok, 0)
-                   END AS ilosc_dok,
+                   COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = ?
+            LEFT JOIN (
+                SELECT firma_id, COUNT(*) AS ilosc_dok
+                FROM dokumenty
+                WHERE substr(data_wyst, 1, 7) = ?
+                GROUP BY firma_id
+            ) doc ON doc.firma_id = f.id
             ORDER BY f.nazwa
         """,
-            (selected_month, selected_month, selected_month),
+            (selected_month, selected_month),
         )
 
         rows = [dict(r) for r in cur.fetchall()]

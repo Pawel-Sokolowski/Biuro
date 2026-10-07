@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import email
+from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
 
 from PyQt6.QtWidgets import (
@@ -176,6 +177,11 @@ class EmailPage(QWidget):
         splitter.addWidget(right_container)
 
         # Message view
+        self.btn_download_message = QPushButton("Pobierz pełną wiadomość z serwera")
+        self.btn_download_message.setEnabled(False)
+        self.btn_download_message.clicked.connect(self.on_download_current_message)
+        right_layout.addWidget(self.btn_download_message)
+
         self.mail_view = QTextEdit()
         self.mail_view.setReadOnly(True)
         splitter.addWidget(self.mail_view)
@@ -320,6 +326,12 @@ class EmailPage(QWidget):
         except Exception:
             rows = []
 
+        subject_counts = Counter(
+            (r.get("temat") or "").strip().casefold()
+            for r in rows
+            if (r.get("temat") or "").strip()
+        )
+
         for r in rows:
             uid = r.get("uid")
             sender = r.get("nadawca") or ""
@@ -328,21 +340,11 @@ class EmailPage(QWidget):
             is_unread = not bool(r.get("przeczytana"))
             self.unread_map[uid] = is_unread
 
-            has_thread = False
-            try:
-                conv = search_messages(konto_id, local_folder, subject or "")
-                has_thread = len(conv) > 1
-            except Exception:
-                pass
-
+            has_thread = subject_counts.get(subject.strip().casefold(), 0) > 1
+            # Full MIME bodies are intentionally not loaded while rendering
+            # the list. They are fetched only when the user opens/downloads a
+            # message.
             has_attachment = False
-            try:
-                msg = load_message(konto_id, local_folder, uid)
-                if msg:
-                    atts = get_attachments(msg)
-                    has_attachment = len(atts) > 0
-            except Exception:
-                pass
 
             widget = self.create_message_widget(subject, sender, date, has_attachment, has_thread, is_unread)
             item = QListWidgetItem()
@@ -432,22 +434,51 @@ class EmailPage(QWidget):
 
         self.current_uid = uid
         self.cached_message = None
+        self.btn_download_message.setEnabled(False)
         konto_id = self.current_account["id"]
 
         try:
             msg = load_message(konto_id, local_folder, uid)
-            if not msg:
-                server_folder = denormalize_folder_name(local_folder)
-                fetch_ok = fetch_message_from_imap_and_store(konto_id, server_folder, uid)
-                if fetch_ok:
-                    msg = load_message(konto_id, local_folder, uid)
         except Exception:
             msg = None
 
         if not msg:
-            QMessageBox.warning(self, "IMAP", "Nie można pobrać treści wiadomości.")
+            self.btn_download_message.setEnabled(True)
+            self.mail_view.setPlainText(
+                "Ta wiadomość nie jest przechowywana lokalnie.\n"
+                "Kliknij przycisk powyżej, aby pobrać jej pełną treść z serwera."
+            )
             return
 
+        self._render_message(msg)
+
+        if self.unread_map.get(uid, False):
+            try:
+                mark_read_remote(konto_id, denormalize_folder_name(local_folder), uid)
+            except Exception:
+                pass
+            self.unread_map[uid] = False
+            self.update_item_widget(item, uid)
+
+    def on_download_current_message(self) -> None:
+        if not self.current_account or not self.current_uid or not self.current_folder_local:
+            return
+
+        konto_id = self.current_account["id"]
+        server_folder = denormalize_folder_name(self.current_folder_local)
+        self.btn_download_message.setEnabled(False)
+        try:
+            if not fetch_message_from_imap_and_store(konto_id, server_folder, self.current_uid):
+                raise RuntimeError("Serwer nie zwrócił pełnej wiadomości.")
+            msg = load_message(konto_id, self.current_folder_local, self.current_uid)
+            if not msg:
+                raise RuntimeError("Nie udało się odczytać pobranej wiadomości.")
+            self._render_message(msg)
+        except Exception as exc:
+            self.btn_download_message.setEnabled(True)
+            QMessageBox.warning(self, "IMAP", f"Nie można pobrać treści wiadomości:\n{exc}")
+
+    def _render_message(self, msg: email.message.Message) -> None:
         self.cached_message = msg
         html = extract_html(msg)
 
@@ -476,14 +507,6 @@ class EmailPage(QWidget):
 
         attachments = get_attachments(msg)
         self.show_attachments(attachments)
-
-        if self.unread_map.get(uid, False):
-            try:
-                mark_read_remote(konto_id, denormalize_folder_name(local_folder), uid)
-            except Exception:
-                pass
-            self.unread_map[uid] = False
-            self.update_item_widget(item, uid)
 
     def show_attachments(self, attachments: List[Dict[str, Any]]) -> None:
         if not attachments:

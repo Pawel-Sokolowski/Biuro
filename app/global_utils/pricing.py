@@ -1,7 +1,6 @@
 # app/global/pricing.py
-import sqlite3
 from typing import Optional, Dict, Any
-from app.config import DB_NAME
+from app.db.dao_conn import get_conn
 
 
 def _extract_limit_from_key(klucz: str) -> Optional[int]:
@@ -35,8 +34,7 @@ def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optiona
       3. Jeśli w kluczu jest liczba (limit), wybiera największy limit nieprzekraczający limit_dokumentow.
       4. Jeśli nic nie pasuje, zwraca pierwszy znaleziony wpis jako fallback.
     """
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = get_conn()
     cur = conn.cursor()
 
     vat_suffix = "T" if vat_czynny else "N"

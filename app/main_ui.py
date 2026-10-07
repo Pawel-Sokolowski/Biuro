@@ -3,7 +3,6 @@ from app.utils.ui_imports import *
 
 from app.db.dao_employees import get_employee_info
 from app.db.dao_companies import get_company
-from app.db.dao_monthly import get_month_status
 
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
 from app.companies.company_ui import CompanyUI
@@ -12,9 +11,9 @@ from app.chat.chat_ui import ChatPage
 from app.reports.reports_ui import ReportsPage
 from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
+from app.tasks.tasks_ui import TasksPage
 
 from PyQt6.QtCore import QTimer
-from datetime import datetime
 from typing import Optional
 
 
@@ -201,6 +200,7 @@ class OfficeManagerApp(QMainWindow):
             "Chat",
             "Faktury",
             "Raporty",
+            "Zadania",
             "Ustawienia"
         ])
         self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
@@ -254,6 +254,7 @@ class OfficeManagerApp(QMainWindow):
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_faktury = FakturyPage(self.pracownik_id)
         self.page_raporty = ReportsPage(self.pracownik_id)
+        self.page_tasks = TasksPage(self.pracownik_id)
         self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
 
         self.pages.addWidget(self.page_monthly)
@@ -262,6 +263,7 @@ class OfficeManagerApp(QMainWindow):
         self.pages.addWidget(self.page_chat)
         self.pages.addWidget(self.page_faktury)
         self.pages.addWidget(self.page_raporty)
+        self.pages.addWidget(self.page_tasks)
         self.pages.addWidget(self.page_settings)
 
         self.sidebar.setCurrentRow(0)
@@ -286,40 +288,8 @@ class OfficeManagerApp(QMainWindow):
                     self.lbl_live_timer.setText("Brak aktywnego stoperu")
                 return
 
-            now = datetime.now()
-
-            # priorytet: księgowość
-            if getattr(logic, "aktywna_firma_stoper_ks", None):
-                fid = logic.aktywna_firma_stoper_ks
-                base_seconds = 0
-                row = get_month_status(fid, logic.aktualny_miesiac)
-                if row:
-                    base_seconds = int(row.get("sekundy_ksiegowosc", 0) or 0)
-                delta = int((now - logic.czas_start_ks).total_seconds()) if logic.czas_start_ks else 0
-                total = base_seconds + delta
-                company = logic._get_company_data(fid) or {}
-                name = company.get("nazwa") or f"Firma {fid}"
-                text = f"{name} — {logic.format_seconds(total)} — Księgowość"
-                self.lbl_live_timer.setText(text)
-                return
-
-            # kadry
-            if getattr(logic, "aktywna_firma_stoper_kadry", None):
-                fid = logic.aktywna_firma_stoper_kadry
-                base_seconds = 0
-                row = get_month_status(fid, logic.aktualny_miesiac)
-                if row:
-                    base_seconds = int(row.get("sekundy_kadry", 0) or 0)
-                delta = int((now - logic.czas_start_kadry).total_seconds()) if logic.czas_start_kadry else 0
-                total = base_seconds + delta
-                company = logic._get_company_data(fid) or {}
-                name = company.get("nazwa") or f"Firma {fid}"
-                text = f"{name} — {logic.format_seconds(total)} — Kadry"
-                self.lbl_live_timer.setText(text)
-                return
-
-            # brak aktywnego stopera
-            self.lbl_live_timer.setText("Brak aktywnego stoperu")
+            labels = logic.get_active_timer_labels()
+            self.lbl_live_timer.setText(" | ".join(labels) if labels else "Brak aktywnego stoperu")
         except Exception:
             # nie przerywamy UI; ewentualnie loguj
             if self.lbl_live_timer:

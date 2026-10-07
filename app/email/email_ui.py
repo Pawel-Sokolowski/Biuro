@@ -8,7 +8,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton,
-    QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit
+    QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit,
+    QToolButton, QStyle
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -86,32 +87,37 @@ class EmailPage(QWidget):
         toolbar.addStretch()
         main_layout.addLayout(toolbar)
 
-        # Toolbar 2 — NOWY pasek przycisków
+        # Message actions, arranged like a mail client toolbar.
         mail_toolbar = QHBoxLayout()
 
-        self.btn_reply = QPushButton("Odpowiedz")
-        self.btn_reply.clicked.connect(self.on_reply)
-        mail_toolbar.addWidget(self.btn_reply)
+        self.btn_reply = self._create_mail_action(
+            "Odpowiedz", QStyle.StandardPixmap.SP_ArrowBack, self.on_reply
+        )
+        self.btn_forward = self._create_mail_action(
+            "Przekaż", QStyle.StandardPixmap.SP_ArrowForward, self.on_forward
+        )
+        self.btn_archive = self._create_mail_action(
+            "Archiwizuj", QStyle.StandardPixmap.SP_DriveHDIcon, self.on_archive
+        )
+        self.btn_spam = self._create_mail_action(
+            "Niechciane", QStyle.StandardPixmap.SP_MessageBoxWarning, self.on_spam
+        )
+        self.btn_delete = self._create_mail_action(
+            "Usuń", QStyle.StandardPixmap.SP_TrashIcon, self.on_delete
+        )
+        self.btn_more = self._create_mail_action(
+            "Więcej", QStyle.StandardPixmap.SP_TitleBarUnshadeButton, self.on_more
+        )
 
-        self.btn_forward = QPushButton("Przekaż")
-        self.btn_forward.clicked.connect(self.on_forward)
-        mail_toolbar.addWidget(self.btn_forward)
-
-        self.btn_archive = QPushButton("Archiwizuj")
-        self.btn_archive.clicked.connect(self.on_archive)
-        mail_toolbar.addWidget(self.btn_archive)
-
-        self.btn_spam = QPushButton("Niechciane")
-        self.btn_spam.clicked.connect(self.on_spam)
-        mail_toolbar.addWidget(self.btn_spam)
-
-        self.btn_delete = QPushButton("Usuń")
-        self.btn_delete.clicked.connect(self.on_delete)
-        mail_toolbar.addWidget(self.btn_delete)
-
-        self.btn_more = QPushButton("Więcej")
-        self.btn_more.clicked.connect(self.on_more)
-        mail_toolbar.addWidget(self.btn_more)
+        for button in (
+            self.btn_reply,
+            self.btn_forward,
+            self.btn_archive,
+            self.btn_spam,
+            self.btn_delete,
+            self.btn_more,
+        ):
+            mail_toolbar.addWidget(button)
 
         mail_toolbar.addStretch()
         main_layout.addLayout(mail_toolbar)
@@ -177,6 +183,16 @@ class EmailPage(QWidget):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
+
+    def _create_mail_action(self, text: str, icon_name, callback) -> QToolButton:
+        button = QToolButton(self)
+        button.setText(text)
+        button.setIcon(self.style().standardIcon(icon_name))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setAutoRaise(True)
+        button.setToolTip(text)
+        button.clicked.connect(callback)
+        return button
     def normalize_name(self, s: str) -> str:
         if not s:
             return ""

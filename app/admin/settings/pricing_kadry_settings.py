@@ -69,10 +69,18 @@ class PricingKadrySettings(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            klucz = r.get("klucz", "")
-            cena_netto = float(r.get("cena_netto_kadry", 0))
-            cena_brutto = float(r.get("cena_brutto_kadry", cena_netto * 1.23))
-            opis = r.get("opis", "")
+            def value(key, default=None):
+                if isinstance(r, dict):
+                    return r.get(key, default)
+                try:
+                    return r[key] if r[key] is not None else default
+                except (KeyError, IndexError):
+                    return default
+
+            klucz = value("klucz", "")
+            cena_netto = float(value("cena_netto_kadry", 0) or 0)
+            cena_brutto = float(value("cena_brutto_kadry", cena_netto * 1.23) or 0)
+            opis = value("opis", "")
 
             # VAT + GTU — pobieramy z app_settings
             vat = self.logic.get_setting("kadry_domyslny_vat") or "23%"

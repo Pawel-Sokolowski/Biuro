@@ -81,12 +81,6 @@ class MonthlyViewModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.UserRole:
             return row
 
-        if role == Qt.ItemDataRole.ToolTipRole:
-            nazwa = row.get("nazwa", "")
-            status = row.get("status", "Aktywne")
-            etap = row.get("etap", "Brak")
-            return f"Firma: {nazwa}\nStatus: {status}\nEtap: {etap}"
-
         if role == Qt.ItemDataRole.BackgroundRole:
             status = row.get("status", "Aktywne")
             etap = row.get("etap", "Brak")

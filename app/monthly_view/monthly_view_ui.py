@@ -4,7 +4,7 @@ import os
 import datetime
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent, QPoint
+from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent
 from PyQt6.QtGui import QAction, QIntValidator, QCursor, QIcon, QColor, QPainter
 from PyQt6.QtWidgets import (
     QWidget,
@@ -73,8 +73,9 @@ class ScrollableNotesDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         painter.save()
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        option.rect = option.rect.adjusted(4, 4, -4, -4)
         painter.drawText(
-            option.rect.adjusted(4, 4, -4, -4),
+            option.rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
             text,
         )
@@ -397,7 +398,6 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.viewport().installEventFilter(self)
         self.table_ks.doubleClicked.connect(self._on_table_double_click)
         self.table_kadry.doubleClicked.connect(self._on_table_double_click)
-        self._note_popup: Optional[QTextEdit] = None
 
         self._setup_column_widths()
 
@@ -407,17 +407,6 @@ class MonthlyViewPage(QWidget):
         self.btn_refresh.clicked.connect(self._reload_rows)
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.MouseMove:
-            table = self.table_ks if obj is self.table_ks.viewport() else self.table_kadry
-            index = table.indexAt(event.pos())
-            note_col = 5 if table is self.table_ks else 7
-            if index.isValid() and index.column() == note_col:
-                row = index.model().get_row(index.row())
-                text = (row or {}).get("note_full", "")
-                if text:
-                    self._show_note_popup(table, index, text)
-            else:
-                self._hide_note_popup()
         if event.type() == QEvent.Type.MouseButtonRelease:
             if obj in (self.table_ks.viewport(), self.table_kadry.viewport()):
                 table = self.table_ks if obj is self.table_ks.viewport() else self.table_kadry
@@ -431,25 +420,6 @@ class MonthlyViewPage(QWidget):
                 self.handle_button_click(index, delegate.role)
                 return True
         return super().eventFilter(obj, event)
-
-    def _show_note_popup(self, table: QTableView, index: QModelIndex, text: str):
-        if self._note_popup is None:
-            self._note_popup = QTextEdit(self)
-            self._note_popup.setReadOnly(True)
-            self._note_popup.setWindowFlags(Qt.WindowType.ToolTip)
-            self._note_popup.setStyleSheet(
-                "QTextEdit { background: #fffef2; border: 1px solid #a0a0a0; padding: 4px; }"
-            )
-        self._note_popup.setPlainText(text)
-        self._note_popup.verticalScrollBar().setValue(0)
-        self._note_popup.resize(max(280, table.columnWidth(index.column())), 140)
-        position = table.viewport().mapToGlobal(table.visualRect(index).bottomLeft())
-        self._note_popup.move(position + QPoint(0, 2))
-        self._note_popup.show()
-
-    def _hide_note_popup(self):
-        if self._note_popup:
-            self._note_popup.hide()
 
     def _on_table_double_click(self, index: QModelIndex):
         table = self.sender()

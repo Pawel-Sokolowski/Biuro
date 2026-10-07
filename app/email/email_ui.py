@@ -21,6 +21,9 @@ from app.email.email_storage import (
     refresh_email_list,
     search_messages,
 )
+from app.db.dao_companies import list_companies
+from app.db.dao_employees import list_employees
+from app.db.dao_email_assignments import list_assigned_messages
 
 from app.email.email_actions import (
     list_folders_from_imap_and_store,
@@ -55,6 +58,7 @@ class EmailPage(QWidget):
         self.accounts = get_email_accounts_for_employee(pracownik_id)
         self.current_account: Optional[Dict[str, Any]] = None
         self.current_folder_local: Optional[str] = None
+        self.current_virtual_scope: Optional[dict] = None
         self.current_uid: Optional[str] = None
         self.cached_message: Optional[email.message.Message] = None
         self.unread_map: Dict[str, bool] = {}
@@ -234,6 +238,30 @@ class EmailPage(QWidget):
         root = QTreeWidgetItem([self.current_account["email"]])
         self.folder_tree.addTopLevelItem(root)
 
+        employees_root = QTreeWidgetItem(["Employees"])
+        root.addChild(employees_root)
+        for employee in list_employees():
+            name = f"{employee.get('imie', '')} {employee.get('nazwisko', '')}".strip()
+            item = QTreeWidgetItem([name or employee.get("email", "Employee")])
+            item.setData(0, Qt.ItemDataRole.UserRole, {
+                "scope": "employee", "id": employee["id"]
+            })
+            employees_root.addChild(item)
+
+        companies_root = QTreeWidgetItem(["Companies"])
+        root.addChild(companies_root)
+        for company in list_companies():
+            item = QTreeWidgetItem([
+                company.get("nazwa_skrocona") or company.get("nazwa") or "Company"
+            ])
+            item.setData(0, Qt.ItemDataRole.UserRole, {
+                "scope": "company", "id": company["id"]
+            })
+            companies_root.addChild(item)
+
+        server_root = QTreeWidgetItem(["Foldery serwera"])
+        root.addChild(server_root)
+
         try:
             folders = get_folders_for_account(self.current_account["id"])
         except Exception:
@@ -254,7 +282,7 @@ class EmailPage(QWidget):
         nodes: Dict[str, QTreeWidgetItem] = {}
         for f in final:
             parts = [p.strip() for p in f.split(".") if p.strip()]
-            parent = root
+            parent = server_root
             path_segments: List[str] = []
             for part in parts:
                 path_segments.append(part)
@@ -273,8 +301,65 @@ class EmailPage(QWidget):
         local_name = item.data(0, Qt.ItemDataRole.UserRole)
         if not local_name:
             return
+        if isinstance(local_name, dict):
+            self.current_virtual_scope = local_name
+            self.current_folder_local = None
+            self.load_assigned_mail_list(local_name)
+            return
+        self.current_virtual_scope = None
         self.current_folder_local = local_name
         self.load_mail_list_from_db(local_name)
+
+    def load_assigned_mail_list(self, scope: dict) -> None:
+        self.mail_list.clear()
+        self.mail_view.clear()
+        self.cached_message = None
+        self.unread_map.clear()
+        if not self.current_account:
+            return
+
+        employee_id = scope["id"] if scope["scope"] == "employee" else None
+        company_id = scope["id"] if scope["scope"] == "company" else None
+        try:
+            rows = [
+                dict(row) for row in list_assigned_messages(
+                    self.current_account["id"], employee_id, company_id
+                )
+            ]
+        except Exception:
+            rows = []
+        query = self.search_input.text().strip().casefold()
+        if query:
+            rows = [
+                row for row in rows
+                if query in " ".join(
+                    str(row.get(field) or "")
+                    for field in ("temat", "nadawca", "od", "do")
+                ).casefold()
+            ]
+        subject_counts = Counter(
+            (row.get("temat") or "").strip().casefold()
+            for row in rows if (row.get("temat") or "").strip()
+        )
+        for row in rows:
+            uid = row.get("uid")
+            subject = row.get("temat") or ""
+            is_unread = not bool(row.get("przeczytana"))
+            self.unread_map[uid] = is_unread
+            widget = self.create_message_widget(
+                subject,
+                row.get("nadawca") or "",
+                row.get("data") or "",
+                False,
+                subject_counts.get(subject.strip().casefold(), 0) > 1,
+                is_unread,
+            )
+            item = QListWidgetItem()
+            item.setSizeHint(widget.sizeHint())
+            item.setData(Qt.ItemDataRole.UserRole, uid)
+            item.setData(Qt.ItemDataRole.UserRole + 1, row.get("folder"))
+            self.mail_list.addItem(item)
+            self.mail_list.setItemWidget(item, widget)
 
     def create_message_widget(self, subject: str, sender: str, date: str,
                               has_attachment: bool, has_thread: bool, is_unread: bool) -> QFrame:
@@ -452,6 +537,7 @@ class EmailPage(QWidget):
             return
 
         self.current_uid = uid
+        self.current_folder_local = local_folder
         self.cached_message = None
         self.btn_download_message.setEnabled(False)
         konto_id = self.current_account["id"]

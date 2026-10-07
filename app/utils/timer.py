@@ -6,9 +6,12 @@ class TimerUtils:
     @staticmethod
     def format_seconds(sekundy: int) -> str:
         """
-        Format seconds to H:MM:SS (using datetime.timedelta for readability).
+        Format seconds to HH:MM:SS.
         """
-        return str(timedelta(seconds=int(sekundy or 0)))
+        total = max(0, int(sekundy or 0))
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     @staticmethod
     def seconds_to_hours(seconds: int) -> float:

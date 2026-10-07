@@ -12,6 +12,7 @@ from app.db.dao_invoices import (
 
 
 class FakturyLogic:
+    _NON_BILLABLE_TIME_LINES = {"praca księgowa", "praca kadrowa"}
 
     # ---------------- STATUS MIESIĘCZNY ----------------
     def _get_month_status(self, firma_id: int, miesiac: str) -> Optional[dict]:
@@ -36,7 +37,7 @@ class FakturyLogic:
             SELECT u.nazwa, u.kategoria, u.stawka_vat, uf.ilosc, uf.cena_netto
             FROM uslugi_dodatkowe_firma uf
             JOIN uslugi_dodatkowe u ON uf.usluga_id = u.id
-            WHERE uf.firma_id = ? AND uf.miesiac = ?
+            WHERE uf.firma_id = ? AND uf.miesiac = ? AND uf.fakturowac = 1
             ORDER BY u.nazwa
         """, (firma_id, miesiac))
         rows = cur.fetchall()
@@ -198,53 +199,18 @@ class FakturyLogic:
                 "generated": True
             })
 
-        # ---------------- Praca księgowa / kadrowa ----------------
-        if status:
-            sek_ks = int(status.get("sekundy_ksiegowosc") or 0)
-            sek_kd = int(status.get("sekundy_kadry") or 0)
-
-            if sek_ks > 0:
-                godz = sek_ks / 3600
-                netto = round(godz * 150, 2)
-                brutto = round(netto * 1.23, 2)
-                pozycje.append({
-                    "nazwa": "Praca księgowa",
-                    "ilosc": round(godz, 2),
-                    "jednostka": "godz.",
-                    "netto": netto,
-                    "vat": 23,
-                    "brutto": brutto,
-                    "kategoria": "księgowość",
-                    "generated": True
-                })
-
-            if sek_kd > 0:
-                godz = sek_kd / 3600
-                netto = round(godz * 120, 2)
-                brutto = round(netto * 1.23, 2)
-                pozycje.append({
-                    "nazwa": "Praca kadrowa",
-                    "ilosc": round(godz, 2),
-                    "jednostka": "godz.",
-                    "netto": netto,
-                    "vat": 23,
-                    "brutto": brutto,
-                    "kategoria": "kadry",
-                    "generated": True
-                })
-
         return pozycje
 
     # ---------------- MERGE ----------------
     def _merge_positions(self, existing_positions: List[Dict[str, Any]], generated_positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        existing = existing_positions or []
-        name_map = {}
-        for idx, p in enumerate(existing):
-            name = (p.get("nazwa") or "").strip()
-            if name:
-                name_map.setdefault(name, []).append((idx, p))
-
-        result = [dict(p) for p in existing]
+        result = [
+            dict(p)
+            for p in (existing_positions or [])
+            if not (
+                p.get("generated")
+                and (p.get("nazwa") or "").strip().lower() in self._NON_BILLABLE_TIME_LINES
+            )
+        ]
 
         for gp in generated_positions:
             gname = (gp.get("nazwa") or "").strip()
@@ -255,18 +221,19 @@ class FakturyLogic:
                 result.append(gp_copy)
                 continue
 
-            found = name_map.get(gname)
-            if found:
-                replaced = False
-                for idx, ex in found:
-                    if ex.get("generated"):
-                        result[idx] = gp_copy
-                        replaced = True
-                        break
-                if not replaced:
-                    result.append(gp_copy)
-            else:
+            generated_index = next(
+                (
+                    idx
+                    for idx, existing in enumerate(result)
+                    if existing.get("generated")
+                    and (existing.get("nazwa") or "").strip() == gname
+                ),
+                None,
+            )
+            if generated_index is None:
                 result.append(gp_copy)
+            else:
+                result[generated_index] = gp_copy
 
         return result
 

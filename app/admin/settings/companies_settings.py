@@ -71,7 +71,7 @@ class CompaniesSettings(QWidget):
         btn_delete.clicked.connect(self._delete_selected)
         btn_row.addWidget(btn_delete)
 
-        btn_import = QPushButton("Importuj z pliku (wizard)")
+        btn_import = QPushButton("Importuj z pliku (weryfikacja)")
         btn_import.clicked.connect(self._import_from_file)
         btn_row.addWidget(btn_import)
 
@@ -218,10 +218,8 @@ class CompaniesSettings(QWidget):
     # ============================================================
     def _on_import_finished(self, result):
         payloads, warnings = result
-
         if warnings:
             QMessageBox.information(self, "Ostrzeżenia importu", "\n".join(warnings))
-
         self._run_import_wizard(payloads)
     # ============================================================
     # WIZARD — URUCHOMIENIE

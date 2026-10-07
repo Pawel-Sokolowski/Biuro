@@ -14,6 +14,21 @@ from app.utils.timer import TimerUtils
 
 
 class MonthlyViewLogic:
+    _TIMER_FIELDS = {
+        "ksiegowosc": (
+            "aktywna_firma_stoper_ks",
+            "czas_start_ks",
+            "aktywna_firma_stoper_ks_activity",
+            "sekundy_ksiegowosc",
+        ),
+        "kadry": (
+            "aktywna_firma_stoper_kadry",
+            "czas_start_kadry",
+            "aktywna_firma_stoper_kadry_activity",
+            "sekundy_kadry",
+        ),
+    }
+
     def __init__(self, pracownik_id: int):
         self.pracownik_id = pracownik_id
         self.aktualny_miesiac = datetime.datetime.now().strftime("%Y-%m")
@@ -60,7 +75,21 @@ class MonthlyViewLogic:
             """
             SELECT f.id, f.nazwa, f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
-                   COALESCE(sm.ilosc_dok, 0) AS ilosc_dok,
+                   CASE
+                       WHEN (
+                           SELECT COUNT(*)
+                           FROM dokumenty d
+                           WHERE d.firma_id = f.id
+                             AND substr(d.data_wyst, 1, 7) = ?
+                       ) > 0
+                       THEN (
+                           SELECT COUNT(*)
+                           FROM dokumenty d
+                           WHERE d.firma_id = f.id
+                             AND substr(d.data_wyst, 1, 7) = ?
+                       )
+                       ELSE COALESCE(sm.ilosc_dok, 0)
+                   END AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
             FROM firmy f
@@ -68,7 +97,7 @@ class MonthlyViewLogic:
                 ON sm.firma_id = f.id AND sm.miesiac = ?
             ORDER BY f.nazwa
         """,
-            (selected_month,),
+            (selected_month, selected_month, selected_month),
         )
 
         rows = [dict(r) for r in cur.fetchall()]
@@ -133,6 +162,29 @@ class MonthlyViewLogic:
     def format_seconds(self, sekundy: int) -> str:
         return TimerUtils.format_seconds(int(sekundy or 0))
 
+    def get_running_seconds(self, typ: str) -> int:
+        fields = self._TIMER_FIELDS.get(typ)
+        if not fields:
+            return 0
+        start = getattr(self, fields[1])
+        if not start:
+            return 0
+        return max(0, int((datetime.datetime.now() - start).total_seconds()))
+
+    def get_timer_total_seconds(self, firma_id: int, typ: str, saved_seconds: int) -> int:
+        fields = self._TIMER_FIELDS.get(typ)
+        if not fields or getattr(self, fields[0]) != firma_id:
+            return int(saved_seconds or 0)
+        return int(saved_seconds or 0) + self.get_running_seconds(typ)
+
+    def get_active_timer_labels(self) -> List[str]:
+        labels: List[str] = []
+        for typ, label in (("ksiegowosc", "Księgowość"), ("kadry", "Kadry")):
+            fields = self._TIMER_FIELDS[typ]
+            if getattr(self, fields[0]) is not None:
+                labels.append(f"{label}: {self.format_seconds(self.get_running_seconds(typ))}")
+        return labels
+
     def save_status_for_company(
         self,
         firma_id: int,
@@ -175,146 +227,87 @@ class MonthlyViewLogic:
                 },
             )
 
+    def _finish_timer(self, typ: str, now: datetime.datetime, cur) -> None:
+        fields = self._TIMER_FIELDS[typ]
+        firma_id = getattr(self, fields[0])
+        start = getattr(self, fields[1])
+        if firma_id is None or start is None:
+            return
+
+        delta = max(0, int((now - start).total_seconds()))
+        cur.execute(
+            f"""
+            UPDATE statusy_miesieczne
+            SET {fields[3]} = {fields[3]} + ?
+            WHERE firma_id = ? AND miesiac = ?
+            """,
+            (delta, firma_id, self.aktualny_miesiac),
+        )
+
+        activity = getattr(self, fields[2])
+        cur.execute(
+            """
+            INSERT INTO czasomierze (
+                firma_id, pracownik_id, miesiac, typ, usluga_id, fakturowac,
+                rozpoczecie, zakonczenie, sekundy
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                firma_id,
+                self.pracownik_id,
+                self.aktualny_miesiac,
+                typ,
+                (activity or {}).get("usluga_id"),
+                1 if (activity or {}).get("fakturowac") else 0,
+                start.isoformat(timespec="seconds"),
+                now.isoformat(timespec="seconds"),
+                delta,
+            ),
+        )
+        if activity and activity.get("typ_czynnosci") == "extra" and activity.get("fakturowac"):
+            add_invoice_item_for_service(
+                firma_id,
+                activity["usluga_id"],
+                TimerUtils.round_seconds_to_minimum_half(delta),
+                self.aktualny_miesiac,
+                self.pracownik_id,
+            )
+
+        setattr(self, fields[0], None)
+        setattr(self, fields[1], None)
+        setattr(self, fields[2], None)
+
     def toggle_stoper(
         self, firma_id: int, typ: str, activity_payload: Optional[Dict[str, Any]] = None
     ):
+        fields = self._TIMER_FIELDS.get(typ)
+        if not fields:
+            raise ValueError(f"Nieznany typ stopera: {typ}")
+
         now = datetime.datetime.now()
         self._ensure_month_status(firma_id)
 
         conn = get_conn()
         cur = conn.cursor()
+        active_firma_id = getattr(self, fields[0])
 
-        if typ == "ksiegowosc":
-            if self.aktywna_firma_stoper_ks is None:
-                self.aktywna_firma_stoper_ks = firma_id
-                self.czas_start_ks = now
-                self.aktywna_firma_stoper_ks_activity = activity_payload
-                conn.close()
-                return
+        # A single department timer may run at a time. Starting one department
+        # always commits and stops the timer from the other department first.
+        other_typ = "kadry" if typ == "ksiegowosc" else "ksiegowosc"
+        other_fields = self._TIMER_FIELDS[other_typ]
+        if getattr(self, other_fields[0]) is not None:
+            self._finish_timer(other_typ, now, cur)
 
-            if self.aktywna_firma_stoper_ks == firma_id:
-                delta = int((now - self.czas_start_ks).total_seconds())
-                cur.execute(
-                    """
-                    UPDATE statusy_miesieczne
-                    SET sekundy_ksiegowosc = sekundy_ksiegowosc + ?
-                    WHERE firma_id = ? AND miesiac = ?
-                """,
-                    (delta, firma_id, self.aktualny_miesiac),
-                )
-                conn.commit()
-                conn.close()
+        if active_firma_id is not None:
+            self._finish_timer(typ, now, cur)
 
-                act = self.aktywna_firma_stoper_ks_activity
-                if act and act.get("typ_czynnosci") == "extra" and act.get("fakturowac"):
-                    hours = TimerUtils.round_seconds_to_minimum_half(delta)
-                    add_invoice_item_for_service(
-                        firma_id,
-                        act["usluga_id"],
-                        hours,
-                        self.aktualny_miesiac,
-                        self.pracownik_id,
-                    )
+        if active_firma_id != firma_id:
+            setattr(self, fields[0], firma_id)
+            setattr(self, fields[1], now)
+            setattr(self, fields[2], activity_payload)
 
-                self.aktywna_firma_stoper_ks = None
-                self.czas_start_ks = None
-                self.aktywna_firma_stoper_ks_activity = None
-                return
-
-            prev = self.aktywna_firma_stoper_ks
-            delta_prev = int((now - self.czas_start_ks).total_seconds())
-            cur.execute(
-                """
-                UPDATE statusy_miesieczne
-                SET sekundy_ksiegowosc = sekundy_ksiegowosc + ?
-                WHERE firma_id = ? AND miesiac = ?
-            """,
-                (delta_prev, prev, self.aktualny_miesiac),
-            )
-
-            prev_act = self.aktywna_firma_stoper_ks_activity
-            if prev_act and prev_act.get("typ_czynnosci") == "extra" and prev_act.get("fakturowac"):
-                hours_prev = TimerUtils.round_seconds_to_minimum_half(delta_prev)
-                add_invoice_item_for_service(
-                    prev,
-                    prev_act["usluga_id"],
-                    hours_prev,
-                    self.aktualny_miesiac,
-                    self.pracownik_id,
-                )
-
-            self.aktywna_firma_stoper_ks = firma_id
-            self.czas_start_ks = now
-            self.aktywna_firma_stoper_ks_activity = activity_payload
-            conn.commit()
-            conn.close()
-            return
-
-        if typ == "kadry":
-            if self.aktywna_firma_stoper_kadry is None:
-                self.aktywna_firma_stoper_kadry = firma_id
-                self.czas_start_kadry = now
-                self.aktywna_firma_stoper_kadry_activity = activity_payload
-                conn.close()
-                return
-
-            if self.aktywna_firma_stoper_kadry == firma_id:
-                delta = int((now - self.czas_start_kadry).total_seconds())
-                cur.execute(
-                    """
-                    UPDATE statusy_miesieczne
-                    SET sekundy_kadry = sekundy_kadry + ?
-                    WHERE firma_id = ? AND miesiac = ?
-                """,
-                    (delta, firma_id, self.aktualny_miesiac),
-                )
-                conn.commit()
-                conn.close()
-
-                act = self.aktywna_firma_stoper_kadry_activity
-                if act and act.get("typ_czynnosci") == "extra" and act.get("fakturowac"):
-                    hours = TimerUtils.round_seconds_to_minimum_half(delta)
-                    add_invoice_item_for_service(
-                        firma_id,
-                        act["usluga_id"],
-                        hours,
-                        self.aktualny_miesiac,
-                        self.pracownik_id,
-                    )
-
-                self.aktywna_firma_stoper_kadry = None
-                self.czas_start_kadry = None
-                self.aktywna_firma_stoper_kadry_activity = None
-                return
-
-            prev = self.aktywna_firma_stoper_kadry
-            delta_prev = int((now - self.czas_start_kadry).total_seconds())
-            cur.execute(
-                """
-                UPDATE statusy_miesieczne
-                SET sekundy_kadry = sekundy_kadry + ?
-                WHERE firma_id = ? AND miesiac = ?
-            """,
-                (delta_prev, prev, self.aktualny_miesiac),
-            )
-
-            prev_act = self.aktywna_firma_stoper_kadry_activity
-            if prev_act and prev_act.get("typ_czynnosci") == "extra" and prev_act.get("fakturowac"):
-                hours_prev = TimerUtils.round_seconds_to_minimum_half(delta_prev)
-                add_invoice_item_for_service(
-                    prev,
-                    prev_act["usluga_id"],
-                    hours_prev,
-                    self.aktualny_miesiac,
-                    self.pracownik_id,
-                )
-
-            self.aktywna_firma_stoper_kadry = firma_id
-            self.czas_start_kadry = now
-            self.aktywna_firma_stoper_kadry_activity = activity_payload
-            conn.commit()
-            conn.close()
-            return
+        conn.commit()
+        conn.close()
 
     def open_notes_window(self, firma_id: int):
         from app.monthly_view.notes_window import NotesWindow
@@ -334,73 +327,9 @@ class MonthlyViewLogic:
             data["id"] = firma_id
         save_company(data)
     def open_company_edit_window(self, firma_id: int):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout
-        # import CompanyForm lazily
         from app.companies.company_form import CompanyForm
 
-        company_data = self._get_company_data(firma_id)
-
-        dialog = QDialog()
-        dialog.setWindowTitle("Edycja firmy")
-        dialog.setModal(True)
-        dialog.resize(700, 600)
-
-        layout = QVBoxLayout(dialog)
-
-        form = None
-        # Spróbuj kilku wariantów wywołania konstruktora, bez przerywania aplikacji
-        try:
-            # 1) najpierw spróbuj standardowo: (pracownik_id, company_data, parent)
-            form = CompanyForm(self.pracownik_id, company_data, dialog)
-        except TypeError:
-            try:
-                # 2) spróbuj (pracownik_id, parent, company_data) - niektóre wersje mają parent jako drugi arg
-                form = CompanyForm(self.pracownik_id, dialog, company_data)
-            except TypeError:
-                try:
-                    # 3) spróbuj z keywordami (jeśli dostępne)
-                    form = CompanyForm(self.pracownik_id, parent=dialog)
-                    # ustaw dane ręcznie, jeśli formularz ma odpowiednią metodę/atrybut
-                    if hasattr(form, "load_company_data"):
-                        form.load_company_data(company_data)
-                    elif hasattr(form, "set_company_data"):
-                        form.set_company_data(company_data)
-                    elif hasattr(form, "company_data"):
-                        try:
-                            form.company_data = company_data
-                        except Exception:
-                            pass
-                except Exception:
-                    # ostateczny fallback: spróbuj tylko z pracownik_id
-                    try:
-                        form = CompanyForm(self.pracownik_id)
-                        if hasattr(form, "load_company_data"):
-                            form.load_company_data(company_data)
-                        elif hasattr(form, "set_company_data"):
-                            form.set_company_data(company_data)
-                        elif hasattr(form, "company_data"):
-                            try:
-                                form.company_data = company_data
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        # jeśli wszystko zawiedzie, pokaż błąd w konsoli i zamknij dialog
-                        print("ERROR: Nie udało się utworzyć CompanyForm:", e)
-                        dialog.reject()
-                        return
-
-        def _on_saved():
-            dialog.accept()
-
-        # jeśli form został utworzony, podłącz i pokaż
-        if form is not None:
-            try:
-                form.on_saved = _on_saved
-            except Exception:
-                # jeśli form nie ma on_saved, ignorujemy
-                pass
-            layout.addWidget(form)
-            dialog.exec()
+        CompanyForm(firma_id).exec()
 
     def mark_company_suspended_manual(self, firma_id: int):
         today = datetime.datetime.now().strftime("%Y-%m-%d")

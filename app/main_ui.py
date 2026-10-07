@@ -305,7 +305,7 @@ class OfficeManagerApp(QMainWindow):
         live_layout.setSpacing(8)
 
         # tytuł
-        lbl_live_title = QLabel("Użytkownik")
+        lbl_live_title = QLabel(name)
         lbl_live_title.setStyleSheet("font-weight: bold;")
         live_layout.addWidget(lbl_live_title)
 

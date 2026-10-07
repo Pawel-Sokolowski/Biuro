@@ -2,6 +2,7 @@
 import sqlite3
 from typing import Dict, Any
 from app.db.dao_conn import get_conn
+from app.utils.months import month_bounds
 
 
 
@@ -56,12 +57,14 @@ def _get_docs_count_for_month(firma_id: int, miesiac: str) -> int:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
+    start, end = month_bounds(miesiac)
     cur.execute("""
         SELECT COUNT(*) AS cnt
         FROM dokumenty
         WHERE firma_id = ?
-          AND substr(data_wyst, 1, 7) = ?
-    """, (firma_id, miesiac))
+          AND data_wyst >= ?
+          AND data_wyst < ?
+    """, (firma_id, start, end))
 
     row = cur.fetchone()
     conn.close()

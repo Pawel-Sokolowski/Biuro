@@ -14,6 +14,7 @@ from app.reports.reports_ui import ReportsPage
 from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
 from app.tasks.tasks_ui import TasksPage
+from app.dashboard.dashboard_ui import DashboardPage
 
 from PyQt6.QtCore import QTimer
 from typing import Optional
@@ -256,6 +257,7 @@ class OfficeManagerApp(QMainWindow):
         """)
 
         self.sidebar.addItems([
+            "Dashboard",
             "Widok miesięczny",
             "Klienci",
             "Email",
@@ -311,6 +313,7 @@ class OfficeManagerApp(QMainWindow):
         main_layout.addWidget(content)
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
+        self.page_dashboard = DashboardPage(self.pracownik_id)
         self.page_companies = CompanyUI(self)
         self.page_email = EmailPage(self.pracownik_id)
         self.page_chat = ChatPage(self.pracownik_id)
@@ -319,6 +322,7 @@ class OfficeManagerApp(QMainWindow):
         self.page_tasks = TasksPage(self.pracownik_id)
         self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
 
+        self.pages.addWidget(self.page_dashboard)
         self.pages.addWidget(self.page_monthly)
         self.pages.addWidget(self.page_companies)
         self.pages.addWidget(self.page_email)

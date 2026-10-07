@@ -20,48 +20,13 @@ from app.email.email_storage import (
     get_email_filters_for_message,
     prune_email_storage,
 )
+from app.email.email_helpers import (
+    SERVER_TO_LOCAL, LOCAL_TO_SERVER, normalize_folder_name,
+    denormalize_folder_name, safe_header, extract_html, get_attachments,
+)
 from app.utils.crypto import decrypt_password
 
 # MAPOWANIE NAZW FOLDERÓW
-SERVER_TO_LOCAL = {
-    "INBOX": "Odebrane",
-    "INBOX.Sent": "Wysłane",
-    "INBOX.spam": "Spam",
-    "INBOX.Spam": "Spam",
-    "INBOX.Junk": "Spam",
-    "INBOX.Drafts": "Szkice",
-    "INBOX.Archive": "Archiwum",
-}
-LOCAL_TO_SERVER = {
-    "Odebrane": "INBOX",
-    "Wysłane": "INBOX.Sent",
-    "Spam": "INBOX.spam",
-    "Szkice": "INBOX.Drafts",
-    "Archiwum": "INBOX.Archive",
-}
-
-# HELPERY
-def safe_header(value: str) -> str:
-    if not value:
-        return ""
-    try:
-        decoded = email.header.decode_header(value)
-        parts: List[str] = []
-        for b, enc in decoded:
-            if isinstance(b, str):
-                parts.append(b)
-            else:
-                enc = enc or "utf-8"
-                if enc.lower() in ("unknown-8bit", "x-unknown", "unknown"):
-                    enc = "latin-1"
-                try:
-                    parts.append(b.decode(enc, errors="replace"))
-                except Exception:
-                    parts.append(b.decode("latin-1", errors="replace"))
-        return "".join(parts)
-    except Exception:
-        return value
-
 def parse_mailbox_name(raw: bytes) -> str:
     s = raw.decode(errors="replace")
     first_quote = s.find('"')
@@ -70,12 +35,6 @@ def parse_mailbox_name(raw: bytes) -> str:
         if last_quote > first_quote:
             return s[first_quote + 1:last_quote]
     return s.split()[-1].strip('"')
-
-def normalize_folder_name(server_name: str) -> str:
-    return SERVER_TO_LOCAL.get(server_name, server_name)
-
-def denormalize_folder_name(local_name: str) -> str:
-    return LOCAL_TO_SERVER.get(local_name, local_name)
 
 # KONTA I LOGOWANIE IMAP
 def _get_account_by_id(konto_id: int) -> Optional[Dict[str, Any]]:
@@ -222,57 +181,6 @@ def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message
             return None
     finally:
         conn.close()
-
-# -----------------------------
-# EKSTRAKCJA HTML
-# -----------------------------
-def extract_html(msg: email.message.Message) -> Optional[str]:
-    if msg is None:
-        return None
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/html":
-                try:
-                    return part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8",
-                        errors="replace",
-                    )
-                except Exception:
-                    try:
-                        return part.get_payload(decode=True).decode("utf-8", errors="replace")
-                    except Exception:
-                        return None
-    else:
-        if msg.get_content_type() == "text/html":
-            try:
-                return msg.get_payload(decode=True).decode(
-                    msg.get_content_charset() or "utf-8",
-                    errors="replace",
-                )
-            except Exception:
-                return None
-    return None
-
-# -----------------------------
-# ZAŁĄCZNIKI (z DB)
-# -----------------------------
-def get_attachments(msg: email.message.Message) -> List[Dict[str, Any]]:
-    if msg is None:
-        return []
-    attachments: List[Dict[str, Any]] = []
-    idx = 0
-    for part in msg.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
-        cd = part.get("Content-Disposition")
-        if cd is None:
-            continue
-        filename = part.get_filename()
-        if not filename:
-            continue
-        attachments.append({"index": idx, "filename": safe_header(filename)})
-        idx += 1
-    return attachments
 
 def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optional[str]:
     msg = load_message(konto_id, folder, uid)

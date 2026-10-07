@@ -13,6 +13,7 @@ from app.admin.settings.logs_settings import LogsSettings
 from app.admin.settings.system_settings import SystemSettings
 from app.admin.settings.invoice_settings import InvoiceSettings
 from app.admin.settings.database_settings import DatabaseSettings
+from app.admin.settings.audit_settings import AuditSettings
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 
@@ -88,6 +89,8 @@ class GlobalSettingsPage(QWidget):
         logs.logic = self.logic
         logs.pracownik_id = self.pracownik_id
         self.tabs.addTab(logs, "Logi")
+
+        self.tabs.addTab(AuditSettings(), "Audyt i importy")
 
         sys_tab = SystemSettings()
         sys_tab.logic = self.logic

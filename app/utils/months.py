@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 
 def previous_month(month: str) -> str:
@@ -25,3 +25,13 @@ def _last_day_of_month(year: int, month: int) -> int:
     else:
         next_month = date(year, month + 1, 1)
     return (next_month - timedelta(days=1)).day
+
+
+def month_bounds(month: str) -> tuple[str, str]:
+    """Return an inclusive start and exclusive end ISO date for YYYY-MM."""
+    start = datetime.strptime(month, "%Y-%m")
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1)
+    else:
+        end = start.replace(month=start.month + 1)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")

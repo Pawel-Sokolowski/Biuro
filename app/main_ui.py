@@ -1,5 +1,7 @@
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QFileDialog
+from PyQt6.QtCore import QSettings
 from app.utils.ui_imports import *
+from app.config import DEFAULT_DB_NAME, get_database, set_database
 
 from app.db.dao_employees import get_employee_info
 from app.db.dao_companies import get_company
@@ -12,6 +14,7 @@ from app.reports.reports_ui import ReportsPage
 from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
 from app.tasks.tasks_ui import TasksPage
+from app.dashboard.dashboard_ui import DashboardPage
 
 from PyQt6.QtCore import QTimer
 from typing import Optional
@@ -21,8 +24,9 @@ class LoginWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Logowanie")
-        self.setFixedSize(420, 320)
+        self.setMinimumSize(520, 380)
         self.pracownik_id: Optional[int] = None
+        self.database_path = get_database()
         self._build_ui()
 
     def _build_ui(self):
@@ -53,6 +57,19 @@ class LoginWindow(QDialog):
         layout.addWidget(lbl_title)
 
         form = QFormLayout()
+        self.database_combo = QComboBox()
+        self.database_combo.setEditable(True)
+        self.database_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.database_combo.addItems(self._database_history())
+        self.database_combo.setCurrentText(self.database_path)
+        self.database_combo.lineEdit().setPlaceholderText("Wybierz plik SQLite...")
+        btn_browse = QPushButton("...")
+        btn_browse.setFixedWidth(42)
+        btn_browse.clicked.connect(self._choose_database)
+        database_row = QHBoxLayout()
+        database_row.addWidget(self.database_combo)
+        database_row.addWidget(btn_browse)
+        form.addRow("Baza danych:", database_row)
         self.email_input = QLineEdit()
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -69,14 +86,45 @@ class LoginWindow(QDialog):
         row.addWidget(btn_register)
         layout.addLayout(row)
 
+    @staticmethod
+    def _database_history() -> list[str]:
+        settings = QSettings("Biuro", "OfficeManager")
+        values = settings.value("databases", [], type=list)
+        paths = [str(value) for value in values if str(value).strip()]
+        if DEFAULT_DB_NAME not in paths:
+            paths.insert(0, DEFAULT_DB_NAME)
+        return paths
+
+    def _choose_database(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz bazę SQLite",
+            self.database_combo.currentText() or DEFAULT_DB_NAME,
+            "Baza SQLite (*.db *.sqlite *.sqlite3);;Wszystkie pliki (*)",
+        )
+        if path:
+            self.database_combo.setCurrentText(path)
+
+    def _remember_database(self, path: str):
+        settings = QSettings("Biuro", "OfficeManager")
+        paths = [path]
+        for existing in self._database_history():
+            if existing != path:
+                paths.append(existing)
+        settings.setValue("databases", paths[:10])
+
     def _on_login(self):
         from app.utils.crypto import login_user
+        database_path = self.database_combo.currentText().strip()
         email = self.email_input.text().strip()
         password = self.password_input.text()
-        if not email or not password:
-            QMessageBox.warning(self, "Błąd", "Uzupełnij email i hasło")
+        if not database_path or not email or not password:
+            QMessageBox.warning(self, "Błąd", "Uzupełnij bazę danych, email i hasło")
             return
         try:
+            set_database(database_path)
+            from app.db.schema import init_db
+            init_db()
             result = login_user(email, password)
         except Exception as e:
             QMessageBox.critical(self, "Błąd", str(e))
@@ -86,6 +134,8 @@ class LoginWindow(QDialog):
         else:
             ok, user_id = bool(result), result
         if ok:
+            self.database_path = database_path
+            self._remember_database(database_path)
             self.pracownik_id = user_id
             self.accept()
         else:
@@ -93,6 +143,17 @@ class LoginWindow(QDialog):
 
     def _on_register(self):
         from app.utils.crypto import register_user
+        database_path = self.database_combo.currentText().strip()
+        if not database_path:
+            QMessageBox.warning(self, "Błąd", "Wybierz bazę danych przed rejestracją")
+            return
+        try:
+            set_database(database_path)
+            from app.db.schema import init_db
+            init_db()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", str(e))
+            return
         dlg = QDialog(self)
         dlg.setWindowTitle("Rejestracja")
         dlg.setFixedSize(420, 320)
@@ -129,6 +190,8 @@ class LoginWindow(QDialog):
             if isinstance(ok, tuple):
                 ok = ok[0]
             if ok:
+                self.database_path = database_path
+                self._remember_database(database_path)
                 QMessageBox.information(self, "OK", "Rejestracja udana.")
             else:
                 QMessageBox.critical(self, "Błąd", "Rejestracja nie powiodła się.")
@@ -194,6 +257,7 @@ class OfficeManagerApp(QMainWindow):
         """)
 
         self.sidebar.addItems([
+            "Dashboard",
             "Widok miesięczny",
             "Klienci",
             "Email",
@@ -249,6 +313,7 @@ class OfficeManagerApp(QMainWindow):
         main_layout.addWidget(content)
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
+        self.page_dashboard = DashboardPage(self.pracownik_id)
         self.page_companies = CompanyUI(self)
         self.page_email = EmailPage(self.pracownik_id)
         self.page_chat = ChatPage(self.pracownik_id)
@@ -257,6 +322,7 @@ class OfficeManagerApp(QMainWindow):
         self.page_tasks = TasksPage(self.pracownik_id)
         self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
 
+        self.pages.addWidget(self.page_dashboard)
         self.pages.addWidget(self.page_monthly)
         self.pages.addWidget(self.page_companies)
         self.pages.addWidget(self.page_email)
@@ -273,7 +339,6 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer = QTimer(self)
         self._header_timer.setInterval(1000)
         self._header_timer.timeout.connect(self._update_header_timer)
-        self._header_timer.timeout.connect(self.page_monthly._reload_rows)
         self._header_timer.start()
 
     def _update_header_timer(self):

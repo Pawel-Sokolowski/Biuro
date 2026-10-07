@@ -10,34 +10,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from email.message import Message
 from app.db.dao_conn import get_conn
+from app.config import EMAIL_LOCAL_LIMIT
+from app.email.email_helpers import (
+    normalize_folder_name, denormalize_folder_name, safe_header,
+    extract_html, get_attachments,
+)
 
 logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"[^@]+@[^@]+\.[^@]+")
 
 # mapowania folderów (lokalne <-> serwer)
-SERVER_TO_LOCAL = {
-    "INBOX": "Odebrane",
-    "INBOX.Sent": "Wysłane",
-    "INBOX.spam": "Spam",
-    "INBOX.Spam": "Spam",
-    "INBOX.Junk": "Spam",
-    "INBOX.Drafts": "Szkice",
-    "INBOX.Archive": "Archiwum",
-}
-LOCAL_TO_SERVER = {
-    "Odebrane": "INBOX",
-    "Wysłane": "INBOX.Sent",
-    "Spam": "INBOX.spam",
-    "Szkice": "INBOX.Drafts",
-    "Archiwum": "INBOX.Archive",
-}
-
-def normalize_folder_name(server_name: str) -> str:
-    return SERVER_TO_LOCAL.get(server_name, server_name)
-
-def denormalize_folder_name(local_name: str) -> str:
-    return LOCAL_TO_SERVER.get(local_name, local_name)
-
 # helper do bezpiecznego dekodowania nagłówków
 def safe_header(value: str) -> str:
     if not value:
@@ -465,12 +447,60 @@ def refresh_email_list(konto_id: int, folder: str) -> List[Dict[str, Any]]:
             SELECT id, uid, nadawca, temat, data, przeczytana
             FROM wiadomosci_email
             WHERE konto_id = ? AND folder_id = ? AND usunieta = 0
-            ORDER BY data DESC
+            ORDER BY datetime(data) DESC, id DESC
+            LIMIT ?
             """,
-            (konto_id, folder_id),
+            (konto_id, folder_id, EMAIL_LOCAL_LIMIT),
         )
         rows = cur.fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def prune_email_storage(
+    konto_id: Optional[int] = None,
+    limit: int = EMAIL_LOCAL_LIMIT,
+) -> int:
+    """Keep only the newest local message rows per account and folder.
+
+    The IMAP server remains the source of truth. Older messages can be
+    downloaded again on demand by UID, while SQLite remains bounded.
+    """
+    if limit < 1:
+        raise ValueError("Email storage limit must be at least 1.")
+
+    conn = get_conn()
+    try:
+        account_clause = "WHERE konto_id = ?" if konto_id is not None else ""
+        params = (konto_id,) if konto_id is not None else ()
+        rows = conn.execute(
+            f"""
+            SELECT id, konto_id, folder_id
+            FROM wiadomosci_email
+            {account_clause}
+            ORDER BY konto_id, folder_id, datetime(data) DESC, id DESC
+            """,
+            params,
+        ).fetchall()
+
+        kept: Dict[Tuple[int, Optional[int]], int] = {}
+        delete_ids: List[int] = []
+        for row in rows:
+            key = (int(row["konto_id"]), row["folder_id"])
+            count = kept.get(key, 0)
+            if count >= limit:
+                delete_ids.append(int(row["id"]))
+            else:
+                kept[key] = count + 1
+
+        if delete_ids:
+            conn.executemany(
+                "DELETE FROM wiadomosci_email WHERE id = ?",
+                ((message_id,) for message_id in delete_ids),
+            )
+            conn.commit()
+        return len(delete_ids)
     finally:
         conn.close()
 
@@ -535,45 +565,6 @@ def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message
             return None
     finally:
         conn.close()
-
-def extract_html(msg: email.message.Message) -> Optional[str]:
-    if msg is None:
-        return None
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/html":
-                try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="replace")
-                except Exception:
-                    try:
-                        return part.get_payload(decode=True).decode("utf-8", errors="replace")
-                    except Exception:
-                        return None
-    else:
-        if msg.get_content_type() == "text/html":
-            try:
-                return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="replace")
-            except Exception:
-                return None
-    return None
-
-def get_attachments(msg: email.message.Message) -> List[Dict[str, Any]]:
-    if msg is None:
-        return []
-    attachments: List[Dict[str, Any]] = []
-    idx = 0
-    for part in msg.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
-        cd = part.get("Content-Disposition")
-        if cd is None:
-            continue
-        filename = part.get_filename()
-        if not filename:
-            continue
-        attachments.append({"index": idx, "filename": safe_header(filename)})
-        idx += 1
-    return attachments
 
 def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optional[str]:
     msg = load_message(konto_id, folder, uid)

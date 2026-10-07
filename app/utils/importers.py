@@ -5,10 +5,7 @@ import re
 import os
 import hashlib
 from typing import Dict, Any, List, Optional, Tuple
-from dotenv import load_dotenv
-
-load_dotenv()
-DB_NAME = os.getenv("DB_NAME")
+from app.config import get_database
 
 from app.utils.parsing import (
     normalize_identifier,
@@ -16,6 +13,7 @@ from app.utils.parsing import (
     parse_date_value,
     resolve_employee_ids,
 )
+from app.db.dao_audit import record_import
 
 
 # ============================================================
@@ -214,7 +212,7 @@ def import_tax_offices_from_excel(filepath: str) -> int:
     if not records:
         raise ValueError("Nie znaleziono wierszy urzędów skarbowych.")
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(get_database(), timeout=30)
     try:
         conn.executemany(
             """
@@ -616,7 +614,7 @@ def _apply_payload_to_db(
 # KLASYCZNY IMPORTER — ZAPIS DO DB
 # ============================================================
 def import_companies_from_excel_file(
-    filepath: str, db_path: str = DB_NAME
+    filepath: str, db_path: Optional[str] = None
 ) -> Dict[str, Any]:
     try:
         headers, rows = _load_rows_from_file(filepath)
@@ -625,7 +623,7 @@ def import_companies_from_excel_file(
 
     header_index = {header: idx for idx, header in enumerate(headers)}
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path or get_database(), timeout=30)
     cursor = conn.cursor()
 
     created_count = 0
@@ -651,18 +649,20 @@ def import_companies_from_excel_file(
                     pass
 
         conn.commit()
-        return {"created": created_count, "updated": updated_count, "warnings": warnings}
+        result = {"created": created_count, "updated": updated_count, "warnings": warnings}
+        record_import("firmy", filepath, result)
+        return result
     finally:
         conn.close()
 
 
 def save_imported_payload(
     payload: Dict[str, Any],
-    db_path: str = DB_NAME,
+    db_path: Optional[str] = None,
     row_number: int = 2,
 ) -> Dict[str, Any]:
     """Save one reviewed wizard payload using the complete import path."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path or get_database(), timeout=30)
     cursor = conn.cursor()
     warnings: List[str] = []
     try:
@@ -677,7 +677,7 @@ def save_imported_payload(
 # SZYBKI IMPORTER — ZAPIS DO DB
 # ============================================================
 def import_companies_fast_from_excel_file(
-    filepath: str, db_path: str = DB_NAME
+    filepath: str, db_path: Optional[str] = None
 ) -> Dict[str, Any]:
     try:
         headers, rows = _load_rows_from_file(filepath)
@@ -686,7 +686,7 @@ def import_companies_fast_from_excel_file(
 
     header_index = {header: idx for idx, header in enumerate(headers)}
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path or get_database(), timeout=30)
     cursor = conn.cursor()
 
     cursor.execute("PRAGMA journal_mode=WAL;")
@@ -709,7 +709,9 @@ def import_companies_fast_from_excel_file(
                 updated += 1
 
         conn.commit()
-        return {"created": created, "updated": updated, "warnings": warnings}
+        result = {"created": created, "updated": updated, "warnings": warnings}
+        record_import("firmy_fast", filepath, result)
+        return result
     finally:
         conn.close()
 
@@ -717,7 +719,7 @@ def import_companies_fast_from_excel_file(
 # ============================================================
 # IMPORT CENNIKA KSIĘGOWEGO — ZWRACA PAYLOADY
 # ============================================================
-def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME) -> List[Dict[str, Any]]:
+def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     ext = os.path.splitext(filepath)[1].lower()
 
     try:
@@ -791,7 +793,7 @@ def import_cennik_from_excel(filepath: str, db_path: str = DB_NAME) -> List[Dict
 # ============================================================
 # IMPORT CEN ZA DOKUMENT — ZWRACA PAYLOADY
 # ============================================================
-def import_ceny_za_dokument_from_excel(filepath: str, db_path: str = DB_NAME) -> List[Dict[str, Any]]:
+def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     ext = os.path.splitext(filepath)[1].lower()
 
     try:

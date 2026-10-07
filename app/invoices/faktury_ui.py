@@ -1,5 +1,6 @@
 # app/invoices/faktury_ui.py
 import json
+import sqlite3
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
@@ -103,7 +104,7 @@ class FakturyPage(QWidget):
         self.firma_combo = QComboBox()
         self.firma_combo.addItem("Wszystkie firmy", None)
         conn = get_conn()
-        conn.row_factory = None
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
         for r in cur.fetchall():
@@ -269,37 +270,35 @@ class FakturyPage(QWidget):
             """, (miesiac,))
         rows = cur.fetchall()
         conn.close()
-        invoices = [dict(zip([d[0] for d in cur.description], r)) if False else None for r in rows]  # placeholder to avoid lint
-        # simpler: iterate rows directly
         for inv in rows:
             row = self.faktury_table.rowCount()
             self.faktury_table.insertRow(row)
             # id
-            it0 = QTableWidgetItem(str(inv[0]))
+            it0 = QTableWidgetItem(str(inv["id"]))
             it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 0, it0)
             # firma
-            it1 = QTableWidgetItem(inv[1] or "")
+            it1 = QTableWidgetItem(inv["firma_nazwa"] or "")
             it1.setFlags(it1.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 1, it1)
             # miesiac
-            it2 = QTableWidgetItem(inv[2] or "")
+            it2 = QTableWidgetItem(inv["miesiac"] or "")
             it2.setFlags(it2.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 2, it2)
             # netto
-            it3 = QTableWidgetItem(str(inv[3] or ""))
+            it3 = QTableWidgetItem(str(inv["kwota_netto"] or ""))
             it3.setFlags(it3.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 3, it3)
             # brutto
-            it4 = QTableWidgetItem(str(inv[4] or ""))
+            it4 = QTableWidgetItem(str(inv["kwota_brutto"] or ""))
             it4.setFlags(it4.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 4, it4)
             # data wystawienia
-            it5 = QTableWidgetItem(inv[5] or "")
+            it5 = QTableWidgetItem(inv["data_wystawienia"] or "")
             it5.setFlags(it5.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 5, it5)
             # termin platnosci
-            it6 = QTableWidgetItem(inv[6] or "")
+            it6 = QTableWidgetItem(inv["termin_platnosci"] or "")
             it6.setFlags(it6.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.faktury_table.setItem(row, 6, it6)
 

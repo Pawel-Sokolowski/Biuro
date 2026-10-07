@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
+from app.utils.months import month_bounds
 from app.db.dao_monthly import get_month_status, save_month_status
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_companies import get_company, save_company
@@ -51,6 +52,7 @@ class MonthlyViewLogic:
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
+        month_start, month_end = month_bounds(selected_month)
         cur.execute(
             """
             SELECT id, imie || ' ' || nazwisko AS label
@@ -77,29 +79,21 @@ class MonthlyViewLogic:
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
                    f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
-                   CASE
-                       WHEN (
-                           SELECT COUNT(*)
-                           FROM dokumenty d
-                           WHERE d.firma_id = f.id
-                             AND substr(d.data_wyst, 1, 7) = ?
-                       ) > 0
-                       THEN (
-                           SELECT COUNT(*)
-                           FROM dokumenty d
-                           WHERE d.firma_id = f.id
-                             AND substr(d.data_wyst, 1, 7) = ?
-                       )
-                       ELSE COALESCE(sm.ilosc_dok, 0)
-                   END AS ilosc_dok,
+                   COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = ?
+            LEFT JOIN (
+                SELECT firma_id, COUNT(*) AS ilosc_dok
+                FROM dokumenty
+                WHERE data_wyst >= ? AND data_wyst < ?
+                GROUP BY firma_id
+            ) doc ON doc.firma_id = f.id
             ORDER BY f.nazwa
         """,
-            (selected_month, selected_month, selected_month),
+            (selected_month, month_start, month_end),
         )
 
         rows = [dict(r) for r in cur.fetchall()]

@@ -276,10 +276,13 @@ def init_db():
             klucz TEXT UNIQUE NOT NULL,
             cena_netto_kadry REAL NOT NULL DEFAULT 0,
             cena_brutto_kadry REAL NOT NULL DEFAULT 0,
+            cena REAL,
             opis TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    # ``cena`` is kept for compatibility with older payroll pricing helpers.
+    _safe_alter_add_column(cur, "cenniki_kadry", "cena REAL")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
 
     # -------------------------
@@ -364,12 +367,15 @@ def init_db():
             pracownik_id INTEGER NOT NULL,
             firma_id INTEGER NOT NULL,
             rola_id INTEGER,
+            rola TEXT,
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
             FOREIGN KEY(rola_id) REFERENCES role(id) ON DELETE SET NULL,
             UNIQUE(pracownik_id, firma_id, rola_id)
         );
     """)
+    # Older authorization code may read the denormalized role name.
+    _safe_alter_add_column(cur, "pracownik_firma", "rola TEXT")
 
     # -------------------------
     # company_notes

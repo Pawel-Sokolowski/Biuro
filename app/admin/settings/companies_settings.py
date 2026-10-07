@@ -12,6 +12,7 @@ from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.companies.company_form import CompanyForm
 from app.utils.importers import (
     import_companies_from_excel_file_payloads,
+    import_companies_fast_from_excel_file,
     import_tax_offices_from_excel,
 )
 
@@ -31,6 +32,21 @@ class ImportWorker(QThread):
         try:
             payloads, warnings = import_companies_from_excel_file_payloads(self.filepath)
             self.finished_with_result.emit((payloads, warnings))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class FastImportWorker(QThread):
+    finished_with_result = pyqtSignal(object, name="finished_with_result")
+    error = pyqtSignal(str, name="error")
+
+    def __init__(self, filepath: str):
+        super().__init__()
+        self.filepath = filepath
+
+    def run(self):
+        try:
+            self.finished_with_result.emit(import_companies_fast_from_excel_file(self.filepath))
         except Exception as e:
             self.error.emit(str(e))
 
@@ -77,6 +93,10 @@ class CompaniesSettings(QWidget):
         btn_import = QPushButton("Importuj z pliku (weryfikacja)")
         btn_import.clicked.connect(self._import_from_file)
         btn_row.addWidget(btn_import)
+
+        btn_fast_import = QPushButton("Importuj bez weryfikacji")
+        btn_fast_import.clicked.connect(self._import_without_verification)
+        btn_row.addWidget(btn_fast_import)
 
         btn_tax_offices = QPushButton("Importuj urzędy skarbowe")
         btn_tax_offices.clicked.connect(self._import_tax_offices)
@@ -235,6 +255,32 @@ class CompaniesSettings(QWidget):
             )
         except Exception as exc:
             QMessageBox.critical(self, "Błąd importu urzędów", str(exc))
+
+    def _import_without_verification(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plik do szybkiego importu",
+            "",
+            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)",
+        )
+        if not path:
+            return
+        worker = FastImportWorker(path)
+        worker.finished_with_result.connect(self._on_fast_import_finished)
+        worker.error.connect(self._on_import_error)
+        worker.start()
+        self._current_worker = worker
+
+    def _on_fast_import_finished(self, result):
+        if result.get("warnings"):
+            QMessageBox.warning(self, "Ostrzeżenia importu", "\n".join(result["warnings"]))
+        QMessageBox.information(
+            self,
+            "Import zakończony",
+            f"Utworzono: {result.get('created', 0)}\n"
+            f"Zaktualizowano: {result.get('updated', 0)}",
+        )
+        self._refresh()
 
     def _on_import_error(self, msg):
         QMessageBox.critical(self, "Błąd importu", msg)

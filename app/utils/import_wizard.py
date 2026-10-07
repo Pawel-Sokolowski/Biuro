@@ -24,7 +24,7 @@ class ImportWizard(QDialog):
         self.index = 0
 
         self.setWindowTitle("Import firm — kreator")
-        self.resize(500, 200)
+        self.resize(900, 700)
 
         layout = QVBoxLayout(self)
 
@@ -68,6 +68,9 @@ class ImportWizard(QDialog):
                 # Keep parsed pricing and assignment metadata from the source
                 # row; CompanyForm exposes the normal company fields only.
                 for key in (
+                    "cennik_ksiegowy",
+                    "cennik_kadrowy",
+                    "cennik_czasowy",
                     "cennik_ksiegowy_parsed",
                     "cennik_kadrowy_parsed",
                     "cennik_czasowy_parsed",

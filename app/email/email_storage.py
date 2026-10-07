@@ -232,7 +232,7 @@ def get_email_filters_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     try:
         cur.execute(
             """
-            SELECT rf.id, rf.pracownik_id, rf.konto_id, rf.od, rf.do, rf.nadawca_zawiera,
+            SELECT rf.id, rf.pracownik_id, rf.konto_id, rf.firma_id, rf.od, rf.do, rf.nadawca_zawiera,
                    rf.temat_zawiera, rf.tresc_zawiera, rf.folder_docelowy, rf.oznacz_jako_przeczytane,
                    rf.usun, rf.aktywna
             FROM reguly_filtrow rf
@@ -247,8 +247,92 @@ def get_email_filters_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+
+def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT rf.*, ke.email AS konto_email
+            FROM reguly_filtrow rf
+            JOIN konta_email ke ON ke.id = rf.konto_id
+            WHERE rf.firma_id = ?
+            ORDER BY rf.id
+            """,
+            (firma_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def ensure_contact_email_filters(firma_id: int, folder_name: str) -> int:
+    """Create sender rules for all company contacts on every active mail account."""
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        contacts = conn.execute(
+            """
+            SELECT DISTINCT LOWER(TRIM(email)) AS email
+            FROM company_contacts
+            WHERE firma_id = ? AND email IS NOT NULL AND TRIM(email) <> ''
+            """,
+            (firma_id,),
+        ).fetchall()
+        accounts = conn.execute(
+            """
+            SELECT ke.id,
+                   COALESCE(ke.pracownik_id, pke.pracownik_id) AS pracownik_id,
+                   ke.email
+            FROM konta_email ke
+            LEFT JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
+            WHERE ke.aktywne = 1
+            """
+        ).fetchall()
+        created = 0
+        for contact in contacts:
+            sender = contact["email"]
+            for account in accounts:
+                if account["pracownik_id"] is None:
+                    continue
+                exists = conn.execute(
+                    """
+                    SELECT 1
+                    FROM reguly_filtrow
+                    WHERE konto_id = ? AND firma_id = ?
+                      AND LOWER(COALESCE(od, nadawca_zawiera, '')) = ?
+                    LIMIT 1
+                    """,
+                    (account["id"], firma_id, sender),
+                ).fetchone()
+                if exists:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO reguly_filtrow (
+                        pracownik_id, konto_id, firma_id, od, folder_docelowy, aktywna
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        account["pracownik_id"],
+                        account["id"],
+                        firma_id,
+                        sender,
+                        folder_name,
+                    ),
+                )
+                created += 1
+        conn.commit()
+        return created
+    finally:
+        conn.close()
+
+
 def add_email_filter(
     konto_id: int,
+    firma_id: Optional[int],
     od: Optional[str],
     do: Optional[str],
     nadawca_zawiera: Optional[str],
@@ -265,13 +349,14 @@ def add_email_filter(
         cur.execute(
             """
             INSERT INTO reguly_filtrow (
-                konto_id, od, do, nadawca_zawiera, temat_zawiera, tresc_zawiera,
+                konto_id, firma_id, od, do, nadawca_zawiera, temat_zawiera, tresc_zawiera,
                 folder_docelowy, oznacz_jako_przeczytane, usun, aktywna
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 konto_id,
+                firma_id,
                 od,
                 do,
                 nadawca_zawiera,
@@ -289,11 +374,61 @@ def add_email_filter(
     finally:
         conn.close()
 
+
+def get_email_filters_for_message(
+    konto_id: int, sender: str, subject: str = "", body: str = ""
+) -> List[Dict[str, Any]]:
+    """Return matching active rules, including company-specific sender rules."""
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM reguly_filtrow
+            WHERE konto_id = ? AND aktywna = 1
+            ORDER BY firma_id IS NULL, id
+            """,
+            (konto_id,),
+        ).fetchall()
+        haystack = " ".join((sender or "", subject or "", body or "")).lower()
+        sender_value = (sender or "").lower()
+        result = []
+        for row in rows:
+            rule = dict(row)
+            sender_filter = (rule.get("od") or rule.get("nadawca_zawiera") or "").strip().lower()
+            subject_filter = (rule.get("temat_zawiera") or "").strip().lower()
+            body_filter = (rule.get("tresc_zawiera") or "").strip().lower()
+            if sender_filter and sender_filter not in sender_value:
+                continue
+            if subject_filter and subject_filter not in haystack:
+                continue
+            if body_filter and body_filter not in haystack:
+                continue
+            if not sender_filter and not subject_filter and not body_filter:
+                continue
+            result.append(rule)
+        return result
+    finally:
+        conn.close()
+
 def delete_email_filter(filter_id: int) -> None:
     conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM reguly_filtrow WHERE id = ?", (filter_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM reguly_filtrow WHERE id = ? AND firma_id = ?",
+            (filter_id, firma_id),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -471,6 +606,32 @@ def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optiona
 def download_all_attachments(konto_id: int, folder: str, uid: str, attachments: List[Dict[str, Any]]) -> None:
     for att in attachments:
         open_attachment(konto_id, folder, uid, att["index"])
+
+
+def get_email_storage_stats(konto_id: Optional[int] = None) -> Dict[str, int]:
+    """Return SQLite payload sizes without loading message bodies into Python."""
+    conn = get_conn()
+    try:
+        where = "WHERE konto_id = ?" if konto_id is not None else ""
+        params = (konto_id,) if konto_id is not None else ()
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS messages,
+                   COALESCE(SUM(length(tresc)), 0) AS body_bytes,
+                   COALESCE(SUM(length(temat) + length(nadawca) + length(odbiorca)), 0)
+                       AS header_bytes
+            FROM wiadomosci_email
+            {where}
+            """,
+            params,
+        ).fetchone()
+        return {
+            "messages": int(row["messages"] or 0),
+            "body_bytes": int(row["body_bytes"] or 0),
+            "header_bytes": int(row["header_bytes"] or 0),
+        }
+    finally:
+        conn.close()
 
 # -----------------------------
 # SINGLE MESSAGE STORE (minimal)

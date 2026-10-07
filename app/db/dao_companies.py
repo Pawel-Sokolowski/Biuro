@@ -169,6 +169,32 @@ def get_company(firma_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def get_company_field_options(field: str) -> List[str]:
+    allowed = {"forma_dzialalnosci", "forma_opodatkowania", "sposob_zaplaty", "status_podatkowy"}
+    if field not in allowed:
+        raise ValueError("Unsupported company option field")
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT DISTINCT {field} AS value FROM firmy "
+            f"WHERE {field} IS NOT NULL AND TRIM({field}) <> '' ORDER BY {field}"
+        ).fetchall()
+        return [str(row["value"]) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_tax_offices() -> List[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM urzedy_skarbowe ORDER BY nazwa"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def _find_company_by_nip(nip: str) -> Optional[int]:
     if not nip:
         return None

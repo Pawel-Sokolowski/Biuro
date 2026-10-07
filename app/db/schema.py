@@ -276,10 +276,13 @@ def init_db():
             klucz TEXT UNIQUE NOT NULL,
             cena_netto_kadry REAL NOT NULL DEFAULT 0,
             cena_brutto_kadry REAL NOT NULL DEFAULT 0,
+            cena REAL,
             opis TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    # ``cena`` is kept for compatibility with older payroll pricing helpers.
+    _safe_alter_add_column(cur, "cenniki_kadry", "cena REAL")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
 
     # -------------------------
@@ -364,12 +367,15 @@ def init_db():
             pracownik_id INTEGER NOT NULL,
             firma_id INTEGER NOT NULL,
             rola_id INTEGER,
+            rola TEXT,
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
             FOREIGN KEY(rola_id) REFERENCES role(id) ON DELETE SET NULL,
             UNIQUE(pracownik_id, firma_id, rola_id)
         );
     """)
+    # Older authorization code may read the denormalized role name.
+    _safe_alter_add_column(cur, "pracownik_firma", "rola TEXT")
 
     # -------------------------
     # company_notes
@@ -472,6 +478,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             konto_id INTEGER NOT NULL,
             nazwa TEXT NOT NULL,
+            UNIQUE(konto_id, nazwa),
             FOREIGN KEY(konto_id) REFERENCES konta_email(id) ON DELETE CASCADE
         );
     """)
@@ -497,7 +504,10 @@ def init_db():
         );
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
-
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_account_folder_date "
+        "ON wiadomosci_email(konto_id, folder_id, data DESC);"
+    )
     # -------------------------
     # email_attachments
     # -------------------------
@@ -512,6 +522,10 @@ def init_db():
             FOREIGN KEY(wiadomosc_id) REFERENCES wiadomosci_email(id) ON DELETE CASCADE
         );
     """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_attachments_message "
+        "ON email_attachments(wiadomosc_id);"
+    )
 
     # -------------------------
     # pracownik_konto_email
@@ -536,6 +550,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pracownik_id INTEGER NOT NULL,
             konto_id INTEGER NOT NULL,
+            firma_id INTEGER,
             od TEXT,
             do TEXT,
             nadawca_zawiera TEXT,
@@ -546,9 +561,41 @@ def init_db():
             usun INTEGER DEFAULT 0,
             aktywna INTEGER DEFAULT 1,
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
-            FOREIGN KEY(konto_id) REFERENCES konta_email(id) ON DELETE CASCADE
+            FOREIGN KEY(konto_id) REFERENCES konta_email(id) ON DELETE CASCADE,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
         );
     """)
+    _safe_alter_add_column(cur, "reguly_filtrow", "firma_id INTEGER")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reguly_filtrow_account_company "
+        "ON reguly_filtrow(konto_id, firma_id, aktywna);"
+    )
+
+    # -------------------------
+    # URZĘDY SKARBOWE
+    # -------------------------
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS urzedy_skarbowe (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wojewodztwo TEXT,
+            typ TEXT,
+            nazwa TEXT NOT NULL,
+            kod TEXT,
+            miasto TEXT,
+            ulica TEXT,
+            nr_budynku_lokalu TEXT,
+            poczta TEXT,
+            nr_telefonu TEXT,
+            nr_faxu TEXT,
+            email TEXT,
+            kod_jednostki TEXT UNIQUE,
+            adresy_bip TEXT
+        );
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_urzedy_skarbowe_name "
+        "ON urzedy_skarbowe(nazwa);"
+    )
 
     # -------------------------
     # chat

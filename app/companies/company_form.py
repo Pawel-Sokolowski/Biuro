@@ -12,10 +12,18 @@ from app.db.dao_companies import (
     get_company, save_company, get_contacts, save_contact,
     delete_contact, get_pricing_kadry, get_ksiegowosc_options,
     get_partners, save_partner, delete_partner,
+    get_company_field_options, get_tax_offices,
 )
 from app.db.dao_notes import (
     get_notes_for_company, save_company_note)
 from app.companies.company_logic import ceidg_fetch
+from app.email.email_storage import (
+    get_all_email_accounts,
+    get_email_filters_for_company,
+    add_email_filter,
+    delete_email_filter_for_company,
+    ensure_contact_email_filters,
+)
 
 
 class CompanyForm(QDialog):
@@ -100,7 +108,8 @@ class CompanyForm(QDialog):
         # -----------------------------
         krs = QLineEdit()
         pesel = QLineEdit()
-        forma_dzialalnosci = QLineEdit()
+        forma_dzialalnosci = QComboBox()
+        forma_dzialalnosci.addItems(get_company_field_options("forma_dzialalnosci"))
 
         add_row(
             ["KRS:", "PESEL:", "Forma działalności:"],
@@ -113,8 +122,12 @@ class CompanyForm(QDialog):
         status_vat = QComboBox()
         status_vat.addItems(["Czynny", "Zwolniony", "Brak danych"])
 
-        urzad_skarbowy = QLineEdit()
-        forma_opodatkowania = QLineEdit()
+        urzad_skarbowy = QComboBox()
+        urzad_skarbowy.addItem("", None)
+        for office in get_tax_offices():
+            urzad_skarbowy.addItem(office["nazwa"], office["nazwa"])
+        forma_opodatkowania = QComboBox()
+        forma_opodatkowania.addItems(get_company_field_options("forma_opodatkowania"))
 
         add_row(
             ["Status VAT:", "Urząd skarbowy:", "Forma opodatkowania:"],
@@ -150,8 +163,10 @@ class CompanyForm(QDialog):
         # -----------------------------
         # RZĄD 7
         # -----------------------------
-        sposob_zaplaty = QLineEdit()
-        status_podatkowy = QLineEdit()
+        sposob_zaplaty = QComboBox()
+        sposob_zaplaty.addItems(get_company_field_options("sposob_zaplaty"))
+        status_podatkowy = QComboBox()
+        status_podatkowy.addItems(get_company_field_options("status_podatkowy"))
         kategoria_domyslna = QLineEdit()
 
         add_row(
@@ -568,6 +583,41 @@ class CompanyForm(QDialog):
         main_layout.addWidget(kontakty_box)
 
         # ============================================================
+        # FILTRY EMAIL FIRMY
+        # ============================================================
+        email_box = QWidget()
+        email_layout = QVBoxLayout(email_box)
+        email_layout.addWidget(QLabel("Filtry email firmy"))
+        self.email_filters_table = QTableWidget(0, 3)
+        self.email_filters_table.setHorizontalHeaderLabels(
+            ["Adres/nadawca zawiera", "Konto", "Folder docelowy"]
+        )
+        self.email_filters_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        email_layout.addWidget(self.email_filters_table)
+
+        filter_form = QHBoxLayout()
+        self.filter_account = QComboBox()
+        for account in get_all_email_accounts():
+            self.filter_account.addItem(account["email"], account["id"])
+        self.filter_sender = QLineEdit()
+        self.filter_sender.setPlaceholderText("np. admin@firmaa.pl lub firmaa@gmail.com")
+        self.filter_folder = QLineEdit()
+        self.filter_folder.setPlaceholderText("Folder, np. nazwa skrócona firmy")
+        btn_add_filter = QPushButton("Dodaj filtr")
+        btn_delete_filter = QPushButton("Usuń zaznaczony")
+        btn_add_filter.clicked.connect(self._add_company_email_filter)
+        btn_delete_filter.clicked.connect(self._delete_company_email_filter)
+        filter_form.addWidget(self.filter_account)
+        filter_form.addWidget(self.filter_sender)
+        filter_form.addWidget(self.filter_folder)
+        filter_form.addWidget(btn_add_filter)
+        filter_form.addWidget(btn_delete_filter)
+        email_layout.addLayout(filter_form)
+        main_layout.addWidget(email_box)
+
+        # ============================================================
         # SEKCJA: WSPÓLNICY
         # ============================================================
         wsp_box = QWidget()
@@ -690,6 +740,8 @@ class CompanyForm(QDialog):
         # ============================================================
         if self.firma_id:
             self._load_company()
+            self._load_contacts()
+            self._load_email_filters()
 
     # ============================================================
     # CEIDG
@@ -725,13 +777,61 @@ class CompanyForm(QDialog):
 
         return payload
 
+    def _load_email_filters(self):
+        company = get_company(self.firma_id)
+        folder_name = (
+            (company or {}).get("nazwa_skrocona")
+            or (company or {}).get("nazwa")
+            or str(self.firma_id)
+        )
+        ensure_contact_email_filters(self.firma_id, folder_name)
+        self.email_filters_table.setRowCount(0)
+        for rule in get_email_filters_for_company(self.firma_id):
+            row = self.email_filters_table.rowCount()
+            self.email_filters_table.insertRow(row)
+            self.email_filters_table.setItem(row, 0, QTableWidgetItem(rule.get("od") or rule.get("nadawca_zawiera") or ""))
+            self.email_filters_table.setItem(row, 1, QTableWidgetItem(rule.get("konto_email", "")))
+            self.email_filters_table.setItem(row, 2, QTableWidgetItem(rule.get("folder_docelowy", "")))
+            self.email_filters_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, rule["id"])
+
+    def _add_company_email_filter(self):
+        if not self.firma_id:
+            return
+        sender = self.filter_sender.text().strip()
+        folder = self.filter_folder.text().strip()
+        if not folder and "@" in sender:
+            folder = sender.rsplit("@", 1)[1].strip().lower()
+        if not folder:
+            folder = self.inputs["nazwa_skrocona"].text().strip()
+        account_id = self.filter_account.currentData()
+        if not sender or account_id is None or not folder:
+            return
+        add_email_filter(
+            int(account_id), self.firma_id, sender, None, None, None, None,
+            folder, 0, 0, 1,
+        )
+        self.filter_sender.clear()
+        self.filter_folder.clear()
+        self._load_email_filters()
+
+    def _delete_company_email_filter(self):
+        row = self.email_filters_table.currentRow()
+        if row < 0 or not self.firma_id:
+            return
+        item = self.email_filters_table.item(row, 0)
+        filter_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if filter_id:
+            delete_email_filter_for_company(int(filter_id), self.firma_id)
+            self._load_email_filters()
+
     # ============================================================
     # ZAPIS
     # ============================================================
     def _on_save(self):
         payload = self._collect_payload()
         try:
-            save_company(payload)
+            self.firma_id = save_company(payload)
+            self._sync_contact_email_filters()
             self.accept()
         except Exception as e:
             print("Save error:", e)
@@ -756,6 +856,11 @@ class CompanyForm(QDialog):
                 widget.setValue(float(val or 0))
             elif isinstance(widget, QComboBox):
                 if val is not None:
+                    if widget.findText(str(val)) < 0 and key in (
+                        "forma_dzialalnosci", "forma_opodatkowania", "urzad_skarbowy",
+                        "sposob_zaplaty", "status_podatkowy"
+                    ):
+                        widget.addItem(str(val), str(val))
                     idx = widget.findText(str(val))
                     if idx >= 0:
                         widget.setCurrentIndex(idx)
@@ -791,6 +896,11 @@ class CompanyForm(QDialog):
 
             elif isinstance(widget, QComboBox):
                 if val is not None:
+                    if widget.findText(str(val)) < 0 and key in (
+                        "forma_dzialalnosci", "forma_opodatkowania", "urzad_skarbowy",
+                        "sposob_zaplaty", "status_podatkowy"
+                    ):
+                        widget.addItem(str(val), str(val))
                     idx = widget.findText(str(val))
                     if idx >= 0:
                         widget.setCurrentIndex(idx)
@@ -811,6 +921,7 @@ class CompanyForm(QDialog):
             self.contacts_table.insertRow(row)
             for col, key in enumerate(["imie", "nazwisko", "email", "telefon", "rola"]):
                 self.contacts_table.setItem(row, col, QTableWidgetItem(str(r.get(key, ""))))
+            self.contacts_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
 
     def _add_contact(self):
         if not self.firma_id:
@@ -823,7 +934,8 @@ class CompanyForm(QDialog):
             "telefon": self.inputs["kont_tel"].text().strip(),
             "rola": self.inputs["kont_rola"].text().strip(),
         }
-        save_contact(payload)
+        save_contact(self.firma_id, payload)
+        self._sync_contact_email_filters()
         self._load_contacts()
 
     def _delete_contact(self):
@@ -831,7 +943,9 @@ class CompanyForm(QDialog):
         if row < 0:
             return
         email = self.contacts_table.item(row, 2).text()
-        delete_contact(self.firma_id, email)
+        contact_id = self.contacts_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        if contact_id:
+            delete_contact(int(contact_id))
         self._load_contacts()
 
     def _save_selected_contact(self):
@@ -846,8 +960,23 @@ class CompanyForm(QDialog):
             "telefon": self.contacts_table.item(row, 3).text(),
             "rola": self.contacts_table.item(row, 4).text(),
         }
-        save_contact(payload)
+        contact_id = self.contacts_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        if contact_id:
+            payload["id"] = int(contact_id)
+        save_contact(self.firma_id, payload)
+        self._sync_contact_email_filters()
         self._load_contacts()
+
+    def _sync_contact_email_filters(self):
+        company = get_company(self.firma_id) or {}
+        folder_name = (
+            company.get("nazwa_skrocona")
+            or self.inputs["nazwa_skrocona"].text().strip()
+            or company.get("nazwa")
+            or self.inputs["nazwa"].text().strip()
+            or str(self.firma_id)
+        )
+        ensure_contact_email_filters(self.firma_id, folder_name)
 
     # ============================================================
     # WSPÓLNICY

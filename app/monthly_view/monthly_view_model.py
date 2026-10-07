@@ -57,7 +57,7 @@ class MonthlyViewModel(QAbstractTableModel):
                     2: str(row.get("ilosc_dok", 0)),
                     3: row.get("czas_ks_str", ""),
                     4: "▶",
-                    5: row.get("note_snippet", ""),
+                    5: row.get("note_full", row.get("note_snippet", "")),
                     6: "➕",
                     7: "✏️",
                     8: "⋯",
@@ -72,7 +72,7 @@ class MonthlyViewModel(QAbstractTableModel):
                     4: str(row.get("uod", 0)),
                     5: row.get("czas_kadry_str", ""),
                     6: "▶",
-                    7: row.get("note_snippet", ""),
+                    7: row.get("note_full", row.get("note_snippet", "")),
                     8: "➕",
                     9: "✏️",
                 }

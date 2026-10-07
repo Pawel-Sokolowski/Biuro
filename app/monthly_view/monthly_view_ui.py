@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 from app.monthly_view.monthly_view_logic import MonthlyViewLogic
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.db.dao_invoices import add_invoice_item_for_service
+from app.db.dao_services import add_company_extra_service
 from app.utils.timer import TimerUtils
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.notes_window import NotesWindow
@@ -97,7 +98,7 @@ class HoverScrollTextEdit(QTextEdit):
 
 
 class ActivitySelectionDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, mode: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Wybór czynności")
         self.resize(500, 300)
@@ -106,7 +107,11 @@ class ActivitySelectionDialog(QDialog):
         form = QFormLayout()
 
         self.cb_typ = QComboBox()
-        self.cb_typ.addItems(["Księgowość", "Kadry", "Czynności dodatkowe"])
+        self.cb_typ.addItems(
+            ["Księgowość", "Usługi dodatkowe"]
+            if mode == "ksiegowosc"
+            else ["Kadry", "Usługi dodatkowe"]
+        )
 
         self.cb_usluga = QComboBox()
         self._load_extra_services()
@@ -148,7 +153,7 @@ class ActivitySelectionDialog(QDialog):
 
     def _update_visibility(self):
         typ = self.cb_typ.currentText()
-        is_extra = (typ == "Czynności dodatkowe")
+        is_extra = typ == "Usługi dodatkowe"
 
         self.cb_usluga.setVisible(is_extra)
         self.input_cena.setVisible(is_extra)
@@ -272,13 +277,28 @@ class InlineExtraServiceWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Ilość musi być większa od zera.")
             return
 
-        if self.chk_fakturowac.isChecked():
-            try:
-                cena = float(self.input_cena.text().replace(",", "."))
-            except:
-                cena = None
+        try:
+            cena = float(self.input_cena.text().replace(",", ".") or "0")
+        except ValueError:
+            cena = 0.0
 
-            add_invoice_item_for_service(self.firma_id, usluga_id, ilosc, self.miesiac, cena)
+        add_company_extra_service(
+            self.firma_id,
+            self.miesiac,
+            usluga_id,
+            ilosc,
+            cena,
+            self.chk_fakturowac.isChecked(),
+        )
+
+        if self.chk_fakturowac.isChecked():
+            add_invoice_item_for_service(
+                self.firma_id,
+                usluga_id,
+                ilosc,
+                self.miesiac,
+                cena_netto=cena,
+            )
             QMessageBox.information(self, "OK", "Dodano pozycję do faktury.")
         self.accept()
 
@@ -462,8 +482,12 @@ class MonthlyViewPage(QWidget):
             rr = dict(r)
             sekundy_ks = rr.get("sekundy_ksiegowosc", 0)
             sekundy_kadry = rr.get("sekundy_kadry", 0)
-            rr["czas_ks_str"] = self.logic.format_seconds(sekundy_ks)
-            rr["czas_kadry_str"] = self.logic.format_seconds(sekundy_kadry)
+            rr["czas_ks_str"] = self.logic.format_seconds(
+                self.logic.get_timer_total_seconds(rr["id"], "ksiegowosc", sekundy_ks)
+            )
+            rr["czas_kadry_str"] = self.logic.format_seconds(
+                self.logic.get_timer_total_seconds(rr["id"], "kadry", sekundy_kadry)
+            )
             rr.setdefault("uop", 0)
             rr.setdefault("uz", 0)
             rr.setdefault("uod", 0)
@@ -473,14 +497,14 @@ class MonthlyViewPage(QWidget):
         self.model_kadry.set_rows(rows_prepared)
 
     def _update_running_timer(self):
-        now = datetime.datetime.now()
-
         if self.logic.aktywna_firma_stoper_ks and self.logic.czas_start_ks:
             fid = self.logic.aktywna_firma_stoper_ks
-            delta = int((now - self.logic.czas_start_ks).total_seconds())
             for row_idx in range(self.model_ks.rowCount()):
                 row = self.model_ks.get_row(row_idx)
                 if row and row.get("id") == fid:
+                    delta = self.logic.get_timer_total_seconds(
+                        fid, "ksiegowosc", row.get("sekundy_ksiegowosc", 0)
+                    )
                     row["czas_ks_str"] = TimerUtils.format_seconds(delta)
                     idx = self.model_ks.index(row_idx, 3)
                     self.model_ks.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
@@ -488,10 +512,12 @@ class MonthlyViewPage(QWidget):
 
         if self.logic.aktywna_firma_stoper_kadry and self.logic.czas_start_kadry:
             fid = self.logic.aktywna_firma_stoper_kadry
-            delta = int((now - self.logic.czas_start_kadry).total_seconds())
             for row_idx in range(self.model_kadry.rowCount()):
                 row = self.model_kadry.get_row(row_idx)
                 if row and row.get("id") == fid:
+                    delta = self.logic.get_timer_total_seconds(
+                        fid, "kadry", row.get("sekundy_kadry", 0)
+                    )
                     row["czas_kadry_str"] = TimerUtils.format_seconds(delta)
                     idx = self.model_kadry.index(row_idx, 5)
                     self.model_kadry.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
@@ -540,10 +566,11 @@ class MonthlyViewPage(QWidget):
             self._reload_rows()
             return
 
-        dlg = ActivitySelectionDialog(self)
+        dlg = ActivitySelectionDialog("ksiegowosc", self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "ksiegowosc", payload)
+            self._reload_rows()
 
     def _on_toggle_stoper_kadry(self, firma_id: int):
         if self.logic.aktywna_firma_stoper_kadry == firma_id:
@@ -551,10 +578,11 @@ class MonthlyViewPage(QWidget):
             self._reload_rows()
             return
 
-        dlg = ActivitySelectionDialog(self)
+        dlg = ActivitySelectionDialog("kadry", self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "kadry", payload)
+            self._reload_rows()
 
     def _on_extra_service(self, firma_id: int):
         dlg = InlineExtraServiceWindow(

@@ -197,6 +197,27 @@ def init_db():
         );
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS czasomierze (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firma_id INTEGER NOT NULL,
+            pracownik_id INTEGER,
+            miesiac TEXT NOT NULL,
+            typ TEXT NOT NULL,
+            usluga_id INTEGER,
+            fakturowac INTEGER DEFAULT 0,
+            rozpoczecie TEXT NOT NULL,
+            zakonczenie TEXT NOT NULL,
+            sekundy INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE SET NULL,
+            FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE SET NULL
+        );
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_czasomierze_month ON czasomierze(miesiac, firma_id)"
+    )
+
     # -------------------------
     # dokumenty
     # -------------------------
@@ -282,10 +303,12 @@ def init_db():
             usluga_id INTEGER NOT NULL,
             ilosc INTEGER NOT NULL,
             cena_netto REAL NOT NULL,
+            fakturowac INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
             FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE RESTRICT
         );
     """)
+    _safe_alter_add_column(cur, "uslugi_dodatkowe_firma", "fakturowac INTEGER NOT NULL DEFAULT 0")
 
     # -------------------------
     # pracownicy
@@ -563,6 +586,27 @@ def init_db():
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE
         );
     """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS zadania (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tytul TEXT NOT NULL,
+            opis TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'Nowe',
+            termin TEXT,
+            firma_id INTEGER,
+            pracownik_id INTEGER,
+            created_by INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE SET NULL,
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE SET NULL,
+            FOREIGN KEY(created_by) REFERENCES pracownicy(id) ON DELETE SET NULL
+        );
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_zadania_status ON zadania(status, termin)"
+    )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja ON wiadomosci_chat(konwersacja_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
 

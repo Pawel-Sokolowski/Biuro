@@ -3,13 +3,19 @@ import openpyxl
 import sqlite3
 import re
 import os
+import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
 DB_NAME = os.getenv("DB_NAME")
 
-from app.utils.parsing import normalize_identifier, resolve_employee_ids
+from app.utils.parsing import (
+    normalize_identifier,
+    normalize_pkd_codes,
+    parse_date_value,
+    resolve_employee_ids,
+)
 
 
 # ============================================================
@@ -182,10 +188,10 @@ def _build_payload_from_row(
     # podstawowe
     payload["nazwa"] = get("Nazwa Firmy")
     payload["nazwa_skrocona"] = get("Nazwa skrócona")
-    payload["nip"] = get("NIP")
-    payload["regon"] = get("REGON")
-    payload["krs"] = get("KRS")
-    payload["pesel"] = get("PESEL")
+    payload["nip"] = normalize_identifier(get("NIP"), {10})
+    payload["regon"] = normalize_identifier(get("REGON"), {9, 14})
+    payload["krs"] = normalize_identifier(get("KRS"), {10})
+    payload["pesel"] = normalize_identifier(get("PESEL"), {11})
     payload["forma_dzialalnosci"] = get("Forma działalności")
     payload["forma_opodatkowania"] = get("Forma opodatkowania")
     payload["analityka_fk"] = get("Analityka FK")
@@ -212,7 +218,10 @@ def _build_payload_from_row(
     payload["adres_zam_lokal"] = lokal_zam
 
     # adres korespondencyjny
-    payload["adres_koresp_miasto"] = get("Adres korespondpondencyjny - miasto")
+    payload["adres_koresp_miasto"] = (
+        get("Adres korespondencyjny - miasto")
+        or get("Adres korespondpondencyjny - miasto")
+    )
     payload["adres_koresp_kod_pocztowy"] = get("Adres korespondencyjny - kod pocztowy")
     ulica_koresp_raw = get("Adres korespondencyjny - ulica")
     ulica_koresp, budynek_koresp, lokal_koresp = split_address_line(ulica_koresp_raw)
@@ -221,21 +230,22 @@ def _build_payload_from_row(
     payload["adres_koresp_lokal"] = lokal_koresp
 
     # daty, pkd, zawieszenia
-    payload["data_rozpoczecia_dg"] = get("Data rozpoczęcia działalności gospodarczej")
-    payload["data_rozpoczecia_sprzedazy"] = get("Data rozpoczęcia sprzedaży dla osoby fizycznej")
-    payload["data_koniec_zus_start"] = get("Data zakończenia ulgi ZUS na start")
-    payload["data_koniec_zus_pref"] = get("Data zakończenia ZUS preferencyjny")
-    payload["data_koniec_maly_zus"] = get("Data zakończenia małego ZUS PLUS")
-    payload["data_koniec_a1"] = get("Data zakończenia A1")
-    payload["data_rozpoczecia_obslugi"] = get("Data rozpoczęcia obsługi")
-    payload["data_zakonczenia_obslugi"] = get("Data zakończenia obsługi")
+    payload["data_rozpoczecia_dg"] = parse_date_value(get("Data rozpoczęcia działalności gospodarczej"))
+    payload["data_rozpoczecia_sprzedazy"] = parse_date_value(get("Data rozpoczęcia sprzedaży dla osoby fizycznej"))
+    payload["data_koniec_zus_start"] = parse_date_value(get("Data zakończenia ulgi ZUS na start"))
+    payload["data_koniec_zus_pref"] = parse_date_value(get("Data zakończenia ZUS preferencyjny"))
+    payload["data_koniec_maly_zus"] = parse_date_value(get("Data zakończenia małego ZUS PLUS"))
+    payload["data_koniec_a1"] = parse_date_value(get("Data zakończenia A1"))
+    payload["data_rozpoczecia_obslugi"] = parse_date_value(get("Data rozpoczęcia obsługi"))
+    payload["data_zakonczenia_obslugi"] = parse_date_value(get("Data zakończenia obsługi"))
     payload["zawieszenia_dzialalnosci"] = get("Zawieszenia działalności")
-    payload["kody_pkd"] = get("Kody PKD")
+    payload["kody_pkd"] = normalize_pkd_codes(get("Kody PKD"))
 
     # cenniki księgowe
     cennik_ksiegowy_text = str(get("Cenniki usług księgowych") or "")
     cks = parse_cennik_ksiegowy(cennik_ksiegowy_text)
     payload["cennik_ksiegowy"] = cennik_ksiegowy_text
+    payload["cennik_ksiegowy_parsed"] = cks
     payload["limit_dokumentow"] = cks["limit_dokumentow"]
     payload["zdrowotna"] = cks["zdrowotna"]
 
@@ -243,6 +253,7 @@ def _build_payload_from_row(
     cennik_kadrowy_text = str(get("Cenniki usług kadrowych") or "")
     ckad = parse_cennik_kadrowy(cennik_kadrowy_text)
     payload["cennik_kadrowy"] = cennik_kadrowy_text
+    payload["cennik_kadrowy_parsed"] = ckad
     payload["uop_ilosc"] = ckad["uop_ilosc"]
     payload["uop_cennik"] = ckad["uop_cennik"]
     payload["uz_ilosc"] = ckad["uz_ilosc"]
@@ -254,6 +265,7 @@ def _build_payload_from_row(
     cennik_czasowy_text = str(get("Cenniki czasowe") or "")
     cczas = parse_cennik_czasowy(cennik_czasowy_text)
     payload["cennik_czasowy"] = cennik_czasowy_text
+    payload["cennik_czasowy_parsed"] = cczas
     payload["ryczalt_czasowy"] = cczas["ryczalt_czasowy"]
 
     # przypisani pracownicy
@@ -306,17 +318,154 @@ def import_companies_from_excel_file_payloads(filepath: str) -> Tuple[List[Dict[
 # ============================================================
 # ZAPIS DO DB (stary importer)
 # ============================================================
+def _pricing_key(prefix: str, values: Dict[str, Any]) -> str:
+    raw = "|".join(f"{key}={values.get(key)!r}" for key in sorted(values))
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12].upper()
+    return f"IMPORT_{prefix}_{digest}"
+
+
+def _ensure_accounting_cennik(
+    cursor: sqlite3.Cursor,
+    payload: Dict[str, Any],
+) -> Optional[str]:
+    parsed = payload.get("cennik_ksiegowy_parsed") or {}
+    text = str(payload.get("cennik_ksiegowy") or "").strip()
+    if not text:
+        return None
+
+    limit_price = parsed.get("cena_za_dokument")
+    base_price = parsed.get("ryczalt_ksiegowy")
+    zdrowotna = parsed.get("zdrowotna") or 0
+    if limit_price is None and base_price is None and zdrowotna is None:
+        return None
+
+    values = {
+        "typ": "RYCZALT" if "rycza" in str(payload.get("forma_opodatkowania") or "").lower() else "KSIEGOWOSC",
+        "limit": parsed.get("limit_dokumentow"),
+        "limit_price": limit_price,
+        "base_price": base_price,
+        "zdrowotna": zdrowotna,
+    }
+    cursor.execute(
+        """
+        SELECT klucz FROM cenniki
+        WHERE typ = ?
+          AND cena_za_dokument_ponad_limit = ?
+          AND netto = ?
+          AND zdrowotna = ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (values["typ"], limit_price or 0, base_price, zdrowotna or 0),
+    )
+    existing = cursor.fetchone()
+    key = existing[0] if existing else _pricing_key("KS", values)
+
+    cursor.execute(
+        """
+        INSERT INTO cenniki (
+            klucz, typ, cena_netto_ksiegowosc, cena_brutto_ksiegowosc,
+            cena_za_dokument_ponad_limit, zdrowotna, netto, brutto
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(klucz) DO UPDATE SET
+            typ = excluded.typ,
+            cena_netto_ksiegowosc = excluded.cena_netto_ksiegowosc,
+            cena_brutto_ksiegowosc = excluded.cena_brutto_ksiegowosc,
+            cena_za_dokument_ponad_limit = excluded.cena_za_dokument_ponad_limit,
+            zdrowotna = excluded.zdrowotna,
+            netto = excluded.netto,
+            brutto = excluded.brutto,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            key,
+            values["typ"],
+            base_price or 0,
+            round((base_price or 0) * 1.23, 2),
+            limit_price or 0,
+            zdrowotna or 0,
+            base_price,
+            round((base_price or 0) * 1.23, 2) if base_price is not None else None,
+        ),
+    )
+    return key
+
+
+def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> None:
+    parsed = payload.get("cennik_kadrowy_parsed") or {}
+    text = str(payload.get("cennik_kadrowy") or "").strip()
+    if not text:
+        return
+
+    for service, price in (
+        ("ZDROWOTNA", parsed.get("zdrowotna")),
+        ("UOP", parsed.get("uop_cennik")),
+        ("UZ", parsed.get("uz_cennik")),
+        ("UOD", parsed.get("uod_cennik")),
+    ):
+        if price is None:
+            continue
+        cursor.execute(
+            """
+            SELECT klucz FROM cenniki_kadry
+            WHERE cena_netto_kadry = ?
+            ORDER BY id
+            LIMIT 1
+            """,
+            (price,),
+        )
+        existing = cursor.fetchone()
+        key = existing[0] if existing else _pricing_key(f"KADRY_{service}", {"price": price})
+        cursor.execute(
+            """
+            INSERT INTO cenniki_kadry (
+                klucz, cena_netto_kadry, cena_brutto_kadry, opis
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(klucz) DO UPDATE SET
+                cena_netto_kadry = excluded.cena_netto_kadry,
+                cena_brutto_kadry = excluded.cena_brutto_kadry,
+                opis = excluded.opis,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, price, round(price * 1.23, 2), f"Import z Excela: {service}"),
+        )
+
+
+def _assign_employees(
+    cursor: sqlite3.Cursor,
+    firma_id: int,
+    assigned_raw: Any,
+    warnings: List[str],
+    row_number: int,
+) -> None:
+    if not assigned_raw:
+        return
+    assigned_ids, unresolved = resolve_employee_ids(cursor, assigned_raw)
+    for employee_id in assigned_ids:
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
+            VALUES (?, ?, NULL)
+            """,
+            (employee_id, firma_id),
+        )
+    if unresolved:
+        warnings.append(
+            f"Wiersz {row_number}: nie znaleziono pracowników {', '.join(unresolved)}."
+        )
+
+
 def _apply_payload_to_db(
     cursor: sqlite3.Cursor,
     payload: Dict[str, Any],
     row_number: int,
     warnings: List[str],
-) -> None:
+) -> bool:
 
     company_name = str(payload.get("nazwa", "") or "").strip()
     if not company_name:
         warnings.append(f"Wiersz {row_number}: pominięto pustą nazwę firmy.")
-        return
+        return False
 
     normalized_nip = normalize_identifier(payload.get("nip"), {10})
     company_id = None
@@ -325,80 +474,62 @@ def _apply_payload_to_db(
         cursor.execute("SELECT id FROM firmy WHERE nip = ?", (normalized_nip,))
         row_db = cursor.fetchone()
         company_id = row_db[0] if row_db else None
+    if company_id is None:
+        cursor.execute("SELECT id FROM firmy WHERE nazwa = ?", (company_name,))
+        row_db = cursor.fetchone()
+        company_id = row_db[0] if row_db else None
 
-    fields_update = []
-    values_update = []
+    accounting_key = _ensure_accounting_cennik(cursor, payload)
+    _ensure_employee_cenniki(cursor, payload)
 
-    def add_field(db_field: str, excel_key: str):
-        fields_update.append(f"{db_field} = ?")
-        values_update.append(payload.get(excel_key))
+    company_fields = [
+        "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",
+        "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk",
+        "osoba_kontaktowa", "adres_email", "nr_telefonu", "miasto",
+        "kod_pocztowy", "ulica", "adres_budynek", "adres_lokal",
+        "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
+        "adres_zam_budynek", "adres_zam_lokal", "adres_koresp_miasto",
+        "adres_koresp_kod_pocztowy", "adres_koresp_ulica",
+        "adres_koresp_budynek", "adres_koresp_lokal",
+        "data_rozpoczecia_dg", "data_rozpoczecia_sprzedazy",
+        "data_koniec_zus_start", "data_koniec_zus_pref",
+        "data_koniec_maly_zus", "data_koniec_a1",
+        "data_rozpoczecia_obslugi", "data_zakonczenia_obslugi",
+        "zawieszenia_dzialalnosci", "kody_pkd", "cennik_ksiegowy",
+        "cennik_kadrowy", "cennik_czasowy", "limit_dokumentow",
+        "zdrowotna", "uop_ilosc", "uop_cennik", "uz_ilosc",
+        "uz_cennik", "uod_ilosc", "uod_cennik",
+    ]
+    if accounting_key:
+        company_fields.append("glowny_cennik")
+        payload["glowny_cennik"] = accounting_key
 
-    # podstawowe
-    add_field("nazwa", "nazwa")
-    add_field("nazwa_skrocona", "nazwa_skrocona")
-    add_field("nip", "nip")
-    add_field("regon", "regon")
-    add_field("krs", "krs")
-    add_field("pesel", "pesel")
-    add_field("forma_dzialalnosci", "forma_dzialalnosci")
-    add_field("forma_opodatkowania", "forma_opodatkowania")
-    add_field("analityka_fk", "analityka_fk")
-    add_field("osoba_kontaktowa", "osoba_kontaktowa")
-    add_field("adres_email", "adres_email")
-    add_field("nr_telefonu", "nr_telefonu")
-
-    # adres główny
-    add_field("miasto", "miasto")
-    add_field("kod_pocztowy", "kod_pocztowy")
-    add_field("ulica", "ulica")
-    add_field("adres_budynek", "adres_budynek")
-    add_field("adres_lokal", "adres_lokal")
-
-    # adres zamieszkania
-    add_field("adres_zam_miasto", "adres_zam_miasto")
-    add_field("adres_zam_kod_pocztowy", "adres_zam_kod_pocztowy")
-    add_field("adres_zam_ulica", "adres_zam_ulica")
-    add_field("adres_zam_budynek", "adres_zam_budynek")
-    add_field("adres_zam_lokal", "adres_zam_lokal")
-
-    # adres korespondencyjny
-    add_field("adres_koresp_miasto", "adres_koresp_miasto")
-    add_field("adres_koresp_kod_pocztowy", "adres_koresp_kod_pocztowy")
-    add_field("adres_koresp_ulica", "adres_koresp_ulica")
-    add_field("adres_koresp_budynek", "adres_koresp_budynek")
-    add_field("adres_koresp_lokal", "adres_koresp_lokal")
-
-    # daty, pkd, zawieszenia
-    add_field("data_rozpoczecia_dg", "data_rozpoczecia_dg")
-    add_field("data_rozpoczecia_sprzedazy", "data_rozpoczecia_sprzedazy")
-    add_field("data_koniec_zus_start", "data_koniec_zus_start")
-    add_field("data_koniec_zus_pref", "data_koniec_zus_pref")
-    add_field("data_koniec_maly_zus", "data_koniec_maly_zus")
-    add_field("data_koniec_a1", "data_koniec_a1")
-    add_field("data_rozpoczecia_obslugi", "data_rozpoczecia_obslugi")
-    add_field("data_zakonczenia_obslugi", "data_zakonczenia_obslugi")
-    add_field("zawieszenia_dzialalnosci", "zawieszenia_dzialalnosci")
-    add_field("kody_pkd", "kody_pkd")
+    values = []
+    fields = []
+    for field in company_fields:
+        value = payload.get(field)
+        if value not in (None, "") or field == "nazwa":
+            fields.append(field)
+            values.append(value)
 
     if company_id:
-        sql = f"UPDATE firmy SET {', '.join(fields_update)} WHERE id = ?"
-        values_update.append(company_id)
-        cursor.execute(sql, tuple(values_update))
-    else:
+        assignments = ", ".join(f"{field} = ?" for field in fields)
         cursor.execute(
-            """
-            INSERT INTO firmy (nazwa, nip, glowny_cennik, limit_dokumentow, typ_rozliczenia, vat_czynny)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (
-                company_name,
-                normalized_nip,
-                payload.get("cennik_ksiegowy", ""),
-                payload.get("limit_dokumentow") or 0,
-                payload.get("forma_opodatkowania") or "Ryczałt",
-                0,
-            ),
+            f"UPDATE firmy SET {assignments} WHERE id = ?",
+            (*values, company_id),
         )
+        created = False
+    else:
+        placeholders = ", ".join("?" for _ in fields)
+        cursor.execute(
+            f"INSERT INTO firmy ({', '.join(fields)}) VALUES ({placeholders})",
+            values,
+        )
+        company_id = int(cursor.lastrowid)
+        created = True
+
+    _assign_employees(cursor, company_id, payload.get("assigned_raw"), warnings, row_number)
+    return created
 
 
 # ============================================================
@@ -428,26 +559,10 @@ def import_companies_from_excel_file(
 
             payload = _build_payload_from_row(headers, header_index, row)
 
-            assigned_raw = payload.get("assigned_raw")
-            if assigned_raw:
-                try:
-                    assigned_ids, unresolved = resolve_employee_ids(cursor, assigned_raw)
-                    if unresolved:
-                        warnings.append(
-                            f"Wiersz {row_number}: nie znaleziono pracowników {', '.join(unresolved)}."
-                        )
-                except Exception:
-                    pass
-
-            before = conn.total_changes
-            _apply_payload_to_db(cursor, payload, row_number, warnings)
-            after = conn.total_changes
-
-            if after > before:
-                if before == 0:
-                    created_count += 1
-                else:
-                    updated_count += 1
+            if _apply_payload_to_db(cursor, payload, row_number, warnings):
+                created_count += 1
+            else:
+                updated_count += 1
 
             if row_number % 20 == 0:
                 try:
@@ -457,6 +572,23 @@ def import_companies_from_excel_file(
 
         conn.commit()
         return {"created": created_count, "updated": updated_count, "warnings": warnings}
+    finally:
+        conn.close()
+
+
+def save_imported_payload(
+    payload: Dict[str, Any],
+    db_path: str = DB_NAME,
+    row_number: int = 2,
+) -> Dict[str, Any]:
+    """Save one reviewed wizard payload using the complete import path."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    warnings: List[str] = []
+    try:
+        created = _apply_payload_to_db(cursor, payload, row_number, warnings)
+        conn.commit()
+        return {"created": int(created), "updated": int(not created), "warnings": warnings}
     finally:
         conn.close()
 
@@ -491,26 +623,10 @@ def import_companies_fast_from_excel_file(
 
             payload = _build_payload_from_row(headers, header_index, row)
 
-            assigned_raw = payload.get("assigned_raw")
-            if assigned_raw:
-                try:
-                    assigned_ids, unresolved = resolve_employee_ids(cursor, assigned_raw)
-                    if unresolved:
-                        warnings.append(
-                            f"Wiersz {row_number}: nie znaleziono pracowników {', '.join(unresolved)}."
-                        )
-                except Exception:
-                    pass
-
-            before = conn.total_changes
-            _apply_payload_to_db(cursor, payload, row_number, warnings)
-            after = conn.total_changes
-
-            if after > before:
-                if before == 0:
-                    created += 1
-                else:
-                    updated += 1
+            if _apply_payload_to_db(cursor, payload, row_number, warnings):
+                created += 1
+            else:
+                updated += 1
 
         conn.commit()
         return {"created": created, "updated": updated, "warnings": warnings}

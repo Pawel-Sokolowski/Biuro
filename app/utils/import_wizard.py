@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
 from typing import List, Dict, Any
 
 from app.companies.company_form import CompanyForm
-from app.db.dao_companies import save_company
+from app.utils.importers import save_imported_payload
 
 
 class ImportWizard(QDialog):
@@ -44,7 +44,12 @@ class ImportWizard(QDialog):
             self.btn_next.setText("Zamknij")
             return
 
-        self.label.setText(f"Firma {self.index + 1} z {len(self.payloads)}")
+        payload = self.payloads[self.index]
+        self.label.setText(
+            f"Firma {self.index + 1} z {len(self.payloads)}\n"
+            f"{payload.get('nazwa', '')} | NIP: {payload.get('nip', '') or 'brak'}\n"
+            "Dane możesz zweryfikować i poprawić w formularzu."
+        )
 
     def _next(self):
         if self.index >= len(self.payloads):
@@ -59,9 +64,28 @@ class ImportWizard(QDialog):
 
         if dlg.exec():
             try:
-                save_company(dlg._collect_payload())
+                reviewed_payload = dlg._collect_payload()
+                # Keep parsed pricing and assignment metadata from the source
+                # row; CompanyForm exposes the normal company fields only.
+                for key in (
+                    "cennik_ksiegowy_parsed",
+                    "cennik_kadrowy_parsed",
+                    "cennik_czasowy_parsed",
+                    "assigned_raw",
+                ):
+                    if key in payload:
+                        reviewed_payload[key] = payload[key]
+                result = save_imported_payload(reviewed_payload, row_number=self.index + 2)
+                if result.get("warnings"):
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        self,
+                        "Ostrzeżenia zapisu",
+                        "\n".join(result["warnings"]),
+                    )
             except Exception as e:
-                print("Błąd zapisu:", e)
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Błąd zapisu", str(e))
 
         self.index += 1
         self._update_label()

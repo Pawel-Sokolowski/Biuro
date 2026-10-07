@@ -21,7 +21,8 @@ from app.reports.reports_logic import (
     build_report,
     build_yearly_report,
     compare_companies,
-    build_profit_report
+    build_profit_report,
+    build_summary_report,
 )
 
 
@@ -52,7 +53,8 @@ class ReportsPage(QWidget):
             "Raport miesięczny",
             "Raport roczny",
             "Porównanie firm",
-            "Zarobek na godzinę"
+            "Zarobek na godzinę",
+            "Zestawienie"
         ])
         mode_box.addWidget(QLabel("Tryb:"))
         mode_box.addWidget(self.mode_combo)
@@ -112,9 +114,22 @@ class ReportsPage(QWidget):
         layout.addWidget(self.chart_top)
         layout.addWidget(self.chart_bottom)
 
+        self.summary_table = QTableWidget(0, 6)
+        self.summary_table.setHorizontalHeaderLabels(
+            ["Klient", "Księgowa", "Miesiąc", "Typ", "Czas pracy", "Cena za usługę"]
+        )
+        self.summary_table.horizontalHeader().setStretchLastSection(True)
+        self.summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.summary_table)
+
     def _update_mode_ui(self, mode):
-        self.month_box_container.setVisible(mode in ["Raport miesięczny", "Porównanie firm", "Zarobek na godzinę"])
+        self.month_box_container.setVisible(
+            mode in ["Raport miesięczny", "Porównanie firm", "Zarobek na godzinę", "Zestawienie"]
+        )
         self.year_box_container.setVisible(mode == "Raport roczny")
+        self.summary_table.setVisible(mode == "Zestawienie")
+        self.chart_top.setVisible(mode != "Zestawienie")
+        self.chart_bottom.setVisible(mode != "Zestawienie")
 
     def _generate_report(self):
         selected = [
@@ -157,6 +172,28 @@ class ReportsPage(QWidget):
             months = get_months_range(start, end)
             data = build_profit_report(selected, months)
             self._render_profit(data, selected, months)
+
+        elif mode == "Zestawienie":
+            start = self.month_start.currentText()
+            end = self.month_end.currentText()
+            months = get_months_range(start, end)
+            self._render_summary(build_summary_report(selected, months))
+
+    def _render_summary(self, rows):
+        self.summary_table.setRowCount(0)
+        for item in rows:
+            row = self.summary_table.rowCount()
+            self.summary_table.insertRow(row)
+            values = [
+                item["klient"],
+                item["ksiegowa"],
+                item["miesiac"],
+                "Kadry" if item["typ"] == "kadry" else "Księgowość",
+                format_hours(item["sekundy"]),
+                f"{item['cena_za_usluge']:.2f} zł",
+            ]
+            for col, value in enumerate(values):
+                self.summary_table.setItem(row, col, QTableWidgetItem(str(value)))
 
     # ============================================================
     # WYKRES MIESZANY — SŁUPKI (KWOTA) + LINIA (CZAS)
@@ -372,6 +409,26 @@ class ReportsPage(QWidget):
 
             if mode == "Raport miesięczny":
                 data = build_report(selected, months)
+            elif mode == "Zestawienie":
+                rows = build_summary_report(selected, months)
+                filepath, _ = QFileDialog.getSaveFileName(
+                    self, "Zapisz zestawienie Excel", "", "Pliki Excel (*.xlsx)"
+                )
+                if not filepath:
+                    return
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Zestawienie"
+                ws.append(["Klient", "Księgowa", "Miesiąc", "Typ", "Czas pracy", "Cena za usługę"])
+                for row in rows:
+                    ws.append([
+                        row["klient"], row["ksiegowa"], row["miesiac"],
+                        row["typ"], format_hours(row["sekundy"]),
+                        row["cena_za_usluge"],
+                    ])
+                wb.save(filepath)
+                QMessageBox.information(self, "Sukces", f"Zestawienie zapisane:\n{filepath}")
+                return
             elif mode == "Zarobek na godzinę":
                 data = build_profit_report(selected, months)
             elif mode == "Porównanie firm":

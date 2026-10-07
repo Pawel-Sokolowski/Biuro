@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 
 from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QDateTime
+from PyQt6.QtCore import Qt, QDateTime, pyqtSignal
 from typing import Optional
 import os
 from dotenv import load_dotenv
@@ -16,6 +16,19 @@ DB_NAME = os.getenv("DB_NAME")
 from app.chat.chat_model import get_conversations, get_messages, add_message, create_conversation
 
 import sqlite3
+
+
+class ChatMessageEdit(QTextEdit):
+    send_requested = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                self.send_requested.emit()
+            return
+        super().keyPressEvent(event)
 
 
 def _format_date_header(dt_str: str) -> str:
@@ -39,6 +52,9 @@ class ChatPage(QWidget):
         self.pracownik_id = pracownik_id
         self.current_konwersacja: Optional[int] = None
         self.offset = 0
+        self.page_size = 100
+        self.has_more_history = True
+        self.loading_history = False
         self.current_pracownik_id = pracownik_id  # alias used in rendering
 
         self._build_ui()
@@ -79,15 +95,15 @@ class ChatPage(QWidget):
         self.messages_layout.setSpacing(6)
         self.messages_container.setLayout(self.messages_layout)
         self.scroll_area.setWidget(self.messages_container)
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         right_layout.addWidget(self.scroll_area)
 
-        btn_history = QPushButton("⬆ Pokaż starsze wiadomości")
-        btn_history.clicked.connect(self.load_more_history)
-        right_layout.addWidget(btn_history)
-
         bottom = QHBoxLayout()
-        self.chat_input = QLineEdit()
+        self.chat_input = ChatMessageEdit()
+        self.chat_input.setAcceptRichText(False)
+        self.chat_input.setFixedHeight(70)
         self.chat_input.setPlaceholderText("Napisz wiadomość...")
+        self.chat_input.send_requested.connect(self.send_message)
         bottom.addWidget(self.chat_input)
 
         btn_send = QPushButton("Wyślij")
@@ -120,22 +136,42 @@ class ChatPage(QWidget):
             return
         self.current_konwersacja = item.data(Qt.ItemDataRole.UserRole)
         self.offset = 0
+        self.has_more_history = True
         self.load_messages()
 
     # ============================================================
     # MESSAGES LOADING & RENDERING (grouped by sender + date)
     # ============================================================
-    def load_messages(self):
+    def load_messages(self, scroll_to_bottom: bool = True):
         if not self.current_konwersacja:
             return
 
-        messages = get_messages(self.current_konwersacja, limit=100, offset=self.offset)
+        messages = get_messages(
+            self.current_konwersacja,
+            limit=self.offset + self.page_size,
+            offset=0,
+        )
+        self.has_more_history = len(messages) >= self.offset + self.page_size
         # messages are returned oldest-first by dao; render grouped
-        self._render_grouped_messages(messages)
+        self._render_grouped_messages(messages, scroll_to_bottom=scroll_to_bottom)
 
     def load_more_history(self):
-        self.offset += 100
-        self.load_messages()
+        if self.loading_history or not self.has_more_history:
+            return
+        self.loading_history = True
+        old_value = self.scroll_area.verticalScrollBar().value()
+        old_maximum = self.scroll_area.verticalScrollBar().maximum()
+        self.offset += self.page_size
+        self.load_messages(scroll_to_bottom=False)
+        new_maximum = self.scroll_area.verticalScrollBar().maximum()
+        self.scroll_area.verticalScrollBar().setValue(
+            old_value + new_maximum - old_maximum
+        )
+        self.loading_history = False
+
+    def _on_scroll_changed(self, value: int):
+        if value <= 20:
+            self.load_more_history()
 
     def _clear_messages(self):
         while self.messages_layout.count():
@@ -144,7 +180,7 @@ class ChatPage(QWidget):
             if w:
                 w.deleteLater()
 
-    def _render_grouped_messages(self, messages):
+    def _render_grouped_messages(self, messages, scroll_to_bottom: bool = True):
         """
         Render messages grouped by date and sender.
         Consecutive messages from same sender on same date are shown under one header.
@@ -228,14 +264,16 @@ class ChatPage(QWidget):
 
         # stretch at the end to push content up if few messages
         self.messages_layout.addStretch()
-        # scroll to bottom
-        self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
+        if scroll_to_bottom:
+            self.scroll_area.verticalScrollBar().setValue(
+                self.scroll_area.verticalScrollBar().maximum()
+            )
 
     # ============================================================
     # SENDING MESSAGES
     # ============================================================
     def send_message(self):
-        text = self.chat_input.text().strip()
+        text = self.chat_input.toPlainText().strip()
         if not text:
             return
 

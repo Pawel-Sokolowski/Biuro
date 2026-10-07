@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from app.global_utils.calculator import oblicz_miesieczny_koszt
 import os
 from dotenv import load_dotenv
+from app.db.dao_conn import get_conn
 
 load_dotenv()
 DB_NAME = os.getenv("DB_NAME")
@@ -12,7 +13,7 @@ DB_NAME = os.getenv("DB_NAME")
 # LISTA FIRM
 # ============================================================
 def get_all_companies() -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
@@ -74,20 +75,79 @@ def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]
 # USŁUGI DODATKOWE — SUMA
 # ============================================================
 def get_extra_services_value(firma_id: int, miesiac: str) -> float:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
         SELECT SUM(ilosc * cena_netto) AS suma
         FROM uslugi_dodatkowe_firma
-        WHERE firma_id = ? AND miesiac = ?
+        WHERE firma_id = ? AND miesiac = ? AND fakturowac = 1
     """, (firma_id, miesiac))
 
     row = cur.fetchone()
     conn.close()
 
     return float(row["suma"] or 0)
+
+
+def build_summary_report(firma_ids: List[int], months: List[str]) -> List[Dict[str, Any]]:
+    """Return employee-attributed work rows for the Reports/Zestawienie view."""
+    if not firma_ids or not months:
+        return []
+
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    placeholders_firm = ",".join("?" for _ in firma_ids)
+    placeholders_month = ",".join("?" for _ in months)
+    rows = conn.execute(
+        f"""
+        SELECT c.firma_id, c.miesiac, c.typ, c.sekundy,
+               f.nazwa AS klient,
+               COALESCE(p.imie || ' ' || p.nazwisko, 'Nieprzypisany') AS ksiegowa
+        FROM czasomierze c
+        JOIN firmy f ON f.id = c.firma_id
+        LEFT JOIN pracownicy p ON p.id = c.pracownik_id
+        WHERE c.firma_id IN ({placeholders_firm})
+          AND c.miesiac IN ({placeholders_month})
+        ORDER BY f.nazwa, c.miesiac, ksiegowa, c.typ
+        """,
+        [*firma_ids, *months],
+    ).fetchall()
+    conn.close()
+
+    summary: Dict[tuple, Dict[str, Any]] = {}
+    for row in rows:
+        key = (row["firma_id"], row["miesiac"], row["ksiegowa"], row["typ"])
+        item = summary.setdefault(
+            key,
+            {
+                "firma_id": row["firma_id"],
+                "miesiac": row["miesiac"],
+                "klient": row["klient"],
+                "ksiegowa": row["ksiegowa"],
+                "typ": row["typ"],
+                "sekundy": 0,
+            },
+        )
+        item["sekundy"] += int(row["sekundy"] or 0)
+
+    # Existing monthly pricing is used as the service value, divided by the
+    # department's tracked time so every employee row remains comparable.
+    for item in summary.values():
+        koszt = oblicz_miesieczny_koszt(item["firma_id"], item["miesiac"])
+        extra = get_extra_services_value(item["firma_id"], item["miesiac"])
+        value = float(koszt["zdrowotna"] if item["typ"] == "kadry" else koszt["netto"] + extra)
+        total = max(1, sum(
+            x["sekundy"]
+            for x in summary.values()
+            if x["firma_id"] == item["firma_id"]
+            and x["miesiac"] == item["miesiac"]
+            and x["typ"] == item["typ"]
+        ))
+        item["cena_za_usluge"] = round(value * item["sekundy"] / total, 2)
+
+    return list(summary.values())
 
 
 # ============================================================

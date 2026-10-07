@@ -98,7 +98,17 @@ def _get_or_create_draft_invoice_for_company(
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT id FROM faktury WHERE firma_id = ? AND miesiac = ? AND COALESCE(status, '') = 'robocza' LIMIT 1",
+            """
+            SELECT id
+            FROM faktury
+            WHERE firma_id = ?
+              AND miesiac = ?
+              AND COALESCE(eksportowana, 0) = 0
+            ORDER BY CASE WHEN COALESCE(status, '') = 'robocza' THEN 0 ELSE 1 END,
+                     updated_at DESC,
+                     id DESC
+            LIMIT 1
+            """,
             (firma_id, miesiac),
         )
         row = cur.fetchone()
@@ -152,6 +162,7 @@ def add_invoice_item_for_service(
     ilosc_hours: float,
     miesiac: str,
     pracownik_id: Optional[int] = None,
+    cena_netto: Optional[float] = None,
 ) -> Optional[int]:
     if ilosc_hours is None or ilosc_hours <= 0:
         return None
@@ -168,7 +179,11 @@ def add_invoice_item_for_service(
         if not svc_row:
             return None
         svc = dict(svc_row)
-        cena_netto = float(svc.get("cena_netto") or 0.0)
+        cena_netto = (
+            float(cena_netto)
+            if cena_netto is not None
+            else float(svc.get("cena_netto") or 0.0)
+        )
         nazwa = svc.get("nazwa") or "Usługa dodatkowa"
         stawka_vat = svc.get("stawka_vat") if svc.get("stawka_vat") is not None else "23"
 
@@ -176,6 +191,30 @@ def add_invoice_item_for_service(
 
         ilosc_rounded = round(float(ilosc_hours), 2)
         wartosc_netto = round(cena_netto * ilosc_rounded, 2)
+        vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
+        wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
+
+        cur.execute("SELECT pozycje_json FROM faktury WHERE id = ?", (invoice_id,))
+        invoice_row = cur.fetchone()
+        try:
+            positions = json.loads(invoice_row["pozycje_json"] or "[]") if invoice_row else []
+        except (TypeError, json.JSONDecodeError):
+            positions = []
+
+        positions.append(
+            {
+                "nazwa": nazwa,
+                "ilosc": ilosc_rounded,
+                "jednostka": "godz.",
+                "netto": wartosc_netto,
+                "cena_netto": round(cena_netto, 2),
+                "vat": int(vat_percent),
+                "brutto": wartosc_brutto,
+                "kategoria": svc.get("kategoria") or "usługi dodatkowe",
+                "usluga_id": usluga_id,
+                "generated": False,
+            }
+        )
 
         cur.execute(
             """
@@ -195,7 +234,20 @@ def add_invoice_item_for_service(
             ),
         )
 
-        _recalculate_invoice_totals(conn, invoice_id)
+        cur.execute(
+            """
+            UPDATE faktury
+            SET kwota_netto = ?, kwota_brutto = ?,
+                pozycje_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                round(sum(float(p.get("netto") or 0) for p in positions), 2),
+                round(sum(float(p.get("brutto") or 0) for p in positions), 2),
+                json.dumps(positions, ensure_ascii=False),
+                invoice_id,
+            ),
+        )
 
         conn.commit()
         return invoice_id

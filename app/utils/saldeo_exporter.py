@@ -199,6 +199,7 @@ def export_saldeo_xlsx(
             jednostka = poz.get("jednostka", poz.get("unit", "szt."))
 
             raw_netto = poz.get("netto", poz.get("cena_netto", None))
+            raw_unit_netto = poz.get("cena_netto")
             raw_brutto = poz.get("brutto", poz.get("cena_brutto", None))
             vat_raw = poz.get("vat", poz.get("stawka_vat", ""))
 
@@ -211,10 +212,17 @@ def export_saldeo_xlsx(
                 vat_pct = float(default_vat_str)
 
             if price_mode == "netto":
-                netto = float(raw_netto or 0)
+                # Invoice JSON stores ``netto`` as the line total.  Saldeo
+                # expects the unit value, while manual positions may only
+                # provide a unit ``cena_netto``.
+                if raw_unit_netto is not None:
+                    netto = float(raw_unit_netto or 0)
+                else:
+                    netto = float(raw_netto or 0) / max(float(ilosc or 1), 1)
                 brutto = netto * (1 + vat_pct / 100)
             else:
                 brutto = float(raw_brutto or 0)
+                brutto = brutto / max(float(ilosc or 1), 1)
                 netto = brutto / (1 + vat_pct / 100)
 
             cena_netto_fmt = format_amount_pl(netto)

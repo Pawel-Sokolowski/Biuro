@@ -33,8 +33,9 @@ def get_conversations(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]
 
 def get_messages(konwersacja_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
     """
-    Zwraca wiadomości dla konwersacji posortowane rosnąco (najstarsze pierwsze),
-    co ułatwia grupowanie i renderowanie w kolejności naturalnej.
+    Zwraca najnowsze wiadomości w kolejności naturalnej (najstarsze pierwsze).
+    Offset jest liczony od końca rozmowy, aby przewijanie do góry mogło
+    doładować starszą historię.
     """
     conn = _get_conn()
     cur = conn.cursor()
@@ -44,12 +45,12 @@ def get_messages(konwersacja_id: int, limit: int = 100, offset: int = 0) -> List
         FROM wiadomosci_chat wc
         LEFT JOIN pracownicy p ON wc.pracownik_id = p.id
         WHERE wc.konwersacja_id = ?
-        ORDER BY datetime(wc.data_wysylki) ASC, wc.id ASC
+        ORDER BY datetime(wc.data_wysylki) DESC, wc.id DESC
         LIMIT ? OFFSET ?
     """, (konwersacja_id, limit, offset))
     rows = cur.fetchall()
     conn.close()
-    return [{k: row[k] for k in row.keys()} for row in rows]
+    return [{k: row[k] for k in row.keys()} for row in reversed(rows)]
 
 
 def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:

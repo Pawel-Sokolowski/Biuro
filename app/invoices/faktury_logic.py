@@ -9,6 +9,8 @@ from app.db.dao_invoices import (
     get_invoice_for_company_month,
     create_or_update_invoice
 )
+from app.db.dao_monthly import count_documents_for_month
+from app.utils.months import previous_month
 
 
 class FakturyLogic:
@@ -27,6 +29,16 @@ class FakturyLogic:
         row = cur.fetchone()
         conn.close()
         return dict(row) if row else None
+
+    def _get_document_count_for_invoice(self, firma_id: int, miesiac: str, fallback: int) -> int:
+        document_month = previous_month(miesiac)
+        imported_count = count_documents_for_month(firma_id, document_month)
+        if imported_count:
+            return imported_count
+        previous_status = self._get_month_status(firma_id, document_month)
+        if previous_status and previous_status.get("ilosc_dok") is not None:
+            return int(previous_status.get("ilosc_dok") or 0)
+        return int(fallback or 0)
 
     # ---------------- USŁUGI DODATKOWE ----------------
     def _get_extra_services(self, firma_id: int, miesiac: str) -> List[dict]:
@@ -139,8 +151,10 @@ class FakturyLogic:
             })
 
         # ---------------- Dokumenty ponad limit ----------------
-        if status and pricing and company.get("fakturowac", 0) == 1:
-            ilosc_dok = int(status.get("ilosc_dok") or 0)
+        if pricing and company.get("fakturowac", 0) == 1:
+            ilosc_dok = self._get_document_count_for_invoice(
+                firma_id, miesiac, int((status or {}).get("ilosc_dok") or 0)
+            )
             limit = int(company.get("limit_dokumentow") or 0)
             if ilosc_dok > limit:
                 ponad = ilosc_dok - limit

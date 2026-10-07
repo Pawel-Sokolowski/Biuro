@@ -11,6 +11,7 @@ from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_companies import get_company, save_company
 from app.db.dao_notes import get_latest_notes_for_firms
 from app.utils.timer import TimerUtils
+from app.utils.months import default_month_for_monthly_view
 
 
 class MonthlyViewLogic:
@@ -31,7 +32,7 @@ class MonthlyViewLogic:
 
     def __init__(self, pracownik_id: int):
         self.pracownik_id = pracownik_id
-        self.aktualny_miesiac = datetime.datetime.now().strftime("%Y-%m")
+        self.aktualny_miesiac = default_month_for_monthly_view()
 
         self.aktywna_firma_stoper_ks: Optional[int] = None
         self.aktywna_firma_stoper_kadry: Optional[int] = None

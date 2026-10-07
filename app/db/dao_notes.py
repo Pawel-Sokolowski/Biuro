@@ -19,8 +19,17 @@ def get_latest_notes_for_firms(firm_ids: List[int]) -> Dict[int, Dict[str, Any]]
         FROM company_notes cn
         LEFT JOIN pracownicy p ON p.id = cn.autor_id
         WHERE cn.firma_id IN ({placeholders})
-          AND cn.data_utworzenia = (
-              SELECT MAX(data_utworzenia) FROM company_notes cn2 WHERE cn2.firma_id = cn.firma_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM company_notes cn2
+              WHERE cn2.firma_id = cn.firma_id
+                AND (
+                    cn2.data_utworzenia > cn.data_utworzenia
+                    OR (
+                        cn2.data_utworzenia = cn.data_utworzenia
+                        AND cn2.id > cn.id
+                    )
+                )
           )
     """,
         tuple(firm_ids),
@@ -49,7 +58,7 @@ def get_notes_for_company(firma_id: int, limit: Optional[int] = None) -> List[Di
         FROM company_notes cn
         LEFT JOIN pracownicy p ON p.id = cn.autor_id
         WHERE cn.firma_id = ?
-        ORDER BY cn.data_utworzenia DESC
+        ORDER BY cn.data_utworzenia DESC, cn.id DESC
     """
     if limit:
         q += " LIMIT ?"

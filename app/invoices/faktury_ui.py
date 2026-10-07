@@ -250,7 +250,7 @@ class FakturyPage(QWidget):
         self.faktury_table.setRowCount(0)
 
         conn = get_conn()
-        conn.row_factory = None
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         if firma_id:
             cur.execute("""

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import email
+import os
+import uuid
+from pathlib import Path
 from email.message import Message
 from typing import Any, Dict, List, Optional
 
@@ -81,3 +84,14 @@ def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
             attachments.append({"index": index, "filename": safe_header(filename)})
             index += 1
     return attachments
+
+
+def attachment_output_path(filename: str, base_dir: Optional[str] = None) -> str:
+    """Create a unique, contained path for an untrusted attachment name."""
+    root = Path(base_dir or (Path.cwd() / "tmp_attachments")).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(safe_header(filename)).name or "attachment"
+    destination = (root / f"{uuid.uuid4().hex}_{safe_name}").resolve()
+    if os.path.commonpath((str(root), str(destination))) != str(root):
+        raise ValueError("Invalid attachment filename")
+    return str(destination)

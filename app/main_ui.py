@@ -272,15 +272,16 @@ class OfficeManagerApp(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, item.text())
         self.sidebar.currentRowChanged.connect(self.zmien_zakladke)
         self.sidebar_collapsed = False
-        sidebar_panel = QWidget()
-        sidebar_layout = QVBoxLayout(sidebar_panel)
+        self.sidebar_panel = QWidget()
+        self.sidebar_panel.setFixedWidth(240)
+        sidebar_layout = QVBoxLayout(self.sidebar_panel)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         self.sidebar_toggle = QPushButton("☰  Menu")
         self.sidebar_toggle.setToolTip("Zwiń lub rozwiń menu")
         self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
         sidebar_layout.addWidget(self.sidebar_toggle)
         sidebar_layout.addWidget(self.sidebar)
-        main_layout.addWidget(sidebar_panel)
+        main_layout.addWidget(self.sidebar_panel)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -359,6 +360,7 @@ class OfficeManagerApp(QMainWindow):
         self.sidebar_collapsed = not self.sidebar_collapsed
         if self.sidebar_collapsed:
             self.sidebar.setFixedWidth(58)
+            self.sidebar_panel.setFixedWidth(58)
             self.sidebar_toggle.setText("☰")
             self.sidebar.setToolTip("Rozwiń menu")
             for row in range(self.sidebar.count()):
@@ -367,6 +369,7 @@ class OfficeManagerApp(QMainWindow):
                 item.setText("")
         else:
             self.sidebar.setFixedWidth(240)
+            self.sidebar_panel.setFixedWidth(240)
             self.sidebar_toggle.setText("☰  Menu")
             self.sidebar.setToolTip("")
             for row in range(self.sidebar.count()):

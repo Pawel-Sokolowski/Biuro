@@ -9,6 +9,40 @@ from app.db.dao_conn import get_conn
 TASK_STATUSES = ("Nowe", "W toku", "Zakończone", "Anulowane")
 
 
+def list_tasks_for_timer(
+    pracownik_id: Optional[int],
+    firma_id: Optional[int],
+) -> List[Dict[str, Any]]:
+    """Return open tasks available for a timer started from a company row."""
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT z.*, f.nazwa AS firma_nazwa,
+                   p.imie || ' ' || p.nazwisko AS pracownik_nazwa
+            FROM zadania z
+            LEFT JOIN firmy f ON f.id = z.firma_id
+            LEFT JOIN pracownicy p ON p.id = z.pracownik_id
+            WHERE z.status IN ('Nowe', 'W toku')
+              AND (
+                    (? IS NOT NULL AND z.firma_id = ?)
+                    OR (? IS NOT NULL AND z.pracownik_id = ?)
+                  )
+            ORDER BY
+                CASE WHEN z.status = 'W toku' THEN 0 ELSE 1 END,
+                CASE WHEN z.termin IS NULL OR z.termin = '' THEN 1 ELSE 0 END,
+                z.termin ASC,
+                z.updated_at DESC,
+                z.id DESC
+            """,
+            (firma_id, firma_id, pracownik_id, pracownik_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def list_tasks(
     pracownik_id: Optional[int] = None,
     firma_id: Optional[int] = None,

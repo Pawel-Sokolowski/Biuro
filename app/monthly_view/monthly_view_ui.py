@@ -31,7 +31,7 @@ from app.monthly_view.monthly_view_logic import MonthlyViewLogic
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_services import add_company_extra_service
-from app.db.dao_tasks import list_tasks
+from app.db.dao_tasks import list_tasks_for_timer
 from app.utils.timer import TimerUtils
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.notes_window import NotesWindow
@@ -99,7 +99,13 @@ class HoverScrollTextEdit(QTextEdit):
 
 
 class ActivitySelectionDialog(QDialog):
-    def __init__(self, mode: str, firma_id: int, parent=None):
+    def __init__(
+        self,
+        mode: str,
+        firma_id: int,
+        pracownik_id: int,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Wybór czynności")
         self.resize(500, 300)
@@ -119,7 +125,7 @@ class ActivitySelectionDialog(QDialog):
 
         self.cb_task = QComboBox()
         self.cb_task.addItem("Brak zadania", None)
-        for task in list_tasks(firma_id=firma_id, status="W toku"):
+        for task in list_tasks_for_timer(pracownik_id, firma_id):
             self.cb_task.addItem(task["tytul"], task["id"])
 
         self.input_cena = QLineEdit()
@@ -615,7 +621,12 @@ class MonthlyViewPage(QWidget):
             self._reload_rows()
             return
 
-        dlg = ActivitySelectionDialog("ksiegowosc", firma_id, self)
+        dlg = ActivitySelectionDialog(
+            "ksiegowosc",
+            firma_id,
+            self.pracownik_id,
+            self,
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "ksiegowosc", payload)
@@ -627,7 +638,12 @@ class MonthlyViewPage(QWidget):
             self._reload_rows()
             return
 
-        dlg = ActivitySelectionDialog("kadry", firma_id, self)
+        dlg = ActivitySelectionDialog(
+            "kadry",
+            firma_id,
+            self.pracownik_id,
+            self,
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             payload = dlg.get_payload()
             self.logic.toggle_stoper(firma_id, "kadry", payload)

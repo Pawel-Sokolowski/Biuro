@@ -158,14 +158,7 @@ class CompaniesSettings(QWidget):
     # DODAWANIE FIRMY
     # ============================================================
     def _add_company(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Dodaj firmę")
-        lay = QVBoxLayoutDialog(dlg)
-
-        form = CompanyForm(None, dlg)
-        lay.addWidget(form)
-
-        dlg.exec()
+        CompanyForm(None, self, actor_id=self.pracownik_id).exec()
         self._refresh()
 
     # ============================================================
@@ -182,14 +175,11 @@ class CompaniesSettings(QWidget):
             QMessageBox.critical(self, "Błąd", "Nie znaleziono firmy.")
             return
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Edytuj firmę")
-        lay = QVBoxLayoutDialog(dlg)
-
-        form = CompanyForm(firma["id"], dlg)
-        lay.addWidget(form)
-
-        dlg.exec()
+        CompanyForm(
+            firma["id"],
+            self,
+            actor_id=self.pracownik_id,
+        ).exec()
         self._refresh()
 
     # ============================================================
@@ -299,7 +289,7 @@ class CompaniesSettings(QWidget):
     def _run_import_wizard(self, payloads):
         from app.utils.import_wizard import ImportWizard
 
-        wizard = ImportWizard(payloads, self)
+        wizard = ImportWizard(payloads, self, actor_id=self.pracownik_id)
         wizard.exec()
 
         self._refresh()

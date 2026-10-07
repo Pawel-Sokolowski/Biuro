@@ -335,6 +335,11 @@ class OfficeManagerApp(QMainWindow):
 
         header_layout.addStretch()
         header_layout.addWidget(live_container)
+        minimize_button = QPushButton("—")
+        minimize_button.setFixedSize(34, 28)
+        minimize_button.setToolTip("Minimalizuj okno")
+        minimize_button.clicked.connect(self.showMinimized)
+        header_layout.addWidget(minimize_button)
 
         content_layout.addWidget(header)
 

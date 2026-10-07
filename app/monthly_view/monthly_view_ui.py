@@ -662,7 +662,10 @@ class MonthlyViewPage(QWidget):
         if hasattr(self, "_timer"):
             self._timer.stop()
 
-        self.logic.open_company_edit_window(firma_id)
+        try:
+            self.logic.open_company_edit_window(firma_id)
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
 
         # po zamknięciu okna edycji wznów timer
         if hasattr(self, "_timer"):
@@ -689,12 +692,20 @@ class MonthlyViewPage(QWidget):
         menu.exec(QCursor.pos())
 
     def _on_mark_suspended(self, firma_id: int):
-        self.logic.mark_company_suspended_manual(firma_id)
+        try:
+            self.logic.mark_company_suspended_manual(firma_id)
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
+            return
         QMessageBox.information(self, "Zawieszenie", "Firma oznaczona jako zawieszona.")
         self._reload_rows()
 
     def _on_move_archive(self, firma_id: int):
-        self.logic.move_company_to_archive(firma_id)
+        try:
+            self.logic.move_company_to_archive(firma_id)
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
+            return
         QMessageBox.information(self, "Archiwum", "Firma przeniesiona do archiwum.")
         self._reload_rows()
 

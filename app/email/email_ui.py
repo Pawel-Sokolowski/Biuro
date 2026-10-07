@@ -133,9 +133,6 @@ class EmailPage(QWidget):
         ):
             mail_toolbar.addWidget(button)
 
-        mail_toolbar.addStretch()
-        main_layout.addLayout(mail_toolbar)
-
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
@@ -189,15 +186,21 @@ class EmailPage(QWidget):
 
         splitter.addWidget(right_container)
 
-        # Message view
+        # Message content pane
+        message_container = QFrame()
+        message_layout = QVBoxLayout(message_container)
+        message_layout.setContentsMargins(0, 0, 0, 0)
+        message_layout.addLayout(mail_toolbar)
+
         self.btn_download_message = QPushButton("Pobierz pełną wiadomość z serwera")
         self.btn_download_message.setEnabled(False)
         self.btn_download_message.clicked.connect(self.on_download_current_message)
-        right_layout.addWidget(self.btn_download_message)
+        message_layout.addWidget(self.btn_download_message)
 
         self.mail_view = QTextEdit()
         self.mail_view.setReadOnly(True)
-        splitter.addWidget(self.mail_view)
+        message_layout.addWidget(self.mail_view)
+        splitter.addWidget(message_container)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)

@@ -18,9 +18,15 @@ class ImportWizard(QDialog):
     - przechodzi do kolejnej firmy
     """
 
-    def __init__(self, payloads: List[Dict[str, Any]], parent=None):
+    def __init__(
+        self,
+        payloads: List[Dict[str, Any]],
+        parent=None,
+        actor_id: int | None = None,
+    ):
         super().__init__(parent)
         self.payloads = payloads
+        self.actor_id = actor_id
         self.index = 0
 
         self.setWindowTitle("Import firm — kreator")
@@ -59,7 +65,7 @@ class ImportWizard(QDialog):
         payload = self.payloads[self.index]
 
         # otwieramy pełny CompanyForm
-        dlg = CompanyForm(None, self)
+        dlg = CompanyForm(None, self, actor_id=self.actor_id)
         dlg._load_company_from_payload(payload)
 
         if dlg.exec():

@@ -13,6 +13,7 @@ from app.db.dao_companies import get_company, save_company
 from app.db.dao_notes import get_latest_notes_for_firms
 from app.utils.timer import TimerUtils
 from app.utils.months import default_month_for_monthly_view
+from app.security.authorization import assigned_company_ids, can, is_administrator
 
 
 class MonthlyViewLogic:
@@ -74,8 +75,7 @@ class MonthlyViewLogic:
         cur = conn.cursor()
         month_start, month_end = month_bounds(selected_month)
 
-        cur.execute(
-            """
+        sql = """
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
                    f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
@@ -91,10 +91,18 @@ class MonthlyViewLogic:
                 WHERE data_wyst >= ? AND data_wyst < ?
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
-            ORDER BY f.nazwa
-        """,
-            (selected_month, month_start, month_end),
-        )
+        """
+        params: List[Any] = [selected_month, month_start, month_end]
+        if not is_administrator(self.pracownik_id):
+            company_ids = assigned_company_ids(self.pracownik_id)
+            if not company_ids:
+                conn.close()
+                return []
+            placeholders = ",".join("?" for _ in company_ids)
+            sql += f" WHERE f.id IN ({placeholders})"
+            params.extend(sorted(company_ids))
+        sql += " ORDER BY f.nazwa"
+        cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
@@ -363,13 +371,24 @@ class MonthlyViewLogic:
         data = dict(payload)
         if firma_id:
             data["id"] = firma_id
-        save_company(data)
+        save_company(data, actor_id=self.pracownik_id)
+
+    def _assert_company_access(self, firma_id: int, permission: str = "can_edit_companies"):
+        if is_administrator(self.pracownik_id):
+            return
+        if firma_id not in assigned_company_ids(self.pracownik_id):
+            raise PermissionError("Brak dostępu do tej firmy.")
+        if not can(self.pracownik_id, permission):
+            raise PermissionError("Brak uprawnień do edycji firm.")
+
     def open_company_edit_window(self, firma_id: int):
         from app.companies.company_form import CompanyForm
 
-        CompanyForm(firma_id).exec()
+        self._assert_company_access(firma_id)
+        CompanyForm(firma_id, actor_id=self.pracownik_id).exec()
 
     def mark_company_suspended_manual(self, firma_id: int):
+        self._assert_company_access(firma_id)
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         conn = get_conn()
         cur = conn.cursor()
@@ -386,6 +405,7 @@ class MonthlyViewLogic:
         conn.close()
 
     def move_company_to_archive(self, firma_id: int):
+        self._assert_company_access(firma_id)
         conn = get_conn()
         cur = conn.cursor()
         cur.execute(

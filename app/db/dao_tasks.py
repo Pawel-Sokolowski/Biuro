@@ -113,6 +113,8 @@ def save_task(
     task_id: Optional[int] = None,
     actor_id: Optional[int] = None,
 ) -> int:
+    if not actor_id:
+        raise PermissionError("Identyfikator użytkownika jest wymagany.")
     if not tytul.strip():
         raise ValueError("Tytuł zadania nie może być pusty.")
     if status not in TASK_STATUSES:
@@ -184,6 +186,8 @@ def save_task(
 
 
 def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
+    if not actor_id:
+        raise PermissionError("Identyfikator użytkownika jest wymagany.")
     conn = get_conn()
     try:
         if actor_id and not is_administrator(actor_id):

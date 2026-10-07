@@ -57,7 +57,7 @@ class ReportsPage(QWidget):
         self.firm_list = QListWidget()
         self.firm_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         self.company_names = {}
-        for f in get_all_companies():
+        for f in get_all_companies(self.pracownik_id):
             self.company_names[f["id"]] = f["nazwa"]
             item = QListWidgetItem(f"{f['nazwa']} (ID {f['id']})")
             item.setData(Qt.ItemDataRole.UserRole, f["id"])
@@ -163,7 +163,7 @@ class ReportsPage(QWidget):
             start = self.month_start.currentText()
             end = self.month_end.currentText()
             months = get_months_range(start, end)
-            data = build_report(selected, months)
+            data = build_report(selected, months, self.pracownik_id)
             self._render_mixed(data, selected, months)
 
         elif mode == "Raport roczny":
@@ -178,21 +178,21 @@ class ReportsPage(QWidget):
 
         elif mode == "Porównanie firm":
             miesiac = self.month_start.currentText()
-            data = compare_companies(selected, miesiac)
+            data = compare_companies(selected, miesiac, self.pracownik_id)
             self._render_compare(data, selected, miesiac)
 
         elif mode == "Zarobek na godzinę":
             start = self.month_start.currentText()
             end = self.month_end.currentText()
             months = get_months_range(start, end)
-            data = build_profit_report(selected, months)
+            data = build_profit_report(selected, months, self.pracownik_id)
             self._render_profit(data, selected, months)
 
         elif mode == "Zestawienie":
             start = self.month_start.currentText()
             end = self.month_end.currentText()
             months = get_months_range(start, end)
-            self._render_summary(build_summary_report(selected, months))
+            self._render_summary(build_summary_report(selected, months, self.pracownik_id))
 
     def _render_summary(self, rows):
         self.summary_table.setRowCount(0)
@@ -453,9 +453,9 @@ class ReportsPage(QWidget):
             months = get_months_range(start, end)
 
             if mode == "Raport miesięczny":
-                data = build_report(selected, months)
+                data = build_report(selected, months, self.pracownik_id)
             elif mode == "Zestawienie":
-                rows = build_summary_report(selected, months)
+                rows = build_summary_report(selected, months, self.pracownik_id)
                 filepath, _ = QFileDialog.getSaveFileName(
                     self, "Zapisz zestawienie Excel", "", "Pliki Excel (*.xlsx)"
                 )
@@ -475,9 +475,13 @@ class ReportsPage(QWidget):
                 QMessageBox.information(self, "Sukces", f"Zestawienie zapisane:\n{filepath}")
                 return
             elif mode == "Zarobek na godzinę":
-                data = build_profit_report(selected, months)
+                data = build_profit_report(selected, months, self.pracownik_id)
             elif mode == "Porównanie firm":
-                data = compare_companies(selected, self.month_start.currentText())
+                data = compare_companies(
+                    selected,
+                    self.month_start.currentText(),
+                    self.pracownik_id,
+                )
                 months = [self.month_start.currentText()]
 
         filepath, _ = QFileDialog.getSaveFileName(

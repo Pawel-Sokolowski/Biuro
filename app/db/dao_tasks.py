@@ -4,6 +4,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
+from app.security.authorization import assigned_company_ids, is_administrator
 
 
 TASK_STATUSES = ("Nowe", "W toku", "Zakończone", "Anulowane")
@@ -47,6 +48,7 @@ def list_tasks(
     pracownik_id: Optional[int] = None,
     firma_id: Optional[int] = None,
     status: Optional[str] = None,
+    viewer_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
@@ -62,6 +64,20 @@ def list_tasks(
         if status:
             filters.append("z.status = ?")
             params.append(status)
+        if viewer_id and not is_administrator(viewer_id):
+            filters.append(
+                """
+                (
+                    z.pracownik_id = ?
+                    OR z.created_by = ?
+                    OR EXISTS (
+                        SELECT 1 FROM pracownik_firma pf_view
+                        WHERE pf_view.pracownik_id = ? AND pf_view.firma_id = z.firma_id
+                    )
+                )
+                """
+            )
+            params.extend([viewer_id, viewer_id, viewer_id])
 
         where = f"WHERE {' AND '.join(filters)}" if filters else ""
         rows = conn.execute(
@@ -95,6 +111,7 @@ def save_task(
     pracownik_id: Optional[int] = None,
     created_by: Optional[int] = None,
     task_id: Optional[int] = None,
+    actor_id: Optional[int] = None,
 ) -> int:
     if not tytul.strip():
         raise ValueError("Tytuł zadania nie może być pusty.")
@@ -104,6 +121,33 @@ def save_task(
     conn = get_conn()
     try:
         if task_id:
+            if actor_id and not is_administrator(actor_id):
+                if pracownik_id not in (None, actor_id):
+                    raise PermissionError(
+                        "Tylko administrator może przypisać zadanie innemu pracownikowi."
+                    )
+                if firma_id is not None and firma_id not in assigned_company_ids(actor_id):
+                    raise PermissionError(
+                        "Nie można przypisać zadania do nieprzypisanej firmy."
+                    )
+                allowed = conn.execute(
+                    """
+                    SELECT 1
+                    FROM zadania z
+                    WHERE z.id = ?
+                      AND (
+                        z.pracownik_id = ?
+                        OR z.created_by = ?
+                        OR EXISTS (
+                            SELECT 1 FROM pracownik_firma pf
+                            WHERE pf.pracownik_id = ? AND pf.firma_id = z.firma_id
+                        )
+                      )
+                    """,
+                    (task_id, actor_id, actor_id, actor_id),
+                ).fetchone()
+                if not allowed:
+                    raise PermissionError("Brak uprawnień do edycji tego zadania.")
             conn.execute(
                 """
                 UPDATE zadania
@@ -115,7 +159,16 @@ def save_task(
             )
             result = task_id
         else:
-            cur = conn.execute(
+            if actor_id and not is_administrator(actor_id):
+                if pracownik_id not in (None, actor_id):
+                    raise PermissionError(
+                        "Tylko administrator może przypisać zadanie innemu pracownikowi."
+                    )
+                if firma_id is not None and firma_id not in assigned_company_ids(actor_id):
+                    raise PermissionError(
+                        "Nie można przypisać zadania do nieprzypisanej firmy."
+                    )
+            conn.execute(
                 """
                 INSERT INTO zadania (
                     tytul, opis, status, termin, firma_id, pracownik_id, created_by
@@ -123,16 +176,35 @@ def save_task(
                 """,
                 (tytul.strip(), opis.strip(), status, termin, firma_id, pracownik_id, created_by),
             )
-            result = int(cur.lastrowid)
+            result = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         conn.commit()
         return result
     finally:
         conn.close()
 
 
-def delete_task(task_id: int) -> None:
+def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
     conn = get_conn()
     try:
+        if actor_id and not is_administrator(actor_id):
+            allowed = conn.execute(
+                """
+                SELECT 1
+                FROM zadania z
+                WHERE z.id = ?
+                  AND (
+                    z.pracownik_id = ?
+                    OR z.created_by = ?
+                    OR EXISTS (
+                        SELECT 1 FROM pracownik_firma pf
+                        WHERE pf.pracownik_id = ? AND pf.firma_id = z.firma_id
+                    )
+                  )
+                """,
+                (task_id, actor_id, actor_id, actor_id),
+            ).fetchone()
+            if not allowed:
+                raise PermissionError("Brak uprawnień do usunięcia tego zadania.")
         conn.execute("DELETE FROM zadania WHERE id = ?", (task_id,))
         conn.commit()
     finally:

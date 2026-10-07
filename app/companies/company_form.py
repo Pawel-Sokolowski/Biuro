@@ -29,10 +29,16 @@ from app.email.email_storage import (
 
 
 class CompanyForm(QDialog):
-    def __init__(self, firma_id: Optional[int] = None, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        firma_id: Optional[int] = None,
+        parent: Optional[QWidget] = None,
+        actor_id: Optional[int] = None,
+    ):
         super().__init__(parent)
 
         self.firma_id = firma_id
+        self.actor_id = actor_id
         self.inputs: Dict[str, Any] = {}
 
         self.setWindowTitle("Firma")
@@ -857,7 +863,7 @@ class CompanyForm(QDialog):
     def _on_save(self):
         payload = self._collect_payload()
         try:
-            self.firma_id = save_company(payload)
+            self.firma_id = save_company(payload, actor_id=self.actor_id)
             self._sync_contact_email_filters()
             self.accept()
         except Exception as e:

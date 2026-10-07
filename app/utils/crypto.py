@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 # --- Konfiguracja szyfrowania (Fernet) ---
 # W produkcji klucz powinien pochodzić ze zmiennych środowiskowych.
 def _get_encryption_key() -> bytes:
-    """Get encryption key from environment or use generated default."""
+    """Get the deployment-specific encryption key."""
     key_str = os.environ.get("BIO_ENCRYPTION_KEY")
     if not key_str:
-        logger.warning("BIO_ENCRYPTION_KEY not set in environment. Using fallback (NOT FOR PRODUCTION).")
-        key_str = "Qa6bILYFSFYxYL2wAskbJN29N3FOnJb0zcqMwXrgtXM="
+        raise RuntimeError(
+            "BIO_ENCRYPTION_KEY is required to access stored email passwords."
+        )
     
     if isinstance(key_str, str):
         key_str = key_str.encode("utf-8")
@@ -41,7 +42,8 @@ def _get_encryption_key() -> bytes:
         logger.error(f"Invalid encryption key format: {e}")
         raise ValueError("Invalid encryption key format. Must be a valid Fernet key.") from e
 
-cipher_suite = Fernet(_get_encryption_key())
+def _cipher() -> Fernet:
+    return Fernet(_get_encryption_key())
 
 # --- Funkcje szyfrowania haseł email ---
 def encrypt_password(password: str) -> str:
@@ -61,7 +63,7 @@ def encrypt_password(password: str) -> str:
         raise ValueError("Password must not be None or empty")
     
     try:
-        encrypted = cipher_suite.encrypt(password.encode("utf-8")).decode("utf-8")
+        encrypted = _cipher().encrypt(password.encode("utf-8")).decode("utf-8")
         return encrypted
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
@@ -82,7 +84,7 @@ def decrypt_password(encrypted_password: str) -> str:
         return ""
     
     try:
-        decrypted = cipher_suite.decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+        decrypted = _cipher().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
         return decrypted
     except InvalidToken:
         logger.warning("Failed to decrypt password: invalid token or corrupted data")

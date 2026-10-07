@@ -13,7 +13,7 @@ from app.db.dao_conn import get_conn
 from app.config import EMAIL_LOCAL_LIMIT
 from app.email.email_helpers import (
     normalize_folder_name, denormalize_folder_name, safe_header,
-    extract_html, get_attachments,
+    attachment_output_path, extract_html, get_attachments,
 )
 
 logger = logging.getLogger(__name__)
@@ -582,11 +582,9 @@ def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optiona
             continue
         if idx == index:
             data = part.get_payload(decode=True)
-            save_dir = os.path.join(os.getcwd(), "tmp_attachments")
-            os.makedirs(save_dir, exist_ok=True)
-            path = os.path.join(save_dir, safe_header(filename))
+            path = attachment_output_path(filename)
             try:
-                with open(path, "wb") as f:
+                with open(path, "xb") as f:
                     f.write(data)
                 return path
             except Exception:

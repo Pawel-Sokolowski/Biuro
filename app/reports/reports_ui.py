@@ -94,7 +94,6 @@ class ReportsPage(QWidget):
         layout.addWidget(self.year_box_container)
 
         self.mode_combo.currentTextChanged.connect(self._update_mode_ui)
-        self._update_mode_ui(self.mode_combo.currentText())
 
         btn = QPushButton("Generuj raport")
         btn.setProperty("class", "primary")
@@ -121,6 +120,8 @@ class ReportsPage(QWidget):
         self.summary_table.horizontalHeader().setStretchLastSection(True)
         self.summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.summary_table)
+
+        self._update_mode_ui(self.mode_combo.currentText())
 
     def _update_mode_ui(self, mode):
         self.month_box_container.setVisible(

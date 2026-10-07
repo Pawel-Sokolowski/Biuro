@@ -62,7 +62,9 @@ class ReportsPage(QWidget):
 
         self.firm_list = QListWidget()
         self.firm_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.company_names = {}
         for f in get_all_companies():
+            self.company_names[f["id"]] = f["nazwa"]
             item = QListWidgetItem(f"{f['nazwa']} (ID {f['id']})")
             item.setData(Qt.ItemDataRole.UserRole, f["id"])
             self.firm_list.addItem(item)
@@ -94,7 +96,6 @@ class ReportsPage(QWidget):
         layout.addWidget(self.year_box_container)
 
         self.mode_combo.currentTextChanged.connect(self._update_mode_ui)
-        self._update_mode_ui(self.mode_combo.currentText())
 
         btn = QPushButton("Generuj raport")
         btn.setProperty("class", "primary")
@@ -122,12 +123,32 @@ class ReportsPage(QWidget):
         self.summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.summary_table)
 
+        self.report_status = QLabel("Wybierz firmy i zakres, aby wygenerować raport.")
+        self.report_status.setStyleSheet(
+            "QLabel { background: #f4f6f8; border: 1px solid #d8dde3; "
+            "border-radius: 6px; padding: 8px; color: #263238; }"
+        )
+        layout.addWidget(self.report_status)
+
+        self.report_table = QTableWidget(0, 6)
+        self.report_table.setHorizontalHeaderLabels(
+            ["Klient", "Miesiąc", "Księgowość", "Kadry", "Czas księgowości", "Czas kadr"]
+        )
+        self.report_table.setAlternatingRowColors(True)
+        self.report_table.setSortingEnabled(True)
+        self.report_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.report_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.report_table)
+
+        self._update_mode_ui(self.mode_combo.currentText())
+
     def _update_mode_ui(self, mode):
         self.month_box_container.setVisible(
             mode in ["Raport miesięczny", "Porównanie firm", "Zarobek na godzinę", "Zestawienie"]
         )
         self.year_box_container.setVisible(mode == "Raport roczny")
         self.summary_table.setVisible(mode == "Zestawienie")
+        self.report_table.setVisible(mode != "Zestawienie")
         self.chart_top.setVisible(mode != "Zestawienie")
         self.chart_bottom.setVisible(mode != "Zestawienie")
 
@@ -200,6 +221,7 @@ class ReportsPage(QWidget):
     # ============================================================
 
     def _render_mixed(self, data, selected, months):
+        self._render_report_table(data, selected, months)
         categories = months
 
         # --- Kadry ---
@@ -289,6 +311,35 @@ class ReportsPage(QWidget):
         line_series2.attachAxis(axis_y4)
 
         self.chart_bottom.setChart(chart_ks)
+
+    def _render_report_table(self, data, selected, months):
+        self.report_table.setSortingEnabled(False)
+        self.report_table.setRowCount(0)
+        total_ks = total_kadry = total_ks_time = total_kadry_time = 0.0
+        for fid in selected:
+            for month in months:
+                row_data = data[fid][month]
+                row = self.report_table.rowCount()
+                self.report_table.insertRow(row)
+                values = [
+                    self.company_names.get(fid, f"Firma {fid}"),
+                    month,
+                    f"{row_data.get('koszt_ksiegowosc', 0):.2f} zł",
+                    f"{row_data.get('koszt_kadry', 0):.2f} zł",
+                    format_hours(row_data.get("godziny_ksiegowosc", 0)),
+                    format_hours(row_data.get("godziny_kadry", 0)),
+                ]
+                for column, value in enumerate(values):
+                    self.report_table.setItem(row, column, QTableWidgetItem(str(value)))
+                total_ks += float(row_data.get("koszt_ksiegowosc", 0) or 0)
+                total_kadry += float(row_data.get("koszt_kadry", 0) or 0)
+                total_ks_time += float(row_data.get("godziny_ksiegowosc", 0) or 0)
+                total_kadry_time += float(row_data.get("godziny_kadry", 0) or 0)
+        self.report_table.setSortingEnabled(True)
+        self.report_status.setText(
+            f"Podsumowanie: księgowość {total_ks:.2f} zł / {format_hours(total_ks_time)}, "
+            f"kadry {total_kadry:.2f} zł / {format_hours(total_kadry_time)}"
+        )
 
     # ============================================================
     # ZAROBEK NA GODZINĘ — SŁUPKI

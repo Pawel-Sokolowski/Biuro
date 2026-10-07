@@ -30,6 +30,8 @@ class NotesWindow(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setWordWrap(True)
+        self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.itemDoubleClicked.connect(self._edit_note)
         layout.addWidget(self.table)
 
@@ -54,6 +56,7 @@ class NotesWindow(QDialog):
         layout.addLayout(btns)
 
         self._load_notes()
+        self.table.scrollToTop()
 
     def _load_notes(self):
         notes = get_notes_for_company(self.firma_id)
@@ -67,6 +70,7 @@ class NotesWindow(QDialog):
             item = QTableWidgetItem(n.get("tresc", "")[:200])
             item.setToolTip(n.get("tresc", ""))
             self.table.setItem(row, 2, item)
+        self.table.scrollToTop()
 
     def _add_note(self):
         dlg = NoteEditDialog(self.firma_id, self.pracownik_id, parent=self)

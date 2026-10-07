@@ -330,6 +330,16 @@ class MonthlyViewLogic:
             self._finish_timer(typ, now, cur)
 
         if active_firma_id != firma_id:
+            task_id = (activity_payload or {}).get("task_id")
+            if task_id:
+                cur.execute(
+                    """
+                    UPDATE zadania
+                    SET status = 'W toku', updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND status = 'Nowe'
+                    """,
+                    (task_id,),
+                )
             setattr(self, fields[0], firma_id)
             setattr(self, fields[1], now)
             setattr(self, fields[2], activity_payload)

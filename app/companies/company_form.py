@@ -4,9 +4,11 @@ from typing import Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPushButton,
-    QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView
+    QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
+    QScrollArea
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QCompleter
 
 from app.db.dao_companies import (
     get_company, save_company, get_contacts, save_contact,
@@ -39,7 +41,13 @@ class CompanyForm(QDialog):
         # ============================================================
         # GŁÓWNY LAYOUT
         # ============================================================
-        main_layout = QVBoxLayout(self)
+        content = QWidget()
+        main_layout = QVBoxLayout(content)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        root_layout = QVBoxLayout(self)
+        root_layout.addWidget(scroll)
 
         # ============================================================
         # SEKCJA: DANE FIRMY
@@ -69,6 +77,16 @@ class CompanyForm(QDialog):
 
             dane_layout.addLayout(row_labels)
             dane_layout.addLayout(row_fields)
+
+        def make_searchable(combo: QComboBox):
+            combo.setEditable(True)
+            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            completer = QCompleter(combo.model(), combo)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            combo.setCompleter(completer)
+            combo.lineEdit().setPlaceholderText("Wpisz, aby wyszukać...")
+            return combo
 
 
         # -----------------------------
@@ -110,6 +128,7 @@ class CompanyForm(QDialog):
         pesel = QLineEdit()
         forma_dzialalnosci = QComboBox()
         forma_dzialalnosci.addItems(get_company_field_options("forma_dzialalnosci"))
+        make_searchable(forma_dzialalnosci)
 
         add_row(
             ["KRS:", "PESEL:", "Forma działalności:"],
@@ -126,8 +145,10 @@ class CompanyForm(QDialog):
         urzad_skarbowy.addItem("", None)
         for office in get_tax_offices():
             urzad_skarbowy.addItem(office["nazwa"], office["nazwa"])
+        make_searchable(urzad_skarbowy)
         forma_opodatkowania = QComboBox()
         forma_opodatkowania.addItems(get_company_field_options("forma_opodatkowania"))
+        make_searchable(forma_opodatkowania)
 
         add_row(
             ["Status VAT:", "Urząd skarbowy:", "Forma opodatkowania:"],
@@ -165,8 +186,10 @@ class CompanyForm(QDialog):
         # -----------------------------
         sposob_zaplaty = QComboBox()
         sposob_zaplaty.addItems(get_company_field_options("sposob_zaplaty"))
+        make_searchable(sposob_zaplaty)
         status_podatkowy = QComboBox()
         status_podatkowy.addItems(get_company_field_options("status_podatkowy"))
+        make_searchable(status_podatkowy)
         kategoria_domyslna = QLineEdit()
 
         add_row(
@@ -396,6 +419,7 @@ class CompanyForm(QDialog):
         glowny_cennik.addItem("", "")
         for item in ks_opts:
             glowny_cennik.addItem(item["klucz"], item["klucz"])
+        make_searchable(glowny_cennik)
 
         limit_dokumentow = QSpinBox()
         limit_dokumentow.setRange(0, 100000)
@@ -470,6 +494,7 @@ class CompanyForm(QDialog):
         uop_cennik.addItem("", "")
         for item in kadry_opts:
             uop_cennik.addItem(item["klucz"], item["klucz"])
+        make_searchable(uop_cennik)
 
         uz_ilosc = QSpinBox()
         uz_ilosc.setRange(0, 10000)
@@ -486,6 +511,7 @@ class CompanyForm(QDialog):
         uz_cennik.addItem("", "")
         for item in kadry_opts:
             uz_cennik.addItem(item["klucz"], item["klucz"])
+        make_searchable(uz_cennik)
 
         uod_ilosc = QSpinBox()
         uod_ilosc.setRange(0, 10000)
@@ -494,6 +520,7 @@ class CompanyForm(QDialog):
         uod_cennik.addItem("", "")
         for item in kadry_opts:
             uod_cennik.addItem(item["klucz"], item["klucz"])
+        make_searchable(uod_cennik)
 
         add_kadry_row(
             ["UZ cennik:", "UoD ilość:", "UoD cennik:"],

@@ -170,6 +170,75 @@ def _load_rows_from_file(filepath: str) -> Tuple[List[str], List[Any]]:
     return headers, rows
 
 
+def import_tax_offices_from_excel(filepath: str) -> int:
+    """Import or update the tax-office catalog from the supplied XLSX/CSV."""
+    headers, rows = _load_rows_from_file(filepath)
+    def normalize_header(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().upper()
+
+    index = {normalize_header(header): pos for pos, header in enumerate(headers)}
+
+    def value(row, *names):
+        for name in names:
+            pos = index.get(normalize_header(name))
+            if pos is not None and pos < len(row):
+                return str(row[pos] or "").strip()
+        return ""
+
+    records = []
+    for row in rows:
+        name = value(row, "NAZWA URZĘDU")
+        if name:
+            records.append(
+                (
+                    value(row, "WOJEWÓDZTWO"),
+                    value(row, "TYP"),
+                    name,
+                    value(row, "KOD"),
+                    value(row, "MIASTO"),
+                    value(row, "ULICA"),
+                    value(row, "NR BUDYNKU / LOKALU"),
+                    value(row, "POCZTA"),
+                    value(row, "NR TELEFONU wraz z nr kierunkowym", "NR TELEFONU"),
+                    value(row, "NR FAXU"),
+                    value(row, "ADRES E-MAIL URZĘDU"),
+                    value(row, "KOD JEDNOSTKI"),
+                    value(row, "ADRESY STRON BIP JEDNOSTEK KAS"),
+                )
+            )
+    if not records:
+        raise ValueError("Nie znaleziono wierszy urzędów skarbowych.")
+
+    conn = sqlite3.connect(DB_NAME)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO urzedy_skarbowe (
+                wojewodztwo, typ, nazwa, kod, miasto, ulica, nr_budynku_lokalu,
+                poczta, nr_telefonu, nr_faxu, email, kod_jednostki, adresy_bip
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kod_jednostki) DO UPDATE SET
+                wojewodztwo = excluded.wojewodztwo,
+                typ = excluded.typ,
+                nazwa = excluded.nazwa,
+                kod = excluded.kod,
+                miasto = excluded.miasto,
+                ulica = excluded.ulica,
+                nr_budynku_lokalu = excluded.nr_budynku_lokalu,
+                poczta = excluded.poczta,
+                nr_telefonu = excluded.nr_telefonu,
+                nr_faxu = excluded.nr_faxu,
+                email = excluded.email,
+                adresy_bip = excluded.adresy_bip
+            """,
+            records,
+        )
+        conn.commit()
+        return len(records)
+    finally:
+        conn.close()
+
+
 # ============================================================
 # BUDOWANIE PAYLOADU Z WIERSZA
 # ============================================================

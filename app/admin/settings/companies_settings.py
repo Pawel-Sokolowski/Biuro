@@ -10,7 +10,10 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.companies.company_form import CompanyForm
-from app.utils.importers import import_companies_from_excel_file_payloads
+from app.utils.importers import (
+    import_companies_from_excel_file_payloads,
+    import_tax_offices_from_excel,
+)
 
 
 # ============================================================
@@ -74,6 +77,10 @@ class CompaniesSettings(QWidget):
         btn_import = QPushButton("Importuj z pliku (weryfikacja)")
         btn_import.clicked.connect(self._import_from_file)
         btn_row.addWidget(btn_import)
+
+        btn_tax_offices = QPushButton("Importuj urzędy skarbowe")
+        btn_tax_offices.clicked.connect(self._import_tax_offices)
+        btn_row.addWidget(btn_tax_offices)
 
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -209,6 +216,25 @@ class CompaniesSettings(QWidget):
         worker.start()
 
         self._current_worker = worker
+
+    def _import_tax_offices(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plik urzędów skarbowych",
+            "",
+            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)",
+        )
+        if not path:
+            return
+        try:
+            count = import_tax_offices_from_excel(path)
+            QMessageBox.information(
+                self,
+                "Import urzędów",
+                f"Zaimportowano lub zaktualizowano {count} urzędów skarbowych.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd importu urzędów", str(exc))
 
     def _on_import_error(self, msg):
         QMessageBox.critical(self, "Błąd importu", msg)

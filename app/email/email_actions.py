@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 from app.db.dao_conn import get_conn
-from app.email.email_storage import get_email_accounts_for_employee
+from app.email.email_storage import (
+    get_email_accounts_for_employee,
+    get_email_filters_for_message,
+)
 from app.utils.crypto import decrypt_password
 
 # MAPOWANIE NAZW FOLDERÓW
@@ -1020,12 +1023,39 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                 temat = ""
                                 data_hdr = ""
                             folder_id = f["id"]
+                            przeczytana = 0
+                            usunieta = 0
+                            matching_rules = get_email_filters_for_message(
+                                acc["id"], nadawca, temat, raw_bytes.decode("utf-8", errors="replace")
+                            )
+                            for rule in matching_rules:
+                                target_folder = (rule.get("folder_docelowy") or "").strip()
+                                if not target_folder:
+                                    continue
+                                cur.execute(
+                                    "SELECT id FROM foldery_email WHERE konto_id = ? AND nazwa = ?",
+                                    (acc["id"], target_folder),
+                                )
+                                target_row = cur.fetchone()
+                                if target_row:
+                                    folder_id = target_row["id"] if isinstance(target_row, sqlite3.Row) else target_row[0]
+                                else:
+                                    cur.execute(
+                                        "INSERT INTO foldery_email (konto_id, nazwa) VALUES (?, ?)",
+                                        (acc["id"], target_folder),
+                                    )
+                                    folder_id = cur.lastrowid
+                                if rule.get("oznacz_jako_przeczytane"):
+                                    przeczytana = 1
+                                if rule.get("usun"):
+                                    usunieta = 1
+                                break
                             raw_s = raw_bytes.decode("utf-8", errors="replace")
                             cur.execute(
                                 """
                                 INSERT INTO wiadomosci_email
                                 (konto_id, folder_id, uid, nadawca, odbiorca, temat, data, tresc, przeczytana, usunieta)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                                 (
                                     acc["id"],
@@ -1036,6 +1066,8 @@ def sync_all_emails(pracownik_id: int) -> bool:
                                     temat,
                                     data_hdr,
                                     raw_s,
+                                    przeczytana,
+                                    usunieta,
                                 ),
                             )
                         except Exception:

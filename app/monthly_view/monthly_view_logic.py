@@ -74,7 +74,8 @@ class MonthlyViewLogic:
 
         cur.execute(
             """
-            SELECT f.id, f.nazwa, f.status,
+            SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
+                   f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
                    CASE
                        WHEN (

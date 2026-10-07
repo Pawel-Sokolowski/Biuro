@@ -1,6 +1,4 @@
 # app/reports/reports_ui.py
-from app.config import DB_NAME
-
 from app.utils.ui_imports import *
 from PyQt6.QtCharts import (
     QChart, QChartView,

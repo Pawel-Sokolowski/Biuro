@@ -149,32 +149,78 @@ def build_summary_report(firma_ids: List[int], months: List[str]) -> List[Dict[s
 # RAPORT MIESIĘCZNY — POPRAWIONY
 # ============================================================
 def build_report(firma_ids: List[int], months: List[str]) -> Dict[str, Any]:
-    out = {}
+    if not firma_ids or not months:
+        return {}
 
-    for firma_id in firma_ids:
-        out[firma_id] = {}
+    placeholders_firm = ",".join("?" for _ in firma_ids)
+    placeholders_month = ",".join("?" for _ in months)
+    params = [*firma_ids, *months]
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            WITH selected_months(miesiac) AS (
+                SELECT ? {" UNION ALL SELECT ?" * (len(months) - 1)}
+            ),
+            doc_counts AS (
+                SELECT firma_id, substr(data_wyst, 1, 7) AS miesiac, COUNT(*) AS dokumenty
+                FROM dokumenty
+                WHERE firma_id IN ({placeholders_firm})
+                  AND substr(data_wyst, 1, 7) IN ({placeholders_month})
+                GROUP BY firma_id, substr(data_wyst, 1, 7)
+            ),
+            extras AS (
+                SELECT firma_id, miesiac, SUM(ilosc * cena_netto) AS extra
+                FROM uslugi_dodatkowe_firma
+                WHERE firma_id IN ({placeholders_firm})
+                  AND miesiac IN ({placeholders_month})
+                  AND fakturowac = 1
+                GROUP BY firma_id, miesiac
+            )
+            SELECT f.id AS firma_id, m.miesiac,
+                   COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
+                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
+                   COALESCE(dc.dokumenty, 0) AS dokumenty,
+                   COALESCE(ex.extra, 0) AS extra,
+                   COALESCE(c.netto, c.cena_netto_ksiegowosc, 0) AS netto,
+                   COALESCE(c.brutto, c.cena_brutto_ksiegowosc, 0) AS brutto,
+                   COALESCE(c.zdrowotna, 0) AS zdrowotna,
+                   COALESCE(f.limit_dokumentow, 0) AS limit_dokumentow,
+                   COALESCE(c.cena_za_dokument_ponad_limit, 0) AS cena_za_dokument
+            FROM firmy f
+            CROSS JOIN selected_months m
+            LEFT JOIN statusy_miesieczne sm
+              ON sm.firma_id = f.id AND sm.miesiac = m.miesiac
+            LEFT JOIN doc_counts dc ON dc.firma_id = f.id AND dc.miesiac = m.miesiac
+            LEFT JOIN extras ex ON ex.firma_id = f.id AND ex.miesiac = m.miesiac
+            LEFT JOIN cenniki c ON c.klucz = f.glowny_cennik
+            WHERE f.id IN ({placeholders_firm})
+            """,
+            [*months, *firma_ids, *months, *firma_ids, *months, *firma_ids],
+        ).fetchall()
+    finally:
+        conn.close()
 
-        for miesiac in months:
-            koszt = oblicz_miesieczny_koszt(firma_id, miesiac)
-            godziny = get_hours_for_company_month(firma_id, miesiac)
-            extra = get_extra_services_value(firma_id, miesiac)
-
-            koszt_ksieg = koszt["netto"] + extra
-            koszt_kadry = koszt["zdrowotna"]
-
-            godz_ksieg = godziny["ksiegowosc"]
-            godz_kadry = godziny["kadry"]
-
-            out[firma_id][miesiac] = {
-                "koszt_ksiegowosc": koszt_ksieg,
-                "koszt_kadry": koszt_kadry,
-                "godziny_ksiegowosc": godz_ksieg,
-                "godziny_kadry": godz_kadry,
-                "koszt_na_godzine_ksiegowosc": koszt_ksieg / godz_ksieg if godz_ksieg > 0 else 0,
-                "koszt_na_godzine_kadry": koszt_kadry / godz_kadry if godz_kadry > 0 else 0,
-                "extra": extra
-            }
-
+    out = {firma_id: {} for firma_id in firma_ids}
+    for row in rows:
+        docs = int(row["dokumenty"] or 0)
+        limit = int(row["limit_dokumentow"] or 0)
+        extra_docs = max(0, docs - limit) if limit else 0
+        netto = float(row["netto"] or 0) + extra_docs * float(row["cena_za_dokument"] or 0)
+        extra = float(row["extra"] or 0)
+        koszt_ksieg = netto + extra
+        koszt_kadry = float(row["zdrowotna"] or 0)
+        godz_ksieg = float(row["sekundy_ksiegowosc"] or 0)
+        godz_kadry = float(row["sekundy_kadry"] or 0)
+        out[row["firma_id"]][row["miesiac"]] = {
+            "koszt_ksiegowosc": round(koszt_ksieg, 2),
+            "koszt_kadry": round(koszt_kadry, 2),
+            "godziny_ksiegowosc": godz_ksieg,
+            "godziny_kadry": godz_kadry,
+            "koszt_na_godzine_ksiegowosc": koszt_ksieg / godz_ksieg if godz_ksieg else 0,
+            "koszt_na_godzine_kadry": koszt_kadry / godz_kadry if godz_kadry else 0,
+            "extra": extra,
+        }
     return out
 
 

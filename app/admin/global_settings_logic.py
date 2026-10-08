@@ -86,6 +86,29 @@ class GlobalSettingsLogic:
     def get_users(self) -> List[sqlite3.Row]:
         return list_employees()
 
+    def get_user(self, pracownik_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._get_conn()
+
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    id,
+                    email,
+                    imie,
+                    nazwisko,
+                    aktywny
+                FROM pracownicy
+                WHERE id = ?
+                """,
+                (pracownik_id,),
+            ).fetchone()
+
+            return dict(row) if row else None
+
+        finally:
+            conn.close()
+
     def create_user(self, email: str, imie: str, nazwisko: str, haslo: str) -> int:
         return add_employee(email=email, haslo=haslo, imie=imie, nazwisko=nazwisko)
 

@@ -1,11 +1,18 @@
+import os
+import sys
 from dotenv import load_dotenv
-load_dotenv()
 
+def get_env_path():
+    # PyInstaller
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, ".env")
+
+    # Uruchomienie z Pycharm
+    return os.path.join(os.path.dirname(__file__), ".env")
+
+load_dotenv(dotenv_path=get_env_path())
 
 from PyQt6.QtWidgets import (QApplication, QDialog)
-
-
-import sys, os
 import traceback
 
 DB_NAME = os.getenv("DB_NAME")

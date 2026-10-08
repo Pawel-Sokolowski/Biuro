@@ -1,13 +1,6 @@
-# PyInstaller build configuration for the Biuro desktop application.
-#
-# Recommended release flow:
-#   1. pyinstaller packaging/biuro.spec
-#   2. Package dist/Biuro with installer/biuro.iss using Inno Setup.
-
+# -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
-
 from PyInstaller.utils.hooks import collect_submodules
-
 
 ROOT = Path(SPEC).resolve().parent.parent
 APP = ROOT / "app"
@@ -17,7 +10,14 @@ a = Analysis(
     pathex=[str(ROOT)],
     binaries=[],
     datas=[
+        # Ikony
         (str(APP / "icons"), "app/icons"),
+
+        # .env – MUSI być poziom wyżej niż packaging/
+        (str(ROOT / ".env"), "."),
+
+        # baza danych
+        (str(ROOT / "biuro.db"), "."),
     ],
     hiddenimports=[
         *collect_submodules("app"),

@@ -70,6 +70,11 @@ class MonthlyViewLogic:
     def get_monthly_rows(
         self, selected_month: str, selected_employee: Optional[int], selected_status: str
     ) -> List[Dict[str, Any]]:
+        # No employee selection means the logged-in employee by default.
+        # The explicit 0 value still represents "Wszyscy".
+        if selected_employee is None:
+            selected_employee = self.pracownik_id
+
         conn = get_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
@@ -314,7 +319,10 @@ class MonthlyViewLogic:
         setattr(self, fields[2], None)
 
     def toggle_stoper(
-        self, firma_id: int, typ: str, activity_payload: Optional[Dict[str, Any]] = None
+            self,
+            firma_id: int,
+            typ: str,
+            activity_payload: Optional[Dict[str, Any]] = None,
     ):
         fields = self._TIMER_FIELDS.get(typ)
         if not fields:
@@ -325,35 +333,49 @@ class MonthlyViewLogic:
 
         conn = get_conn()
         cur = conn.cursor()
-        active_firma_id = getattr(self, fields[0])
 
-        # A single department timer may run at a time. Starting one department
-        # always commits and stops the timer from the other department first.
-        other_typ = "kadry" if typ == "ksiegowosc" else "ksiegowosc"
-        other_fields = self._TIMER_FIELDS[other_typ]
-        if getattr(self, other_fields[0]) is not None:
-            self._finish_timer(other_typ, now, cur)
+        try:
+            active_firma_id = getattr(self, fields[0])
 
-        if active_firma_id is not None:
-            self._finish_timer(typ, now, cur)
+            # Stop timer from the other department if running
+            other_typ = "kadry" if typ == "ksiegowosc" else "ksiegowosc"
+            other_fields = self._TIMER_FIELDS[other_typ]
 
-        if active_firma_id != firma_id:
+            if getattr(self, other_fields[0]) is not None:
+                self._finish_timer(other_typ, now, cur)
+
+            # Clicking the same company should only STOP the timer
+            if active_firma_id == firma_id:
+                self._finish_timer(typ, now, cur)
+                conn.commit()
+                return
+
+            # Stop currently running timer for this department
+            if active_firma_id is not None:
+                self._finish_timer(typ, now, cur)
+
+            # Start timer for selected company
             task_id = (activity_payload or {}).get("task_id")
             if task_id:
                 cur.execute(
                     """
                     UPDATE zadania
-                    SET status = 'W toku', updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND status = 'Nowe'
+                    SET status = 'W toku',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                      AND status = 'Nowe'
                     """,
                     (task_id,),
                 )
+
             setattr(self, fields[0], firma_id)
             setattr(self, fields[1], now)
             setattr(self, fields[2], activity_payload)
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+
+        finally:
+            conn.close()
 
     def open_notes_window(self, firma_id: int):
         from app.monthly_view.notes_window import NotesWindow

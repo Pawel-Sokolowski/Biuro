@@ -12,11 +12,6 @@ class MonthlyViewModel(QAbstractTableModel):
         self._mode: str = mode
 
     def set_rows(self, rows: List[Dict[str, Any]]):
-        """
-        Smart update: jeśli liczba wierszy i ich identyfikatory są takie same,
-        emitujemy dataChanged dla zmienionych pól zamiast resetować cały model.
-        Reset modelu (beginResetModel) wykonujemy tylko gdy struktura się zmienia.
-        """
         # szybkie porównanie po id
         old_ids = [r.get("id") for r in self._rows]
         new_ids = [r.get("id") for r in rows]

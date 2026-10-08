@@ -387,6 +387,53 @@ def _pricing_key(prefix: str, values: Dict[str, Any]) -> str:
     return f"IMPORT_{prefix}_{digest}"
 
 
+def _fold_pl(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.translate(str.maketrans({
+        "ą": "a", "ć": "c", "ę": "e", "ł": "l", "ń": "n",
+        "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+    }))
+
+
+# Prefiks klucza cennika: z formy opodatkowania, nie z tekstu "Ryczałt 1300"
+# (tam "ryczałt" oznacza stałą cenę pakietu do limitu dokumentów).
+ACCOUNTING_CENNIK_PREFIXES = {
+    "KPIR": ("KPIR",),
+    "RYCZALT": ("Ryczałt", "RYCZALT", "Ryczalt"),
+    "KH": ("KH", "KR"),
+}
+
+
+def resolve_accounting_cennik_typ(
+    forma_opodatkowania: Any = None,
+    forma_dzialalnosci: Any = None,
+) -> str:
+    tax = _fold_pl(forma_opodatkowania)
+    activity = _fold_pl(forma_dzialalnosci)
+
+    if tax:
+        if "ryczalt" in tax:
+            return "RYCZALT"
+        if "liniow" in tax or "skala" in tax or "kpir" in tax:
+            return "KPIR"
+        if "cit" in tax or "ksieg" in tax or tax in {"kh", "kr"}:
+            return "KH"
+
+    if "kpir" in activity or "osoba fizyczna" in activity:
+        return "KPIR"
+    if "cywiln" in activity:
+        return "KPIR"
+    if activity:
+        return "KH"
+    return "KPIR"
+
+
+def _accounting_cennik_key_candidates(typ: str, vat_flag: str, limit: int) -> List[str]:
+    prefixes = ACCOUNTING_CENNIK_PREFIXES.get(typ, (typ,))
+    return [f"{prefix}_{vat_flag}_{limit}" for prefix in prefixes]
+
+
 def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Optional[str]:
     parsed = payload.get("cennik_ksiegowy_parsed") or {}
     text = str(payload.get("cennik_ksiegowy") or "").strip()
@@ -399,19 +446,20 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
     if limit_price is None and base_price is None:
         return None
 
-    forma = str(payload.get("forma_opodatkowania") or "").lower()
-    if "rycza" in forma:
-        typ = "RYCZALT"
-    elif "księgi" in forma or "ksiegi" in forma:
-        typ = "KH"
-    else:
-        typ = "KPIR"
-
-    vat_flag = "N"
+    typ = resolve_accounting_cennik_typ(
+        payload.get("forma_opodatkowania"),
+        payload.get("forma_dzialalnosci"),
+    )
+    vat_flag = "T" if payload.get("vat_czynny") in (1, True, "1", "T", "t") else "N"
     limit = parsed.get("limit_dokumentow") or 0
-    generated_key = f"{typ}_{vat_flag}_{limit}"
+    candidates = _accounting_cennik_key_candidates(typ, vat_flag, limit)
+    generated_key = candidates[0]
 
-    cursor.execute("SELECT klucz FROM cenniki WHERE klucz = ? LIMIT 1", (generated_key,))
+    placeholders = ", ".join("?" for _ in candidates)
+    cursor.execute(
+        f"SELECT klucz FROM cenniki WHERE klucz IN ({placeholders}) LIMIT 1",
+        candidates,
+    )
     row = cursor.fetchone()
     if row:
         return row[0]

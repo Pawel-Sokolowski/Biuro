@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from app.config import set_database
 from app.services.calculator import oblicz_miesieczny_koszt
-from app.utils.importers import split_address_line
+from app.utils.importers import resolve_accounting_cennik_typ, split_address_line
 from app.utils.months import month_bounds
 from app.utils.timer import TimerUtils
 from app.invoices.faktury_logic import FakturyLogic
@@ -15,6 +15,20 @@ from app.invoices.faktury_logic import FakturyLogic
 class CoreWorkflowTests(unittest.TestCase):
     def test_import_address_parser(self):
         self.assertEqual(split_address_line("ul. Testowa 12/4"), ("ul. Testowa", "12", "4"))
+
+    def test_accounting_cennik_typ_from_tax_and_activity(self):
+        self.assertEqual(resolve_accounting_cennik_typ("Skala podatkowa", "Osoba fizyczna (KPiR)"), "KPIR")
+        self.assertEqual(resolve_accounting_cennik_typ("Podatek liniowy", "Spółka Cywilna"), "KPIR")
+        self.assertEqual(
+            resolve_accounting_cennik_typ("Ryczałt ewidencjonowany", "Osoba fizyczna (KPiR)"),
+            "RYCZALT",
+        )
+        self.assertEqual(resolve_accounting_cennik_typ("CIT 9%", "Osoba prawna - spółka z o. o"), "KH")
+        self.assertEqual(resolve_accounting_cennik_typ("", "Osoba prawna - spółka z o. o"), "KH")
+        self.assertEqual(resolve_accounting_cennik_typ("", "Spółka Cywilna"), "KPIR")
+        self.assertEqual(resolve_accounting_cennik_typ("", "Spółka Jawna"), "KH")
+        self.assertEqual(resolve_accounting_cennik_typ("", "Fundacja"), "KH")
+        self.assertEqual(resolve_accounting_cennik_typ("", "Osoba fizyczna (KPiR)"), "KPIR")
 
     def test_month_bounds_are_index_friendly(self):
         self.assertEqual(month_bounds("2026-02"), ("2026-02-01", "2026-03-01"))

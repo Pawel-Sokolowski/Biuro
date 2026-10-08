@@ -46,7 +46,7 @@ class NotesDelegate(QStyledItemDelegate):
 
 class ScrollableNotesDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
-        from app.monthly_view.monthly_view_page import HoverScrollTextEdit
+        from app.monthly_view.monthly_view_ui import HoverScrollTextEdit
 
         editor = HoverScrollTextEdit(parent)
         editor.setReadOnly(True)

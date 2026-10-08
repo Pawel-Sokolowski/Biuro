@@ -1,7 +1,3 @@
-; Inno Setup installer for the PyInstaller one-folder build.
-; Build the application first with:
-;   pyinstaller packaging/biuro.spec
-
 #define MyAppName "Biuro"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Biuro"
@@ -23,7 +19,11 @@ PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
+; Kopiuje CAŁY folder dist/Biuro
 Source: "..\dist\Biuro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; Gwarantuje, że .env trafi do katalogu instalacji
+Source: "..\dist\Biuro\.env"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

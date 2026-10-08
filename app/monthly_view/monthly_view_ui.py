@@ -50,7 +50,6 @@ COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
 def icon_path(name: str) -> str:
     return os.path.join(os.path.dirname(__file__), "..", "icons", name)
 
-
 class IconButtonDelegate(QStyledItemDelegate):
     def __init__(self, parent, icon_name: str, role: str):
         super().__init__(parent)
@@ -59,6 +58,7 @@ class IconButtonDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         painter.save()
+
         rect = option.rect.adjusted(4, 4, -4, -4)
 
         bg = QColor("#e6e6e6")
@@ -70,12 +70,16 @@ class IconButtonDelegate(QStyledItemDelegate):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, 4, 4)
 
-        self.icon.paint(painter, rect, Qt.AlignmentFlag.AlignCenter)
+        self.icon.paint(
+            painter,
+            rect,
+            Qt.AlignmentFlag.AlignCenter,
+        )
+
         painter.restore()
 
     def editorEvent(self, event, model, option, index):
         return False
-
 
 class ScrollableNotesDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
@@ -442,14 +446,14 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
 
-        self.table_ks.setItemDelegateForColumn(4, IconButtonDelegate(self.table_ks, "play.png", "stoper_ks"))
+        self.table_ks.setItemDelegateForColumn(4, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
         self.table_ks.setItemDelegateForColumn(6, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
         self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
         self.table_ks.setItemDelegateForColumn(8, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
         self.notes_delegate_ks = ScrollableNotesDelegate(self.table_ks)
         self.table_ks.setItemDelegateForColumn(5, self.notes_delegate_ks)
 
-        self.table_kadry.setItemDelegateForColumn(6, IconButtonDelegate(self.table_kadry, "play.png", "stoper_kadry"))
+        self.table_kadry.setItemDelegateForColumn(6, IconButtonDelegate(self.table_kadry, "start.png", "stoper_kadry"))
         self.table_kadry.setItemDelegateForColumn(8, IconButtonDelegate(self.table_kadry, "add.png", "extra_kadry"))
         self.table_kadry.setItemDelegateForColumn(9, IconButtonDelegate(self.table_kadry, "edit.png", "edit_kadry"))
         self.notes_delegate_kadry = ScrollableNotesDelegate(self.table_kadry)
@@ -668,37 +672,61 @@ class MonthlyViewPage(QWidget):
 
     def _on_toggle_stoper_ks(self, firma_id: int):
         if self.logic.aktywna_firma_stoper_ks == firma_id:
-            self.logic.toggle_stoper(firma_id, "ksiegowosc", None)
-            self._reload_rows()
-            return
+            self.logic.toggle_stoper(
+                firma_id,
+                "ksiegowosc",
+                None,
+            )
+        else:
+            dlg = ActivitySelectionDialog(
+                "ksiegowosc",
+                firma_id,
+                self.pracownik_id,
+                self,
+            )
 
-        dlg = ActivitySelectionDialog(
-            "ksiegowosc",
-            firma_id,
-            self.pracownik_id,
-            self,
-        )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
             payload = dlg.get_payload()
-            self.logic.toggle_stoper(firma_id, "ksiegowosc", payload)
-            self._reload_rows()
+
+            self.logic.toggle_stoper(
+                firma_id,
+                "ksiegowosc",
+                payload,
+            )
+
+        self._reload_rows()
+        self.table_ks.viewport().update()
 
     def _on_toggle_stoper_kadry(self, firma_id: int):
         if self.logic.aktywna_firma_stoper_kadry == firma_id:
-            self.logic.toggle_stoper(firma_id, "kadry", None)
-            self._reload_rows()
-            return
+            self.logic.toggle_stoper(
+                firma_id,
+                "kadry",
+                None,
+            )
+        else:
+            dlg = ActivitySelectionDialog(
+                "kadry",
+                firma_id,
+                self.pracownik_id,
+                self,
+            )
 
-        dlg = ActivitySelectionDialog(
-            "kadry",
-            firma_id,
-            self.pracownik_id,
-            self,
-        )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
             payload = dlg.get_payload()
-            self.logic.toggle_stoper(firma_id, "kadry", payload)
-            self._reload_rows()
+
+            self.logic.toggle_stoper(
+                firma_id,
+                "kadry",
+                payload,
+            )
+
+        self._reload_rows()
+        self.table_kadry.viewport().update()
 
     def _on_extra_service(self, firma_id: int):
         dlg = InlineExtraServiceWindow(

@@ -291,6 +291,13 @@ def _build_payload_from_row(
     payload["adres_email"] = get("Adres email")
     payload["nr_telefonu"] = get("Nr telefonu")
 
+    # VAT - zachowujemy wartość z Excela, jeżeli kolumna istnieje.
+    payload["vat_czynny"] = (
+        get("VAT czynny")
+        if "VAT czynny" in header_index
+        else get("VAT")
+    )
+
     payload["miasto"] = get("Miasto")
     payload["kod_pocztowy"] = get("Kod pocztowy")
     payload["ulica"], payload["adres_budynek"], payload["adres_lokal"] = split_address_line(get("Ulica"))
@@ -397,7 +404,6 @@ def _fold_pl(value: Any) -> str:
 
 
 # Prefiks klucza cennika: z formy opodatkowania, nie z tekstu "Ryczałt 1300"
-# (tam "ryczałt" oznacza stałą cenę pakietu do limitu dokumentów).
 ACCOUNTING_CENNIK_PREFIXES = {
     "KPIR": ("KPIR",),
     "RYCZALT": ("Ryczałt", "RYCZALT", "Ryczalt"),
@@ -429,9 +435,25 @@ def resolve_accounting_cennik_typ(
     return "KPIR"
 
 
-def _accounting_cennik_key_candidates(typ: str, vat_flag: str, limit: int) -> List[str]:
+def _accounting_cennik_key_candidates(
+    typ: str,
+    vat_flag: str,
+    limit: int,
+    price: Any = None,
+) -> List[str]:
     prefixes = ACCOUNTING_CENNIK_PREFIXES.get(typ, (typ,))
-    return [f"{prefix}_{vat_flag}_{limit}" for prefix in prefixes]
+
+    if price is not None:
+        price_key = _format_price_key(price)
+        return [
+            f"{prefix}_{vat_flag}_{limit}_{price_key}"
+            for prefix in prefixes
+        ]
+
+    return [
+        f"{prefix}_{vat_flag}_{limit}"
+        for prefix in prefixes
+    ]
 
 
 def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Optional[str]:
@@ -450,12 +472,43 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
         payload.get("forma_opodatkowania"),
         payload.get("forma_dzialalnosci"),
     )
-    vat_flag = "T" if payload.get("vat_czynny") in (1, True, "1", "T", "t") else "N"
+
+    # Poprawione ustalanie VAT.
+    vat_value = payload.get("vat_czynny")
+    vat_normalized = _fold_pl(vat_value)
+
+    vat_active = vat_value in (1, True, "1", "T", "t") or vat_normalized in {
+        "tak",
+        "true",
+        "yes",
+        "czynny",
+        "vat czynny",
+    }
+
+    vat_flag = "T" if vat_active else "N"
+
     limit = parsed.get("limit_dokumentow") or 0
-    candidates = _accounting_cennik_key_candidates(typ, vat_flag, limit)
-    generated_key = candidates[0]
+
+    # Cena podstawowa jest częścią klucza.
+    # Przykład:
+    # Ryczałt + T + 5 + 330
+    # -> Ryczałt_T_5_330
+    if base_price is not None:
+        candidates = _accounting_cennik_key_candidates(
+            typ,
+            vat_flag,
+            limit,
+            base_price,
+        )
+    else:
+        candidates = _accounting_cennik_key_candidates(
+            typ,
+            vat_flag,
+            limit,
+        )
 
     placeholders = ", ".join("?" for _ in candidates)
+
     cursor.execute(
         f"SELECT klucz FROM cenniki WHERE klucz IN ({placeholders}) LIMIT 1",
         candidates,
@@ -463,6 +516,8 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
     row = cursor.fetchone()
     if row:
         return row[0]
+
+    generated_key = candidates[0]
 
     cursor.execute(
         """
@@ -472,10 +527,17 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            generated_key, typ, base_price or 0, round((base_price or 0) * 1.23, 2),
-            limit_price or 0, zdrowotna, base_price or 0, round((base_price or 0) * 1.23, 2),
+            generated_key,
+            typ,
+            base_price or 0,
+            round((base_price or 0) * 1.23, 2),
+            limit_price or 0,
+            zdrowotna,
+            base_price or 0,
+            round((base_price or 0) * 1.23, 2),
         ),
     )
+
     return generated_key
 
 
@@ -565,6 +627,9 @@ def _assign_employees(
         warnings.append(f"Wiersz {row_number}: nie znaleziono pracowników {', '.join(unresolved)}.")
 
 
+# ============================================================
+# ZAPIS DO DB
+# ============================================================
 def _apply_payload_to_db(
     cursor: sqlite3.Cursor,
     payload: Dict[str, Any],
@@ -583,6 +648,7 @@ def _apply_payload_to_db(
         cursor.execute("SELECT id FROM firmy WHERE nip = ?", (normalized_nip,))
         row_db = cursor.fetchone()
         company_id = row_db[0] if row_db else None
+
     if company_id is None:
         cursor.execute("SELECT id FROM firmy WHERE nazwa = ?", (company_name,))
         row_db = cursor.fetchone()
@@ -616,12 +682,14 @@ def _apply_payload_to_db(
         "zdrowotna", "uop_ilosc", "uop_cennik", "uz_ilosc",
         "uz_cennik", "uod_ilosc", "uod_cennik",
     ]
+
     if accounting_key:
         company_fields.append("glowny_cennik")
         payload["glowny_cennik"] = accounting_key
 
     fields = []
     values = []
+
     for field in company_fields:
         value = payload.get(field)
         if value not in (None, "") or field == "nazwa":
@@ -630,11 +698,17 @@ def _apply_payload_to_db(
 
     if company_id:
         assignments = ", ".join(f"{field} = ?" for field in fields)
-        cursor.execute(f"UPDATE firmy SET {assignments} WHERE id = ?", (*values, company_id))
+        cursor.execute(
+            f"UPDATE firmy SET {assignments} WHERE id = ?",
+            (*values, company_id),
+        )
         created = False
     else:
         placeholders = ", ".join("?" for _ in fields)
-        cursor.execute(f"INSERT INTO firmy ({', '.join(fields)}) VALUES ({placeholders})", values)
+        cursor.execute(
+            f"INSERT INTO firmy ({', '.join(fields)}) VALUES ({placeholders})",
+            values,
+        )
         company_id = int(cursor.lastrowid)
         created = True
 
@@ -740,7 +814,17 @@ def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> Li
 
     normalized_headers = [header.lower() for header in headers]
     idx = {header: pos for pos, header in enumerate(normalized_headers)}
-    required = ["klucz", "cena netto 2024", "za przekroczenie limitu netto", "zdrowotna", "netto", "brutto"]
+
+    required = [
+        "klucz",
+        "cena netto 2024",
+        "wzrost ilości dokumentów",
+        "cena za dokument",
+        "zdrowotna",
+        "netto",
+        "brutto",
+    ]
+
     if any(column not in idx for column in required):
         return []
 
@@ -749,18 +833,35 @@ def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> Li
         return row[position] if position is not None and position < len(row) else None
 
     payloads = []
+
     for row in rows:
         klucz_raw = get_cell(row, "klucz")
+
         if klucz_raw is None or not str(klucz_raw).strip():
             continue
+
+        # NOWE:
+        # Klucz jest automatycznie rozszerzany o wartość z kolumny Netto.
+        #
+        # Ryczałt_N_5 + 270  -> Ryczałt_N_5_270
+        # Ryczałt_N_10 + 295 -> Ryczałt_N_10_295
+
+        base_key = str(klucz_raw).strip()
+
+        netto = parse_num(get_cell(row, "netto")) or 0.0
+
+        generated_key = f"{base_key}_{_format_price_key(netto)}"
+
         payloads.append({
-            "klucz": str(klucz_raw).strip(),
+            "klucz": generated_key,
             "cena_netto_ksiegowosc": parse_num(get_cell(row, "cena netto 2024")) or 0.0,
-            "cena_za_dokument_ponad_limit": parse_num(get_cell(row, "za przekroczenie limitu netto")) or 0.0,
+            "cena_za_dokument_ponad_limit": parse_num(get_cell(row, "cena za dokument")) or 0.0,
             "zdrowotna": parse_num(get_cell(row, "zdrowotna")) or 0.0,
-            "netto": parse_num(get_cell(row, "netto")) or 0.0,
+            "netto": netto,
             "brutto": parse_num(get_cell(row, "brutto")) or 0.0,
+            "wzrost_ilosci_dokumentow": parse_num(get_cell(row, "wzrost ilości dokumentów")) or 0.0,
         })
+
     return payloads
 
 

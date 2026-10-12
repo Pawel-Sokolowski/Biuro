@@ -8,52 +8,113 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
-
+from app.admin.settings.user_companies_dialog import UserCompaniesDialog
 
 class UsersSettings(QWidget):
     """Użytkownicy: podgląd, dodawanie, edycja, reset hasła, aktywacja."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
         self.logic = GlobalSettingsLogic()
 
         layout = QVBoxLayout(self)
 
         title = QLabel("Użytkownicy systemu")
-        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        title.setFont(
+            QFont(
+                "Arial",
+                12,
+                QFont.Weight.Bold,
+            )
+        )
         layout.addWidget(title)
 
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Email", "Imię", "Nazwisko", "Aktywny"
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        self.table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Email",
+                "Imię",
+                "Nazwisko",
+                "Aktywny",
+            ]
+        )
+
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
         layout.addWidget(self.table)
 
         btn_row = QHBoxLayout()
 
-        btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self._refresh)
-        btn_row.addWidget(btn_refresh)
+        btn_refresh = QPushButton(
+            "Odśwież"
+        )
+        btn_refresh.clicked.connect(
+            self._refresh
+        )
+        btn_row.addWidget(
+            btn_refresh
+        )
 
-        btn_add = QPushButton("Dodaj użytkownika")
-        btn_add.clicked.connect(self._add)
-        btn_row.addWidget(btn_add)
+        btn_add = QPushButton(
+            "Dodaj użytkownika"
+        )
+        btn_add.clicked.connect(
+            self._add
+        )
+        btn_row.addWidget(
+            btn_add
+        )
 
-        btn_edit = QPushButton("Edytuj wybranego")
-        btn_edit.clicked.connect(self._edit_selected)
-        btn_row.addWidget(btn_edit)
+        btn_edit = QPushButton(
+            "Edytuj wybranego"
+        )
+        btn_edit.clicked.connect(
+            self._edit_selected
+        )
+        btn_row.addWidget(
+            btn_edit
+        )
 
-        btn_reset = QPushButton("Reset hasła")
-        btn_reset.clicked.connect(self._reset_password)
-        btn_row.addWidget(btn_reset)
+        btn_reset = QPushButton(
+            "Reset hasła"
+        )
+        btn_reset.clicked.connect(
+            self._reset_password
+        )
+        btn_row.addWidget(
+            btn_reset
+        )
 
-        btn_toggle = QPushButton("Aktywuj / Dezaktywuj")
-        btn_toggle.clicked.connect(self._toggle_active)
-        btn_row.addWidget(btn_toggle)
+        btn_companies = QPushButton(
+            "Przypisz firmy"
+        )
+        btn_companies.clicked.connect(
+            self._assign_companies
+        )
+        btn_row.addWidget(
+            btn_companies
+        )
+
+        btn_toggle = QPushButton(
+            "Aktywuj / Dezaktywuj"
+        )
+        btn_toggle.clicked.connect(
+            self._toggle_active
+        )
+        btn_row.addWidget(
+            btn_toggle
+        )
 
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+
+        layout.addLayout(
+            btn_row
+        )
 
         self._refresh()
 
@@ -210,3 +271,13 @@ class UsersSettings(QWidget):
             self._refresh()
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zmienić statusu: {e}")
+
+    def _assign_companies(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Użytkownicy", "Wybierz użytkownika.")
+            return
+
+        uid = int(self.table.item(row, 0).text())
+        dlg = UserCompaniesDialog(uid, parent=self)
+        dlg.exec()

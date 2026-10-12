@@ -159,6 +159,60 @@ class GlobalSettingsLogic:
     def reset_password(self, uid: int, new_pass: str):
         self.reset_user_password(uid, new_pass)
 
+    def get_companies_for_user(
+            self,
+            pracownik_id: int,
+    ):
+        conn = self._get_conn()
+
+        try:
+            rows = conn.execute(
+                """
+                SELECT firma_id
+                FROM pracownik_firma
+                WHERE pracownik_id = ?
+                """,
+                (pracownik_id,),
+            ).fetchall()
+            return [
+                int(r["firma_id"])
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def save_companies_for_user(
+            self,
+            pracownik_id: int,
+            company_ids: list[int],
+    ):
+        conn = self._get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM pracownik_firma
+                WHERE pracownik_id = ?
+                """,
+                (pracownik_id,),
+            )
+            for firma_id in company_ids:
+                cur.execute(
+                    """
+                    INSERT INTO pracownik_firma (
+                        pracownik_id,
+                        firma_id
+                    )
+                    VALUES (?, ?)
+                    """,
+                    (
+                        pracownik_id,
+                        firma_id,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     # -------------------------
     # Role + uprawnienia
     # -------------------------

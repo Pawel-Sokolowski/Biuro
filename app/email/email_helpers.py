@@ -7,7 +7,6 @@ from pathlib import Path
 from email.message import Message
 from typing import Any, Dict, List, Optional
 
-
 SERVER_TO_LOCAL = {
     "INBOX": "Odebrane",
     "INBOX.Sent": "Wysłane",
@@ -17,6 +16,7 @@ SERVER_TO_LOCAL = {
     "INBOX.Drafts": "Szkice",
     "INBOX.Archive": "Archiwum",
 }
+
 LOCAL_TO_SERVER = {
     "Odebrane": "INBOX",
     "Wysłane": "INBOX.Sent",
@@ -27,14 +27,29 @@ LOCAL_TO_SERVER = {
 
 
 def normalize_folder_name(server_name: str) -> str:
+    """
+    Convert server folder name to localized folder name.
+    """
     return SERVER_TO_LOCAL.get(server_name, server_name)
 
 
 def denormalize_folder_name(local_name: str) -> str:
+    """
+    Convert localized folder name back to server folder name.
+    """
     return LOCAL_TO_SERVER.get(local_name, local_name)
 
 
 def safe_header(value: str) -> str:
+    """
+    Safely decode an email header that may contain multiple encodings.
+
+    Args:
+        value: The raw header string.
+
+    Returns:
+        Decoded unicode string.
+    """
     if not value:
         return ""
     try:
@@ -44,6 +59,7 @@ def safe_header(value: str) -> str:
                 parts.append(value_part)
                 continue
             encoding = encoding or "utf-8"
+            # Handle unknown encodings by falling back to latin-1
             if encoding.lower() in ("unknown-8bit", "x-unknown", "unknown"):
                 encoding = "latin-1"
             try:
@@ -56,6 +72,15 @@ def safe_header(value: str) -> str:
 
 
 def extract_html(msg: Optional[Message]) -> Optional[str]:
+    """
+    Extract the first HTML part from an email message.
+
+    Args:
+        msg: Email message object.
+
+    Returns:
+        Decoded HTML content or None if not found.
+    """
     if msg is None:
         return None
     parts = msg.walk() if msg.is_multipart() else [msg]
@@ -72,6 +97,15 @@ def extract_html(msg: Optional[Message]) -> Optional[str]:
 
 
 def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
+    """
+    Extract attachment info from an email message.
+
+    Args:
+        msg: Email message object.
+
+    Returns:
+        List of dicts with attachment index and decoded filename.
+    """
     if msg is None:
         return []
     attachments: List[Dict[str, Any]] = []
@@ -87,11 +121,29 @@ def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
 
 
 def attachment_output_path(filename: str, base_dir: Optional[str] = None) -> str:
-    """Create a unique, contained path for an untrusted attachment name."""
+    """
+    Create a unique, safe file path for saving an attachment.
+
+    Args:
+        filename: Original filename from the attachment.
+        base_dir: Optional base directory to save attachments.
+
+    Returns:
+        Absolute path to save the attachment.
+
+    Raises:
+        ValueError: If the resolved path escapes the base directory.
+    """
     root = Path(base_dir or (Path.cwd() / "tmp_attachments")).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    # Sanitize filename by taking only the name part (no directories)
     safe_name = Path(safe_header(filename)).name or "attachment"
+    # Remove problematic characters from filename (optional)
+    safe_name = "".join(c for c in safe_name if c.isalnum() or c in (" ", ".", "_", "-")).strip()
+    if not safe_name:
+        safe_name = "attachment"
     destination = (root / f"{uuid.uuid4().hex}_{safe_name}").resolve()
+    # Prevent directory traversal attacks
     if os.path.commonpath((str(root), str(destination))) != str(root):
         raise ValueError("Invalid attachment filename")
     return str(destination)

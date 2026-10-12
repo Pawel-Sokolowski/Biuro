@@ -61,13 +61,19 @@ class EmailSettings(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            self.table.setItem(row, 0, QTableWidgetItem(str(r.get("id"))))
-            self.table.setItem(row, 1, QTableWidgetItem(r.get("email", "")))
-            self.table.setItem(row, 2, QTableWidgetItem(r.get("serwer_imap", "")))
-            self.table.setItem(row, 3, QTableWidgetItem(r.get("serwer_smtp", "")))
-            self.table.setItem(row, 4, QTableWidgetItem("Tak" if r.get("aktywny") else "Nie"))
-            self.table.setItem(row, 5, QTableWidgetItem(str(r.get("pracownik_id") or "")))
-            self.table.setItem(row, 6, QTableWidgetItem(r.get("ssl_imap", "")))
+            self.table.setItem(row, 0, QTableWidgetItem(str(r["id"])))
+            self.table.setItem(row, 1, QTableWidgetItem(r["email"] or ""))
+            self.table.setItem(row, 2, QTableWidgetItem(r["serwer_imap"] or ""))
+            self.table.setItem(row, 3, QTableWidgetItem(r["serwer_smtp"] or ""))
+            self.table.setItem(
+                row, 4,
+                QTableWidgetItem("Tak" if r["aktywne"] else "Nie")
+            )
+            self.table.setItem(
+                row, 5,
+                QTableWidgetItem(str(r["pracownik_id"] or ""))
+            )
+            self.table.setItem(row, 6, QTableWidgetItem(r["ssl_imap"] or ""))
 
     def _add(self):
         dlg = QDialog(self)
@@ -104,12 +110,13 @@ class EmailSettings(QWidget):
             try:
                 self.logic.add_email_account(
                     email=e_email.text().strip(),
-                    haslo=e_haslo.text().strip(),
-                    imap=e_imap.text().strip(),
+                    password=e_haslo.text(),
+                    imap_server=e_imap.text().strip(),
                     imap_port=int(e_imap_port.text()),
-                    smtp=e_smtp.text().strip(),
+                    smtp_server=e_smtp.text().strip(),
                     smtp_port=int(e_smtp_port.text()),
-                    ssl=cb_ssl.currentText()
+                    imap_ssl=cb_ssl.currentText(),
+                    smtp_ssl=cb_ssl.currentText(),
                 )
                 self._refresh()
                 QMessageBox.information(self, "OK", "Dodano konto email.")
@@ -157,13 +164,14 @@ class EmailSettings(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
                 self.logic.update_email_account(
-                    acc_id,
+                    acc_id=acc_id,
                     email=e_email.text().strip(),
                     imap=e_imap.text().strip(),
                     imap_port=int(e_imap_port.text()),
                     smtp=e_smtp.text().strip(),
                     smtp_port=int(e_smtp_port.text()),
-                    ssl=cb_ssl.currentText()
+                    ssl_imap=cb_ssl.currentText(),
+                    ssl_smtp=cb_ssl.currentText(),
                 )
                 self._refresh()
                 QMessageBox.information(self, "OK", "Zapisano zmiany.")

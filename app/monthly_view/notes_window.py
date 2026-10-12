@@ -60,16 +60,33 @@ class NotesWindow(QDialog):
 
     def _load_notes(self):
         notes = get_notes_for_company(self.firma_id)
+
         self.table.setRowCount(0)
 
         for n in notes:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(n.get("autor_nazwa", "")))
-            self.table.setItem(row, 1, QTableWidgetItem(n.get("data_utworzenia", "")))
-            item = QTableWidgetItem(n.get("tresc", "")[:200])
-            item.setToolTip(n.get("tresc", ""))
-            self.table.setItem(row, 2, item)
+
+            user_item = QTableWidgetItem(n.get("autor_nazwa", ""))
+            user_item.setData(
+                Qt.ItemDataRole.UserRole,
+                n["id"]
+            )
+
+            self.table.setItem(row, 0, user_item)
+            self.table.setItem(
+                row,
+                1,
+                QTableWidgetItem(n.get("data_utworzenia", ""))
+            )
+
+            text_item = QTableWidgetItem(
+                n.get("tresc", "")[:200]
+            )
+            text_item.setToolTip(n.get("tresc", ""))
+
+            self.table.setItem(row, 2, text_item)
+
         self.table.scrollToTop()
 
     def _add_note(self):
@@ -79,35 +96,73 @@ class NotesWindow(QDialog):
 
     def _edit_note(self):
         row = self.table.currentRow()
+
         if row < 0:
             return
 
-        notes = get_notes_for_company(self.firma_id)
-        if row >= len(notes):
-            return
-        note = notes[row]
+        note_id = self.table.item(
+            row,
+            0
+        ).data(Qt.ItemDataRole.UserRole)
 
-        dlg = NoteEditDialog(self.firma_id, self.pracownik_id, note, parent=self)
+        notes = get_notes_for_company(self.firma_id)
+
+        note = next(
+            (
+                n
+                for n in notes
+                if n["id"] == note_id
+            ),
+            None
+        )
+
+        if not note:
+            return
+
+        dlg = NoteEditDialog(
+            self.firma_id,
+            self.pracownik_id,
+            note,
+            parent=self
+        )
+
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._load_notes()
 
     def _delete_note(self):
         row = self.table.currentRow()
+
         if row < 0:
             return
 
+        note_id = self.table.item(
+            row,
+            0
+        ).data(Qt.ItemDataRole.UserRole)
+
         notes = get_notes_for_company(self.firma_id)
-        if row >= len(notes):
+
+        note = next(
+            (
+                n
+                for n in notes
+                if n["id"] == note_id
+            ),
+            None
+        )
+
+        if not note:
             return
-        note = notes[row]
 
         confirm = QMessageBox.question(
             self,
             "Usuń notatkę",
             "Czy na pewno chcesz usunąć tę notatkę?"
         )
+
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
         delete_company_note(note["id"])
+
         self._load_notes()

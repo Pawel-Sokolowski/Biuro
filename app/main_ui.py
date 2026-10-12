@@ -34,13 +34,19 @@ class LoginWindow(QDialog):
     def _build_ui(self):
         self.setStyleSheet("""
             QDialog { background-color: #eae0d5; }
-            QLabel { color: #1c70b7; font-weight: bold; }
+
+            QLabel {
+                color: #1c70b7;
+                font-weight: bold;
+            }
+
             QLineEdit {
                 padding: 8px;
                 border-radius: 6px;
                 border: 1px solid #b8b1a8;
                 background-color: white;
             }
+
             QPushButton {
                 background-color: #1c70b7;
                 color: white;
@@ -48,45 +54,133 @@ class LoginWindow(QDialog):
                 border-radius: 6px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #155a8a; }
+
+            QPushButton:hover {
+                background-color: #155a8a;
+            }
         """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
 
         lbl_title = QLabel("Zaloguj się")
-        lbl_title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        lbl_title.setFont(
+            QFont(
+                "Arial",
+                16,
+                QFont.Weight.Bold
+            )
+        )
+
         layout.addWidget(lbl_title)
 
         form = QFormLayout()
+
         self.database_combo = QComboBox()
         self.database_combo.setEditable(True)
-        self.database_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.database_combo.addItems(self._database_history())
-        self.database_combo.setCurrentText(self.database_path)
-        self.database_combo.lineEdit().setPlaceholderText("Wybierz plik SQLite...")
+        self.database_combo.setInsertPolicy(
+            QComboBox.InsertPolicy.NoInsert
+        )
+
+        self.database_combo.addItems(
+            self._database_history()
+        )
+
+        self.database_combo.setCurrentText(
+            self.database_path
+        )
+
+        self.database_combo.lineEdit().setPlaceholderText(
+            "Wybierz plik SQLite..."
+        )
+
+        # TAB nie zatrzymuje się na polu bazy
+        self.database_combo.setFocusPolicy(
+            Qt.FocusPolicy.ClickFocus
+        )
+
         btn_browse = QPushButton("...")
         btn_browse.setFixedWidth(42)
-        btn_browse.clicked.connect(self._choose_database)
+        btn_browse.clicked.connect(
+            self._choose_database
+        )
+
         database_row = QHBoxLayout()
-        database_row.addWidget(self.database_combo)
-        database_row.addWidget(btn_browse)
-        form.addRow("Baza danych:", database_row)
+        database_row.addWidget(
+            self.database_combo
+        )
+        database_row.addWidget(
+            btn_browse
+        )
+
+        form.addRow(
+            "Baza danych:",
+            database_row
+        )
+
         self.email_input = QLineEdit()
+
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Email:", self.email_input)
-        form.addRow("Hasło:", self.password_input)
+        self.password_input.setEchoMode(
+            QLineEdit.EchoMode.Password
+        )
+
+        form.addRow(
+            "Email:",
+            self.email_input
+        )
+
+        form.addRow(
+            "Hasło:",
+            self.password_input
+        )
+
         layout.addLayout(form)
 
         row = QHBoxLayout()
-        btn_login = QPushButton("Zaloguj")
-        btn_login.clicked.connect(self._on_login)
-        btn_register = QPushButton("Zarejestruj")
-        btn_register.clicked.connect(self._on_register)
+
+        btn_login = QPushButton(
+            "Zaloguj"
+        )
+        btn_login.clicked.connect(
+            self._on_login
+        )
+
+        btn_register = QPushButton(
+            "Zarejestruj"
+        )
+        btn_register.clicked.connect(
+            self._on_register
+        )
+
         row.addWidget(btn_login)
         row.addWidget(btn_register)
+
         layout.addLayout(row)
+
+        # ====================================================
+        # OBSŁUGA ENTER / TAB
+        # ====================================================
+
+        self.setTabOrder(
+            self.email_input,
+            self.password_input
+        )
+
+        self.setTabOrder(
+            self.password_input,
+            btn_login
+        )
+
+        self.email_input.returnPressed.connect(
+            self.password_input.setFocus
+        )
+
+        self.password_input.returnPressed.connect(
+            self._on_login
+        )
+
+        self.email_input.setFocus()
 
     @staticmethod
     def _database_history() -> list[str]:

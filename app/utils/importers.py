@@ -278,20 +278,22 @@ def _build_payload_from_row(
         return row[idx] if idx is not None and idx < len(row) else None
 
     payload: Dict[str, Any] = {}
+
     payload["nazwa"] = get("Nazwa Firmy")
     payload["nazwa_skrocona"] = get("Nazwa skrócona")
     payload["nip"] = normalize_identifier(get("NIP"), {10})
     payload["regon"] = normalize_identifier(get("REGON"), {9, 14})
     payload["krs"] = normalize_identifier(get("KRS"), {10})
     payload["pesel"] = normalize_identifier(get("PESEL"), {11})
+
     payload["forma_dzialalnosci"] = get("Forma działalności")
     payload["forma_opodatkowania"] = get("Forma opodatkowania")
+
     payload["analityka_fk"] = get("Analityka FK")
     payload["osoba_kontaktowa"] = get("Osoba kontaktowa")
     payload["adres_email"] = get("Adres email")
     payload["nr_telefonu"] = get("Nr telefonu")
 
-    # VAT - zachowujemy wartość z Excela, jeżeli kolumna istnieje.
     payload["vat_czynny"] = (
         get("VAT czynny")
         if "VAT czynny" in header_index
@@ -300,17 +302,38 @@ def _build_payload_from_row(
 
     payload["miasto"] = get("Miasto")
     payload["kod_pocztowy"] = get("Kod pocztowy")
-    payload["ulica"], payload["adres_budynek"], payload["adres_lokal"] = split_address_line(get("Ulica"))
+
+    (
+        payload["ulica"],
+        payload["adres_budynek"],
+        payload["adres_lokal"],
+    ) = split_address_line(get("Ulica"))
 
     payload["adres_zam_miasto"] = get("Adres zamieszkania - miasto")
     payload["adres_zam_kod_pocztowy"] = get("Adres zamieszkania - kod pocztowy")
-    payload["adres_zam_ulica"], payload["adres_zam_budynek"], payload["adres_zam_lokal"] = split_address_line(
+
+    (
+        payload["adres_zam_ulica"],
+        payload["adres_zam_budynek"],
+        payload["adres_zam_lokal"],
+    ) = split_address_line(
         get("Adres zamieszkania - ulica")
     )
 
-    payload["adres_koresp_miasto"] = get("Adres korespondencyjny - miasto") or get("Adres korespondpondencyjny - miasto")
-    payload["adres_koresp_kod_pocztowy"] = get("Adres korespondencyjny - kod pocztowy")
-    payload["adres_koresp_ulica"], payload["adres_koresp_budynek"], payload["adres_koresp_lokal"] = split_address_line(
+    payload["adres_koresp_miasto"] = (
+        get("Adres korespondencyjny - miasto")
+        or get("Adres korespondpondencyjny - miasto")
+    )
+
+    payload["adres_koresp_kod_pocztowy"] = get(
+        "Adres korespondencyjny - kod pocztowy"
+    )
+
+    (
+        payload["adres_koresp_ulica"],
+        payload["adres_koresp_budynek"],
+        payload["adres_koresp_lokal"],
+    ) = split_address_line(
         get("Adres korespondencyjny - ulica")
     )
 
@@ -325,17 +348,50 @@ def _build_payload_from_row(
     payload["zawieszenia_dzialalnosci"] = get("Zawieszenia działalności")
     payload["kody_pkd"] = normalize_pkd_codes(get("Kody PKD"))
 
-    cennik_ksiegowy_text = str(get("Cenniki usług księgowych") or "")
-    cks = parse_cennik_ksiegowy(cennik_ksiegowy_text)
+    # --------------------------------------------------
+    # KSIĘGOWOŚĆ
+    # --------------------------------------------------
+
+    cennik_ksiegowy_text = str(
+        get("Cenniki usług księgowych") or ""
+    )
+
+    cks = parse_cennik_ksiegowy(
+        cennik_ksiegowy_text
+    )
+
     payload["cennik_ksiegowy"] = cennik_ksiegowy_text
     payload["cennik_ksiegowy_parsed"] = cks
     payload["limit_dokumentow"] = cks["limit_dokumentow"]
-    payload["zdrowotna"] = cks["zdrowotna"]
 
-    cennik_kadrowy_text = str(get("Cenniki usług kadrowych") or "")
-    ckad = parse_cennik_kadrowy(cennik_kadrowy_text)
+    # --------------------------------------------------
+    # KADRY
+    # --------------------------------------------------
+
+    cennik_kadrowy_text = str(
+        get("Cenniki usług kadrowych") or ""
+    )
+    ckad = parse_cennik_kadrowy(
+        cennik_kadrowy_text
+    )
+
     payload["cennik_kadrowy"] = cennik_kadrowy_text
     payload["cennik_kadrowy_parsed"] = ckad
+
+    # --------------------------------------------------
+    # ZDROWOTNA
+    # --------------------------------------------------
+
+    ksiegowosc_zdrowotna = cks.get("zdrowotna")
+    kadry_zdrowotna = ckad.get("zdrowotna")
+    payload["zdrowotna"] = (
+        ksiegowosc_zdrowotna
+        if ksiegowosc_zdrowotna is not None
+        else kadry_zdrowotna
+    )
+
+    payload["wliczac_zdrowotna"] = (1 if ksiegowosc_zdrowotna is not None else 0)
+
     payload["uop_ilosc"] = ckad["uop_ilosc"]
     payload["uop_cennik"] = ckad["uop_cennik"]
     payload["uz_ilosc"] = ckad["uz_ilosc"]
@@ -343,15 +399,20 @@ def _build_payload_from_row(
     payload["uod_ilosc"] = ckad["uod_ilosc"]
     payload["uod_cennik"] = ckad["uod_cennik"]
 
-    cennik_czasowy_text = str(get("Cenniki czasowe") or "")
+    # --------------------------------------------------
+    # CZASOWE
+    # --------------------------------------------------
+
+    cennik_czasowy_text = str(
+        get("Cenniki czasowe") or ""
+    )
     cczas = parse_cennik_czasowy(cennik_czasowy_text)
     payload["cennik_czasowy"] = cennik_czasowy_text
     payload["cennik_czasowy_parsed"] = cczas
     payload["ryczalt_czasowy"] = cczas["ryczalt_czasowy"]
     payload["assigned_raw"] = get("Przypisani pracownicy")
+
     return payload
-
-
 # ============================================================
 # IMPORT DO PAYLOADÓW (DLA WIZARDU)
 # ============================================================
@@ -839,13 +900,7 @@ def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> Li
 
         if klucz_raw is None or not str(klucz_raw).strip():
             continue
-
-        # NOWE:
         # Klucz jest automatycznie rozszerzany o wartość z kolumny Netto.
-        #
-        # Ryczałt_N_5 + 270  -> Ryczałt_N_5_270
-        # Ryczałt_N_10 + 295 -> Ryczałt_N_10_295
-
         base_key = str(klucz_raw).strip()
 
         netto = parse_num(get_cell(row, "netto")) or 0.0
@@ -864,10 +919,6 @@ def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> Li
 
     return payloads
 
-
-# ============================================================
-# IMPORT CEN ZA DOKUMENT
-# ============================================================
 def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     del db_path
     try:

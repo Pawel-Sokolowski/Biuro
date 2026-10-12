@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPushButton,
     QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea
+    QScrollArea, QMessageBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QCompleter
@@ -44,9 +44,6 @@ class CompanyForm(QDialog):
         self.setWindowTitle("Firma")
         self.resize(1200, 900)
 
-        # ============================================================
-        # GŁÓWNY LAYOUT
-        # ============================================================
         content = QWidget()
         main_layout = QVBoxLayout(content)
         scroll = QScrollArea(self)
@@ -55,9 +52,7 @@ class CompanyForm(QDialog):
         root_layout = QVBoxLayout(self)
         root_layout.addWidget(scroll)
 
-        # ============================================================
         # SEKCJA: DANE FIRMY
-        # ============================================================
         dane_box = QWidget()
         dane_layout = QVBoxLayout(dane_box)
 
@@ -70,19 +65,37 @@ class CompanyForm(QDialog):
             row_fields = QHBoxLayout()
 
             for lbl in labels:
-                lab = QLabel(lbl)
-                lab.setMinimumWidth(250)
-                row_labels.addWidget(lab)
+                row_labels.addWidget(
+                    QLabel(lbl),
+                    1
+                )
 
             for w in widgets:
-                if isinstance(w, QHBoxLayout):
-                    row_fields.addLayout(w)
-                else:
-                    w.setMinimumWidth(250)
-                    row_fields.addWidget(w)
 
-            dane_layout.addLayout(row_labels)
-            dane_layout.addLayout(row_fields)
+                if isinstance(w, QHBoxLayout):
+
+                    wrapper = QWidget()
+                    wrapper.setLayout(w)
+
+                    row_fields.addWidget(
+                        wrapper,
+                        1
+                    )
+
+                else:
+
+                    row_fields.addWidget(
+                        w,
+                        1
+                    )
+
+            dane_layout.addLayout(
+                row_labels
+            )
+
+            dane_layout.addLayout(
+                row_fields
+            )
 
         def make_searchable(combo: QComboBox):
             combo.setEditable(True)
@@ -95,9 +108,6 @@ class CompanyForm(QDialog):
             return combo
 
 
-        # -----------------------------
-        # RZĄD 1
-        # -----------------------------
         nazwa = QLineEdit()
         nazwa_skrocona = QLineEdit()
         numer_klienta = QLineEdit()
@@ -107,9 +117,6 @@ class CompanyForm(QDialog):
             [nazwa, nazwa_skrocona, numer_klienta]
         )
 
-        # -----------------------------
-        # RZĄD 2
-        # -----------------------------
         numer_umowy = QLineEdit()
 
         nip_box = QHBoxLayout()
@@ -127,9 +134,6 @@ class CompanyForm(QDialog):
             [numer_umowy, nip_box, regon]
         )
 
-        # -----------------------------
-        # RZĄD 3
-        # -----------------------------
         krs = QLineEdit()
         pesel = QLineEdit()
         forma_dzialalnosci = QComboBox()
@@ -141,9 +145,7 @@ class CompanyForm(QDialog):
             [krs, pesel, forma_dzialalnosci]
         )
 
-        # -----------------------------
-        # RZĄD 4
-        # -----------------------------
+
         status_vat = QComboBox()
         status_vat.addItems(["Czynny", "Zwolniony", "Brak danych"])
 
@@ -161,9 +163,6 @@ class CompanyForm(QDialog):
             [status_vat, urzad_skarbowy, forma_opodatkowania]
         )
 
-        # -----------------------------
-        # RZĄD 5
-        # -----------------------------
         analityka_fk = QLineEdit()
         kody_pkd = QLineEdit()
 
@@ -175,9 +174,6 @@ class CompanyForm(QDialog):
             [analityka_fk, kody_pkd, status]
         )
 
-        # -----------------------------
-        # RZĄD 6
-        # -----------------------------
         konto_bankowe = QLineEdit()
         seria_fv = QLineEdit()
         seria_kfv = QLineEdit()
@@ -187,9 +183,6 @@ class CompanyForm(QDialog):
             [konto_bankowe, seria_fv, seria_kfv]
         )
 
-        # -----------------------------
-        # RZĄD 7
-        # -----------------------------
         sposob_zaplaty = QComboBox()
         sposob_zaplaty.addItems(get_company_field_options("sposob_zaplaty"))
         make_searchable(sposob_zaplaty)
@@ -203,9 +196,6 @@ class CompanyForm(QDialog):
             [sposob_zaplaty, status_podatkowy, kategoria_domyslna]
         )
 
-        # -----------------------------
-        # RZĄD 8
-        # -----------------------------
         miesiac_dok_fakturowanie = QLineEdit()
         miesiac_prac_fakturowanie = QLineEdit()
 
@@ -217,9 +207,6 @@ class CompanyForm(QDialog):
             [miesiac_dok_fakturowanie, miesiac_prac_fakturowanie, dzien_dostarczania_dokumentow]
         )
 
-        # -----------------------------
-        # Uwagi
-        # -----------------------------
         uwagi_label = QLabel("Uwagi:")
         uwagi = QTextEdit()
         uwagi.setMinimumHeight(120)
@@ -258,9 +245,6 @@ class CompanyForm(QDialog):
 
         main_layout.addWidget(dane_box)
 
-        # ============================================================
-        # SEKCJA: ADRESY
-        # ============================================================
         adresy_box = QWidget()
         adresy_layout = QVBoxLayout(adresy_box)
 
@@ -272,24 +256,31 @@ class CompanyForm(QDialog):
         adresy_layout.addWidget(tabs)
 
         def add_addr_row(parent_layout, labels, widgets):
+
             row_labels = QHBoxLayout()
             row_fields = QHBoxLayout()
 
             for lbl in labels:
-                lab = QLabel(lbl)
-                lab.setMinimumWidth(250)
-                row_labels.addWidget(lab)
+                row_labels.addWidget(
+                    QLabel(lbl),
+                    1
+                )
 
             for w in widgets:
-                w.setMinimumWidth(250)
-                row_fields.addWidget(w)
+                row_fields.addWidget(
+                    w,
+                    1
+                )
 
-            parent_layout.addLayout(row_labels)
-            parent_layout.addLayout(row_fields)
+            parent_layout.addLayout(
+                row_labels
+            )
 
-        # -----------------------------
+            parent_layout.addLayout(
+                row_fields
+            )
+
         # ADRES DZIAŁALNOŚCI
-        # -----------------------------
         dz_widget = QWidget()
         dz_layout = QVBoxLayout(dz_widget)
 
@@ -310,9 +301,7 @@ class CompanyForm(QDialog):
 
         tabs.addTab(dz_widget, "Adres działalności")
 
-        # -----------------------------
         # ADRES KORESPONDENCYJNY
-        # -----------------------------
         ko_widget = QWidget()
         ko_layout = QVBoxLayout(ko_widget)
 
@@ -333,9 +322,7 @@ class CompanyForm(QDialog):
 
         tabs.addTab(ko_widget, "Adres korespondencyjny")
 
-        # -----------------------------
         # ADRES ZAMIESZKANIA
-        # -----------------------------
         zam_widget = QWidget()
         zam_layout = QVBoxLayout(zam_widget)
 
@@ -391,9 +378,7 @@ class CompanyForm(QDialog):
 
         main_layout.addWidget(adresy_box)
 
-        # ============================================================
         # SEKCJA: CENNIKI
-        # ============================================================
         cenniki_box = QWidget()
         cenniki_layout = QVBoxLayout(cenniki_box)
 
@@ -402,24 +387,33 @@ class CompanyForm(QDialog):
         cenniki_layout.addWidget(title_cenniki)
 
         def add_cennik_row(labels, widgets):
+
             row_labels = QHBoxLayout()
             row_fields = QHBoxLayout()
 
             for lbl in labels:
-                lab = QLabel(lbl)
-                lab.setMinimumWidth(250)
-                row_labels.addWidget(lab)
+                row_labels.addWidget(
+                    QLabel(lbl),
+                    1
+                )
 
             for w in widgets:
-                if isinstance(w, QWidget):
-                    w.setMinimumWidth(250)
-                row_fields.addWidget(w)
 
-            cenniki_layout.addLayout(row_labels)
-            cenniki_layout.addLayout(row_fields)
+                if isinstance(w, QWidget):
+                    row_fields.addWidget(
+                        w,
+                        1
+                    )
+
+            cenniki_layout.addLayout(
+                row_labels
+            )
+
+            cenniki_layout.addLayout(
+                row_fields
+            )
 
         glowny_cennik = QComboBox()
-        glowny_cennik.setMinimumWidth(250)
 
         ks_opts = get_ksiegowosc_options()
         glowny_cennik.addItem("", "")
@@ -442,10 +436,11 @@ class CompanyForm(QDialog):
         wysylac_do_ksef = QCheckBox()
         wysylac_do_kontrahenta = QCheckBox()
         metoda_kasowa = QCheckBox()
+        wliczac_zdrowotna = QCheckBox()
 
         add_cennik_row(
-            ["Wysyłać do KSeF:", "Wysyłać do kontrahenta:", "Metoda kasowa:"],
-            [wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa]
+            ["Wysyłać do KSeF:", "Wysyłać do kontrahenta:", "Metoda kasowa:", "Uwzględniać zdrowotną:"],
+            [wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa, wliczac_zdrowotna]
         )
 
         fakturowac = QCheckBox()
@@ -458,6 +453,7 @@ class CompanyForm(QDialog):
             "wysylac_do_ksef": wysylac_do_ksef,
             "wysylac_do_kontrahenta": wysylac_do_kontrahenta,
             "metoda_kasowa": metoda_kasowa,
+            "wliczac_zdrowotna": wliczac_zdrowotna,
             "fakturowac": fakturowac,
         })
 
@@ -473,20 +469,29 @@ class CompanyForm(QDialog):
         kadry_layout.addWidget(title_kadry)
 
         def add_kadry_row(labels, widgets):
+
             row_labels = QHBoxLayout()
             row_fields = QHBoxLayout()
 
             for lbl in labels:
-                lab = QLabel(lbl)
-                lab.setMinimumWidth(250)
-                row_labels.addWidget(lab)
+                row_labels.addWidget(
+                    QLabel(lbl),
+                    1
+                )
 
             for w in widgets:
-                w.setMinimumWidth(250)
-                row_fields.addWidget(w)
+                row_fields.addWidget(
+                    w,
+                    1
+                )
 
-            kadry_layout.addLayout(row_labels)
-            kadry_layout.addLayout(row_fields)
+            kadry_layout.addLayout(
+                row_labels
+            )
+
+            kadry_layout.addLayout(
+                row_fields
+            )
 
         kadry_opts = get_pricing_kadry()
 
@@ -575,8 +580,6 @@ class CompanyForm(QDialog):
             ("Nazwisko:", kont_nazwisko),
         ]:
             lab = QLabel(lbl)
-            lab.setMinimumWidth(250)
-            widget.setMinimumWidth(250)
             kont_left.addWidget(lab)
             kont_left.addWidget(widget)
 
@@ -586,8 +589,6 @@ class CompanyForm(QDialog):
             ("Rola:", kont_rola),
         ]:
             lab = QLabel(lbl)
-            lab.setMinimumWidth(250)
-            widget.setMinimumWidth(250)
             kont_right.addWidget(lab)
             kont_right.addWidget(widget)
 
@@ -670,30 +671,29 @@ class CompanyForm(QDialog):
         wsp_left = QVBoxLayout()
         wsp_right = QVBoxLayout()
 
-        partner_imie1 = QLineEdit()
-        partner_imie2 = QLineEdit()
-        partner_nazwisko = QLineEdit()
-        partner_procent = QDoubleSpinBox()
-        partner_procent.setRange(0, 100)
-        partner_procent.setDecimals(2)
+        self.partner_imie1 = QLineEdit()
+        self.partner_imie2 = QLineEdit()
+        self.partner_nazwisko = QLineEdit()
+
+        self.partner_procent = QDoubleSpinBox()
+        self.partner_procent.setRange(0, 100)
+        self.partner_procent.setDecimals(2)
+
+        self.edited_partner_id = None
 
         for lbl, widget in [
-            ("Imię pierwsze:", partner_imie1),
-            ("Imię drugie:", partner_imie2),
+            ("Imię pierwsze:", self.partner_imie1),
+            ("Imię drugie:", self.partner_imie2),
         ]:
             lab = QLabel(lbl)
-            lab.setMinimumWidth(250)
-            widget.setMinimumWidth(250)
             wsp_left.addWidget(lab)
             wsp_left.addWidget(widget)
 
         for lbl, widget in [
-            ("Nazwisko:", partner_nazwisko),
-            ("Procent:", partner_procent),
+            ("Nazwisko:", self.partner_nazwisko),
+            ("Procent:", self.partner_procent),
         ]:
             lab = QLabel(lbl)
-            lab.setMinimumWidth(250)
-            widget.setMinimumWidth(250)
             wsp_right.addWidget(lab)
             wsp_right.addWidget(widget)
 
@@ -775,6 +775,8 @@ class CompanyForm(QDialog):
             self._load_company()
             self._load_contacts()
             self._load_email_filters()
+            self._load_partners()
+            self._load_notes()
 
     # ============================================================
     # CEIDG
@@ -1017,25 +1019,47 @@ class CompanyForm(QDialog):
     def _load_partners(self):
         if not self.firma_id:
             return
+
         rows = get_partners(self.firma_id)
         self.partners_table.setRowCount(0)
+
         for r in rows:
             row = self.partners_table.rowCount()
             self.partners_table.insertRow(row)
-            for col, key in enumerate(["imie1", "imie2", "nazwisko", "procent"]):
-                self.partners_table.setItem(row, col, QTableWidgetItem(str(r.get(key, ""))))
+            for col, key in enumerate(
+                    ["imie1", "imie2", "nazwisko", "procent"]
+            ):
+                self.partners_table.setItem(
+                    row,
+                    col,
+                    QTableWidgetItem(
+                        str(r.get(key, ""))))
+
+            self.partners_table.item(row,0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
 
     def _add_partner(self):
+
         if not self.firma_id:
             return
+
+        if not self._validate_partner_percent():
+            return
+
         payload = {
             "firma_id": self.firma_id,
-            "imie1": self.inputs["partner_imie1"].text().strip(),
-            "imie2": self.inputs["partner_imie2"].text().strip(),
-            "nazwisko": self.inputs["partner_nazwisko"].text().strip(),
-            "procent": self.inputs["partner_procent"].value(),
+            "imie1": self.partner_imie1.text().strip(),
+            "imie2": self.partner_imie2.text().strip(),
+            "nazwisko": self.partner_nazwisko.text().strip(),
+            "procent": self.partner_procent.value(),
         }
+
         save_partner(payload)
+
+        self.partner_imie1.clear()
+        self.partner_imie2.clear()
+        self.partner_nazwisko.clear()
+        self.partner_procent.setValue(0)
+
         self._load_partners()
 
     def _delete_partner(self):
@@ -1047,18 +1071,100 @@ class CompanyForm(QDialog):
         self._load_partners()
 
     def _save_selected_partner(self):
+
+        if not self.firma_id:
+            return
+
+        if self.edited_partner_id is None:
+            QMessageBox.information(
+                self,
+                "Wspólnicy",
+                "Wybierz wspólnika z listy."
+            )
+            return
+
+        if not self._validate_partner_percent(
+                self.edited_partner_id
+        ):
+            return
+
+        payload = {
+            "id": self.edited_partner_id,
+            "firma_id": self.firma_id,
+            "imie1": self.partner_imie1.text().strip(),
+            "imie2": self.partner_imie2.text().strip(),
+            "nazwisko": self.partner_nazwisko.text().strip(),
+            "procent": self.partner_procent.value(),
+        }
+
+        save_partner(payload)
+
+        self._load_partners()
+
+    def _partner_selected(self):
+
         row = self.partners_table.currentRow()
+
         if row < 0:
             return
-        payload = {
-            "firma_id": self.firma_id,
-            "imie1": self.partners_table.item(row, 0).text(),
-            "imie2": self.partners_table.item(row, 1).text(),
-            "nazwisko": self.partners_table.item(row, 2).text(),
-            "procent": float(self.partners_table.item(row, 3).text()),
-        }
-        save_partner(payload)
-        self._load_partners()
+
+        self.edited_partner_id = self.partners_table.item(row,0).data(Qt.ItemDataRole.UserRole)
+
+        self.partner_imie1.setText(
+            self.partners_table.item(row,0).text())
+
+        self.partner_imie2.setText(
+            self.partners_table.item(row,1).text())
+
+        self.partner_nazwisko.setText(
+            self.partners_table.item(row,2).text())
+
+        try:
+            self.partner_procent.setValue(
+                float(self.partners_table.item(row,3).text()))
+        except Exception:
+            self.partner_procent.setValue(0)
+
+    def _validate_partner_percent(
+            self,
+            current_partner_id=None,
+    ):
+
+        total = 0.0
+
+        rows = get_partners(self.firma_id)
+
+        for row in rows:
+
+            rid = row.get("id")
+
+            if (
+                    current_partner_id is not None
+                    and rid == current_partner_id
+            ):
+                continue
+
+            try:
+                total += float(
+                    row.get("procent") or 0
+                )
+            except Exception:
+                pass
+
+        total += self.partner_procent.value()
+
+        if total > 100:
+            QMessageBox.warning(
+                self,
+                "Wspólnicy",
+                (
+                    f"Suma udziałów przekracza 100%.\n"
+                    f"Obecnie byłoby: {total:.2f}%"
+                ),
+            )
+            return False
+
+        return True
 
     # ============================================================
     # NOTATKI

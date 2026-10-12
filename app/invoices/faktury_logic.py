@@ -215,35 +215,46 @@ class FakturyLogic:
 
         return pozycje
 
-    # ---------------- MERGE ----------------
-    def _merge_positions(self, existing_positions: List[Dict[str, Any]], generated_positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _merge_positions(
+            self,
+            existing_positions: List[Dict[str, Any]],
+            generated_positions: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+
         result = [
             dict(p)
             for p in (existing_positions or [])
             if not (
-                p.get("generated")
-                and (p.get("nazwa") or "").strip().lower() in self._NON_BILLABLE_TIME_LINES
+                    p.get("generated")
+                    and (p.get("nazwa") or "").strip().lower()
+                    in self._NON_BILLABLE_TIME_LINES
             )
         ]
 
         for gp in generated_positions:
-            gname = (gp.get("nazwa") or "").strip()
             gp_copy = dict(gp)
             gp_copy.setdefault("generated", True)
 
-            if not gname:
-                result.append(gp_copy)
-                continue
+            gname = (gp_copy.get("nazwa") or "").strip()
+            gnetto = round(self._to_float(gp_copy.get("netto")), 2)
+            gvat = int(gp_copy.get("vat") or 0)
+            gkat = (gp_copy.get("kategoria") or "").strip()
 
             generated_index = next(
                 (
                     idx
                     for idx, existing in enumerate(result)
                     if existing.get("generated")
-                    and (existing.get("nazwa") or "").strip() == gname
+                       and (existing.get("nazwa") or "").strip() == gname
+                       and round(
+                    self._to_float(existing.get("netto")), 2
+                ) == gnetto
+                       and int(existing.get("vat") or 0) == gvat
+                       and (existing.get("kategoria") or "").strip() == gkat
                 ),
                 None,
             )
+
             if generated_index is None:
                 result.append(gp_copy)
             else:

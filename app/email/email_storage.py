@@ -1,4 +1,3 @@
-# app/email/email_storage.py
 from __future__ import annotations
 
 import re
@@ -6,6 +5,7 @@ import os
 import email
 import logging
 import sqlite3
+import imaplib
 from typing import Any, Dict, List, Optional, Tuple
 
 from email.message import Message
@@ -19,8 +19,146 @@ from app.email.email_helpers import (
 logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"[^@]+@[^@]+\.[^@]+")
 
-# mapowania folderów (lokalne <-> serwer)
-# helper do bezpiecznego dekodowania nagłówków
+# NOTE: placeholder decryption — replace with your real decrypt routine
+def _decrypt_password(haslo_enc: Optional[str]) -> str:
+    # If you store encrypted passwords, replace this with actual decryption.
+    # For now we assume haslo_enc is plaintext or already decrypted.
+    return haslo_enc or ""
+
+def _get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, email, serwer_imap, port_imap, ssl_imap, haslo_enc FROM konta_email WHERE id = ?",
+            (konto_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return dict(row)
+    finally:
+        conn.close()
+
+def fetch_message_from_imap(konto_id: int, folder: str, uid: str, timeout: int = 30) -> Optional[Message]:
+    """
+    Connect to IMAP, fetch message by UID and return email.message.Message.
+    Uses account data from 'konta_email' table for connection and auth.
+    """
+    account = _get_account_info(konto_id)
+    if not account:
+        logger.debug("No account info for konto_id=%s", konto_id)
+        return None
+
+    host = account.get("serwer_imap")
+    port = account.get("port_imap") or None
+    ssl_flag = account.get("ssl_imap")
+    user = account.get("email")
+    password = _decrypt_password(account.get("haslo_enc"))
+
+    if not host or not user:
+        logger.debug("Incomplete IMAP credentials for konto_id=%s", konto_id)
+        return None
+
+    imap_conn = None
+    try:
+        # Decide between SSL and plain connection
+        if ssl_flag and str(ssl_flag).lower() in ("1", "true", "yes", "ssl"):
+            # imaplib.IMAP4_SSL accepts None for default port
+            if port:
+                imap_conn = imaplib.IMAP4_SSL(host, int(port))
+            else:
+                imap_conn = imaplib.IMAP4_SSL(host)
+        else:
+            if port:
+                imap_conn = imaplib.IMAP4(host, int(port))
+            else:
+                imap_conn = imaplib.IMAP4(host)
+
+        # Login
+        imap_conn.login(user, password)
+
+        # Select mailbox. Many servers expect modified UTF-7; if selection fails
+        # you may need to encode mailbox name. For now try direct select and fallback.
+        try:
+            typ, data = imap_conn.select(folder, readonly=True)
+            if typ != "OK":
+                # try with quoted folder or root
+                typ, data = imap_conn.select('"%s"' % folder, readonly=True)
+                if typ != "OK":
+                    logger.debug("IMAP select failed for folder=%s", folder)
+        except Exception:
+            # fallback attempt (no raise)
+            try:
+                typ, data = imap_conn.select('"%s"' % folder, readonly=True)
+            except Exception as e:
+                logger.exception("IMAP select exception for folder %s: %s", folder, e)
+                typ = "NO"
+
+        if typ != "OK":
+            logger.debug("Could not select folder %s for account %s", folder, konto_id)
+            imap_conn.logout()
+            return None
+
+        # Fetch message by UID
+        typ, fetch_data = imap_conn.uid("FETCH", str(uid), "(RFC822)")
+        if typ != "OK" or not fetch_data or fetch_data[0] is None:
+            logger.debug("IMAP fetch failed for UID=%s (typ=%s)", uid, typ)
+            imap_conn.logout()
+            return None
+
+        # fetch_data structure: [(b'UID ... (RFC822 {bytes}', b'...raw...'), b')'] or similar
+        raw_bytes = None
+        # find the first tuple that contains bytes payload
+        for part in fetch_data:
+            if isinstance(part, tuple) and len(part) >= 2 and isinstance(part[1], (bytes, bytearray)):
+                raw_bytes = part[1]
+                break
+        if raw_bytes is None:
+            # sometimes fetch_data[0][1] is the bytes
+            try:
+                raw_bytes = fetch_data[0][1]
+            except Exception:
+                raw_bytes = None
+
+        if raw_bytes is None:
+            logger.debug("No raw payload returned for UID=%s", uid)
+            imap_conn.logout()
+            return None
+
+        # Parse into Message
+        try:
+            msg = email.message_from_bytes(raw_bytes)
+        except Exception:
+            try:
+                raw_str = raw_bytes.decode("utf-8", errors="replace")
+                msg = email.message_from_string(raw_str)
+            except Exception:
+                logger.exception("Failed to parse message UID=%s", uid)
+                imap_conn.logout()
+                return None
+
+        imap_conn.logout()
+        return msg
+    except imaplib.IMAP4.error:
+        logger.exception("IMAP error while fetching UID=%s for konto_id=%s", uid, konto_id)
+        if imap_conn:
+            try:
+                imap_conn.logout()
+            except Exception:
+                pass
+        return None
+    except Exception:
+        logger.exception("Unexpected error while fetching from IMAP for konto_id=%s", konto_id)
+        if imap_conn:
+            try:
+                imap_conn.logout()
+            except Exception:
+                pass
+        return None
+
+# helper safe_header already defined in the original file — keep original implementation
 def safe_header(value: str) -> str:
     if not value:
         return ""
@@ -50,13 +188,16 @@ def get_email_accounts_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT ke.*
             FROM konta_email ke
             JOIN pracownik_konto_email pke ON pke.konto_id = ke.id
             WHERE pke.pracownik_id = ?
             ORDER BY ke.id
-        """, (pracownik_id,))
+        """,
+            (pracownik_id,),
+        )
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -148,6 +289,7 @@ def add_email_account_for_employee(
         return konto_id
     finally:
         conn.close()
+
 def delete_email_account(konto_id: int) -> None:
     conn = get_conn()
     try:
@@ -229,7 +371,6 @@ def get_email_filters_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
-
 def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
@@ -247,7 +388,6 @@ def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
         return [dict(row) for row in rows]
     finally:
         conn.close()
-
 
 def ensure_contact_email_filters(firma_id: int, folder_name: str) -> int:
     """Create sender rules for all company contacts on every active mail account."""
@@ -311,7 +451,6 @@ def ensure_contact_email_filters(firma_id: int, folder_name: str) -> int:
     finally:
         conn.close()
 
-
 def add_email_filter(
     konto_id: int,
     firma_id: Optional[int],
@@ -355,7 +494,6 @@ def add_email_filter(
         return fid
     finally:
         conn.close()
-
 
 def get_email_filters_for_message(
     konto_id: int, sender: str, subject: str = "", body: str = ""
@@ -402,7 +540,6 @@ def delete_email_filter(filter_id: int) -> None:
         conn.commit()
     finally:
         conn.close()
-
 
 def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
     conn = get_conn()
@@ -456,7 +593,6 @@ def refresh_email_list(konto_id: int, folder: str) -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
-
 
 def prune_email_storage(
     konto_id: Optional[int] = None,
@@ -538,6 +674,10 @@ def search_messages(konto_id: int, folder: str, query: str) -> List[Dict[str, An
 # SINGLE MESSAGE LOAD / ATTACHMENTS
 # -----------------------------
 def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message.Message]:
+    """
+    First attempt to load message from local DB; if not found, fetch via IMAP.
+    If downloaded from IMAP, store a minimal local copy.
+    """
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -555,14 +695,41 @@ def load_message(konto_id: int, folder: str, uid: str) -> Optional[email.message
             (konto_id, folder, uid),
         )
         row = cur.fetchone()
-        if not row:
+        if row and row["tresc"]:
+            raw = row["tresc"]
+            try:
+                msg = email.message_from_string(raw)
+                return msg
+            except Exception:
+                logger.exception("Failed to parse local message for konto_id=%s uid=%s", konto_id, uid)
+                # fall through to IMAP fetch
+
+        # Not found or parse failed — try IMAP
+        msg = fetch_message_from_imap(konto_id, folder, uid)
+        if not msg:
             return None
-        raw = row["tresc"]
+
+        # store minimal local copy for future reads
         try:
-            msg = email.message_from_string(raw)
-            return msg
+            raw_str = msg.as_string()
+            # Attempt to get headers for store_message_minimal
+            from_header = safe_header(msg.get("From") or "")
+            subject = safe_header(msg.get("Subject") or "")
+            date_hdr = msg.get("Date") or ""
+            store_message_minimal(
+                konto_id=konto_id,
+                folder_name=folder,
+                uid=uid,
+                nadawca=from_header,
+                temat=subject,
+                data_hdr=date_hdr,
+                tresc_raw=raw_str,
+                przeczytana=0,
+            )
         except Exception:
-            return None
+            logger.exception("Failed to store minimal message copy for konto_id=%s uid=%s", konto_id, uid)
+
+        return msg
     finally:
         conn.close()
 
@@ -584,10 +751,12 @@ def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optiona
             data = part.get_payload(decode=True)
             path = attachment_output_path(filename)
             try:
+                # write if not exists
                 with open(path, "xb") as f:
                     f.write(data)
                 return path
             except Exception:
+                logger.exception("Failed to write attachment to %s", path)
                 return None
         idx += 1
     return None
@@ -595,7 +764,6 @@ def open_attachment(konto_id: int, folder: str, uid: str, index: int) -> Optiona
 def download_all_attachments(konto_id: int, folder: str, uid: str, attachments: List[Dict[str, Any]]) -> None:
     for att in attachments:
         open_attachment(konto_id, folder, uid, att["index"])
-
 
 def get_email_storage_stats(konto_id: Optional[int] = None) -> Dict[str, int]:
     """Return SQLite payload sizes without loading message bodies into Python."""

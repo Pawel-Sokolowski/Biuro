@@ -19,13 +19,10 @@ from app.email.email_storage import (
     get_email_accounts_for_employee,
     get_folders_for_account,
     refresh_email_list,
-    search_messages,
 )
-from app.db.dao_companies import list_companies
-from app.db.dao_employees import list_employees
-from app.db.dao_email_assignments import list_assigned_messages
-
-from app.email.email_actions import (
+from app.email.email_storage import (
+    refresh_email_list,
+    get_folders_for_account,
     list_folders_from_imap_and_store,
     fetch_headers_from_imap_and_store,
     fetch_message_from_imap_and_store,
@@ -36,6 +33,13 @@ from app.email.email_actions import (
     create_folder,
     delete_folder,
     sync_all_emails,
+)
+
+from app.db.dao_companies import list_companies
+from app.db.dao_employees import list_employees
+from app.db.dao_email_assignments import list_assigned_messages
+
+from app.email.email_actions import (
     send_email_smtp,
     send_batch_emails,
     denormalize_folder_name,

@@ -1,207 +1,632 @@
 from __future__ import annotations
 
-import codecs
 import email
+from app.email.email_helpers import safe_header, normalize_folder_name
+from app.email.email_storage import (
+    save_folder,
+    save_message_header,
+    get_folder_id,
+    get_email_accounts_for_employee,
+)
+import imaplib
 import logging
-from typing import Optional, List
+import socket
+import sqlite3
+
+from email.message import Message
+from typing import Any, Dict, List, Optional
+
+from app.db.dao_conn import get_conn
+from app.email.email_helpers import (
+    parse_mailbox_name,
+)
 
 logger = logging.getLogger(__name__)
 
-def safe_header(value: str) -> str:
-    if not value:
-        return ""
+
+def _decrypt_password(haslo_enc: Optional[str]) -> str:
+    return haslo_enc or ""
+
+
+def _get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+
     try:
-        parts = email.header.decode_header(value)
-        decoded = []
-        for text, charset in parts:
-            if isinstance(text, bytes):
-                try:
-                    decoded.append(text.decode(charset or "utf-8", errors="replace"))
-                except (LookupError, TypeError):
-                    decoded.append(text.decode("utf-8", errors="replace"))
-            else:
-                decoded.append(text)
-        return "".join(decoded)
-    except Exception as e:
-        logger.warning(f"Failed to decode header, returning raw value: {e}")
-        return value
+        cur = conn.cursor()
 
-def decode_imap_utf7(name: bytes | str) -> str:
-    if not name:
-        return ""
+        cur.execute(
+            """
+            SELECT
+                id,
+                email,
+                serwer_imap,
+                port_imap,
+                ssl_imap,
+                haslo_enc
+            FROM konta_email
+            WHERE id = ?
+            """,
+            (konto_id,),
+        )
+
+        row = cur.fetchone()
+
+        return dict(row) if row else None
+
+    finally:
+        conn.close()
+
+
+def _connect_imap(
+    account: Dict[str, Any],
+    timeout: int = 30,
+) -> Optional[imaplib.IMAP4]:
+    host = account.get("serwer_imap")
+    port = account.get("port_imap")
+    ssl_flag = account.get("ssl_imap")
+    login = account.get("email")
+    password = _decrypt_password(account.get("haslo_enc"))
+
+    if not host or not login:
+        return None
+
+    socket.setdefaulttimeout(timeout)
+
     try:
-        s = name.decode("utf-8", errors="replace") if isinstance(name, bytes) else str(name)
-        try:
-            return codecs.decode(s.encode("ascii", errors="replace"), "imap4-utf-7")
-        except Exception:
-            try:
-                return codecs.decode(s, "imap4-utf-7")
-            except Exception:
-                return s
-    except Exception as e:
-        logger.warning(f"Failed to decode IMAP UTF-7, returning string representation: {e}")
-        return str(name)
+        use_ssl = str(ssl_flag).lower() in (
+            "1",
+            "true",
+            "yes",
+            "ssl",
+            "ssl/tls",
+        )
 
-def encode_imap_utf7(name: str) -> str:
-    if not name:
-        return ""
+        if use_ssl:
+            imap_conn = (
+                imaplib.IMAP4_SSL(host, int(port))
+                if port
+                else imaplib.IMAP4_SSL(host)
+            )
+        else:
+            imap_conn = (
+                imaplib.IMAP4(host, int(port))
+                if port
+                else imaplib.IMAP4(host)
+            )
+
+        imap_conn.login(login, password)
+
+        return imap_conn
+
+    except Exception:
+        logger.exception(
+            "IMAP login failed for %s",
+            login,
+        )
+        return None
+
+
+def _select_folder(
+    imap_conn: imaplib.IMAP4,
+    folder: str,
+    readonly: bool = True,
+) -> bool:
     try:
-        return codecs.encode(name, "imap4-utf-7").decode("ascii", errors="replace")
-    except Exception as e:
-        logger.warning(f"Failed to encode IMAP UTF-7, returning original name: {e}")
-        return name
+        typ, _ = imap_conn.select(
+            folder,
+            readonly=readonly,
+        )
 
-def extract_folder_name(raw: bytes) -> str:
-    if not raw:
-        return ""
+        if typ == "OK":
+            return True
+
+    except Exception:
+        pass
+
     try:
-        line = raw.decode(errors="replace").strip()
-        if '"' in line:
-            parts = line.split('"')
-            if len(parts) >= 2:
-                return parts[-2].strip()
-        tokens = line.split()
-        return tokens[-1].strip() if tokens else ""
-    except Exception as e:
-        logger.warning(f"Failed to extract folder name: {e}")
-        return ""
+        typ, _ = imap_conn.select(
+            f'"{folder}"',
+            readonly=readonly,
+        )
 
-def extract_separator(raw: bytes) -> str:
-    try:
-        line = raw.decode(errors="replace")
-        if '"' in line:
-            parts = line.split('"')
-            if len(parts) >= 3:
-                return parts[1]
-        return "/"
-    except Exception as e:
-        logger.warning(f"Failed to extract separator, using default '/': {e}")
-        return "/"
+        return typ == "OK"
 
-def extract_flags(raw: bytes) -> str:
-    try:
-        line = raw.decode(errors="replace")
-        if "(" in line and ")" in line:
-            return line.split(")")[0].replace("(", "").strip()
-        return ""
-    except Exception as e:
-        logger.warning(f"Failed to extract flags: {e}")
-        return ""
-
-def imap_list_folders(imap) -> List[str]:
-    attempts = [
-        ("INBOX", "*"),
-        ("INBOX", "%"),
-        ("", "*"),
-        ("", "%"),
-    ]
-    for args in attempts:
-        try:
-            typ, boxes = imap.list(*args)
-            if typ == "OK" and boxes:
-                return [extract_folder_name(b) for b in boxes]
-        except Exception as e:
-            logger.debug(f"IMAP list attempt {args} failed: {e}")
-    return []
-
-def imap_safe_select(imap, folder: str) -> bool:
-    if not folder:
+    except Exception:
         return False
 
-    attempts = [
-        (folder, True),
-        (folder, False),
-        (folder, None),
-    ]
-    for f, readonly in attempts:
-        try:
-            if readonly is None:
-                status, _ = imap.select(f)
-            else:
-                status, _ = imap.select(f, readonly=readonly)
-            if status == "OK":
-                return True
-        except Exception as e:
-            logger.debug(f"IMAP select attempt {f} (readonly={readonly}) failed: {e}")
-    return False
 
-def imap_fetch_headers(imap, uid: str) -> Optional[email.message.Message]:
-    if not uid:
-        return None
+def _supports_move(
+    imap_conn: imaplib.IMAP4,
+) -> bool:
     try:
-        typ, msg_data = imap.uid('fetch', uid, "(BODY.PEEK[HEADER])")
-        if typ != "OK" or not msg_data or not msg_data[0]:
-            return None
-        return email.message_from_bytes(msg_data[0][1])
-    except Exception as e:
-        logger.warning(f"Failed to fetch headers for UID {uid}: {e}")
-        return None
+        typ, caps = imap_conn.capability()
 
-def imap_fetch_full(imap, uid: str) -> Optional[email.message.Message]:
-    if not uid:
-        return None
-    try:
-        typ, msg_data = imap.uid('fetch', uid, "(BODY[])")
-        if typ != "OK" or not msg_data or not msg_data[0]:
-            return None
-        return email.message_from_bytes(msg_data[0][1])
-    except Exception as e:
-        logger.warning(f"Failed to fetch full message for UID {uid}: {e}")
-        return None
-
-def imap_search_uids(imap) -> List[str]:
-    try:
-        typ, data = imap.uid('search', None, "ALL")
         if typ != "OK":
-            logger.warning("IMAP search failed")
-            return []
-        uid_list = data[0].split() if data[0] else []
-        return [uid.decode() if isinstance(uid, bytes) else uid for uid in uid_list]
-    except Exception as e:
-        logger.error(f"Failed to search UIDs: {e}")
+            return False
+
+        caps_str = (
+            b" ".join(caps)
+            .decode(errors="replace")
+            .upper()
+        )
+
+        return "MOVE" in caps_str
+
+    except Exception:
+        return False
+
+
+def list_folders(
+    konto_id: int,
+    timeout: int = 30,
+) -> List[str]:
+    account = _get_account_info(konto_id)
+
+    if not account:
         return []
 
-def imap_mark_read(imap, uid: str) -> bool:
-    if not uid:
-        return False
-    try:
-        typ, _ = imap.uid('store', uid, "+FLAGS", r"(\Seen)")
-        return typ == "OK"
-    except Exception as e:
-        logger.warning(f"Failed to mark UID {uid} as read: {e}")
-        return False
+    imap_conn = _connect_imap(
+        account,
+        timeout,
+    )
 
-def imap_mark_unread(imap, uid: str) -> bool:
-    if not uid:
-        return False
-    try:
-        typ, _ = imap.uid('store', uid, "-FLAGS", r"(\Seen)")
-        return typ == "OK"
-    except Exception as e:
-        logger.warning(f"Failed to mark UID {uid} as unread: {e}")
-        return False
+    if not imap_conn:
+        return []
 
-def imap_move_message(imap, uid: str, target_folder: str) -> bool:
-    if not uid or not target_folder:
-        return False
     try:
-        typ, _ = imap.uid('copy', uid, target_folder)
+        typ, folders = imap_conn.list()
+
+        if typ != "OK" or not folders:
+            return []
+
+        result: List[str] = []
+
+        for folder in folders:
+            try:
+                name = parse_mailbox_name(folder)
+
+                if name:
+                    result.append(name)
+
+            except Exception:
+                logger.exception(
+                    "Failed parsing mailbox"
+                )
+
+        return sorted(set(result))
+
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+
+
+def fetch_message_from_imap(
+    konto_id: int,
+    folder: str,
+    uid: str,
+    timeout: int = 30,
+) -> Optional[Message]:
+    account = _get_account_info(konto_id)
+
+    if not account:
+        return None
+
+    imap_conn = _connect_imap(
+        account,
+        timeout,
+    )
+
+    if not imap_conn:
+        return None
+
+    try:
+        if not _select_folder(
+            imap_conn,
+            folder,
+            readonly=True,
+        ):
+            return None
+
+        typ, data = imap_conn.uid(
+            "FETCH",
+            str(uid),
+            "(RFC822)",
+        )
+
         if typ != "OK":
-            logger.warning(f"Failed to copy UID {uid} to {target_folder}")
-            return False
-        imap.uid('store', uid, "+FLAGS", r"(\Deleted)")
-        imap.expunge()
-        return True
-    except Exception as e:
-        logger.error(f"Failed to move UID {uid} to {target_folder}: {e}")
+            return None
+
+        raw_bytes = None
+
+        for item in data:
+            if (
+                isinstance(item, tuple)
+                and len(item) > 1
+                and isinstance(
+                    item[1],
+                    (bytes, bytearray),
+                )
+            ):
+                raw_bytes = item[1]
+                break
+
+        if not raw_bytes:
+            return None
+
+        return email.message_from_bytes(raw_bytes)
+
+    except Exception:
+        logger.exception(
+            "FETCH failed for uid=%s",
+            uid,
+        )
+
+        return None
+
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+
+
+def fetch_headers(
+    konto_id: int,
+    folder: str,
+    timeout: int = 30,
+) -> List[Dict[str, Any]]:
+    account = _get_account_info(konto_id)
+
+    if not account:
+        return []
+
+    imap_conn = _connect_imap(
+        account,
+        timeout,
+    )
+
+    if not imap_conn:
+        return []
+
+    try:
+        if not _select_folder(
+            imap_conn,
+            folder,
+            readonly=True,
+        ):
+            return []
+
+        typ, data = imap_conn.uid(
+            "SEARCH",
+            None,
+            "ALL",
+        )
+
+        if typ != "OK":
+            return []
+
+        if not data or not data[0]:
+            return []
+
+        result = []
+
+        for uid in data[0].split():
+
+            uid_str = (
+                uid.decode()
+                if isinstance(uid, bytes)
+                else str(uid)
+            )
+
+            typ_h, hdr_data = imap_conn.uid(
+                "FETCH",
+                uid_str,
+                "(BODY.PEEK[HEADER] FLAGS)"
+            )
+
+            if typ_h != "OK":
+                continue
+
+            raw = None
+            flags_text = ""
+
+            for part in hdr_data:
+
+                if (
+                    isinstance(part, tuple)
+                    and len(part) > 1
+                    and isinstance(
+                        part[1],
+                        (bytes, bytearray),
+                    )
+                ):
+                    raw = part[1]
+
+                try:
+                    flags_text = (
+                        part[0]
+                        .decode(errors="replace")
+                    )
+                except Exception:
+                    pass
+
+            if not raw:
+                continue
+
+            msg = email.message_from_bytes(raw)
+
+            result.append(
+                {
+                    "uid": uid_str,
+                    "message_id": msg.get("Message-ID"),
+                    "sender": safe_header(
+                        msg.get("From", "")
+                    ),
+                    "recipient": safe_header(
+                        msg.get("To", "")
+                    ),
+                    "subject": safe_header(
+                        msg.get("Subject", "")
+                    ),
+                    "date": safe_header(
+                        msg.get("Date", "")
+                    ),
+                    "is_seen": "\\Seen" in flags_text,
+                    "has_attachments": False,
+                }
+            )
+
+        return result
+
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+
+
+def move_message(
+    konto_id: int,
+    uid: str,
+    source_folder: str,
+    dest_folder: str,
+    timeout: int = 30,
+) -> bool:
+    account = _get_account_info(konto_id)
+
+    if not account:
         return False
 
-def imap_create_folder(imap, folder: str) -> bool:
-    if not folder:
+    imap_conn = _connect_imap(
+        account,
+        timeout,
+    )
+
+    if not imap_conn:
         return False
+
     try:
-        typ, _ = imap.create(folder)
-        return typ == "OK"
-    except Exception as e:
-        logger.warning(f"Failed to create folder {folder}: {e}")
+        if not _select_folder(
+            imap_conn,
+            source_folder,
+            readonly=False,
+        ):
+            return False
+
+        if _supports_move(imap_conn):
+            typ, _ = imap_conn.uid(
+                "MOVE",
+                uid,
+                dest_folder,
+            )
+
+            if typ == "OK":
+                return True
+
+        typ, _ = imap_conn.uid(
+            "COPY",
+            uid,
+            dest_folder,
+        )
+
+        if typ != "OK":
+            return False
+
+        imap_conn.uid(
+            "STORE",
+            uid,
+            "+FLAGS.SILENT",
+            r"(\Deleted)",
+        )
+
+        imap_conn.expunge()
+
+        return True
+
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+
+
+def delete_message(
+    konto_id: int,
+    uid: str,
+    folder: str,
+    timeout: int = 30,
+) -> bool:
+    account = _get_account_info(konto_id)
+
+    if not account:
         return False
+
+    imap_conn = _connect_imap(
+        account,
+        timeout,
+    )
+
+    if not imap_conn:
+        return False
+
+    try:
+        if not _select_folder(
+            imap_conn,
+            folder,
+            readonly=False,
+        ):
+            return False
+
+        typ, _ = imap_conn.uid(
+            "STORE",
+            uid,
+            "+FLAGS.SILENT",
+            r"(\Deleted)",
+        )
+
+        if typ != "OK":
+            return False
+
+        imap_conn.expunge()
+
+        return True
+
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+def sync_account(
+    konto_id: int,
+) -> None:
+
+    folders = list_folders(konto_id)
+
+    for folder in folders:
+
+        save_folder(
+            konto_id,
+            folder,
+            normalize_folder_name(folder),
+        )
+
+        sync_folder(
+            konto_id,
+            folder,
+        )
+def mark_unread_remote(
+    konto_id: int,
+    folder: str,
+    uid: str,
+    timeout: int = 30,
+) -> bool:
+
+    account = _get_account_info(konto_id)
+
+    if not account:
+        return False
+
+    imap_conn = _connect_imap(
+        account,
+        timeout,
+    )
+
+    if not imap_conn:
+        return False
+
+    try:
+        if not _select_folder(
+            imap_conn,
+            folder,
+            readonly=False,
+        ):
+            return False
+
+        typ, _ = imap_conn.uid(
+            "STORE",
+            uid,
+            "-FLAGS.SILENT",
+            r"(\Seen)",
+        )
+
+        return typ == "OK"
+
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            pass
+
+def archive_message(
+    konto_id: int,
+    uid: str,
+    source_folder: str,
+    archive_folder: str,
+    timeout: int = 30,
+) -> bool:
+    return move_message(
+        konto_id,
+        uid,
+        source_folder,
+        archive_folder,
+        timeout,
+    )
+def sync_folder(
+    konto_id: int,
+    folder: str,
+) -> None:
+
+    folder_id = get_folder_id(
+        konto_id,
+        folder,
+    )
+
+    if not folder_id:
+        folder_id = save_folder(
+            konto_id,
+            folder,
+            normalize_folder_name(folder),
+        )
+
+    headers = fetch_headers(
+        konto_id,
+        folder,
+    )
+
+    for hdr in headers:
+
+        save_message_header(
+            konto_id=konto_id,
+            folder_id=folder_id,
+
+            uid=hdr["uid"],
+
+            message_id=hdr["message_id"],
+
+            sender=hdr["sender"],
+
+            recipient=hdr["recipient"],
+
+            subject=hdr["subject"],
+
+            date_value=hdr["date"],
+
+            is_seen=hdr["is_seen"],
+
+            has_attachments=hdr["has_attachments"],
+        )
+
+__all__ = [
+    "list_folders",
+    "fetch_headers",
+    "fetch_message_from_imap",
+    "move_message",
+    "delete_message",
+    "archive_message",
+    "sync_account",
+    "sync_folder",
+    "mark_unread_remote",
+]

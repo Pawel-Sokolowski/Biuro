@@ -480,10 +480,22 @@ def init_db():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS foldery_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+        
             konto_id INTEGER NOT NULL,
-            nazwa TEXT NOT NULL,
-            UNIQUE(konto_id, nazwa),
-            FOREIGN KEY(konto_id) REFERENCES konta_email(id) ON DELETE CASCADE
+        
+            server_name TEXT NOT NULL,
+            display_name TEXT,
+        
+            delimiter TEXT,
+            attributes TEXT,
+        
+            last_sync TEXT,
+        
+            UNIQUE(konto_id, server_name),
+        
+            FOREIGN KEY(konto_id)
+                REFERENCES konta_email(id)
+                ON DELETE CASCADE
         );
     """)
 
@@ -494,17 +506,25 @@ def init_db():
         CREATE TABLE IF NOT EXISTS wiadomosci_email (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             konto_id INTEGER NOT NULL,
-            folder_id INTEGER,
-            uid TEXT,
+            folder_id INTEGER NOT NULL,
+            uid TEXT NOT NULL,
+            message_id TEXT,
             nadawca TEXT,
             odbiorca TEXT,
             temat TEXT,
             data TEXT,
-            tresc TEXT,
             przeczytana INTEGER DEFAULT 0,
             usunieta INTEGER DEFAULT 0,
-            FOREIGN KEY(konto_id) REFERENCES konta_email(id) ON DELETE CASCADE,
-            FOREIGN KEY(folder_id) REFERENCES foldery_email(id) ON DELETE SET NULL
+            oznaczona INTEGER DEFAULT 0,
+            has_attachments INTEGER DEFAULT 0,
+            cached_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(konto_id, folder_id, uid),
+            FOREIGN KEY(konto_id)
+                REFERENCES konta_email(id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(folder_id)
+                REFERENCES foldery_email(id)
+                ON DELETE CASCADE
         );
     """)
     cur.execute("""

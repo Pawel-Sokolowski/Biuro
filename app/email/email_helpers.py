@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import email
+import email.header
 import os
 import uuid
+
 from pathlib import Path
-from email.message import Message
 from typing import Any, Dict, List, Optional
+
+from email.message import Message
+
 
 SERVER_TO_LOCAL = {
     "INBOX": "Odebrane",
@@ -17,6 +21,7 @@ SERVER_TO_LOCAL = {
     "INBOX.Archive": "Archiwum",
 }
 
+
 LOCAL_TO_SERVER = {
     "Odebrane": "INBOX",
     "Wysłane": "INBOX.Sent",
@@ -27,123 +32,348 @@ LOCAL_TO_SERVER = {
 
 
 def normalize_folder_name(server_name: str) -> str:
-    """
-    Convert server folder name to localized folder name.
-    """
-    return SERVER_TO_LOCAL.get(server_name, server_name)
+    if not server_name:
+        return ""
+
+    return SERVER_TO_LOCAL.get(
+        server_name,
+        server_name,
+    )
 
 
 def denormalize_folder_name(local_name: str) -> str:
-    """
-    Convert localized folder name back to server folder name.
-    """
-    return LOCAL_TO_SERVER.get(local_name, local_name)
-
-
-def safe_header(value: str) -> str:
-    """
-    Safely decode an email header that may contain multiple encodings.
-
-    Args:
-        value: The raw header string.
-
-    Returns:
-        Decoded unicode string.
-    """
-    if not value:
+    if not local_name:
         return ""
+
+    return LOCAL_TO_SERVER.get(
+        local_name,
+        local_name,
+    )
+
+
+def parse_mailbox_name(raw: bytes) -> str:
     try:
-        parts = []
-        for value_part, encoding in email.header.decode_header(value):
-            if isinstance(value_part, str):
-                parts.append(value_part)
-                continue
-            encoding = encoding or "utf-8"
-            # Handle unknown encodings by falling back to latin-1
-            if encoding.lower() in ("unknown-8bit", "x-unknown", "unknown"):
-                encoding = "latin-1"
-            try:
-                parts.append(value_part.decode(encoding, errors="replace"))
-            except Exception:
-                parts.append(value_part.decode("latin-1", errors="replace"))
-        return "".join(parts)
+        s = raw.decode(errors="replace")
+
+        first_quote = s.find('"')
+
+        if first_quote != -1:
+            last_quote = s.rfind('"')
+
+            if last_quote > first_quote:
+                return s[first_quote + 1:last_quote]
+
+        return s.split()[-1].strip('"')
+
     except Exception:
-        return value
+        return raw.decode(errors="replace")
 
 
-def extract_html(msg: Optional[Message]) -> Optional[str]:
-    """
-    Extract the first HTML part from an email message.
+def safe_header(
+    value: Optional[str],
+) -> str:
+    if value is None:
+        return ""
 
-    Args:
-        msg: Email message object.
-
-    Returns:
-        Decoded HTML content or None if not found.
-    """
-    if msg is None:
-        return None
-    parts = msg.walk() if msg.is_multipart() else [msg]
-    for part in parts:
-        if part.get_content_type() != "text/html":
-            continue
+    if isinstance(
+        value,
+        (bytes, bytearray),
+    ):
         try:
-            return part.get_payload(decode=True).decode(
-                part.get_content_charset() or "utf-8", errors="replace"
+            return value.decode(
+                "utf-8",
+                errors="replace",
             )
         except Exception:
-            return None
+            return value.decode(
+                "latin-1",
+                errors="replace",
+            )
+
+    try:
+        decoded = email.header.decode_header(
+            value
+        )
+
+        parts: List[str] = []
+
+        for data, encoding in decoded:
+            if isinstance(data, str):
+                parts.append(data)
+                continue
+
+            enc = encoding or "utf-8"
+
+            if (
+                isinstance(enc, str)
+                and enc.lower()
+                in (
+                    "unknown-8bit",
+                    "unknown",
+                    "x-unknown",
+                )
+            ):
+                enc = "latin-1"
+
+            try:
+                parts.append(
+                    data.decode(
+                        enc,
+                        errors="replace",
+                    )
+                )
+            except Exception:
+                parts.append(
+                    data.decode(
+                        "latin-1",
+                        errors="replace",
+                    )
+                )
+
+        return "".join(parts)
+
+    except Exception:
+        return str(value)
+
+
+def extract_html(
+    msg: Optional[Message],
+) -> Optional[str]:
+    if msg is None:
+        return None
+
+    parts = (
+        msg.walk()
+        if msg.is_multipart()
+        else [msg]
+    )
+
+    for part in parts:
+        if (
+            part.get_content_maintype()
+            == "multipart"
+        ):
+            continue
+
+        if (
+            part.get_content_type()
+            != "text/html"
+        ):
+            continue
+
+        payload = None
+
+        try:
+            payload = part.get_payload(
+                decode=True
+            )
+
+            if payload is None:
+                raw = part.get_payload(
+                    decode=False
+                )
+
+                return (
+                    raw
+                    if isinstance(raw, str)
+                    else None
+                )
+
+            charset = (
+                part.get_content_charset()
+                or "utf-8"
+            )
+
+            return payload.decode(
+                charset,
+                errors="replace",
+            )
+
+        except Exception:
+            if payload:
+                try:
+                    return payload.decode(
+                        "latin-1",
+                        errors="replace",
+                    )
+                except Exception:
+                    pass
+
     return None
 
 
-def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
-    """
-    Extract attachment info from an email message.
+def extract_text(
+    msg: Optional[Message],
+) -> str:
+    if msg is None:
+        return ""
 
-    Args:
-        msg: Email message object.
+    try:
+        if msg.is_multipart():
+            for part in msg.walk():
+                if (
+                    part.get_content_type()
+                    == "text/plain"
+                ):
+                    payload = part.get_payload(
+                        decode=True
+                    )
 
-    Returns:
-        List of dicts with attachment index and decoded filename.
-    """
+                    if not payload:
+                        continue
+
+                    charset = (
+                        part.get_content_charset()
+                        or "utf-8"
+                    )
+
+                    return payload.decode(
+                        charset,
+                        errors="replace",
+                    )
+
+        else:
+            if (
+                msg.get_content_type()
+                == "text/plain"
+            ):
+                payload = msg.get_payload(
+                    decode=True
+                )
+
+                if payload:
+                    return payload.decode(
+                        msg.get_content_charset()
+                        or "utf-8",
+                        errors="replace",
+                    )
+
+    except Exception:
+        pass
+
+    return ""
+
+
+def get_attachments(
+    msg: Optional[Message],
+) -> List[Dict[str, Any]]:
     if msg is None:
         return []
-    attachments: List[Dict[str, Any]] = []
+
+    attachments = []
     index = 0
+
     for part in msg.walk():
-        if part.get_content_maintype() == "multipart" or not part.get("Content-Disposition"):
+        if (
+            part.get_content_maintype()
+            == "multipart"
+        ):
             continue
+
         filename = part.get_filename()
-        if filename:
-            attachments.append({"index": index, "filename": safe_header(filename)})
-            index += 1
+        disposition = (
+            part.get(
+                "Content-Disposition",
+                "",
+            )
+            or ""
+        )
+
+        if (
+            not filename
+            and "attachment"
+            not in disposition.lower()
+        ):
+            continue
+
+        payload = None
+        size = None
+
+        try:
+            payload = part.get_payload(
+                decode=True
+            )
+
+            if payload:
+                size = len(payload)
+
+        except Exception:
+            pass
+
+        attachments.append(
+            {
+                "index": index,
+                "filename": (
+                    Path(
+                        safe_header(filename)
+                    ).name
+                    if filename
+                    else "attachment"
+                ),
+                "content_type": part.get_content_type(),
+                "size": size,
+            }
+        )
+
+        index += 1
+
     return attachments
 
 
-def attachment_output_path(filename: str, base_dir: Optional[str] = None) -> str:
-    """
-    Create a unique, safe file path for saving an attachment.
+def attachment_output_path(
+    filename: str,
+    base_dir: Optional[str] = None,
+) -> str:
+    base = (
+        Path(base_dir)
+        if base_dir
+        else Path.cwd()
+        / "tmp_attachments"
+    )
 
-    Args:
-        filename: Original filename from the attachment.
-        base_dir: Optional base directory to save attachments.
+    root = base.resolve()
 
-    Returns:
-        Absolute path to save the attachment.
+    root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    Raises:
-        ValueError: If the resolved path escapes the base directory.
-    """
-    root = Path(base_dir or (Path.cwd() / "tmp_attachments")).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    # Sanitize filename by taking only the name part (no directories)
-    safe_name = Path(safe_header(filename)).name or "attachment"
-    # Remove problematic characters from filename (optional)
-    safe_name = "".join(c for c in safe_name if c.isalnum() or c in (" ", ".", "_", "-")).strip()
+    safe_name = Path(
+        safe_header(filename)
+    ).name
+
+    safe_name = "".join(
+        c
+        for c in safe_name
+        if c.isalnum()
+        or c in (
+            ".",
+            "_",
+            "-",
+            " ",
+        )
+    ).strip()
+
     if not safe_name:
         safe_name = "attachment"
-    destination = (root / f"{uuid.uuid4().hex}_{safe_name}").resolve()
-    # Prevent directory traversal attacks
-    if os.path.commonpath((str(root), str(destination))) != str(root):
-        raise ValueError("Invalid attachment filename")
+
+    destination = (
+        root
+        / f"{uuid.uuid4().hex}_{safe_name}"
+    ).resolve()
+
     return str(destination)
+
+
+__all__ = [
+    "SERVER_TO_LOCAL",
+    "LOCAL_TO_SERVER",
+    "normalize_folder_name",
+    "denormalize_folder_name",
+    "parse_mailbox_name",
+    "safe_header",
+    "extract_html",
+    "extract_text",
+    "get_attachments",
+    "attachment_output_path",
+]

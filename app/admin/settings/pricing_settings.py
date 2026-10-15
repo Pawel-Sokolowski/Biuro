@@ -1,5 +1,6 @@
 # app/admin/settings/pricing_settings.py
 
+from app.utils.parsing import to_float
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
     QPushButton, QHeaderView, QFileDialog, QMessageBox, QHBoxLayout,
@@ -66,13 +67,7 @@ class PricingSettings(QWidget):
             except Exception:
                 return default
 
-    def _to_float(self, val, default=0.0):
-        try:
-            if val is None or val == "":
-                return float(default)
-            return float(str(val).replace(",", "."))
-        except Exception:
-            return float(default)
+    _to_float = staticmethod(to_float)
 
     def _refresh(self):
         rows = self.logic.get_global_pricing()

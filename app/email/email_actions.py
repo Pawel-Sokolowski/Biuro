@@ -1,93 +1,39 @@
 from __future__ import annotations
 
 import email
-import smtplib
+import mimetypes
 import traceback
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 
-from app.db.dao_conn import get_conn
 from app.email.email_helpers import (
     attachment_output_path,
+    denormalize_folder_name,
     get_attachments,
+    iter_message_attachments,
 )
+from app.email.email_storage import (
+    add_email_filter,
+    get_account_info,
+    mark_deleted,
+    update_message_read_flag,
+)
+from app.email.email_connection import describe_error, open_smtp
 from app.email.email_sync import fetch_message_from_imap
 from app.utils.crypto import decrypt_password
-
-
-def _get_account_by_id(
-    konto_id: int,
-) -> Optional[Dict[str, Any]]:
-    conn = get_conn()
-    conn.row_factory = None
-
-    try:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT *
-            FROM konta_email
-            WHERE id = ?
-              AND COALESCE(aktywne, 1) = 1
-            """,
-            (konto_id,),
-        )
-
-        row = cur.fetchone()
-
-        if not row:
-            return None
-
-        cols = [c[0] for c in cur.description]
-
-        return dict(zip(cols, row))
-
-    finally:
-        conn.close()
 
 
 def get_smtp_config_for_account(
     konto_id: int,
 ) -> Dict[str, Any]:
-    conn = get_conn()
-    conn.row_factory = None
+    data = get_account_info(konto_id)
 
-    try:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT
-                serwer_smtp,
-                port_smtp,
-                email,
-                haslo_enc,
-                display_name,
-                ssl_smtp
-            FROM konta_email
-            WHERE id = ?
-            """,
-            (konto_id,),
-        )
-
-        row = cur.fetchone()
-
-        if not row:
-            raise ValueError(
-                f"konto {konto_id} nie znalezione"
-            )
-
-        cols = [c[0] for c in cur.description]
-
-        data = dict(zip(cols, row))
-
-    finally:
-        conn.close()
+    if not data:
+        raise ValueError(f"konto {konto_id} nie znalezione")
 
     return {
         "host": data.get("serwer_smtp"),
@@ -132,7 +78,8 @@ def prepare_message(
         msg["Cc"] = ", ".join(cc)
 
     msg["Subject"] = subject or ""
-
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid()
     msg.set_content(body or "")
 
     for path_str in attachments or []:
@@ -142,13 +89,15 @@ def prepare_message(
             continue
 
         try:
-            with open(path, "rb") as f:
-                data = f.read()
+            ctype, encoding = mimetypes.guess_type(path.name)
+            maintype, _, subtype = (
+                ctype if ctype and not encoding else "application/octet-stream"
+            ).partition("/")
 
             msg.add_attachment(
-                data,
-                maintype="application",
-                subtype="octet-stream",
+                path.read_bytes(),
+                maintype=maintype,
+                subtype=subtype,
                 filename=path.name,
             )
 
@@ -191,54 +140,21 @@ def send_email_smtp(
     )
 
     try:
-        port = int(cfg["port"])
-
-        if port == 465:
-            with smtplib.SMTP_SSL(
-                cfg["host"],
-                port,
-                timeout=timeout,
-            ) as smtp:
-
-                if cfg["password"]:
-                    smtp.login(
-                        cfg["user"],
-                        cfg["password"],
-                    )
-
-                smtp.send_message(
-                    msg,
-                    from_addr=cfg["user"],
-                    to_addrs=recipients,
-                )
-
-        else:
-            with smtplib.SMTP(
-                cfg["host"],
-                port,
-                timeout=timeout,
-            ) as smtp:
-
-                smtp.starttls()
-
-                if cfg["password"]:
-                    smtp.login(
-                        cfg["user"],
-                        cfg["password"],
-                    )
-
-                smtp.send_message(
-                    msg,
-                    from_addr=cfg["user"],
-                    to_addrs=recipients,
-                )
+        with open_smtp(
+            cfg["host"], cfg["port"], cfg["ssl"], cfg["user"], cfg["password"], timeout
+        ) as smtp:
+            smtp.send_message(
+                msg,
+                from_addr=cfg["user"],
+                to_addrs=recipients,
+            )
 
         return True, "OK"
 
     except Exception as exc:
         return (
             False,
-            f"{exc}\n{traceback.format_exc()}",
+            f"{describe_error(exc)}\n{traceback.format_exc()}",
         )
 
 
@@ -295,7 +211,7 @@ def load_message(
 
     return fetch_message_from_imap(
         konto_id,
-        folder,
+        denormalize_folder_name(folder),
         uid,
     )
 
@@ -316,65 +232,27 @@ def open_attachment(
     if not msg:
         return None
 
-    cur_idx = 0
+    attachments = iter_message_attachments(msg)
 
-    for part in msg.walk():
+    if not 0 <= index < len(attachments):
+        return None
 
-        if (
-            part.get_content_maintype()
-            == "multipart"
-        ):
-            continue
+    part = attachments[index]
+    payload = part.get_payload(decode=True)
 
-        content_disposition = (
-            part.get(
-                "Content-Disposition",
-                "",
-            )
-            or ""
-        )
+    if payload is None:
+        return None
 
-        if (
-            "attachment"
-            not in content_disposition.lower()
-        ):
-            continue
+    try:
+        output_path = attachment_output_path(part.get_filename() or "attachment")
 
-        filename = part.get_filename()
+        with open(output_path, "wb") as f:
+            f.write(payload)
 
-        if not filename:
-            continue
+        return output_path
 
-        if cur_idx == index:
-
-            payload = part.get_payload(
-                decode=True
-            )
-
-            if payload is None:
-                return None
-
-            try:
-                output_path = (
-                    attachment_output_path(
-                        filename
-                    )
-                )
-
-                with open(
-                    output_path,
-                    "wb",
-                ) as f:
-                    f.write(payload)
-
-                return output_path
-
-            except Exception:
-                return None
-
-        cur_idx += 1
-
-    return None
+    except Exception:
+        return None
 
 
 def download_all_attachments(
@@ -401,131 +279,20 @@ def download_all_attachments(
     return saved
 
 
-def add_filter(
-    konto_id: int,
-    od: str,
-    folder: str,
-) -> None:
-
-    conn = get_conn()
-
-    try:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            INSERT INTO reguly_filtrow
-            (
-                pracownik_id,
-                konto_id,
-                od,
-                folder_docelowy,
-                aktywna
-            )
-            VALUES
-            (
-                (SELECT pracownik_id
-                 FROM konta_email
-                 WHERE id = ?),
-                ?,
-                ?,
-                ?,
-                1
-            )
-            """,
-            (
-                konto_id,
-                konto_id,
-                od,
-                folder,
-            ),
-        )
-
-        conn.commit()
-
-    finally:
-        conn.close()
+def add_filter(konto_id: int, od: str, folder: str) -> None:
+    add_email_filter(konto_id, None, od, None, None, None, None, folder)
 
 
-def mark_read(
-    konto_id: int,
-    uid: str,
-) -> None:
-
-    conn = get_conn()
-
-    try:
-        conn.execute(
-            """
-            UPDATE wiadomosci_email
-            SET przeczytana = 1
-            WHERE konto_id = ?
-              AND uid = ?
-            """,
-            (
-                konto_id,
-                uid,
-            ),
-        )
-
-        conn.commit()
-
-    finally:
-        conn.close()
+def mark_read(konto_id: int, uid: str) -> None:
+    update_message_read_flag(konto_id, uid, True)
 
 
-def mark_unread(
-    konto_id: int,
-    uid: str,
-) -> None:
-
-    conn = get_conn()
-
-    try:
-        conn.execute(
-            """
-            UPDATE wiadomosci_email
-            SET przeczytana = 0
-            WHERE konto_id = ?
-              AND uid = ?
-            """,
-            (
-                konto_id,
-                uid,
-            ),
-        )
-
-        conn.commit()
-
-    finally:
-        conn.close()
+def mark_unread(konto_id: int, uid: str) -> None:
+    update_message_read_flag(konto_id, uid, False)
 
 
-def delete_email(
-    konto_id: int,
-    uid: str,
-) -> None:
-
-    conn = get_conn()
-
-    try:
-        conn.execute(
-            """
-            UPDATE wiadomosci_email
-            SET usunieta = 1
-            WHERE konto_id = ?
-              AND uid = ?
-            """,
-            (
-                konto_id,
-                uid,
-            ),
-        )
-
-        conn.commit()
-
-    finally:
-        conn.close()
+def delete_email(konto_id: int, uid: str) -> None:
+    mark_deleted(konto_id, uid)
 
 
 __all__ = [

@@ -1,25 +1,35 @@
-# app/invoices/faktury_ui.py
-import json
-import sqlite3
+import logging
 from datetime import datetime
 
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit,
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QMessageBox, QTabWidget, QGridLayout, QSizePolicy, QFrame,
-    QAbstractItemView, QDialog, QDialogButtonBox, QSpinBox, QFormLayout
+    QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QPushButton, QSpinBox,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
-from PyQt6.QtCore import Qt
 
-from app.invoices.faktury_logic import FakturyLogic
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
-    get_invoice_for_company_month,
-    get_exported_invoices,
-    mark_exported
+    InvoiceLockedError, can_access_invoice, create_correction, delete_draft_invoice,
+    get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
 )
-from app.utils.saldeo_exporter import export_saldeo_xlsx
+from app.invoices.faktury_logic import FakturyLogic
+from app.invoices.invoice_editor import InvoiceEditorDialog
+from app.invoices.ksef import ksef_url
+from app.invoices.ksef_client import KsefError
+from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
 from app.security.authorization import can, is_administrator
+from app.utils.saldeo_exporter import export_saldeo_xlsx
+
+logger = logging.getLogger(__name__)
+
+MONTHS = [
+    ("01", "Styczeń"), ("02", "Luty"), ("03", "Marzec"), ("04", "Kwiecień"),
+    ("05", "Maj"), ("06", "Czerwiec"), ("07", "Lipiec"), ("08", "Sierpień"),
+    ("09", "Wrzesień"), ("10", "Październik"), ("11", "Listopad"), ("12", "Grudzień"),
+]
+KSEF_LINK_COLOR = QColor("#1c70b7")
 
 
 class MonthYearDialog(QDialog):
@@ -30,32 +40,21 @@ class MonthYearDialog(QDialog):
         layout = QFormLayout(self)
 
         self.month_cb = QComboBox()
-        months = [
-            ("01", "Styczeń"), ("02", "Luty"), ("03", "Marzec"), ("04", "Kwiecień"),
-            ("05", "Maj"), ("06", "Czerwiec"), ("07", "Lipiec"), ("08", "Sierpień"),
-            ("09", "Wrzesień"), ("10", "Październik"), ("11", "Listopad"), ("12", "Grudzień")
-        ]
-        for code, name in months:
+        for code, name in MONTHS:
             self.month_cb.addItem(f"{code} - {name}", code)
 
         self.year_sb = QSpinBox()
         self.year_sb.setRange(2000, 2100)
         self.year_sb.setValue(initial_year or datetime.now().year)
 
-        if initial_month:
+        if initial_month and "-" in initial_month:
             try:
-                if "-" in initial_month:
-                    parts = initial_month.split("-")
-                    if len(parts[0]) == 4:
-                        # YYYY-MM
-                        self.year_sb.setValue(int(parts[0]))
-                        self.month_cb.setCurrentIndex(int(parts[1]) - 1)
-                    else:
-                        # MM-YYYY
-                        self.year_sb.setValue(int(parts[1]))
-                        self.month_cb.setCurrentIndex(int(parts[0]) - 1)
-            except Exception:
-                pass
+                first, second = initial_month.split("-")
+                year, month = (first, second) if len(first) == 4 else (second, first)
+                self.year_sb.setValue(int(year))
+                self.month_cb.setCurrentIndex(int(month) - 1)
+            except ValueError:
+                logger.warning("Niepoprawny miesiąc: %s", initial_month, exc_info=True)
 
         layout.addRow("Miesiąc:", self.month_cb)
         layout.addRow("Rok:", self.year_sb)
@@ -66,439 +65,414 @@ class MonthYearDialog(QDialog):
         layout.addRow(buttons)
 
     def selected(self):
-        code = self.month_cb.currentData()
-        year = self.year_sb.value()
-        return f"{year}-{code}"
+        return f"{self.year_sb.value()}-{self.month_cb.currentData()}"
+
+
+def _make_table(headers, multi=False):
+    table = QTableWidget(0, len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(
+        QAbstractItemView.SelectionMode.ExtendedSelection if multi
+        else QAbstractItemView.SelectionMode.SingleSelection
+    )
+    return table
+
+
+def _cell(text, align_right=False):
+    item = QTableWidgetItem("" if text is None else str(text))
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    if align_right:
+        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    return item
+
+
+def _kind_label(invoice):
+    return "Korekta" if invoice.get("rodzaj") == "korekta" else "Faktura"
 
 
 class FakturyPage(QWidget):
+    DRAFT_HEADERS = ["ID", "Rodzaj", "Firma", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
+                     "Data wystawienia", "Termin płatności"]
+    ISSUED_HEADERS = ["ID", "Rodzaj", "Firma", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
+                      "Data eksportu", "Numer KSeF"]
+    ISSUED_KSEF_COLUMN = 8
+
     def __init__(self, pracownik_id, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.logic = FakturyLogic()
 
         layout = QVBoxLayout(self)
+        layout.addLayout(self._build_filters())
 
         self.tabs = QTabWidget()
-        self.tab_faktury = QWidget()
-        self.tab_exportowane = QWidget()
-
-        self.tabs.addTab(self.tab_faktury, "Faktury")
-        self.tabs.addTab(self.tab_exportowane, "Eksportowane")
-
+        self.tab_robocze = QWidget()
+        self.tab_wystawione = QWidget()
+        self.tabs.addTab(self.tab_robocze, "Faktury robocze")
+        self.tabs.addTab(self.tab_wystawione, "Faktury wystawione")
         layout.addWidget(self.tabs)
 
-        self._build_tab_faktury()
-        self._build_tab_exportowane()
+        self._build_tab_robocze()
+        self._build_tab_wystawione()
+        self.refresh()
 
-        # initial refresh
-        self._refresh_faktury()
-        self._refresh_exportowane()
-
-    def _build_tab_faktury(self):
-        layout = QVBoxLayout(self.tab_faktury)
-
-        # top controls row
+    # ---------------- budowa ekranu ----------------
+    def _build_filters(self):
         controls = QHBoxLayout()
-
-        # Firma filter (view only)
         self.firma_combo = QComboBox()
         self.firma_combo.addItem("Wszystkie firmy", None)
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
-            cur.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa")
-        else:
-            cur.execute(
-                """
-                SELECT DISTINCT f.id, f.nazwa
-                FROM firmy f
-                JOIN pracownik_firma pf ON pf.firma_id = f.id
-                WHERE pf.pracownik_id = ?
-                ORDER BY f.nazwa
-                """,
-                (self.pracownik_id,),
-            )
-        for r in cur.fetchall():
-            fid = r[0]
-            name = r[1]
-            self.firma_combo.addItem(name, fid)
-        conn.close()
-        self.firma_combo.currentIndexChanged.connect(self._refresh_faktury)
-        controls.addWidget(QLabel("Firma (podgląd):"))
+        try:
+            if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
+                rows = conn.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa").fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT f.id, f.nazwa FROM firmy f
+                    JOIN pracownik_firma pf ON pf.firma_id = f.id
+                    WHERE pf.pracownik_id = ? ORDER BY f.nazwa
+                    """,
+                    (self.pracownik_id,),
+                ).fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            self.firma_combo.addItem(row[1], row[0])
+        self.firma_combo.currentIndexChanged.connect(self.refresh)
+        controls.addWidget(QLabel("Firma:"))
         controls.addWidget(self.firma_combo)
 
-        # Month selector: button that opens MonthYearDialog
         self.month_button = QPushButton(datetime.now().strftime("%m-%Y"))
-        self.month_button.setCheckable(False)
         self.month_button.clicked.connect(self._open_month_dialog)
-        controls.addWidget(QLabel("Miesiąc:"))
+        controls.addWidget(QLabel("Miesiąc (faktury robocze):"))
         controls.addWidget(self.month_button)
 
-        # Generate button
         self.btn_generate_all = QPushButton("Generuj faktury")
         self.btn_generate_all.clicked.connect(self._on_generate_clicked)
         controls.addWidget(self.btn_generate_all)
-
-        # Refresh button
         btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self._refresh_faktury)
+        btn_refresh.clicked.connect(self.refresh)
         controls.addWidget(btn_refresh)
-
-        # Export selected
-        btn_export_selected = QPushButton("Eksportuj zaznaczone")
-        btn_export_selected.clicked.connect(self._export_selected)
-        controls.addWidget(btn_export_selected)
-
         controls.addStretch()
-        layout.addLayout(controls)
+        return controls
 
-        # table of invoices (read-only)
-        self.faktury_table = QTableWidget(0, 7)
-        self.faktury_table.setHorizontalHeaderLabels([
-            "ID", "Firma", "Miesiąc", "Kwota netto", "Kwota brutto", "Data wystawienia", "Termin płatności"
-        ])
-        self.faktury_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.faktury_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.faktury_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.faktury_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.faktury_table.itemSelectionChanged.connect(self._on_invoice_selection_changed)
-        layout.addWidget(self.faktury_table)
+    def _build_tab_robocze(self):
+        layout = QVBoxLayout(self.tab_robocze)
+        buttons = QHBoxLayout()
+        self.btn_edit = QPushButton("Edytuj pozycje")
+        self.btn_edit.clicked.connect(self._edit_selected_draft)
+        self.btn_export = QPushButton("Eksportuj zaznaczone")
+        self.btn_export.clicked.connect(self._export_selected_drafts)
+        self.btn_delete = QPushButton("Usuń roboczą")
+        self.btn_delete.clicked.connect(self._delete_selected_draft)
+        for button in (self.btn_edit, self.btn_export, self.btn_delete):
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
 
-        # positions table below (read-only)
-        self.positions_table = QTableWidget(0, 6)
-        self.positions_table.setHorizontalHeaderLabels([
-            "Nazwa", "Ilość", "Jednostka", "Netto", "VAT", "Kategoria"
-        ])
-        self.positions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.positions_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.positions_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.positions_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.draft_table = _make_table(self.DRAFT_HEADERS, multi=True)
+        self.draft_table.itemSelectionChanged.connect(self._show_draft_positions)
+        self.draft_table.cellDoubleClicked.connect(lambda *_: self._edit_selected_draft())
+        layout.addWidget(self.draft_table)
+
         layout.addWidget(QLabel("Pozycje faktury"))
+        self.positions_table = _make_table(["Nazwa", "Ilość", "Jednostka", "Netto", "VAT", "Kategoria"])
         layout.addWidget(self.positions_table)
 
-    def _build_tab_exportowane(self):
-        layout = QVBoxLayout(self.tab_exportowane)
-        self.exported_table = QTableWidget(0, 6)
-        self.exported_table.setHorizontalHeaderLabels([
-            "ID", "Firma", "Miesiąc", "Kwota netto", "Kwota brutto", "Data eksportu"
-        ])
-        self.exported_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.exported_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.exported_table)
+    def _build_tab_wystawione(self):
+        layout = QVBoxLayout(self.tab_wystawione)
+        buttons = QHBoxLayout()
+        self.btn_view = QPushButton("Podgląd pozycji")
+        self.btn_view.clicked.connect(self._view_selected_issued)
+        self.btn_reexport = QPushButton("Eksportuj ponownie")
+        self.btn_reexport.clicked.connect(self._reexport_selected)
+        self.btn_correction = QPushButton("Wystaw korektę")
+        self.btn_correction.clicked.connect(self._create_correction)
+        self.btn_ksef = QPushButton("Numer KSeF...")
+        self.btn_ksef.clicked.connect(self._edit_ksef_number)
+        self.btn_ksef_download = QPushButton("Pobierz z KSeF")
+        self.btn_ksef_download.clicked.connect(self._download_from_ksef)
+        for button in (self.btn_view, self.btn_reexport, self.btn_correction, self.btn_ksef, self.btn_ksef_download):
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
 
-    # ---------------- month dialog handling ----------------
-    def _open_month_dialog(self):
-        txt = self.month_button.text().strip()
-        dialog = MonthYearDialog(self, initial_month=txt, initial_year=datetime.now().year)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            sel = dialog.selected()  # "YYYY-MM"
-            y, m = sel.split("-")
-            self.month_button.setText(f"{m}-{y}")
-            self._refresh_faktury()
+        self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
+        self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
+        self.issued_table.cellDoubleClicked.connect(self._on_issued_double_click)
+        layout.addWidget(self.issued_table)
 
-    def _on_generate_clicked(self):
-        # determine selected month: parse from button text (MM-YYYY)
-        txt = self.month_button.text().strip()
-        try:
-            parts = txt.split("-")
-            if len(parts) == 2:
-                mm = int(parts[0])
-                yyyy = int(parts[1])
-                miesiac = f"{yyyy}-{mm:02d}"
-            else:
-                raise ValueError("Niepoprawny format")
-        except Exception:
-            QMessageBox.information(self, "Generowanie", "Wybierz miesiąc (kliknij przycisk i wybierz miesiąc).")
+    def _download_from_ksef(self):
+        if not ksef_configured():
+            QMessageBox.warning(self, "KSeF", "KSeF nie jest skonfigurowany (NIP i token w ustawieniach).")
             return
+        month = self._current_month()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = sync_month(month)
+        except KsefError as exc:
+            QMessageBox.critical(self, "KSeF", str(exc))
+            return
+        except Exception:
+            logger.exception("Błąd pobierania z KSeF")
+            QMessageBox.critical(self, "KSeF", "Nie udało się pobrać faktur z KSeF. Szczegóły w logach.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.refresh()
+        message = f"Miesiąc {month}\nDopasowano: {len(result['dopasowane'])}\nNiedopasowano: {len(result['niedopasowane'])}"
+        if result["niedopasowane"]:
+            message += "\n\nNiedopasowane faktury:\n" + "\n".join(result["niedopasowane"][:15])
+        QMessageBox.information(self, "KSeF", message)
 
+    # ---------------- filtry ----------------
+    def _current_month(self):
+        try:
+            mm, yyyy = self.month_button.text().strip().split("-")
+            return f"{int(yyyy)}-{int(mm):02d}"
+        except ValueError:
+            return datetime.now().strftime("%Y-%m")
+
+    def _open_month_dialog(self):
+        dialog = MonthYearDialog(self, initial_month=self.month_button.text().strip())
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            year, month = dialog.selected().split("-")
+            self.month_button.setText(f"{month}-{year}")
+            self.refresh()
+
+    # ---------------- generowanie ----------------
+    def _on_generate_clicked(self):
+        miesiac = self._current_month()
         if QMessageBox.question(
             self, "Generowanie faktur",
             f"Czy na pewno chcesz wygenerować faktury dla wszystkich firm za {miesiac}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
-
         try:
             result = self.logic.generate_and_save_invoices_for_month(miesiac, only_active=True)
-        except Exception as e:
-            import logging, traceback
-            logging.getLogger("generate_invoices").exception("Unhandled exception in UI generate: %s", e)
-            QMessageBox.critical(self, "Błąd",
-                                 f"Wyjątek podczas generowania: {e}\nSprawdź generate_invoices_run.log i konsolę.")
+        except Exception as exc:
+            logger.exception("Błąd generowania faktur")
+            QMessageBox.critical(self, "Błąd", f"Wyjątek podczas generowania: {exc}")
             return
-
-        msg = (
+        message = (
             f"Przetworzono: {result.get('processed', 0)} firm.\n"
             f"Utworzono: {result.get('created', 0)} faktur.\n"
             f"Zaktualizowano: {result.get('updated', 0)} faktur."
         )
+        if result.get("skipped"):
+            message += f"\nPominięto (już wystawione): {result['skipped']}."
         if result.get("errors"):
-            msg += f"\nBłędy: {len(result['errors'])}. Sprawdź logi."
-        QMessageBox.information(self, "Generowanie zbiorcze", msg)
+            message += f"\nBłędy: {len(result['errors'])}. Sprawdź logi."
+        QMessageBox.information(self, "Generowanie zbiorcze", message)
+        self.refresh()
 
-        # refresh view for selected month
-        self._refresh_faktury()
-        self._refresh_exportowane()
-
-    # ---------------- refresh / display ----------------
-    def _refresh_faktury(self):
+    # ---------------- odświeżanie ----------------
+    def refresh(self):
         firma_id = self.firma_combo.currentData()
-        # determine month from button label
-        txt = self.month_button.text().strip()
-        miesiac = None
-        try:
-            parts = txt.split("-")
-            if len(parts) == 2:
-                mm = int(parts[0])
-                yyyy = int(parts[1])
-                miesiac = f"{yyyy}-{mm:02d}"
-        except Exception:
-            miesiac = datetime.now().strftime("%Y-%m")
+        self._fill_drafts(list_invoices(self.pracownik_id, False, self._current_month(), firma_id))
+        self._fill_issued(list_invoices(self.pracownik_id, True, None, firma_id))
 
-        if not miesiac:
-            return
-
-        self.faktury_table.setRowCount(0)
-
-        conn = get_conn()
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        if firma_id:
-            if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
-                cur.execute("""
-                    SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
-                    FROM faktury f
-                    JOIN firmy c ON f.firma_id = c.id
-                    WHERE f.firma_id = ? AND f.miesiac = ?
-                    ORDER BY f.miesiac DESC, f.created_at DESC
-                """, (firma_id, miesiac))
-            else:
-                cur.execute("""
-                    SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
-                    FROM faktury f
-                    JOIN firmy c ON f.firma_id = c.id
-                    JOIN pracownik_firma pf ON pf.firma_id = f.firma_id
-                    WHERE f.firma_id = ? AND f.miesiac = ? AND pf.pracownik_id = ?
-                    ORDER BY f.miesiac DESC, f.created_at DESC
-                """, (firma_id, miesiac, self.pracownik_id))
-        else:
-            if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
-                cur.execute("""
-                SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
-                FROM faktury f
-                JOIN firmy c ON f.firma_id = c.id
-                WHERE f.miesiac = ?
-                ORDER BY f.firma_id, f.miesiac DESC
-                """, (miesiac,))
-            else:
-                cur.execute("""
-                    SELECT f.id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.termin_platnosci
-                    FROM faktury f
-                    JOIN firmy c ON f.firma_id = c.id
-                    JOIN pracownik_firma pf ON pf.firma_id = f.firma_id
-                    WHERE f.miesiac = ? AND pf.pracownik_id = ?
-                    ORDER BY f.firma_id, f.miesiac DESC
-                """, (miesiac, self.pracownik_id))
-        rows = cur.fetchall()
-        conn.close()
-        for inv in rows:
-            row = self.faktury_table.rowCount()
-            self.faktury_table.insertRow(row)
-            # id
-            it0 = QTableWidgetItem(str(inv["id"]))
-            it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 0, it0)
-            # firma
-            it1 = QTableWidgetItem(inv["firma_nazwa"] or "")
-            it1.setFlags(it1.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 1, it1)
-            # miesiac
-            it2 = QTableWidgetItem(inv["miesiac"] or "")
-            it2.setFlags(it2.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 2, it2)
-            # netto
-            it3 = QTableWidgetItem(str(inv["kwota_netto"] or ""))
-            it3.setFlags(it3.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 3, it3)
-            # brutto
-            it4 = QTableWidgetItem(str(inv["kwota_brutto"] or ""))
-            it4.setFlags(it4.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 4, it4)
-            # data wystawienia
-            it5 = QTableWidgetItem(inv["data_wystawienia"] or "")
-            it5.setFlags(it5.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 5, it5)
-            # termin platnosci
-            it6 = QTableWidgetItem(inv["termin_platnosci"] or "")
-            it6.setFlags(it6.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.faktury_table.setItem(row, 6, it6)
-
-        # clear positions view
+    def _fill_drafts(self, invoices):
+        self.draft_table.setRowCount(0)
         self.positions_table.setRowCount(0)
+        for inv in invoices:
+            row = self.draft_table.rowCount()
+            self.draft_table.insertRow(row)
+            values = [inv["id"], _kind_label(inv), inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+                      f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
+                      inv["data_wystawienia"], inv["termin_platnosci"]]
+            for column, value in enumerate(values):
+                self.draft_table.setItem(row, column, _cell(value, column in (5, 6)))
 
-    def _on_invoice_selection_changed(self):
-        selected = self.faktury_table.selectedItems()
-        if not selected:
-            self.positions_table.setRowCount(0)
-            return
-        row = selected[0].row()
-        id_item = self.faktury_table.item(row, 0)
-        if not id_item:
-            return
-        try:
-            inv_id = int(id_item.text())
-        except Exception:
-            return
+    def _fill_issued(self, invoices):
+        self.issued_table.setRowCount(0)
+        for inv in invoices:
+            row = self.issued_table.rowCount()
+            self.issued_table.insertRow(row)
+            values = [inv["id"], _kind_label(inv), inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+                      f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
+                      inv["data_eksportu"], inv["ksef_numer"]]
+            for column, value in enumerate(values):
+                self.issued_table.setItem(row, column, _cell(value, column in (5, 6)))
+            ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
+            if inv["ksef_numer"]:
+                font = ksef_item.font()
+                font.setUnderline(True)
+                ksef_item.setFont(font)
+                ksef_item.setForeground(KSEF_LINK_COLOR)
+                ksef_item.setToolTip("Kliknij, aby otworzyć KSeF (numer zostanie skopiowany do schowka)")
 
-        conn = get_conn()
-        conn.row_factory = None
-        cur = conn.cursor()
-        cur.execute("SELECT pozycje_json FROM faktury WHERE id = ?", (inv_id,))
-        row = cur.fetchone()
-        conn.close()
-        if not row:
-            self.positions_table.setRowCount(0)
-            return
+    @staticmethod
+    def _selected_ids(table):
+        rows = sorted({index.row() for index in table.selectedIndexes()})
+        return [int(table.item(row, 0).text()) for row in rows]
 
-        pozycje_json = row[0] if isinstance(row, (list, tuple)) else row.get("pozycje_json") if hasattr(row, "keys") else None
-        try:
-            pozycje = json.loads(pozycje_json or "[]")
-        except Exception:
-            pozycje = []
-
+    # ---------------- faktury robocze ----------------
+    def _show_draft_positions(self):
         self.positions_table.setRowCount(0)
-        for p in pozycje:
-            r = self.positions_table.rowCount()
-            self.positions_table.insertRow(r)
-
-            it0 = QTableWidgetItem(str(p.get("nazwa") or p.get("opis", "")))
-            it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.positions_table.setItem(r, 0, it0)
-
-            it1 = QTableWidgetItem(str(p.get("ilosc", "")))
-            it1.setFlags(it1.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.positions_table.setItem(r, 1, it1)
-
-            it2 = QTableWidgetItem(str(p.get("jednostka", "")))
-            it2.setFlags(it2.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.positions_table.setItem(r, 2, it2)
-
+        ids = self._selected_ids(self.draft_table)
+        if len(ids) != 1:
+            return
+        for position in get_invoice_positions(ids[0]):
+            row = self.positions_table.rowCount()
+            self.positions_table.insertRow(row)
+            netto = position.get("netto") or position.get("wartosc_netto") or 0
             try:
-                netto_val = float(p.get("netto") or p.get("wartosc_netto") or 0)
-                netto_str = f"{netto_val:.2f}"
-            except Exception:
-                netto_str = str(p.get("netto") or p.get("wartosc_netto") or "0")
-            it3 = QTableWidgetItem(netto_str)
-            it3.setFlags(it3.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.positions_table.setItem(r, 3, it3)
+                netto = f"{float(netto):.2f}"
+            except (TypeError, ValueError):
+                netto = str(netto)
+            values = [position.get("nazwa") or position.get("opis", ""), position.get("ilosc", ""),
+                      position.get("jednostka", ""), netto,
+                      position.get("vat") or position.get("stawka_vat", ""), position.get("kategoria", "")]
+            for column, value in enumerate(values):
+                self.positions_table.setItem(row, column, _cell(value))
 
-            it4 = QTableWidgetItem(str(p.get("vat") or p.get("stawka_vat", "")))
-            it4.setFlags(it4.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.positions_table.setItem(r, 4, it4)
-
-            it5 = QTableWidgetItem(str(p.get("kategoria", "")))
-            it5.setFlags(it5.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.positions_table.setItem(r, 5, it5)
-
-    # ---------------- export ----------------
-    def _export_selected(self):
-        if not (
-            is_administrator(self.pracownik_id)
-            or can(self.pracownik_id, "can_export_data")
-        ):
-            QMessageBox.warning(
-                self,
-                "Brak uprawnień",
-                "Nie masz uprawnień do eksportowania danych.",
-            )
+    def _edit_selected_draft(self):
+        ids = self._selected_ids(self.draft_table)
+        if len(ids) != 1:
+            QMessageBox.information(self, "Faktura", "Zaznacz jedną fakturę do edycji.")
             return
-        selected = self.faktury_table.selectedItems()
-        if not selected:
+        self._open_editor(ids[0])
+
+    def _open_editor(self, invoice_id):
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+            QMessageBox.warning(self, "Brak uprawnień", "Nie masz dostępu do tej faktury.")
+            return
+        if InvoiceEditorDialog(invoice, self).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _delete_selected_draft(self):
+        ids = self._selected_ids(self.draft_table)
+        if not ids:
+            QMessageBox.information(self, "Faktura", "Zaznacz fakturę roboczą do usunięcia.")
+            return
+        if QMessageBox.question(
+            self, "Usuwanie", f"Usunąć zaznaczone faktury robocze ({len(ids)})?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        for invoice_id in ids:
+            invoice = get_invoice_by_id(invoice_id)
+            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+                try:
+                    delete_draft_invoice(invoice_id)
+                except InvoiceLockedError as exc:
+                    QMessageBox.warning(self, "Faktura", str(exc))
+        self.refresh()
+
+    # ---------------- eksport ----------------
+    def _can_export(self):
+        if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data"):
+            return True
+        QMessageBox.warning(self, "Brak uprawnień", "Nie masz uprawnień do eksportowania danych.")
+        return False
+
+    def _export_selected_drafts(self):
+        self._export_ids(self._selected_ids(self.draft_table), mark=True)
+
+    def _reexport_selected(self):
+        self._export_ids(self._selected_ids(self.issued_table), mark=False)
+
+    def _export_ids(self, ids, mark):
+        if not self._can_export():
+            return
+        if not ids:
             QMessageBox.information(self, "Eksport", "Zaznacz faktury do eksportu.")
             return
-        ids = set()
-        for it in selected:
-            try:
-                row = it.row()
-                id_item = self.faktury_table.item(row, 0)
-                if id_item:
-                    ids.add(int(id_item.text()))
-            except Exception:
-                continue
-        if not ids:
-            QMessageBox.information(self, "Eksport", "Brak poprawnych ID.")
+        invoices = []
+        for invoice_id in ids:
+            invoice = get_invoice_by_id(invoice_id)
+            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+                invoices.append(dict(invoice, firma_nazwa=self._company_name(invoice["firma_id"])))
+        if not invoices:
+            QMessageBox.warning(self, "Eksport", "Brak faktur dostępnych do eksportu.")
             return
-
         path, _ = QFileDialog.getSaveFileName(self, "Zapisz XLSX", "", "Excel (*.xlsx)")
         if not path:
             return
-
         try:
-            conn = get_conn()
-            conn.row_factory = None
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT f.id, f.firma_id, c.nazwa AS firma_nazwa, f.miesiac, f.kwota_netto, f.kwota_brutto, f.pozycje_json
-                FROM faktury f
-                JOIN firmy c ON f.firma_id = c.id
-                WHERE f.id IN ({})
-                  AND (
-                    ? = 1
-                    OR EXISTS (
-                        SELECT 1 FROM pracownik_firma pf
-                        WHERE pf.firma_id = f.firma_id AND pf.pracownik_id = ?
-                    )
-                  )
-            """.format(",".join("?" * len(ids))),
-                tuple(ids) + (
-                    int(is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data")),
-                    self.pracownik_id,
-                ))
-            rows = cur.fetchall()
-            conn.close()
-            invoices = []
-            for r in rows:
-                invoices.append({
-                    "id": r[0],
-                    "firma_id": r[1],
-                    "firma_nazwa": r[2],
-                    "miesiac": r[3],
-                    "kwota_netto": r[4],
-                    "kwota_brutto": r[5],
-                    "pozycje_json": r[6]
-                })
             export_saldeo_xlsx(invoices, path)
-            mark_exported(list(ids), self.pracownik_id)
+            if mark:
+                mark_exported([inv["id"] for inv in invoices], self.pracownik_id)
             QMessageBox.information(self, "OK", "Faktury wyeksportowano.")
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się wyeksportować faktur: {e}")
+        except Exception as exc:
+            logger.exception("Błąd eksportu faktur")
+            QMessageBox.critical(self, "Błąd", f"Nie udało się wyeksportować faktur: {exc}")
+        self.refresh()
 
-        self._refresh_faktury()
-        self._refresh_exportowane()
+    @staticmethod
+    def _company_name(firma_id):
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT nazwa FROM firmy WHERE id = ?", (firma_id,)).fetchone()
+            return row[0] if row else ""
+        finally:
+            conn.close()
 
-    def _refresh_exportowane(self):
-        invoices = get_exported_invoices(self.pracownik_id)
-        self.exported_table.setRowCount(0)
-        for inv in invoices:
-            row = self.exported_table.rowCount()
-            self.exported_table.insertRow(row)
-            it0 = QTableWidgetItem(str(inv.get("numer", "")))
-            it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.exported_table.setItem(row, 0, it0)
-            it1 = QTableWidgetItem(inv.get("firma_nazwa", ""))
-            it1.setFlags(it1.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.exported_table.setItem(row, 1, it1)
-            it2 = QTableWidgetItem(inv.get("miesiac", ""))
-            it2.setFlags(it2.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.exported_table.setItem(row, 2, it2)
-            it3 = QTableWidgetItem(str(inv.get("kwota_netto", "")))
-            it3.setFlags(it3.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.exported_table.setItem(row, 3, it3)
-            it4 = QTableWidgetItem(str(inv.get("kwota_brutto", "")))
-            it4.setFlags(it4.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.exported_table.setItem(row, 4, it4)
-            it5 = QTableWidgetItem(inv.get("data_eksportu", ""))
-            it5.setFlags(it5.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.exported_table.setItem(row, 5, it5)
+    # ---------------- faktury wystawione ----------------
+    def _view_selected_issued(self):
+        ids = self._selected_ids(self.issued_table)
+        if len(ids) != 1:
+            QMessageBox.information(self, "Faktura", "Zaznacz jedną fakturę.")
+            return
+        self._open_editor(ids[0])
+
+    def _on_issued_double_click(self, row, column):
+        if column != self.ISSUED_KSEF_COLUMN:
+            self._open_editor(int(self.issued_table.item(row, 0).text()))
+
+    def _create_correction(self):
+        ids = self._selected_ids(self.issued_table)
+        if len(ids) != 1:
+            QMessageBox.information(self, "Korekta", "Zaznacz jedną wystawioną fakturę.")
+            return
+        invoice = get_invoice_by_id(ids[0])
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+            QMessageBox.warning(self, "Brak uprawnień", "Nie masz dostępu do tej faktury.")
+            return
+        reason, ok = QInputDialog.getText(self, "Korekta", "Przyczyna korekty:")
+        if not ok:
+            return
+        try:
+            correction_id = create_correction(ids[0], reason.strip())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Korekta", str(exc))
+            return
+        self.tabs.setCurrentWidget(self.tab_robocze)
+        self.month_button.setText(self._to_button_month(invoice["miesiac"]))
+        self.refresh()
+        self._open_editor(correction_id)
+
+    @staticmethod
+    def _to_button_month(miesiac):
+        year, month = miesiac.split("-")
+        return f"{month}-{year}"
+
+    def _edit_ksef_number(self):
+        ids = self._selected_ids(self.issued_table)
+        if len(ids) != 1:
+            QMessageBox.information(self, "KSeF", "Zaznacz jedną fakturę.")
+            return
+        invoice = get_invoice_by_id(ids[0])
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+            return
+        value, ok = QInputDialog.getText(
+            self, "Numer KSeF", "Numer KSeF faktury (puste = usuń):", text=invoice.get("ksef_numer") or ""
+        )
+        if ok:
+            set_ksef_number(ids[0], value)
+            self.refresh()
+
+    def _on_issued_cell_clicked(self, row, column):
+        if column != self.ISSUED_KSEF_COLUMN:
+            return
+        numer = self.issued_table.item(row, column).text().strip()
+        if not numer:
+            return
+        QGuiApplication.clipboard().setText(numer)
+        QDesktopServices.openUrl(QUrl(ksef_url(numer)))

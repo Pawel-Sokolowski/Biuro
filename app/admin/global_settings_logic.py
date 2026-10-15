@@ -33,6 +33,9 @@ from app.db.dao_app_settings import (
     list_settings as dao_list_settings,
 )
 from app.db import dao_global_settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def safe_float(val) -> float:
@@ -70,14 +73,14 @@ class GlobalSettingsLogic:
         try:
             self.ensure_schema_minimum()
         except Exception:
-            pass
+            logger.warning("Zignorowany błąd", exc_info=True)
 
     def _get_conn(self) -> sqlite3.Connection:
         conn = get_conn()
         try:
             conn.row_factory = sqlite3.Row
         except Exception:
-            pass
+            logger.warning("Zignorowany błąd", exc_info=True)
         return conn
 
     # -------------------------
@@ -338,6 +341,24 @@ class GlobalSettingsLogic:
             ssl_imap=ssl_imap,
             ssl_smtp=ssl_smtp,
         )
+
+    def update_email_password(self, acc_id: int, password: str):
+        from app.utils.crypto import encrypt_password
+
+        dao_global_settings.update_email_account_password(
+            acc_id, encrypt_password(password)
+        )
+
+    def get_account_employee_ids(self, konto_id: int) -> List[int]:
+        return dao_global_settings.get_account_employee_ids(konto_id)
+
+    def set_account_employees(self, konto_id: int, employee_ids: List[int]):
+        dao_global_settings.set_account_employees(konto_id, employee_ids)
+
+    def list_employees(self):
+        from app.db.dao_employees import list_employees
+
+        return list_employees()
 
     def toggle_email_account_active(self, acc_id: int):
         dao_global_settings.toggle_email_account_active(acc_id)
@@ -1103,4 +1124,4 @@ class GlobalSettingsLogic:
         try:
             self.ensure_role_columns()
         except Exception:
-            pass
+            logger.warning("Zignorowany błąd", exc_info=True)

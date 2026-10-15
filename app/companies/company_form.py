@@ -15,6 +15,7 @@ from app.db.dao_companies import (
     delete_contact, get_pricing_kadry, get_ksiegowosc_options,
     get_partners, save_partner, delete_partner,
     get_company_field_options, get_tax_offices,
+    get_employees_list, get_pelnomocnictwa, set_pelnomocnictwa,
 )
 from app.db.dao_notes import (
     get_notes_for_company, save_company_note)
@@ -26,6 +27,9 @@ from app.email.email_storage import (
     delete_email_filter_for_company,
     ensure_contact_email_filters,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CompanyForm(QDialog):
@@ -560,7 +564,7 @@ class CompanyForm(QDialog):
         kontakty_layout.addWidget(title_kontakty)
 
         self.contacts_table = QTableWidget(0, 5)
-        self.contacts_table.setHorizontalHeaderLabels(["Imię", "Nazwisko", "Email", "Telefon", "Rola"])
+        self.contacts_table.setHorizontalHeaderLabels(["Imię", "Nazwisko", "E-mail", "Telefon", "Rola"])
         self.contacts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.contacts_table.setMinimumHeight(200)
         kontakty_layout.addWidget(self.contacts_table)
@@ -584,7 +588,7 @@ class CompanyForm(QDialog):
             kont_left.addWidget(widget)
 
         for lbl, widget in [
-            ("Email:", kont_email),
+            ("E-mail:", kont_email),
             ("Telefon:", kont_tel),
             ("Rola:", kont_rola),
         ]:
@@ -616,6 +620,25 @@ class CompanyForm(QDialog):
 
         main_layout.addWidget(kontakty_box)
 
+        # ============================================================
+        # SEKCJA: PEŁNOMOCNICTWA (PEL) / UPOWAŻNIENIA (UPL)
+        # ============================================================
+        pel_box = QWidget()
+        pel_layout = QVBoxLayout(pel_box)
+        title_pel = QLabel("Pełnomocnictwa pracowników")
+        title_pel.setStyleSheet("font-weight: bold; font-size: 16px;")
+        pel_layout.addWidget(title_pel)
+
+        self.pel_table = QTableWidget(0, 3)
+        self.pel_table.setHorizontalHeaderLabels(["Pracownik", "PEL", "UPL"])
+        self.pel_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.pel_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.pel_table.setMinimumHeight(180)
+        pel_layout.addWidget(self.pel_table)
+        main_layout.addWidget(pel_box)
+        self._populate_pelnomocnictwa()
         # ============================================================
         # FILTRY EMAIL FIRMY
         # ============================================================
@@ -765,6 +788,7 @@ class CompanyForm(QDialog):
         btn_add_partner.clicked.connect(self._add_partner)
         btn_del_partner.clicked.connect(self._delete_partner)
         btn_save_partner.clicked.connect(self._save_selected_partner)
+        self.partners_table.itemSelectionChanged.connect(self._partner_selected)
 
         btn_add_note.clicked.connect(self._add_note)
 
@@ -862,10 +886,44 @@ class CompanyForm(QDialog):
     # ============================================================
     # ZAPIS
     # ============================================================
+    # ============================================================
+    # PEL / UPL
+    # ============================================================
+    def _populate_pelnomocnictwa(self):
+        granted = get_pelnomocnictwa(self.firma_id) if self.firma_id else {}
+        employees = get_employees_list()
+        self.pel_table.setRowCount(len(employees))
+        for row, emp in enumerate(employees):
+            name_item = QTableWidgetItem(f"{emp['imie']} {emp['nazwisko']}")
+            name_item.setData(Qt.ItemDataRole.UserRole, emp["id"])
+            self.pel_table.setItem(row, 0, name_item)
+            for col, typ in ((1, "PEL"), (2, "UPL")):
+                item = QTableWidgetItem()
+                item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+                )
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if emp["id"] in granted.get(typ, [])
+                    else Qt.CheckState.Unchecked
+                )
+                self.pel_table.setItem(row, col, item)
+
+    def _save_pelnomocnictwa(self):
+        selected = {"PEL": [], "UPL": []}
+        for row in range(self.pel_table.rowCount()):
+            emp_id = self.pel_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            for col, typ in ((1, "PEL"), (2, "UPL")):
+                if self.pel_table.item(row, col).checkState() == Qt.CheckState.Checked:
+                    selected[typ].append(emp_id)
+        for typ, ids in selected.items():
+            set_pelnomocnictwa(self.firma_id, typ, ids)
+
     def _on_save(self):
         payload = self._collect_payload()
         try:
             self.firma_id = save_company(payload, actor_id=self.actor_id)
+            self._save_pelnomocnictwa()
             self._sync_contact_email_filters()
             self.accept()
         except Exception as e:
@@ -955,7 +1013,7 @@ class CompanyForm(QDialog):
             row = self.contacts_table.rowCount()
             self.contacts_table.insertRow(row)
             for col, key in enumerate(["imie", "nazwisko", "email", "telefon", "rola"]):
-                self.contacts_table.setItem(row, col, QTableWidgetItem(str(r.get(key, ""))))
+                self.contacts_table.setItem(row, col, QTableWidgetItem(str(r.get(key) or "")))
             self.contacts_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
 
     def _add_contact(self):
@@ -1027,13 +1085,13 @@ class CompanyForm(QDialog):
             row = self.partners_table.rowCount()
             self.partners_table.insertRow(row)
             for col, key in enumerate(
-                    ["imie1", "imie2", "nazwisko", "procent"]
+                    ["imie_pierwsze", "imie_drugie", "nazwisko", "procent"]
             ):
                 self.partners_table.setItem(
                     row,
                     col,
                     QTableWidgetItem(
-                        str(r.get(key, ""))))
+                        str(r.get(key) or "")))
 
             self.partners_table.item(row,0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
 
@@ -1046,14 +1104,13 @@ class CompanyForm(QDialog):
             return
 
         payload = {
-            "firma_id": self.firma_id,
-            "imie1": self.partner_imie1.text().strip(),
-            "imie2": self.partner_imie2.text().strip(),
+            "imie_pierwsze": self.partner_imie1.text().strip(),
+            "imie_drugie": self.partner_imie2.text().strip(),
             "nazwisko": self.partner_nazwisko.text().strip(),
             "procent": self.partner_procent.value(),
         }
 
-        save_partner(payload)
+        save_partner(self.firma_id, payload)
 
         self.partner_imie1.clear()
         self.partner_imie2.clear()
@@ -1066,8 +1123,10 @@ class CompanyForm(QDialog):
         row = self.partners_table.currentRow()
         if row < 0:
             return
-        nazwisko = self.partners_table.item(row, 2).text()
-        delete_partner(self.firma_id, nazwisko)
+        partner_id = self.partners_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        if partner_id is not None:
+            delete_partner(partner_id)
+        self.edited_partner_id = None
         self._load_partners()
 
     def _save_selected_partner(self):
@@ -1090,14 +1149,13 @@ class CompanyForm(QDialog):
 
         payload = {
             "id": self.edited_partner_id,
-            "firma_id": self.firma_id,
-            "imie1": self.partner_imie1.text().strip(),
-            "imie2": self.partner_imie2.text().strip(),
+            "imie_pierwsze": self.partner_imie1.text().strip(),
+            "imie_drugie": self.partner_imie2.text().strip(),
             "nazwisko": self.partner_nazwisko.text().strip(),
             "procent": self.partner_procent.value(),
         }
 
-        save_partner(payload)
+        save_partner(self.firma_id, payload)
 
         self._load_partners()
 
@@ -1149,7 +1207,7 @@ class CompanyForm(QDialog):
                     row.get("procent") or 0
                 )
             except Exception:
-                pass
+                logger.warning("Zignorowany błąd", exc_info=True)
 
         total += self.partner_procent.value()
 
@@ -1178,7 +1236,7 @@ class CompanyForm(QDialog):
             row = self.notes_table.rowCount()
             self.notes_table.insertRow(row)
             for col, key in enumerate(["tresc", "autor", "data"]):
-                self.notes_table.setItem(row, col, QTableWidgetItem(str(r.get(key, ""))))
+                self.notes_table.setItem(row, col, QTableWidgetItem(str(r.get(key) or "")))
 
     def _add_note(self):
         if not self.firma_id:

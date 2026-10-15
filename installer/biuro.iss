@@ -1,7 +1,10 @@
-#define MyAppName "Biuro"
+﻿#define MyAppName "Biuro"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
+
+[Languages]
+Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 
 [Setup]
 AppId={{E1D2A7C9-8B4A-4DB7-9F6D-5A6F0A3C1B20}
@@ -19,18 +22,16 @@ PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-; Kopiuje CAŁY folder dist/Biuro
 Source: "..\dist\Biuro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-; Gwarantuje, że .env trafi do katalogu instalacji
-Source: "..\dist\Biuro\.env"; DestDir: "{app}"; Flags: ignoreversion
+; Szablon konfiguracji w folderze uzytkownika (nie nadpisuje istniejacego, zostaje po odinstalowaniu)
+Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.example"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+Name: "desktopicon"; Description: "Utwórz skrót na pulpicie"; GroupDescription: "Dodatkowe skróty:"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Uruchom {#MyAppName}"; Flags: nowait postinstall skipifsilent

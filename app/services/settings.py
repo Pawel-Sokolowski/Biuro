@@ -28,7 +28,7 @@ def get_email_settings():
     cur = conn.cursor()
     cur.execute("""
         SELECT id, pracownik_id, email, serwer_imap, serwer_smtp
-        FROM konta_email ORDER BY id
+        FROM konta_email WHERE COALESCE(systemowe, 0) = 0 ORDER BY id
     """)
     rows = cur.fetchall()
     conn.close()

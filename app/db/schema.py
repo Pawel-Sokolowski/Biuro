@@ -146,25 +146,6 @@ def init_db():
         );
     """)
 
-    # ensure commonly referenced columns exist (backwards compatibility)
-    _safe_alter_add_column(cur, "firmy", "konto_bankowe TEXT")
-    _safe_alter_add_column(cur, "firmy", "uwagi TEXT")
-    _safe_alter_add_column(cur, "firmy", "kategoria_domyslna TEXT")
-    _safe_alter_add_column(cur, "firmy", "glowny_cennik TEXT")
-    _safe_alter_add_column(cur, "firmy", "limit_dokumentow INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "firmy", "vat_czynny INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "firmy", "glowny_cennik_manualny INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "firmy", "numer_klienta TEXT")
-    _safe_alter_add_column(cur, "firmy", "urzad_skarbowy TEXT")
-    _safe_alter_add_column(cur, "firmy", "adres_doreczen_elektronicznych TEXT")
-    _safe_alter_add_column(cur, "firmy", "miesiac_dok_fakturowanie TEXT")
-    _safe_alter_add_column(cur, "firmy", "miesiac_prac_fakturowanie TEXT")
-    _safe_alter_add_column(cur, "firmy", "dzien_dostarczania_dokumentow INTEGER DEFAULT 7")
-    _safe_alter_add_column(cur, "firmy", "seria_fv TEXT")
-    _safe_alter_add_column(cur, "firmy", "seria_kfv TEXT")
-    _safe_alter_add_column(cur, "firmy", "sposob_zaplaty TEXT")
-    _safe_alter_add_column(cur, "firmy", "status_podatkowy TEXT")
-
     # -------------------------
     # preferencje cennikowe
     # -------------------------
@@ -190,7 +171,9 @@ def init_db():
             sekundy_ksiegowosc INTEGER DEFAULT 0,
             sekundy_kadry INTEGER DEFAULT 0,
             wartosc_uslug REAL DEFAULT 0,
+            dokumenty_dostarczone INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(firma_id, miesiac),
+            CHECK(etap IN ('Brak', 'Zatwierdzone', 'Zaksięgowane', 'Wysłane wyniki')),
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
         );
     """)
@@ -213,7 +196,6 @@ def init_db():
             FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE SET NULL
         );
     """)
-    _safe_alter_add_column(cur, "czasomierze", "task_id INTEGER")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_czasomierze_month ON czasomierze(miesiac, firma_id)"
     )
@@ -285,8 +267,6 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
-    # ``cena`` is kept for compatibility with older payroll pricing helpers.
-    _safe_alter_add_column(cur, "cenniki_kadry", "cena REAL")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
 
     # -------------------------
@@ -315,7 +295,6 @@ def init_db():
             FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE RESTRICT
         );
     """)
-    _safe_alter_add_column(cur, "uslugi_dodatkowe_firma", "fakturowac INTEGER NOT NULL DEFAULT 0")
 
     # -------------------------
     # pracownicy
@@ -328,10 +307,10 @@ def init_db():
             imie TEXT NOT NULL,
             nazwisko TEXT NOT NULL,
             aktywny INTEGER DEFAULT 1,
+            is_admin INTEGER DEFAULT 0,
             data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_pracownicy_email ON pracownicy(email);")
 
     # -------------------------
     # role
@@ -348,13 +327,6 @@ def init_db():
             can_access_admin_settings INTEGER DEFAULT 0
         );
     """)
-    # ensure role columns exist for older schemas
-    _safe_alter_add_column(cur, "role", "can_view_invoices INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "role", "can_edit_companies INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "role", "can_manage_users INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "role", "can_view_finances INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "role", "can_export_data INTEGER DEFAULT 0")
-    _safe_alter_add_column(cur, "role", "can_access_admin_settings INTEGER DEFAULT 0")
 
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (1, 'księgowa');")
     cur.execute("INSERT OR IGNORE INTO role (id, nazwa) VALUES (2, 'kadrowa');")
@@ -378,8 +350,24 @@ def init_db():
             UNIQUE(pracownik_id, firma_id, rola_id)
         );
     """)
-    # Older authorization code may read the denormalized role name.
-    _safe_alter_add_column(cur, "pracownik_firma", "rola TEXT")
+
+    # -------------------------
+    # pełnomocnictwa (PEL) i upoważnienia (UPL) pracowników do firm
+    # -------------------------
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pelnomocnictwa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firma_id INTEGER NOT NULL,
+            pracownik_id INTEGER NOT NULL,
+            typ TEXT NOT NULL CHECK(typ IN ('PEL', 'UPL')),
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
+            UNIQUE(firma_id, pracownik_id, typ)
+        );
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pelnomocnictwa_firma ON pelnomocnictwa(firma_id, typ);"
+    )
 
     # -------------------------
     # company_notes
@@ -461,6 +449,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pracownik_id INTEGER,
             email TEXT NOT NULL,
+            display_name TEXT,
             haslo_enc TEXT,
             serwer_imap TEXT,
             port_imap INTEGER DEFAULT 993,
@@ -469,9 +458,11 @@ def init_db():
             port_smtp INTEGER DEFAULT 465,
             ssl_smtp TEXT DEFAULT 'SSL/TLS',
             aktywne INTEGER DEFAULT 1,
+            systemowe INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE SET NULL
         );
     """)
+    _safe_alter_add_column(cur, "konta_email", "systemowe INTEGER NOT NULL DEFAULT 0")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
 
     # -------------------------
@@ -592,7 +583,7 @@ def init_db():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS reguly_filtrow (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pracownik_id INTEGER NOT NULL,
+            pracownik_id INTEGER,
             konto_id INTEGER NOT NULL,
             firma_id INTEGER,
             od TEXT,
@@ -609,7 +600,6 @@ def init_db():
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
         );
     """)
-    _safe_alter_add_column(cur, "reguly_filtrow", "firma_id INTEGER")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_reguly_filtrow_account_company "
         "ON reguly_filtrow(konto_id, firma_id, aktywna);"
@@ -761,15 +751,29 @@ def init_db():
             eksportowana INTEGER DEFAULT 0,
             data_eksportu TEXT,
 
-            status TEXT DEFAULT '',
+            status TEXT DEFAULT 'robocza',
+
+            rodzaj TEXT NOT NULL DEFAULT 'faktura' CHECK (rodzaj IN ('faktura', 'korekta')),
+            numer TEXT,
+            korygowana_faktura_id INTEGER,
+            przyczyna_korekty TEXT,
+            ksef_numer TEXT,
+            ksef_data TEXT,
 
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
-            UNIQUE(firma_id, miesiac)
+            FOREIGN KEY(korygowana_faktura_id) REFERENCES faktury(id) ON DELETE SET NULL
         );
     """)
+    # Jedna faktura miesięczna na firmę, ale dowolnie wiele korekt
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_faktury_firma_miesiac "
+        "ON faktury(firma_id, miesiac) WHERE rodzaj = 'faktura';"
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_korygowana ON faktury(korygowana_faktura_id);")
+    cur.execute("CREATE TABLE IF NOT EXISTS faktury_archiwum (id INTEGER PRIMARY KEY AUTOINCREMENT, faktura_id INTEGER, firma_id INTEGER, miesiac TEXT, pozycje_json TEXT, kwota_netto REAL, kwota_brutto REAL, archived_at TEXT DEFAULT (datetime('now')));")
 
     # faktury_pozycje - zgodne z DAO (invoice_id) oraz kompatybilność z faktura_id
     cur.execute("""
@@ -799,6 +803,41 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(invoice_id);")
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS wydarzenia (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tytul TEXT NOT NULL,
+            opis TEXT,
+            lokalizacja TEXT,
+            start TEXT NOT NULL,
+            koniec TEXT NOT NULL,
+            caly_dzien INTEGER NOT NULL DEFAULT 0,
+            pracownik_id INTEGER NOT NULL,
+            firma_id INTEGER,
+            google_event_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE SET NULL
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS wydarzenia_dostep (
+            wydarzenie_id INTEGER NOT NULL,
+            pracownik_id INTEGER NOT NULL,
+            PRIMARY KEY (wydarzenie_id, pracownik_id),
+            FOREIGN KEY(wydarzenie_id) REFERENCES wydarzenia(id) ON DELETE CASCADE,
+            FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE
+        );
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wydarzenia_pracownik_start ON wydarzenia(pracownik_id, start);"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_wydarzenia_google "
+        "ON wydarzenia(pracownik_id, google_event_id) WHERE google_event_id IS NOT NULL;"
+    )
 
     # -------------------------
     # tags
@@ -885,10 +924,6 @@ def init_db():
     # -------------------------
     cur.execute("CREATE INDEX IF NOT EXISTS idx_pracownicy_email ON pracownicy(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_firmy_nip ON firmy(nip);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_email_uid ON wiadomosci_email(uid);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_firma_miesiac ON faktury(firma_id, miesiac);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_updated_at ON faktury(updated_at);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_pozycje_faktura ON faktury_pozycje(invoice_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_klucz ON cenniki(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
@@ -901,35 +936,16 @@ def init_db():
     # -------------------------
     # initial data
     # -------------------------
-    cur.execute("SELECT COUNT(*) AS cnt FROM pracownicy")
-    cnt_row = cur.fetchone()
-    cnt = cnt_row["cnt"] if cnt_row else 0
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS reset_hasla_proby (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            czas TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
 
-    if cnt == 0:
-        haslo = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-        cur.execute("""
-            INSERT INTO pracownicy (id, email, haslo_hash, imie, nazwisko, aktywny)
-            VALUES (1, 'admin@biuro.pl', ?, 'Główny', 'Administrator', 1)
-        """, (haslo,))
-
-        cur.execute("INSERT OR IGNORE INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma')")
-
-        cur.execute("""
-            INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
-            VALUES (1, 1, 4)
-        """)
-
-        cur.execute("""
-            UPDATE role
-            SET can_view_invoices=1,
-                can_edit_companies=1,
-                can_manage_users=1,
-                can_view_finances=1,
-                can_export_data=1,
-                can_access_admin_settings=1
-            WHERE id = 4
-        """)
+    # Konto administratora powstaje przy pierwszym uruchomieniu (app.security.bootstrap).
+    cur.execute("INSERT OR IGNORE INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma')")
 
     conn.commit()
     conn.close()

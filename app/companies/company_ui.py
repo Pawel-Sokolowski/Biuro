@@ -53,10 +53,10 @@ class CompanyUI(QWidget):
 
         layout.addLayout(filter_layout)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
             "ID", "Nazwa", "NIP", "Miasto", "Status",
-            "Cennik", "Limit dokumentów"
+            "Cennik", "Limit dokumentów", "PEL", "UPL"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -114,6 +114,8 @@ class CompanyUI(QWidget):
             self.table.setItem(row, 4, QTableWidgetItem(r.get("status") or ""))
             self.table.setItem(row, 5, QTableWidgetItem(r.get("glowny_cennik") or ""))
             self.table.setItem(row, 6, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
+            self.table.setItem(row, 7, QTableWidgetItem(r.get("pel") or ""))
+            self.table.setItem(row, 8, QTableWidgetItem(r.get("upl") or ""))
 
     # ============================================================
     #  FILTERS

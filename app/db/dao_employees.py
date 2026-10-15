@@ -139,7 +139,7 @@ def get_email_accounts_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
                 haslo_enc,
                 aktywne
             FROM konta_email
-            WHERE pracownik_id = ?
+            WHERE pracownik_id = ? AND COALESCE(systemowe, 0) = 0
             ORDER BY id
         """, (pracownik_id,))
         rows = cur.fetchall()
@@ -165,6 +165,7 @@ def get_all_email_accounts() -> List[Dict[str, Any]]:
                 haslo_enc,
                 aktywne
             FROM konta_email
+            WHERE COALESCE(systemowe, 0) = 0
             ORDER BY id
         """)
         rows = cur.fetchall()

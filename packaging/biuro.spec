@@ -5,25 +5,26 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(SPEC).resolve().parent.parent
 APP = ROOT / "app"
 
+datas = [
+    (str(APP / "icons"), "app/icons"),
+]
+# Sekrety (.env) nie sa dolaczane do instalatora - patrz .env.example.
+
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[
-        # Ikony
-        (str(APP / "icons"), "app/icons"),
-
-        # .env – MUSI być poziom wyżej niż packaging/
-        (str(ROOT / ".env"), "."),
-
-        # baza danych
-        (str(ROOT / "biuro.db"), "."),
-    ],
+    datas=datas,
     hiddenimports=[
         *collect_submodules("app"),
         "PyQt6.QtCharts",
         "openpyxl",
+        "bcrypt",
+        "cryptography",
+        "requests",
+        "dotenv",
         "xlsxwriter",
+        "dateutil",
     ],
     hookspath=[],
     hooksconfig={},

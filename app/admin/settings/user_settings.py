@@ -35,7 +35,7 @@ class UsersSettings(QWidget):
         self.table.setHorizontalHeaderLabels(
             [
                 "ID",
-                "Email",
+                "E-mail",
                 "Imię",
                 "Nazwisko",
                 "Aktywny",
@@ -148,7 +148,7 @@ class UsersSettings(QWidget):
         for r in roles:
             cb_rola.addItem(r["nazwa"], r["id"])
 
-        form.addRow("Email:", e_email)
+        form.addRow("E-mail:", e_email)
         form.addRow("Imię:", e_imie)
         form.addRow("Nazwisko:", e_nazw)
         form.addRow("Hasło:", e_haslo)
@@ -205,7 +205,7 @@ class UsersSettings(QWidget):
         if current_role:
             cb_rola.setCurrentIndex(cb_rola.findData(current_role))
 
-        form.addRow("Email:", e_email)
+        form.addRow("E-mail:", e_email)
         form.addRow("Imię:", e_imie)
         form.addRow("Nazwisko:", e_nazw)
         form.addRow("Rola:", cb_rola)

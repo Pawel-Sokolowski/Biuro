@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import email
 import email.header
-import os
+import email.policy
+import re
 import uuid
 
 from pathlib import Path
@@ -30,292 +31,97 @@ LOCAL_TO_SERVER = {
     "Archiwum": "INBOX.Archive",
 }
 
+# Odpowiedź LIST: (\Flags) "delimiter" "nazwa" albo nazwa bez cudzysłowu
+_LIST_RESPONSE_RE = re.compile(
+    r'\((?P<flags>.*?)\)\s+(?P<delim>"[^"]*"|NIL)\s+(?P<name>.+)$'
+)
+
 
 def normalize_folder_name(server_name: str) -> str:
-    if not server_name:
-        return ""
-
-    return SERVER_TO_LOCAL.get(
-        server_name,
-        server_name,
-    )
+    return SERVER_TO_LOCAL.get(server_name, server_name or "")
 
 
 def denormalize_folder_name(local_name: str) -> str:
-    if not local_name:
-        return ""
-
-    return LOCAL_TO_SERVER.get(
-        local_name,
-        local_name,
-    )
+    return LOCAL_TO_SERVER.get(local_name, local_name or "")
 
 
 def parse_mailbox_name(raw: bytes) -> str:
-    try:
-        s = raw.decode(errors="replace")
-
-        first_quote = s.find('"')
-
-        if first_quote != -1:
-            last_quote = s.rfind('"')
-
-            if last_quote > first_quote:
-                return s[first_quote + 1:last_quote]
-
-        return s.split()[-1].strip('"')
-
-    except Exception:
-        return raw.decode(errors="replace")
+    text = raw.decode(errors="replace")
+    match = _LIST_RESPONSE_RE.match(text)
+    name = match.group("name").strip() if match else text.split()[-1]
+    if name.startswith('"') and name.endswith('"') and len(name) >= 2:
+        name = name[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    return name
 
 
-def safe_header(
-    value: Optional[str],
-) -> str:
+def safe_header(value: Optional[str]) -> str:
     if value is None:
         return ""
 
-    if isinstance(
-        value,
-        (bytes, bytearray),
-    ):
-        try:
-            return value.decode(
-                "utf-8",
-                errors="replace",
-            )
-        except Exception:
-            return value.decode(
-                "latin-1",
-                errors="replace",
-            )
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
 
     try:
-        decoded = email.header.decode_header(
-            value
-        )
-
-        parts: List[str] = []
-
-        for data, encoding in decoded:
-            if isinstance(data, str):
-                parts.append(data)
-                continue
-
-            enc = encoding or "utf-8"
-
-            if (
-                isinstance(enc, str)
-                and enc.lower()
-                in (
-                    "unknown-8bit",
-                    "unknown",
-                    "x-unknown",
-                )
-            ):
-                enc = "latin-1"
-
-            try:
-                parts.append(
-                    data.decode(
-                        enc,
-                        errors="replace",
-                    )
-                )
-            except Exception:
-                parts.append(
-                    data.decode(
-                        "latin-1",
-                        errors="replace",
-                    )
-                )
-
-        return "".join(parts)
-
+        return str(email.header.make_header(email.header.decode_header(value)))
     except Exception:
         return str(value)
 
 
-def extract_html(
-    msg: Optional[Message],
-) -> Optional[str]:
+def parse_message(raw: bytes) -> Message:
+    """Parsuje wiadomość nowoczesną polityką (get_body / iter_attachments)."""
+    return email.message_from_bytes(raw, policy=email.policy.default)
+
+
+def _modern(msg: Message) -> Message:
+    if hasattr(msg, "get_body"):
+        return msg
+    return parse_message(msg.as_bytes())
+
+
+def _body_content(msg: Optional[Message], subtype: str) -> Optional[str]:
     if msg is None:
         return None
 
-    parts = (
-        msg.walk()
-        if msg.is_multipart()
-        else [msg]
-    )
-
-    for part in parts:
-        if (
-            part.get_content_maintype()
-            == "multipart"
-        ):
-            continue
-
-        if (
-            part.get_content_type()
-            != "text/html"
-        ):
-            continue
-
-        payload = None
-
-        try:
-            payload = part.get_payload(
-                decode=True
-            )
-
-            if payload is None:
-                raw = part.get_payload(
-                    decode=False
-                )
-
-                return (
-                    raw
-                    if isinstance(raw, str)
-                    else None
-                )
-
-            charset = (
-                part.get_content_charset()
-                or "utf-8"
-            )
-
-            return payload.decode(
-                charset,
-                errors="replace",
-            )
-
-        except Exception:
-            if payload:
-                try:
-                    return payload.decode(
-                        "latin-1",
-                        errors="replace",
-                    )
-                except Exception:
-                    pass
-
-    return None
-
-
-def extract_text(
-    msg: Optional[Message],
-) -> str:
-    if msg is None:
-        return ""
+    part = _modern(msg).get_body(preferencelist=(subtype,))
+    if part is None:
+        return None
 
     try:
-        if msg.is_multipart():
-            for part in msg.walk():
-                if (
-                    part.get_content_type()
-                    == "text/plain"
-                ):
-                    payload = part.get_payload(
-                        decode=True
-                    )
-
-                    if not payload:
-                        continue
-
-                    charset = (
-                        part.get_content_charset()
-                        or "utf-8"
-                    )
-
-                    return payload.decode(
-                        charset,
-                        errors="replace",
-                    )
-
-        else:
-            if (
-                msg.get_content_type()
-                == "text/plain"
-            ):
-                payload = msg.get_payload(
-                    decode=True
-                )
-
-                if payload:
-                    return payload.decode(
-                        msg.get_content_charset()
-                        or "utf-8",
-                        errors="replace",
-                    )
-
+        return part.get_content()
     except Exception:
-        pass
+        payload = part.get_payload(decode=True)
+        return payload.decode("latin-1", errors="replace") if payload else None
 
-    return ""
+
+def extract_html(msg: Optional[Message]) -> Optional[str]:
+    return _body_content(msg, "html")
 
 
-def get_attachments(
-    msg: Optional[Message],
-) -> List[Dict[str, Any]]:
+def extract_text(msg: Optional[Message]) -> str:
+    return _body_content(msg, "plain") or ""
+
+
+def iter_message_attachments(msg: Optional[Message]) -> List[Message]:
     if msg is None:
         return []
+    return list(_modern(msg).iter_attachments())
 
+
+def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
     attachments = []
-    index = 0
 
-    for part in msg.walk():
-        if (
-            part.get_content_maintype()
-            == "multipart"
-        ):
-            continue
-
+    for index, part in enumerate(iter_message_attachments(msg)):
         filename = part.get_filename()
-        disposition = (
-            part.get(
-                "Content-Disposition",
-                "",
-            )
-            or ""
-        )
-
-        if (
-            not filename
-            and "attachment"
-            not in disposition.lower()
-        ):
-            continue
-
-        payload = None
-        size = None
-
-        try:
-            payload = part.get_payload(
-                decode=True
-            )
-
-            if payload:
-                size = len(payload)
-
-        except Exception:
-            pass
+        payload = part.get_payload(decode=True)
 
         attachments.append(
             {
                 "index": index,
-                "filename": (
-                    Path(
-                        safe_header(filename)
-                    ).name
-                    if filename
-                    else "attachment"
-                ),
+                "filename": Path(filename).name if filename else "attachment",
                 "content_type": part.get_content_type(),
-                "size": size,
+                "size": len(payload) if payload else None,
             }
         )
-
-        index += 1
 
     return attachments
 
@@ -324,45 +130,15 @@ def attachment_output_path(
     filename: str,
     base_dir: Optional[str] = None,
 ) -> str:
-    base = (
-        Path(base_dir)
-        if base_dir
-        else Path.cwd()
-        / "tmp_attachments"
-    )
-
-    root = base.resolve()
-
-    root.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    safe_name = Path(
-        safe_header(filename)
-    ).name
+    root = (Path(base_dir) if base_dir else Path.cwd() / "tmp_attachments").resolve()
+    root.mkdir(parents=True, exist_ok=True)
 
     safe_name = "".join(
-        c
-        for c in safe_name
-        if c.isalnum()
-        or c in (
-            ".",
-            "_",
-            "-",
-            " ",
-        )
-    ).strip()
+        c for c in Path(safe_header(filename)).name
+        if c.isalnum() or c in "._- "
+    ).strip() or "attachment"
 
-    if not safe_name:
-        safe_name = "attachment"
-
-    destination = (
-        root
-        / f"{uuid.uuid4().hex}_{safe_name}"
-    ).resolve()
-
-    return str(destination)
+    return str((root / f"{uuid.uuid4().hex}_{safe_name}").resolve())
 
 
 __all__ = [
@@ -372,8 +148,10 @@ __all__ = [
     "denormalize_folder_name",
     "parse_mailbox_name",
     "safe_header",
+    "parse_message",
     "extract_html",
     "extract_text",
+    "iter_message_attachments",
     "get_attachments",
     "attachment_output_path",
 ]

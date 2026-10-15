@@ -45,6 +45,22 @@ from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.notes_window import NotesWindow
 
 COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
+ETAP_CHOICES = ["Brak", "Zatwierdzone", "Zaksięgowane", "Wysłane wyniki"]
+
+
+class EtapComboDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        combo.addItems(ETAP_CHOICES)
+        return combo
+
+    def setEditorData(self, editor, index):
+        value = index.data(Qt.ItemDataRole.EditRole) or "Brak"
+        pos = editor.findText(value)
+        editor.setCurrentIndex(pos if pos >= 0 else 0)
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
 
 def icon_path(name: str) -> str:
@@ -458,6 +474,10 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.setItemDelegateForColumn(9, IconButtonDelegate(self.table_kadry, "edit.png", "edit_kadry"))
         self.notes_delegate_kadry = ScrollableNotesDelegate(self.table_kadry)
         self.table_kadry.setItemDelegateForColumn(7, self.notes_delegate_kadry)
+        self.etap_delegate_ks = EtapComboDelegate(self.table_ks)
+        self.etap_delegate_kadry = EtapComboDelegate(self.table_kadry)
+        self.table_ks.setItemDelegateForColumn(1, self.etap_delegate_ks)
+        self.table_kadry.setItemDelegateForColumn(1, self.etap_delegate_kadry)
 
         self.table_ks.viewport().installEventFilter(self)
         self.table_kadry.viewport().installEventFilter(self)

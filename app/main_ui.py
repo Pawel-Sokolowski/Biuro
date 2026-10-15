@@ -16,10 +16,14 @@ from app.reports.reports_ui import ReportsPage
 from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
 from app.tasks.tasks_ui import TasksPage
+from app.kalendarz.calendar_ui import CalendarPage
 from app.dashboard.dashboard_ui import DashboardPage
 
 from PyQt6.QtCore import QTimer
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LoginWindow(QDialog):
@@ -126,7 +130,7 @@ class LoginWindow(QDialog):
         )
 
         form.addRow(
-            "Email:",
+            "E-mail:",
             self.email_input
         )
 
@@ -157,6 +161,10 @@ class LoginWindow(QDialog):
         row.addWidget(btn_register)
 
         layout.addLayout(row)
+
+        btn_reset = QPushButton("Nie pamiętam hasła")
+        btn_reset.clicked.connect(self._on_reset_password)
+        layout.addWidget(btn_reset)
 
         # ====================================================
         # OBSŁUGA ENTER / TAB
@@ -234,6 +242,8 @@ class LoginWindow(QDialog):
             set_database(database_path)
             from app.db.schema import init_db
             init_db()
+            if not self._ensure_initial_admin():
+                return
             result = login_user(email, password)
         except Exception as e:
             QMessageBox.critical(self, "Błąd", str(e))
@@ -249,6 +259,71 @@ class LoginWindow(QDialog):
             self.accept()
         else:
             QMessageBox.critical(self, "Błąd", "Nieprawidłowy email lub hasło")
+
+    def _ensure_initial_admin(self) -> bool:
+        """Przy pustej bazie prosi o utworzenie konta administratora."""
+        from app.security.bootstrap import needs_initial_admin, create_initial_admin, MIN_PASSWORD_LENGTH
+        if not needs_initial_admin():
+            return True
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Pierwsze uruchomienie - konto administratora")
+        dlg.setMinimumWidth(420)
+        form = QFormLayout()
+        email = QLineEdit()
+        imie = QLineEdit()
+        nazwisko = QLineEdit()
+        haslo = QLineEdit()
+        haslo.setEchoMode(QLineEdit.EchoMode.Password)
+        powtorz = QLineEdit()
+        powtorz.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("E-mail:", email)
+        form.addRow("Imię:", imie)
+        form.addRow("Nazwisko:", nazwisko)
+        form.addRow(f"Hasło (min. {MIN_PASSWORD_LENGTH} znaków):", haslo)
+        form.addRow("Powtórz hasło:", powtorz)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Baza jest pusta. Utwórz konto administratora."))
+        layout.addLayout(form)
+        layout.addWidget(btns)
+        while dlg.exec() == QDialog.DialogCode.Accepted:
+            if haslo.text() != powtorz.text():
+                QMessageBox.warning(self, "Błąd", "Hasła nie są takie same.")
+                continue
+            try:
+                create_initial_admin(email.text(), haslo.text(),
+                                     imie.text().strip() or "Główny",
+                                     nazwisko.text().strip() or "Administrator")
+            except (ValueError, PermissionError) as e:
+                QMessageBox.warning(self, "Błąd", str(e))
+                continue
+            self.email_input.setText(email.text().strip())
+            self.password_input.setText(haslo.text())
+            return True
+        return False
+
+    def _on_reset_password(self):
+        from app.utils.password_reset import reset_password
+        database_path = self.database_combo.currentText().strip()
+        email = self.email_input.text().strip()
+        if not database_path or not email:
+            QMessageBox.warning(self, "Błąd", "Uzupełnij bazę danych i email")
+            return
+        try:
+            set_database(database_path)
+            from app.db.schema import init_db
+            init_db()
+            ok, message = reset_password(email)
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", str(e))
+            return
+        if ok:
+            QMessageBox.information(self, "Reset hasła", message)
+        else:
+            QMessageBox.warning(self, "Reset hasła", message)
 
     def _on_register(self):
         from app.utils.crypto import register_user
@@ -274,7 +349,7 @@ class LoginWindow(QDialog):
         nazwisko = QLineEdit()
         haslo = QLineEdit()
         haslo.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Email:", email)
+        form.addRow("E-mail:", email)
         form.addRow("Imię:", imie)
         form.addRow("Nazwisko:", nazwisko)
         form.addRow("Hasło:", haslo)
@@ -366,14 +441,15 @@ class OfficeManagerApp(QMainWindow):
         """)
 
         self.sidebar.addItems([
-            "Dashboard",
+            "Pulpit",
             "Widok miesięczny",
             "Klienci",
-            "Email",
-            "Chat",
+            "E-mail",
+            "Czat",
             "Faktury",
             "Raporty",
             "Zadania",
+            "Kalendarz",
             "Ustawienia"
         ])
         for row in range(self.sidebar.count()):
@@ -449,6 +525,7 @@ class OfficeManagerApp(QMainWindow):
         self.page_faktury = FakturyPage(self.pracownik_id)
         self.page_raporty = ReportsPage(self.pracownik_id)
         self.page_tasks = TasksPage(self.pracownik_id)
+        self.page_calendar = CalendarPage(self.pracownik_id)
         self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
 
         self.pages.addWidget(self.page_dashboard)
@@ -459,6 +536,7 @@ class OfficeManagerApp(QMainWindow):
         self.pages.addWidget(self.page_faktury)
         self.pages.addWidget(self.page_raporty)
         self.pages.addWidget(self.page_tasks)
+        self.pages.addWidget(self.page_calendar)
         self.pages.addWidget(self.page_settings)
 
         self.sidebar.setCurrentRow(0)
@@ -533,5 +611,5 @@ class OfficeManagerApp(QMainWindow):
             if self._header_timer and self._header_timer.isActive():
                 self._header_timer.stop()
         except Exception:
-            pass
+            logger.warning("Zignorowany błąd", exc_info=True)
         super().closeEvent(event)

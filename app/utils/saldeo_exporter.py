@@ -8,6 +8,9 @@ import xlsxwriter
 
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting_bool, get_setting_first
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Nagłówki zgodne z Twoim wzorem
 SALDEO_HEADERS = [
@@ -314,7 +317,7 @@ def export_saldeo_xlsx(
     try:
         conn.close()
     except Exception:
-        pass
+        logger.warning("Zignorowany błąd", exc_info=True)
 
     workbook.close()
 

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
 from app.config import EMAIL_LOCAL_LIMIT
+from app.email.email_helpers import denormalize_folder_name
 
 
 def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
@@ -48,6 +49,7 @@ def get_email_accounts_for_employee(
                 ON pke.konto_id = ke.id
             WHERE pke.pracownik_id = ?
               AND COALESCE(ke.aktywne, 1) = 1
+              AND COALESCE(ke.systemowe, 0) = 0
             ORDER BY ke.email
             """,
             (pracownik_id,),
@@ -60,6 +62,112 @@ def get_email_accounts_for_employee(
 
     finally:
         conn.close()
+
+def get_all_email_accounts() -> List[Dict[str, Any]]:
+    from app.db.dao_employees import get_all_email_accounts as _get_all
+
+    return _get_all()
+
+
+def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT rf.*, ke.email AS konto_email
+            FROM reguly_filtrow rf
+            LEFT JOIN konta_email ke ON ke.id = rf.konto_id
+            WHERE rf.firma_id = ?
+            ORDER BY rf.id
+            """,
+            (firma_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def add_email_filter(
+    konto_id: int,
+    firma_id: Optional[int],
+    od: Optional[str],
+    do: Optional[str],
+    nadawca_zawiera: Optional[str],
+    temat_zawiera: Optional[str],
+    tresc_zawiera: Optional[str],
+    folder_docelowy: str,
+    oznacz_jako_przeczytane: int = 0,
+    usun: int = 0,
+    aktywna: int = 1,
+) -> int:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT pracownik_id FROM konta_email WHERE id = ?", (konto_id,)
+        ).fetchone()
+        pracownik_id = row[0] if row and row[0] is not None else 0
+        cur = conn.execute(
+            """
+            INSERT INTO reguly_filtrow (
+                pracownik_id, konto_id, firma_id, od, do, nadawca_zawiera,
+                temat_zawiera, tresc_zawiera, folder_docelowy,
+                oznacz_jako_przeczytane, usun, aktywna
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pracownik_id, konto_id, firma_id, od, do, nadawca_zawiera,
+                temat_zawiera, tresc_zawiera, folder_docelowy,
+                int(oznacz_jako_przeczytane), int(usun), int(aktywna),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM reguly_filtrow WHERE id = ? AND firma_id = ?",
+            (filter_id, firma_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_contact_email_filters(firma_id: int, folder_name: str) -> None:
+    """Create a filter for each company contact e-mail that has none yet."""
+    conn = get_conn()
+    try:
+        contacts = conn.execute(
+            "SELECT email FROM company_contacts WHERE firma_id = ?", (firma_id,)
+        ).fetchall()
+        account = conn.execute(
+            "SELECT id FROM konta_email WHERE COALESCE(aktywne, 1) = 1 AND COALESCE(systemowe, 0) = 0 ORDER BY id LIMIT 1"
+        ).fetchone()
+        if not account:
+            return
+        existing = {
+            (r[0] or "").strip().lower()
+            for r in conn.execute(
+                "SELECT od FROM reguly_filtrow WHERE firma_id = ?", (firma_id,)
+            )
+        }
+    finally:
+        conn.close()
+
+    for (email,) in contacts:
+        email = (email or "").strip()
+        if "@" in email and email.lower() not in existing:
+            add_email_filter(
+                account[0], firma_id, email, None, None, None, None, folder_name
+            )
+            existing.add(email.lower())
+
 
 def save_folder(
     konto_id: int,
@@ -246,6 +354,18 @@ def save_message_header(
 
         conn.commit()
 
+    finally:
+        conn.close()
+
+
+def get_known_uids(konto_id: int, folder_id: int) -> set:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT uid FROM wiadomosci_email WHERE konto_id = ? AND folder_id = ?",
+            (konto_id, folder_id),
+        ).fetchall()
+        return {str(r[0]) for r in rows}
     finally:
         conn.close()
 
@@ -551,7 +671,14 @@ def get_cached_messages_by_folder_name(
     finally:
         conn.close()
 
+def refresh_email_list(konto_id: int, local_folder: str) -> List[Dict[str, Any]]:
+    return get_cached_messages_by_folder_name(
+        konto_id, denormalize_folder_name(local_folder)
+    )
+
+
 __all__ = [
+    "refresh_email_list",
     "get_account_info",
     "save_folder",
     "get_folder_id",

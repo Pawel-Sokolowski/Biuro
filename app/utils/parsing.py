@@ -1,6 +1,9 @@
 # Auto-generated parsing helpers extracted from main.py
 
 import datetime
+import re
+
+from dateutil import parser as dateutil_parser
 
 def normalize_identifier(value, expected_lengths=None):
     if value is None:
@@ -9,7 +12,10 @@ def normalize_identifier(value, expected_lengths=None):
     if not normalized:
         return ""
     if expected_lengths and len(normalized) not in expected_lengths:
-        return normalized
+        # Excel drops leading zeros of numeric cells; restore them
+        longer = [n for n in sorted(expected_lengths) if n > len(normalized)]
+        if longer:
+            return normalized.zfill(longer[0])
     return normalized
 
 def normalize_pkd_codes(value):
@@ -32,12 +38,13 @@ def parse_date_value(value):
     raw_value = str(value).strip()
     if not raw_value:
         return ""
-    for date_format in ("%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-        try:
-            return datetime.datetime.strptime(raw_value, date_format).date().isoformat()
-        except ValueError:
-            continue
-    return raw_value
+    if not re.fullmatch(r"\d{1,4}[./-]\d{1,2}[./-]\d{1,4}", raw_value):
+        return raw_value
+    try:
+        # Rok na początku = ISO (rrrr-mm-dd), w pozostałych przypadkach polski zapis dd.mm.rrrr
+        return dateutil_parser.parse(raw_value, dayfirst=not re.match(r"\d{4}", raw_value)).date().isoformat()
+    except (ValueError, OverflowError):
+        return raw_value
 
 def parse_int_value(value, default=0):
     if value in (None, ""):
@@ -64,10 +71,14 @@ def resolve_employee_ids(cursor, raw_value):
     employees = cursor.fetchall()
     lookup = {}
     for employee_id, email_address, first_name, last_name in employees:
-        full_name = f"{first_name} {last_name}".strip().lower()
+        first = (first_name or "").strip().lower()
+        last = (last_name or "").strip().lower()
         lookup[str(employee_id)] = employee_id
-        lookup[email_address.lower()] = employee_id
-        lookup[full_name] = employee_id
+        if email_address:
+            lookup[email_address.strip().lower()] = employee_id
+        lookup[f"{first} {last}".strip()] = employee_id
+        lookup[f"{last} {first}".strip()] = employee_id
+        lookup.setdefault(f"{first[:1]}{last[:1]}", employee_id)
 
     for token in split_multi_value(raw_value):
         employee_id = lookup.get(token.lower())
@@ -76,3 +87,13 @@ def resolve_employee_ids(cursor, raw_value):
         elif not employee_id:
             unresolved.append(token)
     return resolved_ids, unresolved
+
+
+def to_float(value, default=0.0):
+    """Liczba z przecinkiem lub kropką; przy błędzie zwraca default."""
+    try:
+        if value is None or value == "":
+            return float(default)
+        return float(str(value).replace("\xa0", "").replace(" ", "").replace(",", "."))
+    except (TypeError, ValueError):
+        return float(default)

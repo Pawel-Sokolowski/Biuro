@@ -5,7 +5,11 @@ from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
 from app.companies.ceidg_api import get_ceidg_firma_by_nip
 from app.db.dao_conn import get_conn
+from app.db.dao_companies import FIRMA_FIELDS
 from app.db.dao_cenniki_kadry import get_kadry_price, get_kadry_description
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # -------------------------
@@ -48,7 +52,7 @@ def _safe_set(widget, value):
             if d.isValid():
                 widget.setDate(d)
     except Exception:
-        pass
+        logger.warning("Zignorowany błąd", exc_info=True)
 
 
 def ceidg_apply(form, data: Optional[Dict[str, Any]]):
@@ -191,7 +195,7 @@ def ceidg_error(form, error: Exception):
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(form, "CEIDG", f"Błąd pobierania danych z CEIDG: {error}")
     except Exception:
-        pass
+        logger.warning("Zignorowany błąd", exc_info=True)
 
 
 def ceidg_finished(form):
@@ -201,7 +205,7 @@ def ceidg_finished(form):
             form.btn_ceidg.setEnabled(True)
             form.btn_ceidg.setText("Pobierz z CEIDG")
     except Exception:
-        pass
+        logger.warning("Zignorowany błąd", exc_info=True)
 
 
 def ceidg_fetch(form):
@@ -218,7 +222,7 @@ def ceidg_fetch(form):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(form, "CEIDG", "Podaj NIP przed pobraniem danych z CEIDG.")
         except Exception:
-            pass
+            logger.warning("Zignorowany błąd", exc_info=True)
         return
 
     form._ceidg_in_progress = True
@@ -227,7 +231,7 @@ def ceidg_fetch(form):
             form.btn_ceidg.setEnabled(False)
             form.btn_ceidg.setText("Pobieranie...")
     except Exception:
-        pass
+        logger.warning("Zignorowany błąd", exc_info=True)
 
     worker = CEIDGWorker(nip, form)
     worker.signals.result.connect(lambda payload: ceidg_apply(*payload))
@@ -401,8 +405,12 @@ class CompanyLogic:
         values = []
 
         for key, val in payload.items():
+            if key not in FIRMA_FIELDS:
+                continue
             fields.append(key)
             values.append(val)
+        if not fields:
+            raise ValueError("Brak poprawnych pól firmy do zapisania.")
 
         conn = get_conn()
         cur = conn.cursor()
@@ -426,8 +434,12 @@ class CompanyLogic:
         values = []
 
         for key, val in payload.items():
+            if key not in FIRMA_FIELDS:
+                continue
             fields.append(f"{key} = ?")
             values.append(val)
+        if not fields:
+            return
 
         values.append(firma_id)
 

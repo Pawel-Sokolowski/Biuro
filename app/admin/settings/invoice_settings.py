@@ -2,11 +2,12 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QCheckBox, QComboBox,
-    QPushButton, QMessageBox, QHBoxLayout
+    QPushButton, QMessageBox, QHBoxLayout, QLineEdit
 )
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
+from app.invoices.ksef import DEFAULT_URL_TEMPLATE, URL_TEMPLATE_KEY
 
 
 class InvoiceSettings(QWidget):
@@ -17,6 +18,7 @@ class InvoiceSettings(QWidget):
     - Wysyłka do kontrahenta
     - Domyślne GTU
     - Domyślna stawka VAT
+    - Odnośnik do podglądu faktury w KSeF
     """
 
     def __init__(self, parent=None):
@@ -92,6 +94,15 @@ class InvoiceSettings(QWidget):
         layout.addWidget(self.vat_combo)
 
         # -------------------------
+        # KSeF - odnośnik do podglądu faktury
+        # -------------------------
+        layout.addWidget(QLabel("Adres otwierany po kliknięciu numeru KSeF (można użyć {numer}):"))
+        self.ksef_url = QLineEdit(self.logic.get_setting(URL_TEMPLATE_KEY) or DEFAULT_URL_TEMPLATE)
+        layout.addWidget(self.ksef_url)
+
+        layout.addStretch()
+
+        # -------------------------
         # Zapis
         # -------------------------
         btn_row = QHBoxLayout()
@@ -153,5 +164,7 @@ class InvoiceSettings(QWidget):
             "faktury_domyslny_vat",
             self.vat_combo.currentText()
         )
+
+        self.logic.set_setting(URL_TEMPLATE_KEY, self.ksef_url.text().strip() or DEFAULT_URL_TEMPLATE)
 
         QMessageBox.information(self, "OK", "Ustawienia faktur zapisane.")

@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MonthlyViewModel(QAbstractTableModel):
@@ -31,11 +34,14 @@ class MonthlyViewModel(QAbstractTableModel):
         self._rows = rows
         self.endResetModel()
 
+    def _docs_col(self) -> int:
+        return self.columnCount() - 1
+
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 9 if self._mode == "ksiegowosc" else 10
+        return 10 if self._mode == "ksiegowosc" else 11
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
@@ -56,6 +62,7 @@ class MonthlyViewModel(QAbstractTableModel):
                     6: "➕",
                     7: "✏️",
                     8: "⋯",
+                    9: "",
                 }
                 return mapping.get(col, "")
             else:
@@ -70,8 +77,19 @@ class MonthlyViewModel(QAbstractTableModel):
                     7: row.get("note_full", row.get("note_snippet", "")),
                     8: "➕",
                     9: "✏️",
+                    10: "",
                 }
                 return mapping.get(col, "")
+
+        if role == Qt.ItemDataRole.CheckStateRole and col == self._docs_col():
+            return (
+                Qt.CheckState.Checked
+                if row.get("dokumenty_dostarczone")
+                else Qt.CheckState.Unchecked
+            )
+
+        if role == Qt.ItemDataRole.EditRole and col == 1:
+            return row.get("etap", "Brak")
 
         if role == Qt.ItemDataRole.UserRole:
             return row
@@ -83,9 +101,11 @@ class MonthlyViewModel(QAbstractTableModel):
                 return Qt.GlobalColor.lightGray
             if status == "Archiwalne":
                 return Qt.GlobalColor.gray
-            if etap == "W trakcie":
+            if etap == "Zatwierdzone":
                 return Qt.GlobalColor.yellow
-            if etap == "Zakończone":
+            if etap == "Zaksięgowane":
+                return Qt.GlobalColor.cyan
+            if etap == "Wysłane wyniki":
                 return Qt.GlobalColor.green
 
         return QVariant()
@@ -95,9 +115,9 @@ class MonthlyViewModel(QAbstractTableModel):
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
             if self._mode == "ksiegowosc":
-                headers = ["Firma", "Etap", "Ilość dok.", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯"]
+                headers = ["Firma", "Etap", "Ilość dok.", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "Dokumenty dostarczone"]
             else:
-                headers = ["Firma", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
+                headers = ["Firma", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "Dokumenty dostarczone"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()
@@ -106,18 +126,50 @@ class MonthlyViewModel(QAbstractTableModel):
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() == 1:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        if index.column() == self._docs_col():
+            flags |= Qt.ItemFlag.ItemIsUserCheckable
         if self._mode == "ksiegowosc" and index.column() == 2:
             flags |= Qt.ItemFlag.ItemIsEditable
         if self._mode == "kadry" and index.column() in (2, 3, 4):
             flags |= Qt.ItemFlag.ItemIsEditable
         return flags
 
+    def _persist(self, row: Dict[str, Any], **kwargs) -> None:
+        parent = self.parent()
+        logic = getattr(parent, "logic", None) if parent else None
+        if logic is None:
+            return
+        try:
+            logic.save_status_for_company(row["id"], **kwargs)
+        except Exception:
+            logger.warning("Zignorowany błąd", exc_info=True)
+
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
-        if not index.isValid() or role != Qt.ItemDataRole.EditRole:
+        if not index.isValid():
             return False
 
         row = self._rows[index.row()]
         col = index.column()
+
+        if role == Qt.ItemDataRole.CheckStateRole and col == self._docs_col():
+            checked = value in (Qt.CheckState.Checked, Qt.CheckState.Checked.value, 2, True)
+            row["dokumenty_dostarczone"] = 1 if checked else 0
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
+            self._persist(row, dokumenty_dostarczone=row["dokumenty_dostarczone"])
+            return True
+
+        if role != Qt.ItemDataRole.EditRole:
+            return False
+
+        if col == 1:
+            row["etap"] = str(value)
+            top = self.index(index.row(), 0)
+            bottom = self.index(index.row(), self.columnCount() - 1)
+            self.dataChanged.emit(top, bottom)
+            self._persist(row, etap=row["etap"])
+            return True
 
         try:
             ivalue = int(str(value).strip() or "0")

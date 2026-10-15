@@ -82,6 +82,15 @@ FIRMA_FIELDS = [
 #  LIST / FILTER
 # ============================================================
 
+def _attach_pelnomocnictwa(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    initials = get_pelnomocnictwa_initials([r["id"] for r in rows])
+    for r in rows:
+        data = initials.get(r["id"], {})
+        r["pel"] = data.get("PEL", "")
+        r["upl"] = data.get("UPL", "")
+    return rows
+
+
 def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
@@ -104,7 +113,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     cur.execute(sql + " ORDER BY nazwa", params)
     rows = cur.fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return _attach_pelnomocnictwa([dict(r) for r in rows])
 
 
 def get_companies_filtered(
@@ -152,11 +161,74 @@ def get_companies_filtered(
     cur.execute(sql, params)
     rows = cur.fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return _attach_pelnomocnictwa([dict(r) for r in rows])
 
 
 # ============================================================
-#  EMPLOYEES LIST
+#  PEŁNOMOCNICTWA (PEL) / UPOWAŻNIENIA (UPL)
+# ============================================================
+
+PELNOMOCNICTWO_TYPES = ("PEL", "UPL")
+
+
+def employee_initials(imie: Optional[str], nazwisko: Optional[str]) -> str:
+    return f"{(imie or '')[:1]}{(nazwisko or '')[:1]}".upper()
+
+
+def get_pelnomocnictwa(firma_id: int) -> Dict[str, List[int]]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT typ, pracownik_id FROM pelnomocnictwa WHERE firma_id = ?",
+        (firma_id,),
+    )
+    result: Dict[str, List[int]] = {t: [] for t in PELNOMOCNICTWO_TYPES}
+    for row in cur.fetchall():
+        result[row[0]].append(row[1])
+    conn.close()
+    return result
+
+
+def set_pelnomocnictwa(firma_id: int, typ: str, employee_ids: List[int]) -> None:
+    if typ not in PELNOMOCNICTWO_TYPES:
+        raise ValueError(f"Nieznany typ: {typ}")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM pelnomocnictwa WHERE firma_id = ? AND typ = ?", (firma_id, typ))
+    cur.executemany(
+        "INSERT OR IGNORE INTO pelnomocnictwa (firma_id, pracownik_id, typ) VALUES (?, ?, ?)",
+        [(firma_id, int(e), typ) for e in employee_ids],
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_pelnomocnictwa_initials(firma_ids: List[int]) -> Dict[int, Dict[str, str]]:
+    if not firma_ids:
+        return {}
+    conn = get_conn()
+    cur = conn.cursor()
+    result: Dict[int, Dict[str, List[str]]] = {}
+    ids = list(firma_ids)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        cur.execute(
+            f"""
+            SELECT p.firma_id, p.typ, e.imie, e.nazwisko
+            FROM pelnomocnictwa p
+            JOIN pracownicy e ON e.id = p.pracownik_id
+            WHERE p.firma_id IN ({placeholders})
+            ORDER BY e.nazwisko, e.imie
+            """,
+            chunk,
+        )
+        for firma_id, typ, imie, nazwisko in cur.fetchall():
+            result.setdefault(firma_id, {}).setdefault(typ, []).append(
+                employee_initials(imie, nazwisko)
+            )
+    conn.close()
+    return {fid: {t: " ".join(v) for t, v in d.items()} for fid, d in result.items()}
 # ============================================================
 
 def get_employees_list() -> List[Dict[str, Any]]:

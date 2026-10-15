@@ -60,7 +60,7 @@ class ChatPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        title = QLabel("Chat wewnętrzny")
+        title = QLabel("Czat wewnętrzny")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         layout.addWidget(title)
 

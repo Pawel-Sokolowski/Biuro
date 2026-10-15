@@ -1,11 +1,13 @@
 # app/invoices/faktury_logic.py
 import json
 import sqlite3
+from app.utils.parsing import to_float
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
+    InvoiceLockedError,
     get_invoice_for_company_month,
     create_or_update_invoice
 )
@@ -113,13 +115,7 @@ class FakturyLogic:
         return dict(row) if row else None
 
     # ---------------- HELPER ----------------
-    def _to_float(self, v, default: float = 0.0) -> float:
-        try:
-            if v is None or v == "":
-                return float(default)
-            return float(v)
-        except Exception:
-            return float(default)
+    _to_float = staticmethod(to_float)
 
     # ---------------- GENEROWANIE POZYCJI ----------------
     def generate_invoice_positions(self, firma_id: int, miesiac: str) -> List[Dict[str, Any]]:
@@ -340,6 +336,7 @@ class FakturyLogic:
         processed = 0
         created = 0
         updated = 0
+        skipped = 0
         errors: List[str] = []
 
         for r in rows:
@@ -425,6 +422,8 @@ class FakturyLogic:
                         processed += 1
                         created += 1
 
+            except InvoiceLockedError:
+                skipped += 1
             except Exception as e:
                 errors.append(f"Firma {fid}: {e}")
 
@@ -432,6 +431,7 @@ class FakturyLogic:
             "processed": processed,
             "created": created,
             "updated": updated,
+            "skipped": skipped,
             "errors": errors
         }
 
@@ -457,4 +457,5 @@ class FakturyLogic:
                 miesiac=miesiac,
                 pozycje=merged,
                 kwota_netto=kw_net,
-                kwota_brutto=kw_br)
+                kwota_brutto=kw_br,
+                existing_invoice_id=existing["id"])

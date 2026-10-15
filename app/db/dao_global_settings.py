@@ -199,6 +199,7 @@ def get_email_accounts() -> List[sqlite3.Row]:
                 serwer_smtp, port_smtp, ssl_smtp,
                 haslo_enc, aktywne
             FROM konta_email
+            WHERE COALESCE(systemowe, 0) = 0
             ORDER BY id
             """
         )
@@ -302,6 +303,44 @@ def update_email_account_connection(
             WHERE id=?
             """,
             (email, imap, imap_port, smtp, smtp_port, ssl_imap, ssl_smtp, acc_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_email_account_password(acc_id: int, haslo_enc: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE konta_email SET haslo_enc=? WHERE id=?", (haslo_enc, acc_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_account_employee_ids(konto_id: int) -> List[int]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT pracownik_id FROM pracownik_konto_email WHERE konto_id = ?",
+            (konto_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
+def set_account_employees(konto_id: int, employee_ids: List[int]) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM pracownik_konto_email WHERE konto_id = ?", (konto_id,)
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO pracownik_konto_email (konto_id, pracownik_id) VALUES (?, ?)",
+            [(konto_id, int(e)) for e in employee_ids],
         )
         conn.commit()
     finally:

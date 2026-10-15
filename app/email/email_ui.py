@@ -1,38 +1,36 @@
-# app/email/email_page.py
+﻿# app/email/email_page.py
 from __future__ import annotations
 
 import re
 import email
 from collections import Counter
+from email.utils import parseaddr
 from typing import List, Dict, Any, Optional, Tuple
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton,
     QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit,
-    QToolButton, QStyle, QLineEdit
+    QToolButton, QStyle, QLineEdit, QInputDialog
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
+from app.email.email_connection import check_imap
 from app.email.email_storage import (
+    get_account_info,
     get_email_accounts_for_employee,
     get_folders_for_account,
     refresh_email_list,
+    search_messages,
 )
-from app.email.email_storage import (
-    refresh_email_list,
-    get_folders_for_account,
+from app.email.email_sync import (
     list_folders_from_imap_and_store,
     fetch_headers_from_imap_and_store,
     fetch_message_from_imap_and_store,
     mark_read_remote,
     mark_unread_remote,
-    delete_email_remote,
     move_email_and_get_sender,
-    create_folder,
-    delete_folder,
-    sync_all_emails,
 )
 
 from app.db.dao_companies import list_companies
@@ -42,13 +40,19 @@ from app.db.dao_email_assignments import list_assigned_messages
 from app.email.email_actions import (
     send_email_smtp,
     send_batch_emails,
-    denormalize_folder_name,
-    normalize_folder_name,
     load_message,
-    extract_html,
-    get_attachments,
     open_attachment,
 )
+from app.email.email_helpers import (
+    denormalize_folder_name,
+    normalize_folder_name,
+    extract_html,
+    extract_text,
+    get_attachments,
+)
+import logging
+
+logger = logging.getLogger(__name__)
 
 ARCHIVE_FOLDER = "INBOX.Archive"
 SPAM_FOLDER = "INBOX.spam"
@@ -73,11 +77,18 @@ class EmailPage(QWidget):
             self.current_account = self.accounts[0]
             try:
                 list_folders_from_imap_and_store(self.current_account["id"])
+                fetch_headers_from_imap_and_store(self.current_account["id"], "INBOX")
             except Exception:
-                pass
+                logger.warning("Zignorowany błąd", exc_info=True)
             self.load_folders_from_db()
         else:
-            QMessageBox.warning(self, "Brak kont", "Nie znaleziono żadnych kont email.")
+            QMessageBox.warning(
+                self,
+                "Brak kont",
+                "Nie masz przypisanego żadnego konta e-mail.\n"
+                "Administrator może je przypisać w Ustawienia → Konta e-mail → "
+                "Dostęp pracowników.",
+            )
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout()
@@ -245,7 +256,7 @@ class EmailPage(QWidget):
         root = QTreeWidgetItem([self.current_account["email"]])
         self.folder_tree.addTopLevelItem(root)
 
-        employees_root = QTreeWidgetItem(["Employees"])
+        employees_root = QTreeWidgetItem(["Pracownicy"])
         root.addChild(employees_root)
         for employee in list_employees():
             name = f"{employee.get('imie', '')} {employee.get('nazwisko', '')}".strip()
@@ -255,7 +266,7 @@ class EmailPage(QWidget):
             })
             employees_root.addChild(item)
 
-        companies_root = QTreeWidgetItem(["Companies"])
+        companies_root = QTreeWidgetItem(["Firmy"])
         root.addChild(companies_root)
         for company in list_companies(self.pracownik_id):
             item = QTreeWidgetItem([
@@ -270,7 +281,10 @@ class EmailPage(QWidget):
         root.addChild(server_root)
 
         try:
-            folders = get_folders_for_account(self.current_account["id"])
+            folders = [
+                f.get("display_name") or f["server_name"]
+                for f in get_folders_for_account(self.current_account["id"])
+            ]
         except Exception:
             folders = []
 
@@ -475,7 +489,7 @@ class EmailPage(QWidget):
     def on_thread_clicked(self, uid: str, subject: str, local_folder: str) -> None:
         konto_id = self.current_account["id"]
         try:
-            results = search_messages(konto_id, local_folder, subject or "")
+            results = search_messages(konto_id, subject or "")
         except Exception:
             results = []
 
@@ -568,7 +582,7 @@ class EmailPage(QWidget):
             try:
                 mark_read_remote(konto_id, denormalize_folder_name(local_folder), uid)
             except Exception:
-                pass
+                logger.warning("Zignorowany błąd", exc_info=True)
             self.unread_map[uid] = False
             self.update_item_widget(item, uid)
 
@@ -597,25 +611,7 @@ class EmailPage(QWidget):
         if html:
             self.mail_view.setHtml(html)
         else:
-            text = ""
-            try:
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        if part.get_content_type() == "text/plain":
-                            text = part.get_payload(decode=True).decode(
-                                part.get_content_charset() or "utf-8",
-                                errors="replace"
-                            )
-                            break
-                else:
-                    if msg.get_content_type() == "text/plain":
-                        text = msg.get_payload(decode=True).decode(
-                            msg.get_content_charset() or "utf-8",
-                            errors="replace"
-                        )
-            except Exception:
-                text = ""
-            self.mail_view.setPlainText(text)
+            self.mail_view.setPlainText(extract_text(msg))
 
         attachments = get_attachments(msg)
         self.show_attachments(attachments)
@@ -663,18 +659,23 @@ class EmailPage(QWidget):
 
         konto_id = self.current_account["id"]
 
+        ok, msg = check_imap(get_account_info(konto_id) or {})
+        if not ok:
+            QMessageBox.warning(self, "Synchronizacja", f"Nie można połączyć się z serwerem:\n{msg}")
+            return
+
         try:
             if self.current_folder_local:
                 server_folder = denormalize_folder_name(self.current_folder_local)
                 try:
                     fetch_headers_from_imap_and_store(konto_id, server_folder)
                 except Exception:
-                    pass
+                    logger.warning("Zignorowany błąd", exc_info=True)
 
             try:
                 list_folders_from_imap_and_store(konto_id)
             except Exception:
-                pass
+                logger.warning("Zignorowany błąd", exc_info=True)
 
             self.load_folders_from_db()
 
@@ -689,18 +690,33 @@ class EmailPage(QWidget):
         if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local)
 
+    def _compose_from_current(self, prefix: str, to_addr: str):
+        konto_id = self.current_account["id"]
+        original = load_message(konto_id, self.current_folder_local, self.current_uid)
+        if not original:
+            raise RuntimeError("Nie udało się wczytać wiadomości.")
+
+        subject = str(original.get("Subject") or "")
+        if not subject.lower().startswith(prefix.lower()):
+            subject = f"{prefix} {subject}"
+        quoted = "\n".join(f"> {line}" for line in extract_text(original).splitlines())
+        sender = str(original.get("From") or "")
+        return konto_id, to_addr or sender, subject, f"\n\n{sender} napisał(a):\n{quoted}"
+
     def on_reply(self) -> None:
         if not self.current_account or not self.current_uid or not self.current_folder_local:
             return
 
-        konto_id = self.current_account["id"]
-
         try:
-            send_email_smtp(
-                konto_id=konto_id,
-                reply_to_uid=self.current_uid,
-                folder=self.current_folder_local,
+            original = load_message(
+                self.current_account["id"], self.current_folder_local, self.current_uid
             )
+            reply_to = parseaddr(str((original or {}).get("Reply-To") or ""))[1]
+            sender = parseaddr(str((original or {}).get("From") or ""))[1]
+            konto_id, to_addr, subject, body = self._compose_from_current("Re:", reply_to or sender)
+            ok, info = send_email_smtp(konto_id, [to_addr], subject, body)
+            if not ok:
+                raise RuntimeError(info)
             QMessageBox.information(self, "Email", "Wysłano odpowiedź.")
         except Exception as e:
             QMessageBox.warning(self, "Email", f"Nie udało się wysłać odpowiedzi:\n{e}")
@@ -709,14 +725,15 @@ class EmailPage(QWidget):
         if not self.current_account or not self.current_uid or not self.current_folder_local:
             return
 
-        konto_id = self.current_account["id"]
+        to_addr, accepted = QInputDialog.getText(self, "Przekaż", "Adres odbiorcy:")
+        if not accepted or not to_addr.strip():
+            return
 
         try:
-            send_email_smtp(
-                konto_id=konto_id,
-                forward_uid=self.current_uid,
-                folder=self.current_folder_local,
-            )
+            konto_id, to_addr, subject, body = self._compose_from_current("Fwd:", to_addr.strip())
+            ok, info = send_email_smtp(konto_id, [to_addr], subject, body)
+            if not ok:
+                raise RuntimeError(info)
             QMessageBox.information(self, "Email", "Wiadomość przekazana.")
         except Exception as e:
             QMessageBox.warning(self, "Email", f"Nie udało się przekazać wiadomości:\n{e}")

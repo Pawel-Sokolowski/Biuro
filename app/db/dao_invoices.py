@@ -4,10 +4,15 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
 from app.db.dao_conn import get_conn
+from app.invoices.positions import normalize_position, reverse_positions, totals
 from app.security.authorization import assigned_company_ids, can, is_administrator
 
 DATE_FMT = "%Y-%m-%d"
 DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+class InvoiceLockedError(ValueError):
+    """Próba zmiany faktury, która została już wystawiona (wyeksportowana)."""
 
 
 def _now_date() -> str:
@@ -49,7 +54,10 @@ def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM faktury WHERE firma_id = ? AND miesiac = ?", (firma_id, miesiac))
+        cur.execute(
+            "SELECT * FROM faktury WHERE firma_id = ? AND miesiac = ? AND rodzaj = 'faktura'",
+            (firma_id, miesiac),
+        )
         row = cur.fetchone()
         return _row_to_dict(row)
     finally:
@@ -113,6 +121,7 @@ def _get_or_create_draft_invoice_for_company(
             WHERE firma_id = ?
               AND miesiac = ?
               AND COALESCE(eksportowana, 0) = 0
+              AND rodzaj = 'faktura'
             ORDER BY CASE WHEN COALESCE(status, '') = 'robocza' THEN 0 ELSE 1 END,
                      updated_at DESC,
                      id DESC
@@ -324,6 +333,13 @@ def create_or_update_invoice(
 
     try:
         if existing_invoice_id:
+            locked = cur.execute(
+                "SELECT COALESCE(eksportowana, 0) FROM faktury WHERE id = ?", (existing_invoice_id,)
+            ).fetchone()
+            if locked and locked[0]:
+                raise InvoiceLockedError(
+                    "Faktura została już wystawiona. Zmiany wprowadź przez korektę."
+                )
             cur.execute(
                 """
                 UPDATE faktury
@@ -402,7 +418,7 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
         placeholders = ",".join(["?"] * len(invoice_ids))
         params: List[Any] = list(invoice_ids)
         sql = (
-            f"UPDATE faktury SET eksportowana = 1, data_eksportu = CURRENT_TIMESTAMP "
+            f"UPDATE faktury SET eksportowana = 1, status = 'wystawiona', data_eksportu = CURRENT_TIMESTAMP "
             f"WHERE id IN ({placeholders})"
         )
         if pracownik_id and not (
@@ -415,29 +431,6 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
             )
             params.append(pracownik_id)
         cur.execute(sql, params)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _ensure_archiwum_table_exists():
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS faktury_archiwum (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                faktura_id INTEGER,
-                firma_id INTEGER,
-                miesiac TEXT,
-                pozycje_json TEXT,
-                kwota_netto REAL,
-                kwota_brutto REAL,
-                archived_at TEXT DEFAULT (datetime('now'))
-            )
-        """
-        )
         conn.commit()
     finally:
         conn.close()
@@ -464,7 +457,6 @@ def archive_invoice_positions(conn: sqlite3.Connection, invoice_row: Dict[str, A
 
 
 def delete_invoice_keep_positions(invoice_id: int) -> bool:
-    _ensure_archiwum_table_exists()
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -580,5 +572,201 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 
         return report
 
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Lista, edycja, korekty i KSeF
+# ---------------------------------------------------------------------------
+INVOICE_LIST_SQL = """
+    SELECT f.id, f.firma_id, c.nazwa AS firma_nazwa, f.miesiac, f.rodzaj, f.numer, f.status,
+           f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
+           f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer,
+           f.korygowana_faktura_id, f.przyczyna_korekty
+    FROM faktury f
+    JOIN firmy c ON c.id = f.firma_id
+"""
+
+
+def _has_full_finance_access(pracownik_id: Optional[int]) -> bool:
+    return bool(pracownik_id) and (
+        is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
+    )
+
+
+def can_access_invoice(pracownik_id: Optional[int], firma_id: int) -> bool:
+    return _has_full_finance_access(pracownik_id) or firma_id in assigned_company_ids(pracownik_id)
+
+
+def list_invoices(
+    pracownik_id: Optional[int],
+    wystawione: bool,
+    miesiac: Optional[str] = None,
+    firma_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Faktury robocze (wystawione=False) albo wystawione (wystawione=True) widoczne dla pracownika."""
+    where = ["COALESCE(f.eksportowana, 0) = ?"]
+    params: List[Any] = [1 if wystawione else 0]
+    if miesiac:
+        where.append("f.miesiac = ?")
+        params.append(miesiac)
+    if firma_id:
+        where.append("f.firma_id = ?")
+        params.append(firma_id)
+    if not _has_full_finance_access(pracownik_id):
+        ids = sorted(assigned_company_ids(pracownik_id))
+        if not ids:
+            return []
+        where.append(f"f.firma_id IN ({','.join('?' for _ in ids)})")
+        params.extend(ids)
+    order = "f.data_eksportu DESC, f.id DESC" if wystawione else "c.nazwa COLLATE NOCASE, f.id"
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(f"{INVOICE_LIST_SQL} WHERE {' AND '.join(where)} ORDER BY {order}", params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_invoice_positions(invoice_id: int) -> List[Dict[str, Any]]:
+    invoice = get_invoice_by_id(invoice_id)
+    if not invoice:
+        return []
+    try:
+        positions = json.loads(invoice.get("pozycje_json") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return positions if isinstance(positions, list) else []
+
+
+def update_invoice_draft(
+    invoice_id: int,
+    pozycje: List[Dict[str, Any]],
+    numer: Optional[str] = None,
+    data_wystawienia: Optional[str] = None,
+    data_sprzedazy: Optional[str] = None,
+    termin_platnosci: Optional[str] = None,
+    przyczyna_korekty: Optional[str] = None,
+) -> Tuple[float, float]:
+    """Zapisuje pozycje i nagłówek roboczej faktury; zwraca (netto, brutto)."""
+    invoice = get_invoice_by_id(invoice_id)
+    if not invoice:
+        raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
+    if invoice.get("eksportowana"):
+        raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
+    normalized = [normalize_position(p) for p in pozycje]
+    if not normalized:
+        raise ValueError("Faktura musi zawierać co najmniej jedną pozycję.")
+    netto, brutto = totals(normalized)
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE faktury
+            SET pozycje_json = ?, kwota_netto = ?, kwota_brutto = ?, numer = ?,
+                data_wystawienia = ?, data_sprzedazy = ?, termin_platnosci = ?,
+                przyczyna_korekty = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                json.dumps(normalized, ensure_ascii=False), netto, brutto, (numer or "").strip() or None,
+                data_wystawienia, data_sprzedazy, termin_platnosci,
+                przyczyna_korekty if invoice.get("rodzaj") == "korekta" else invoice.get("przyczyna_korekty"),
+                invoice_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return netto, brutto
+
+
+def delete_draft_invoice(invoice_id: int) -> None:
+    invoice = get_invoice_by_id(invoice_id)
+    if not invoice:
+        return
+    if invoice.get("eksportowana"):
+        raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM faktury WHERE id = ?", (invoice_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_correction(invoice_id: int, przyczyna: str = "") -> int:
+    """Tworzy roboczą korektę wystawionej faktury (pozycje 'do zera', do edycji)."""
+    original = get_invoice_by_id(invoice_id)
+    if not original:
+        raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
+    if not original.get("eksportowana"):
+        raise ValueError("Korektę można wystawić tylko do wystawionej faktury. Roboczą fakturę po prostu edytuj.")
+    positions = reverse_positions(get_invoice_positions(invoice_id))
+    netto, brutto = totals(positions)
+    today = _now_date()
+    columns = [
+        "nabywca_skrocona", "nabywca_pelna", "nabywca_adres", "nabywca_kod", "nabywca_miasto",
+        "nabywca_nip", "nabywca_regon", "nabywca_kraj", "nabywca_email", "wystawca",
+        "konto_bankowe", "gtu", "metoda_kasowa", "wyslij_do_ksef", "wyslij_do_kontrahenta",
+    ]
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            f"""
+            INSERT INTO faktury (
+                firma_id, miesiac, kwota_netto, kwota_brutto, data_wystawienia, data_sprzedazy,
+                termin_platnosci, pozycje_json, eksportowana, status, rodzaj,
+                korygowana_faktura_id, przyczyna_korekty, {', '.join(columns)}
+            )
+            SELECT firma_id, miesiac, ?, ?, ?, ?, ?, ?, 0, 'robocza', 'korekta', id, ?,
+                   {', '.join(columns)}
+            FROM faktury WHERE id = ?
+            """,
+            (netto, brutto, today, today, original.get("termin_platnosci") or today,
+             json.dumps(positions, ensure_ascii=False), przyczyna or "", invoice_id),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def set_ksef_number(invoice_id: int, ksef_numer: str) -> None:
+    ksef_numer = (ksef_numer or "").strip()
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE faktury SET ksef_numer = ?, ksef_data = CASE WHEN ? = '' THEN NULL ELSE CURRENT_TIMESTAMP END, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (ksef_numer or None, ksef_numer, invoice_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def list_issued_without_ksef() -> List[Dict[str, Any]]:
+    """Wystawione faktury bez numeru KSeF, z NIP-em firmy, do dopasowania po firmie i kwocie."""
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT f.id, f.numer, f.miesiac, f.kwota_brutto, f.firma_id, fi.nip AS firma_nip "
+            "FROM faktury f JOIN firmy fi ON fi.id = f.firma_id "
+            "WHERE COALESCE(f.eksportowana, 0) = 1 AND COALESCE(f.ksef_numer, '') = '' "
+            "ORDER BY f.miesiac, f.id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_invoice_number(invoice_id: int, numer: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE faktury SET numer = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (numer, invoice_id))
+        conn.commit()
     finally:
         conn.close()

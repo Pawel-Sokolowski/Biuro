@@ -28,7 +28,7 @@ def list_tasks_for_timer(
             WHERE z.status IN ('Nowe', 'W toku')
               AND (
                     (? IS NOT NULL AND z.firma_id = ?)
-                    OR (? IS NOT NULL AND z.pracownik_id = ?)
+                    OR (? IS NULL AND ? IS NOT NULL AND z.pracownik_id = ?)
                   )
             ORDER BY
                 CASE WHEN z.status = 'W toku' THEN 0 ELSE 1 END,
@@ -37,7 +37,7 @@ def list_tasks_for_timer(
                 z.updated_at DESC,
                 z.id DESC
             """,
-            (firma_id, firma_id, pracownik_id, pracownik_id),
+            (firma_id, firma_id, firma_id, pracownik_id, pracownik_id),
         ).fetchall()
         return [dict(row) for row in rows]
     finally:

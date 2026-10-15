@@ -11,6 +11,7 @@ import openpyxl
 from app.config import get_database
 from app.db.dao_audit import record_import
 from app.utils.parsing import (
+    to_float,
     normalize_identifier,
     normalize_pkd_codes,
     parse_date_value,
@@ -49,10 +50,8 @@ def split_address_line(line: str) -> Tuple[str, str, str]:
 def parse_num(value: Any) -> Optional[float]:
     if value is None or value == "":
         return None
-    try:
-        return float(str(value).replace("\xa0", "").replace(" ", "").replace(",", "."))
-    except (TypeError, ValueError):
-        return None
+    number = to_float(value, default=float("nan"))
+    return None if number != number else number
 
 
 PRICE_PATTERN = r"(\d+(?:[.,]\d{1,2})?)"
@@ -67,7 +66,7 @@ def _normalize_pricing_text(text: Any) -> str:
 
 
 def _price_to_float(value: str) -> float:
-    return float(str(value).replace("\xa0", "").replace(" ", "").replace(",", "."))
+    return to_float(value)
 
 
 def _find_price(pattern: str, text: str) -> Optional[float]:
@@ -273,9 +272,21 @@ def _build_payload_from_row(
 ) -> Dict[str, Any]:
     del headers
 
+    def _norm(name: str) -> str:
+        return re.sub(r"\s+", " ", str(name)).strip().casefold()
+
+    normalized_index = {_norm(k): v for k, v in header_index.items()}
+
     def get(col: str) -> Any:
-        idx = header_index.get(col)
-        return row[idx] if idx is not None and idx < len(row) else None
+        idx = normalized_index.get(_norm(col))
+        value = row[idx] if idx is not None and idx < len(row) else None
+        if isinstance(value, str):
+            value = value.strip()
+        elif isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            value = str(value)
+        return value
 
     payload: Dict[str, Any] = {}
 
@@ -741,7 +752,7 @@ def _apply_payload_to_db(
         "zawieszenia_dzialalnosci", "kody_pkd", "cennik_ksiegowy",
         "cennik_kadrowy", "cennik_czasowy", "limit_dokumentow",
         "zdrowotna", "uop_ilosc", "uop_cennik", "uz_ilosc",
-        "uz_cennik", "uod_ilosc", "uod_cennik",
+        "uz_cennik", "uod_ilosc", "uod_cennik", "wliczac_zdrowotna",
     ]
 
     if accounting_key:

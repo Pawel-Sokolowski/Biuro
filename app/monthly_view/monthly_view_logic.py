@@ -84,6 +84,7 @@ class MonthlyViewLogic:
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
                    f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
+                   COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
@@ -233,9 +234,15 @@ class MonthlyViewLogic:
         uop: Optional[int] = None,
         uz: Optional[int] = None,
         uod: Optional[int] = None,
+        dokumenty_dostarczone: Optional[int] = None,
     ):
         row = get_month_status(firma_id, self.aktualny_miesiac)
         payload: Dict[str, Any] = {}
+        payload["dokumenty_dostarczone"] = (
+            dokumenty_dostarczone
+            if dokumenty_dostarczone is not None
+            else (row or {}).get("dokumenty_dostarczone", 0)
+        )
 
         if row:
             payload["etap"] = etap if etap is not None else row.get("etap", "Brak")

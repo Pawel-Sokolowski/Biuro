@@ -1,7 +1,10 @@
-import requests, os
-from dotenv import load_dotenv
+import os
 
-load_dotenv()
+import requests
+
+from app.utils.env_config import load_environment
+
+load_environment()
 
 CEIDG_API_KEY = os.getenv("CEIDG_API_KEY")
 CEIDG_BASE_URL = os.getenv("CEIDG_BASE_URL")

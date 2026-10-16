@@ -20,7 +20,9 @@ a = Analysis(
     datas=datas,
     hiddenimports=[
         *collect_submodules("app"),
-        *[m for pkg in CALDAV_PACKAGES for m in collect_submodules(pkg)],
+        *[m for pkg in CALDAV_PACKAGES
+          for m in collect_submodules(
+              pkg, filter=lambda name: not name.startswith(("caldav.jmap", "niquests.extensions.pyodide")))],
         "PyQt6.QtCharts",
         "openpyxl",
         "bcrypt",

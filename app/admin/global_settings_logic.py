@@ -17,6 +17,7 @@ import openpyxl
 import sqlite3
 
 from app.db.dao_conn import get_conn
+from app.utils.importers import build_pricing_key
 from app.db.dao_companies import list_companies
 from app.db.dao_employees import (
     list_employees,
@@ -192,14 +193,15 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         try:
             cur = conn.cursor()
-            cur.execute(
-                """
-                DELETE FROM pracownik_firma
-                WHERE pracownik_id = ?
-                """,
-                (pracownik_id,),
-            )
-            for firma_id in company_ids:
+            wanted = {int(c) for c in company_ids}
+            existing = {r[0] for r in cur.execute(
+                "SELECT firma_id FROM pracownik_firma WHERE pracownik_id = ?", (pracownik_id,))}
+            for firma_id in existing - wanted:
+                cur.execute(
+                    "DELETE FROM pracownik_firma WHERE pracownik_id = ? AND firma_id = ?",
+                    (pracownik_id, firma_id),
+                )
+            for firma_id in wanted - existing:
                 cur.execute(
                     """
                     INSERT INTO pracownik_firma (
@@ -426,6 +428,7 @@ class GlobalSettingsLogic:
                     cena_netto_ksiegowosc = safe_float(
                         row.get("cena netto 2024") or row.get("cena_netto")
                     )
+                    klucz = build_pricing_key(klucz, cena_netto_ksiegowosc)
                     cena_za_dokument = safe_float(
                         row.get("cena za dokument") or row.get("ponad_limit")
                     )
@@ -491,6 +494,7 @@ class GlobalSettingsLogic:
                 cena_netto_ksiegowosc = safe_float(
                     row[col("cena netto 2024", "cena_netto")]
                 )
+                klucz = build_pricing_key(klucz, cena_netto_ksiegowosc)
                 cena_za_dokument = safe_float(
                     row[col("cena za dokument", "ponad_limit")]
                 )

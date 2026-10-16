@@ -679,7 +679,7 @@ class MonthlyViewPage(QWidget):
         if idx < 0:
             return None
         val = self.employee_combo.itemData(idx)
-        return int(val) if val else None
+        return int(val) if val is not None else None
 
     def _current_status_filter(self) -> str:
         return self.status_combo.currentText() or "Wszystkie"

@@ -3,15 +3,8 @@ from app.db.dao_conn import get_conn
 
 
 def is_admin(pracownik_id: int) -> bool:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT rola_id FROM pracownik_firma
-        WHERE pracownik_id = ? AND rola_id = 4
-    """, (pracownik_id,))
-    row = cur.fetchone()
-    conn.close()
-    return bool(row)
+    from app.security.authorization import is_administrator
+    return is_administrator(pracownik_id)
 
 
 def get_global_roles():

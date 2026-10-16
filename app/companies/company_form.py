@@ -1,4 +1,4 @@
-﻿# app/companies/company_form.py
+# app/companies/company_form.py
 from typing import Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
@@ -22,6 +22,7 @@ from app.db.dao_notes import (
 from app.companies.company_logic import ceidg_fetch
 from app.email.email_storage import (
     get_all_email_accounts,
+    get_known_sender_addresses,
     get_email_filters_for_company,
     add_email_filter,
     delete_email_filter_for_company,
@@ -32,9 +33,7 @@ from app.companies.constants import (
     FORMA_DZIALALNOSCI, FORMA_OPODATKOWANIA, SPOSOB_ZAPLATY,
     STATUS_PODATKOWY, MIESIACE_FAKTUROWANIE, FORMY_OSOBY_FIZYCZNEJ,
 )
-from app.companies.ceidg_api import get_ceidg_firma_by_nip
-from app.companies.gus_api import get_gus_firma_by_nip
-from app.companies.krs_api import get_krs_firma_by_krs
+from app.companies.company_lookup import lookup_company_by_nip
 from PyQt6.QtCore import QEvent, QObject
 from PyQt6.QtWidgets import QAbstractSpinBox, QApplication
 
@@ -160,7 +159,7 @@ class CompanyForm(QDialog):
 
         nip_box = QHBoxLayout()
         nip = QLineEdit()
-        self.btn_ceidg = QPushButton("Pobierz z CEIDG/GUS")
+        self.btn_ceidg = QPushButton("Pobierz dane")
         self.btn_ceidg.clicked.connect(self._on_ceidg)
 
         nip_box.addWidget(nip)
@@ -173,12 +172,7 @@ class CompanyForm(QDialog):
             [numer_umowy, nip_box, regon]
         )
 
-        krs_box = QHBoxLayout()
         krs = QLineEdit()
-        self.btn_krs = QPushButton("Pobierz z KRS")
-        self.btn_krs.clicked.connect(self._on_krs)
-        krs_box.addWidget(krs)
-        krs_box.addWidget(self.btn_krs)
         pesel = QLineEdit()
         forma_dzialalnosci = QComboBox()
         forma_dzialalnosci.addItems(_merged_options("forma_dzialalnosci", FORMA_DZIALALNOSCI))
@@ -186,7 +180,7 @@ class CompanyForm(QDialog):
 
         add_row(
             ["KRS:", "PESEL:", "Forma działalności:"],
-            [krs_box, pesel, forma_dzialalnosci]
+            [krs, pesel, forma_dzialalnosci]
         )
 
 
@@ -658,8 +652,16 @@ class CompanyForm(QDialog):
         self.filter_account = QComboBox()
         for account in get_all_email_accounts():
             self.filter_account.addItem(account["email"], account["id"])
-        self.filter_sender = QLineEdit()
-        self.filter_sender.setPlaceholderText("np. admin@firmaa.pl lub firmaa@gmail.com")
+        self.filter_sender = QComboBox()
+        self.filter_sender.setEditable(True)
+        self.filter_sender.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.filter_sender.lineEdit().setPlaceholderText("Wybierz nadawcę ze skrzynki lub wpisz adres")
+        sender_completer = QCompleter(self.filter_sender.model(), self.filter_sender)
+        sender_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        sender_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.filter_sender.setCompleter(sender_completer)
+        self.filter_account.currentIndexChanged.connect(self._reload_filter_senders)
+        self._reload_filter_senders()
         self.filter_folder = QLineEdit()
         self.filter_folder.setPlaceholderText("Folder, np. nazwa skrócona firmy")
         btn_add_filter = QPushButton("Dodaj filtr")
@@ -814,34 +816,11 @@ class CompanyForm(QDialog):
     # CEIDG / GUS
     # ============================================================
     def _on_ceidg(self):
-        def fetch(nip):
-            res = get_ceidg_firma_by_nip(nip)
-            if res and not res.get("error"):
-                return res
-            gus = get_gus_firma_by_nip(nip)
-            if gus and not gus.get("error"):
-                return gus
-            return res if res and res.get("error") else gus
-
         try:
-            ceidg_fetch(self, fetch=fetch, label="Pobierz z CEIDG/GUS", title="CEIDG/GUS")
+            ceidg_fetch(self, fetch=lookup_company_by_nip, label="Pobierz dane", title="Dane firmy")
         except Exception as e:
-            logger.warning("Błąd pobierania z CEIDG/GUS: %s", e)
-            QMessageBox.warning(self, "CEIDG/GUS", f"Błąd pobierania danych: {e}")
-    def _on_krs(self):
-        try:
-            ceidg_fetch(
-                self,
-                fetch=get_krs_firma_by_krs,
-                button="btn_krs",
-                label="Pobierz z KRS",
-                title="KRS",
-                field="krs",
-                field_label="numer KRS",
-            )
-        except Exception as e:
-            logger.warning("Błąd pobierania z KRS: %s", e)
-            QMessageBox.warning(self, "KRS", f"Błąd pobierania danych z KRS: {e}")
+            logger.warning("Błąd pobierania danych firmy: %s", e)
+            QMessageBox.warning(self, "Dane firmy", f"Błąd pobierania danych: {e}")
 
     def _copy_address(self):
         src = self.addr_copy_from.currentData()
@@ -912,10 +891,41 @@ class CompanyForm(QDialog):
             self.email_filters_table.setItem(row, 2, QTableWidgetItem(rule.get("folder_docelowy", "")))
             self.email_filters_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, rule["id"])
 
+    def _reload_filter_senders(self):
+        current = self.filter_sender.currentText()
+        addresses = set(get_known_sender_addresses(self.filter_account.currentData()))
+        if self.firma_id:
+            for contact in get_contacts(self.firma_id):
+                email = (contact.get("email") or "").strip().lower()
+                if "@" in email:
+                    addresses.add(email)
+        self.filter_sender.clear()
+        self.filter_sender.addItems(sorted(addresses))
+        self.filter_sender.setEditText(current)
+
+    def _ensure_company_saved(self) -> bool:
+        """Nowa firma musi istnieć w bazie, zanim dodamy do niej wspólników, kontakty i filtry."""
+        if self.firma_id:
+            return True
+        error = self._validate()
+        if error:
+            QMessageBox.warning(
+                self, "Firma", f"Aby dodać pozycję, najpierw uzupełnij dane firmy.\n{error}"
+            )
+            return False
+        try:
+            self.firma_id = save_company(self._collect_payload(), actor_id=self.actor_id)
+        except Exception as e:
+            logger.exception("Błąd zapisu firmy")
+            QMessageBox.critical(self, "Firma", f"Nie udało się zapisać firmy: {e}")
+            return False
+        self._populate_pelnomocnictwa()
+        return True
+
     def _add_company_email_filter(self):
-        if not self.firma_id:
+        if not self._ensure_company_saved():
             return
-        sender = self.filter_sender.text().strip()
+        sender = self.filter_sender.currentText().strip()
         folder = self.filter_folder.text().strip()
         if not folder and "@" in sender:
             folder = sender.rsplit("@", 1)[1].strip().lower()
@@ -923,12 +933,15 @@ class CompanyForm(QDialog):
             folder = self.inputs["nazwa_skrocona"].text().strip()
         account_id = self.filter_account.currentData()
         if not sender or account_id is None or not folder:
+            QMessageBox.information(
+                self, "Filtr email", "Wybierz konto i nadawcę oraz podaj folder docelowy."
+            )
             return
         add_email_filter(
             int(account_id), self.firma_id, sender, None, None, None, None,
             folder, 0, 0, 1,
         )
-        self.filter_sender.clear()
+        self.filter_sender.setEditText("")
         self.filter_folder.clear()
         self._load_email_filters()
 
@@ -1031,6 +1044,36 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(bool(val))
 
+    @staticmethod
+    def _payload_to_form_keys(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Klucze z importu (kolumny bazy) -> klucze pól formularza."""
+        out = dict(payload)
+        address_map = {
+            "dz": {"miasto": "miasto", "kod": "kod_pocztowy", "ulica": "ulica",
+                   "budynek": "adres_budynek", "lokal": "adres_lokal",
+                   "wojewodztwo": "wojewodztwo", "powiat": "powiat",
+                   "gmina": "gmina", "kraj": "kraj"},
+            "ko": {f: f"adres_koresp_{c}" for f, c in (
+                ("miasto", "miasto"), ("kod", "kod_pocztowy"), ("ulica", "ulica"),
+                ("budynek", "budynek"), ("lokal", "lokal"), ("wojewodztwo", "wojewodztwo"),
+                ("powiat", "powiat"), ("gmina", "gmina"), ("kraj", "kraj"))},
+            "zam": {f: f"adres_zam_{c}" for f, c in (
+                ("miasto", "miasto"), ("kod", "kod_pocztowy"), ("ulica", "ulica"),
+                ("budynek", "budynek"), ("lokal", "lokal"), ("wojewodztwo", "wojewodztwo"),
+                ("powiat", "powiat"), ("gmina", "gmina"), ("kraj", "kraj"))},
+        }
+        for prefix, fields in address_map.items():
+            for field, source in fields.items():
+                if payload.get(source) not in (None, ""):
+                    out.setdefault(f"{prefix}_{field}", payload[source])
+        person = str(payload.get("osoba_kontaktowa") or "").strip()
+        first, _, last = person.partition(" ")
+        out.setdefault("kont_imie", first)
+        out.setdefault("kont_nazwisko", last.strip())
+        out.setdefault("kont_email", payload.get("adres_email") or "")
+        out.setdefault("kont_tel", payload.get("nr_telefonu") or "")
+        return out
+
     # ============================================================
     # ŁADOWANIE DANYCH Z PAYLOADU (IMPORT WIZARD)
     # ============================================================
@@ -1039,6 +1082,7 @@ class CompanyForm(QDialog):
         Ładuje dane z payloadu wygenerowanego przez importer.
         Payload zawiera tylko podstawowe pola — reszta zostaje pusta.
         """
+        payload = self._payload_to_form_keys(payload)
         for key, widget in self.inputs.items():
             val = payload.get(key)
 
@@ -1083,7 +1127,7 @@ class CompanyForm(QDialog):
             self.contacts_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
 
     def _add_contact(self):
-        if not self.firma_id:
+        if not self._ensure_company_saved():
             return
         payload = {
             "firma_id": self.firma_id,
@@ -1093,9 +1137,16 @@ class CompanyForm(QDialog):
             "telefon": self.inputs["kont_tel"].text().strip(),
             "rola": self.inputs["kont_rola"].text().strip(),
         }
+        if not any(payload[k] for k in ("imie", "nazwisko", "email", "telefon")):
+            QMessageBox.information(self, "Kontakty", "Wpisz dane kontaktu.")
+            return
         save_contact(self.firma_id, payload)
+        for key in ("kont_imie", "kont_nazwisko", "kont_email", "kont_tel", "kont_rola"):
+            self.inputs[key].clear()
         self._sync_contact_email_filters()
         self._load_contacts()
+        self._load_email_filters()
+        self._reload_filter_senders()
 
     def _delete_contact(self):
         row = self.contacts_table.currentRow()
@@ -1163,7 +1214,7 @@ class CompanyForm(QDialog):
 
     def _add_partner(self):
 
-        if not self.firma_id:
+        if not self._ensure_company_saved():
             return
 
         if not self._validate_partner_percent():
@@ -1175,6 +1226,9 @@ class CompanyForm(QDialog):
             "nazwisko": self.partner_nazwisko.text().strip(),
             "procent": self.partner_procent.value(),
         }
+        if not payload["imie_pierwsze"] and not payload["nazwisko"]:
+            QMessageBox.information(self, "Wspólnicy", "Podaj imię lub nazwisko wspólnika.")
+            return
 
         save_partner(self.firma_id, payload)
 

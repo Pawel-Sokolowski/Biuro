@@ -316,6 +316,7 @@ def init_db():
             nazwisko TEXT NOT NULL,
             aktywny INTEGER DEFAULT 1,
             is_admin INTEGER DEFAULT 0,
+            rola_id INTEGER REFERENCES role(id) ON DELETE SET NULL,
             data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP,
             stopka_html TEXT,
             stopka_tekst TEXT

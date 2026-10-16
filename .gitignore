@@ -12,3 +12,4 @@ build/
 dist/
 installer/output/
 /logs/
+/email_cache/

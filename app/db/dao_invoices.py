@@ -55,7 +55,7 @@ def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT * FROM faktury WHERE firma_id = ? AND miesiac = ? AND rodzaj = 'faktura'",
+            "SELECT * FROM faktury WHERE firma_id = ? AND miesiac = ? AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0",
             (firma_id, miesiac),
         )
         row = cur.fetchone()
@@ -85,9 +85,10 @@ def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, 
     cur = conn.cursor()
     try:
         sql = """
-            SELECT f.*, c.nazwa AS firma_nazwa
+            SELECT f.*, COALESCE(NULLIF(f.nabywca_pelna, ''), c.nazwa, k.nazwa) AS firma_nazwa
             FROM faktury f
-            JOIN firmy c ON f.firma_id = c.id
+            LEFT JOIN firmy c ON f.firma_id = c.id
+            LEFT JOIN kontrahenci k ON f.kontrahent_id = k.id
             WHERE COALESCE(f.eksportowana, 0) = 1
         """
         params: List[Any] = []
@@ -122,6 +123,7 @@ def _get_or_create_draft_invoice_for_company(
               AND miesiac = ?
               AND COALESCE(eksportowana, 0) = 0
               AND rodzaj = 'faktura'
+              AND COALESCE(reczna, 0) = 0
             ORDER BY CASE WHEN COALESCE(status, '') = 'robocza' THEN 0 ELSE 1 END,
                      updated_at DESC,
                      id DESC
@@ -310,6 +312,71 @@ def add_custom_invoice_item(
         conn.close()
 
 
+def create_manual_invoice(
+    buyer_type: str,
+    buyer_id: int,
+    positions: List[Dict[str, Any]],
+    data_wystawienia: str,
+    data_sprzedazy: str,
+    termin_platnosci: str,
+) -> int:
+    """Tworzy robocz\u0105 faktur\u0119 r\u0119czn\u0105 dla firmy lub kontrahenta."""
+    if buyer_type not in ("firma", "kontrahent"):
+        raise ValueError("Wybierz nabywc\u0119 faktury.")
+    if not positions:
+        raise ValueError("Faktura musi zawiera? co najmniej jedn? pozycj?.")
+    normalized = [normalize_position(position) for position in positions]
+    if any(not item.get("nazwa") for item in normalized):
+        raise ValueError("Ka\u017Cda pozycja musi mie\u0107 nazw\u0119.")
+    netto, brutto = totals(normalized)
+    conn = get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        if buyer_type == "firma":
+            buyer = conn.execute("SELECT * FROM firmy WHERE id = ?", (buyer_id,)).fetchone()
+            if not buyer:
+                raise ValueError("Nie znaleziono firmy.")
+            buyer = dict(buyer)
+            firma_id, kontrahent_id = buyer_id, None
+            buyer_data = {
+                "nabywca_skrocona": buyer.get("nazwa_skrocona") or buyer["nazwa"],
+                "nabywca_pelna": buyer["nazwa"],
+                "nabywca_adres": " ".join(filter(None, [buyer.get("ulica"), buyer.get("adres_budynek"), buyer.get("adres_lokal")])),
+                "nabywca_kod": buyer.get("kod_pocztowy"), "nabywca_miasto": buyer.get("miasto"),
+                "nabywca_nip": buyer.get("nip"), "nabywca_regon": buyer.get("regon"),
+                "nabywca_kraj": buyer.get("kraj") or "Polska", "nabywca_email": buyer.get("adres_email"),
+            }
+        else:
+            buyer = conn.execute("SELECT * FROM kontrahenci WHERE id = ?", (buyer_id,)).fetchone()
+            if not buyer:
+                raise ValueError("Nie znaleziono kontrahenta.")
+            buyer = dict(buyer)
+            firma_id, kontrahent_id = None, buyer_id
+            buyer_data = {
+                "nabywca_skrocona": buyer["nazwa"], "nabywca_pelna": buyer["nazwa"],
+                "nabywca_adres": buyer.get("adres"), "nabywca_kod": buyer.get("kod"),
+                "nabywca_miasto": buyer.get("miasto"), "nabywca_nip": buyer.get("nip"),
+                "nabywca_regon": buyer.get("regon"), "nabywca_kraj": buyer.get("kraj") or "Polska",
+                "nabywca_email": buyer.get("email"),
+            }
+        miesiac = (data_wystawienia or _now_date())[:7]
+        columns = ["firma_id", "kontrahent_id", "reczna", "miesiac", "kwota_netto", "kwota_brutto",
+                   "data_wystawienia", "data_sprzedazy", "termin_platnosci", "pozycje_json", "status", "rodzaj"]
+        columns.extend(buyer_data)
+        values = [firma_id, kontrahent_id, 1, miesiac, netto, brutto, data_wystawienia,
+                  data_sprzedazy, termin_platnosci, json.dumps(normalized, ensure_ascii=False), "robocza", "faktura"]
+        values.extend(buyer_data.values())
+        marks = ", ".join("?" for _ in columns)
+        cur = conn.execute(f"INSERT INTO faktury ({', '.join(columns)}) VALUES ({marks})", values)
+        conn.commit()
+        return int(cur.lastrowid)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def create_or_update_invoice(
     firma_id: int,
     miesiac: str,
@@ -491,7 +558,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 
     try:
         cur.execute(
-            "SELECT id, nazwa, glowny_cennik, limit_dokumentow, zdrowotna, fakturowac, forma_dzialalnosci, vat_czynny FROM firmy"
+            "SELECT id, nazwa, glowny_cennik, limit_dokumentow, zdrowotna, wliczac_zdrowotna, fakturowac, forma_dzialalnosci, vat_czynny FROM firmy"
         )
         firms_rows = cur.fetchall()
         firms = [dict(r) for r in firms_rows]
@@ -501,7 +568,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
             fakturowac_flag = bool(firma.get("fakturowac", 0))
 
             cur2 = conn.cursor()
-            cur2.execute("SELECT id FROM faktury WHERE firma_id = ? AND miesiac = ?", (fid, miesiac))
+            cur2.execute("SELECT id FROM faktury WHERE firma_id = ? AND miesiac = ? AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0", (fid, miesiac))
             if cur2.fetchone():
                 report["skipped"].append((fid, "Faktura już istnieje"))
                 continue
@@ -527,21 +594,21 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
             netto_total = float(crow.get("netto") or 0.0)
 
             pozycje: List[Dict[str, Any]] = []
-            wliczaj_zdrowotna = bool(firma.get("zdrowotna", 0))
+            wliczaj_zdrowotna = bool(firma.get("wliczac_zdrowotna", 0))
+            zdrowotna_val = float(firma.get("zdrowotna") or 0.0) or zdrowotna_val
 
-            if wliczaj_zdrowotna:
+            if wliczaj_zdrowotna and zdrowotna_val > 0:
+                podstawa = round(cena_netto_ks + zdrowotna_val, 2)
                 pozycje.append(
                     {
                         "opis": "Księgowość (miesięczna) - podstawowa opłata",
                         "ilosc": 1,
-                        "cena_netto": round(netto_total, 2),
+                        "cena_netto": podstawa,
                         "stawka_vat": "0",
-                        "wartosc_netto": round(netto_total, 2),
-                        "wartosc_brutto": round(netto_total * 1.23, 2),
+                        "wartosc_netto": podstawa,
+                        "wartosc_brutto": round(podstawa * 1.23, 2),
                     }
                 )
-                total_netto = round(netto_total, 2)
-                total_brutto = round(netto_total * 1.23, 2)
             else:
                 pozycje.append(
                     {
@@ -564,9 +631,9 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                             "wartosc_brutto": round(zdrowotna_val * 1.23, 2),
                         }
                     )
-                total_netto = round(sum(p["wartosc_netto"] for p in pozycje), 2)
-                total_brutto = round(sum(p["wartosc_brutto"] for p in pozycje), 2)
 
+            total_netto = round(sum(p["wartosc_netto"] for p in pozycje), 2)
+            total_brutto = round(sum(p["wartosc_brutto"] for p in pozycje), 2)
             invoice_id = create_or_update_invoice(fid, miesiac, pozycje, total_netto, total_brutto)
             report["generated"].append((fid, invoice_id))
 
@@ -580,12 +647,15 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 # Lista, edycja, korekty i KSeF
 # ---------------------------------------------------------------------------
 INVOICE_LIST_SQL = """
-    SELECT f.id, f.firma_id, c.nazwa AS firma_nazwa, f.miesiac, f.rodzaj, f.numer, f.status,
+    SELECT f.id, f.firma_id, f.kontrahent_id, f.reczna,
+           COALESCE(NULLIF(f.nabywca_pelna, ''), c.nazwa, k.nazwa, '?') AS firma_nazwa,
+           f.miesiac, f.rodzaj, f.numer, f.status,
            f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
            f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer,
            f.korygowana_faktura_id, f.przyczyna_korekty
     FROM faktury f
-    JOIN firmy c ON c.id = f.firma_id
+    LEFT JOIN firmy c ON c.id = f.firma_id
+    LEFT JOIN kontrahenci k ON k.id = f.kontrahent_id
 """
 
 
@@ -595,7 +665,9 @@ def _has_full_finance_access(pracownik_id: Optional[int]) -> bool:
     )
 
 
-def can_access_invoice(pracownik_id: Optional[int], firma_id: int) -> bool:
+def can_access_invoice(pracownik_id: Optional[int], firma_id: Optional[int]) -> bool:
+    if firma_id is None:
+        return _has_full_finance_access(pracownik_id)
     return _has_full_finance_access(pracownik_id) or firma_id in assigned_company_ids(pracownik_id)
 
 
@@ -620,7 +692,7 @@ def list_invoices(
             return []
         where.append(f"f.firma_id IN ({','.join('?' for _ in ids)})")
         params.extend(ids)
-    order = "f.data_eksportu DESC, f.id DESC" if wystawione else "c.nazwa COLLATE NOCASE, f.id"
+    order = "f.data_eksportu DESC, f.id DESC" if wystawione else "COALESCE(c.nazwa, k.nazwa, f.nabywca_pelna) COLLATE NOCASE, f.id"
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     try:
@@ -753,8 +825,8 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT f.id, f.numer, f.miesiac, f.kwota_brutto, f.firma_id, fi.nip AS firma_nip "
-            "FROM faktury f JOIN firmy fi ON fi.id = f.firma_id "
+            "SELECT f.id, f.numer, f.miesiac, f.kwota_brutto, f.firma_id, COALESCE(fi.nip, f.nabywca_nip) AS firma_nip "
+            "FROM faktury f LEFT JOIN firmy fi ON fi.id = f.firma_id "
             "WHERE COALESCE(f.eksportowana, 0) = 1 AND COALESCE(f.ksef_numer, '') = '' "
             "ORDER BY f.miesiac, f.id"
         ).fetchall()

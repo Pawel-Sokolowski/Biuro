@@ -2,14 +2,19 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox,
-    QScrollArea, QSizePolicy, QFrame
+    QScrollArea, QSizePolicy, QFrame, QDialog, QDialogButtonBox, QFormLayout
 )
 
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt, QDateTime, pyqtSignal
 from typing import Optional
 
-from app.chat.chat_model import get_conversations, get_messages, add_message, create_conversation
+from app.chat.chat_model import (
+    get_conversations, get_messages, add_message, create_conversation,
+    get_conversation, get_participant_ids, get_active_employees,
+    update_conversation, can_manage_conversation, is_participant,
+    get_direct_conversations,
+)
 
 import sqlite3
 
@@ -78,6 +83,11 @@ class ChatPage(QWidget):
         btn_new.clicked.connect(self.create_new_conversation)
         left_layout.addWidget(btn_new)
 
+        self.btn_manage = QPushButton("Zarządzaj dostępem")
+        self.btn_manage.setEnabled(False)
+        self.btn_manage.clicked.connect(self.manage_access)
+        left_layout.addWidget(self.btn_manage)
+
         # RIGHT: messages area with scroll
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -117,20 +127,51 @@ class ChatPage(QWidget):
     # ============================================================
     # CONVERSATIONS
     # ============================================================
-    def refresh_chat_conversations(self):
+    def refresh_chat_conversations(self, select_id: Optional[int] = None):
+        self.chat_conversations.blockSignals(True)
         self.chat_conversations.clear()
-        rows = get_conversations(self.pracownik_id)
-        for r in rows:
+        rows = [r for r in get_conversations(self.pracownik_id) if r.get("typ") != "prywatna"]
+        directs = get_direct_conversations(self.pracownik_id)
+        rows = rows + directs
+
+        def header(text):
+            h = QListWidgetItem(text)
+            h.setFlags(Qt.ItemFlag.NoItemFlags)
+            f = h.font()
+            f.setBold(True)
+            f.setPointSize(max(f.pointSize() - 1, 7))
+            h.setFont(f)
+            h.setForeground(QColor("#607d8b"))
+            self.chat_conversations.addItem(h)
+
+        def add_item(r, prefix):
             nazwa = r.get("nazwa") or f"Konwersacja {r.get('id')}"
-            item = QListWidgetItem(nazwa)
+            item = QListWidgetItem(prefix + nazwa)
             item.setData(Qt.ItemDataRole.UserRole, r.get("id"))
             self.chat_conversations.addItem(item)
+            if select_id is not None and r.get("id") == select_id:
+                self.chat_conversations.setCurrentItem(item)
+
+        header("KANAŁY")
+        for r in rows[:len(rows) - len(directs)]:
+            add_item(r, "# ")
+        header("ROZMOWY")
+        for r in directs:
+            add_item(r, "● ")
+        self.chat_conversations.blockSignals(False)
+        if select_id is not None and self.chat_conversations.currentItem():
+            self.on_chat_selected()
+        elif self.current_konwersacja not in [r.get("id") for r in rows]:
+            self.current_konwersacja = None
+            self._clear_messages()
+            self.btn_manage.setEnabled(False)
 
     def on_chat_selected(self):
         item = self.chat_conversations.currentItem()
         if not item:
             return
         self.current_konwersacja = item.data(Qt.ItemDataRole.UserRole)
+        self.btn_manage.setEnabled(can_manage_conversation(self.current_konwersacja, self.pracownik_id))
         self.offset = 0
         self.has_more_history = True
         self.load_messages()
@@ -277,6 +318,10 @@ class ChatPage(QWidget):
             QMessageBox.warning(self, "Brak konwersacji", "Wybierz lub utwórz konwersację przed wysłaniem wiadomości.")
             return
 
+        if not is_participant(self.current_konwersacja, self.pracownik_id):
+            QMessageBox.warning(self, "Brak dostępu", "Nie masz dostępu do tego kanału.")
+            return
+
         try:
             add_message(self.current_konwersacja, self.pracownik_id, text)
         except Exception as e:
@@ -291,34 +336,88 @@ class ChatPage(QWidget):
     # CREATE NEW CONVERSATION
     # ============================================================
     def create_new_conversation(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, QMessageBox
+        dlg = ChannelAccessDialog(self, self.pracownik_id)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            new_id = create_conversation(dlg.nazwa(), self.pracownik_id, dlg.selected_ids())
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć konwersacji: {e}")
+            return
+        self.refresh_chat_conversations(select_id=new_id)
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Nowa konwersacja")
-        dialog.setFixedSize(420, 180)
+    def manage_access(self):
+        if not self.current_konwersacja:
+            return
+        conv = get_conversation(self.current_konwersacja)
+        if not conv or not can_manage_conversation(self.current_konwersacja, self.pracownik_id):
+            QMessageBox.warning(self, "Brak uprawnień", "Tylko właściciel kanału lub administrator może zarządzać dostępem.")
+            return
+        dlg = ChannelAccessDialog(
+            self, self.pracownik_id, nazwa=conv["nazwa"],
+            selected=get_participant_ids(self.current_konwersacja),
+            locked_id=conv["pracownik_creator_id"],
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            update_conversation(self.current_konwersacja, dlg.nazwa(), dlg.selected_ids(), self.pracownik_id)
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać dostępu: {e}")
+            return
+        self.refresh_chat_conversations(select_id=self.current_konwersacja)
 
-        layout = QVBoxLayout(dialog)
+
+class ChannelAccessDialog(QDialog):
+    """Nazwa kanału + wybór aktywnych pracowników, którzy mają do niego dostęp."""
+
+    def __init__(self, parent, pracownik_id: int, nazwa: str = "",
+                 selected=None, locked_id: Optional[int] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Dostęp do kanału" if nazwa else "Nowa konwersacja")
+        self.resize(420, 460)
+        layout = QVBoxLayout(self)
         form = QFormLayout()
-
-        nazwa_field = QLineEdit()
-        form.addRow("Nazwa:", nazwa_field)
+        self.nazwa_field = QLineEdit(nazwa)
+        form.addRow("Nazwa:", self.nazwa_field)
         layout.addLayout(form)
+        layout.addWidget(QLabel("Pracownicy z dostępem do kanału:"))
 
-        btn_create = QPushButton("Utwórz")
-        layout.addWidget(btn_create)
+        self.employees = QListWidget()
+        selected = set(selected or [])
+        locked_id = locked_id or pracownik_id
+        for emp in get_active_employees():
+            item = QListWidgetItem(f"{emp['imie']} {emp['nazwisko']}")
+            item.setData(Qt.ItemDataRole.UserRole, emp["id"])
+            flags = item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+            checked = emp["id"] in selected or emp["id"] == locked_id
+            if emp["id"] == locked_id:
+                flags &= ~Qt.ItemFlag.ItemIsEnabled
+                item.setText(item.text() + " (właściciel)")
+            item.setFlags(flags)
+            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+            self.employees.addItem(item)
+        layout.addWidget(self.employees)
 
-        def on_create():
-            nazwa = nazwa_field.text().strip()
-            if not nazwa:
-                QMessageBox.warning(dialog, "Błąd", "Wpisz nazwę konwersacji")
-                return
-            try:
-                create_conversation(nazwa, self.pracownik_id)
-            except Exception as e:
-                QMessageBox.critical(dialog, "Błąd", f"Nie udało się utworzyć konwersacji: {e}")
-                return
-            dialog.accept()
-            self.refresh_chat_conversations()
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Zapisz")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
-        btn_create.clicked.connect(on_create)
-        dialog.exec()
+    def _on_accept(self):
+        if not self.nazwa():
+            QMessageBox.warning(self, "Błąd", "Wpisz nazwę konwersacji")
+            return
+        self.accept()
+
+    def nazwa(self) -> str:
+        return self.nazwa_field.text().strip()
+
+    def selected_ids(self):
+        return [
+            self.employees.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.employees.count())
+            if self.employees.item(i).checkState() == Qt.CheckState.Checked
+        ]

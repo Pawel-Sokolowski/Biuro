@@ -14,11 +14,13 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 
 from app.db.dao_companies import (
     list_companies,
     get_companies_filtered,
     delete_company,
+    set_company_status,
 )
 from app.companies.company_form import CompanyForm
 
@@ -53,10 +55,10 @@ class CompanyUI(QWidget):
 
         layout.addLayout(filter_layout)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels([
             "ID", "Nazwa", "NIP", "Miasto", "Status",
-            "Cennik", "Limit dokumentów", "PEL", "UPL"
+            "Cennik", "Limit dokumentów", "PEL", "UPL", "Ostatni backup"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -72,11 +74,13 @@ class CompanyUI(QWidget):
         self.btn_add = QPushButton("Dodaj firmę")
         self.btn_edit = QPushButton("Edytuj firmę")
         self.btn_delete = QPushButton("Usuń firmę")
+        self.btn_restore = QPushButton("Przywróć do aktywnych")
         self.btn_refresh = QPushButton("Odśwież")
 
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_edit)
         btn_layout.addWidget(self.btn_delete)
+        btn_layout.addWidget(self.btn_restore)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_refresh)
 
@@ -90,6 +94,7 @@ class CompanyUI(QWidget):
         self.btn_add.clicked.connect(self._add_company)
         self.btn_edit.clicked.connect(self._edit_company)
         self.btn_delete.clicked.connect(self._delete_company)
+        self.btn_restore.clicked.connect(self._restore_company)
         self.btn_refresh.clicked.connect(self._refresh)
 
         self._refresh()
@@ -101,8 +106,17 @@ class CompanyUI(QWidget):
         rows = list_companies(self.pracownik_id)
         self._load_table(rows)
 
+    @staticmethod
+    def _backup_by_company() -> Dict[str, Dict[str, Any]]:
+        try:
+            from app.utils.backup_status import get_backup_status
+            return {b['firma']: b for b in get_backup_status()['bazy'] if b.get('firma')}
+        except Exception:
+            return {}
+
     def _load_table(self, rows: List[Dict[str, Any]]):
         self.table.setRowCount(0)
+        backups = self._backup_by_company()
         for r in rows:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -116,6 +130,25 @@ class CompanyUI(QWidget):
             self.table.setItem(row, 6, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
             self.table.setItem(row, 7, QTableWidgetItem(r.get("pel") or ""))
             self.table.setItem(row, 8, QTableWidgetItem(r.get("upl") or ""))
+            self.table.setItem(row, 9, self._backup_item(backups.get(r.get("nazwa"))))
+
+    @staticmethod
+    def _backup_item(info):
+        if not info or not info.get('ostatnia_kopia'):
+            return QTableWidgetItem('—')
+        item = QTableWidgetItem(info['ostatnia_kopia'].strftime('%Y-%m-%d %H:%M'))
+        if info.get('stan') != 'ok':
+            item.setForeground(QColor('#c0392b'))
+        return item
+
+    def _restore_company(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, 'Firma', 'Wybierz firmę do przywrócenia.')
+            return
+        firma_id = int(self.table.item(row, 0).text())
+        set_company_status(firma_id, 'Aktywne')
+        self._refresh()
 
     # ============================================================
     #  FILTERS

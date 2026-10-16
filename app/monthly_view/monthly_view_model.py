@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant
+import datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,8 +35,29 @@ class MonthlyViewModel(QAbstractTableModel):
         self._rows = rows
         self.endResetModel()
 
+    COL_DOCS = 1
+    COL_ETAP = 2
+
     def _docs_col(self) -> int:
-        return self.columnCount() - 1
+        return self.COL_DOCS
+
+    def _ilosc_col(self) -> int:
+        return 3 if self._mode == "ksiegowosc" else -1
+
+    def _uop_cols(self):
+        return (3, 4, 5) if self._mode == "kadry" else ()
+
+    DATE_ROLE = Qt.ItemDataRole.UserRole + 1
+
+    @staticmethod
+    def _delivered_text(row: Dict[str, Any]) -> str:
+        raw = row.get("data_dostarczenia")
+        if not row.get("dokumenty_dostarczone") or not raw:
+            return ""
+        try:
+            return datetime.date.fromisoformat(str(raw)[:10]).strftime("%d.%m.%Y")
+        except ValueError:
+            return str(raw)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._rows)
@@ -51,35 +73,34 @@ class MonthlyViewModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.ItemDataRole.DisplayRole:
+            if col == self.COL_DOCS:
+                return self._delivered_text(row)
             if self._mode == "ksiegowosc":
                 mapping = {
                     0: row.get("nazwa", ""),
-                    1: row.get("etap", "Brak"),
-                    2: str(row.get("ilosc_dok", 0)),
-                    3: row.get("czas_ks_str", ""),
-                    4: "▶",
-                    5: row.get("note_full", row.get("note_snippet", "")),
-                    6: "➕",
-                    7: "✏️",
-                    8: "⋯",
-                    9: "",
+                    2: row.get("etap", "Brak"),
+                    3: str(row.get("ilosc_dok", 0)),
+                    4: row.get("czas_ks_str", ""),
+                    5: "▶",
+                    6: row.get("note_full", row.get("note_snippet", "")),
+                    7: "➕",
+                    8: "✏️",
+                    9: "⋯",
                 }
                 return mapping.get(col, "")
-            else:
-                mapping = {
-                    0: row.get("nazwa", ""),
-                    1: row.get("etap", "Brak"),
-                    2: str(row.get("uop", 0)),
-                    3: str(row.get("uz", 0)),
-                    4: str(row.get("uod", 0)),
-                    5: row.get("czas_kadry_str", ""),
-                    6: "▶",
-                    7: row.get("note_full", row.get("note_snippet", "")),
-                    8: "➕",
-                    9: "✏️",
-                    10: "",
-                }
-                return mapping.get(col, "")
+            mapping = {
+                0: row.get("nazwa", ""),
+                2: row.get("etap", "Brak"),
+                3: str(row.get("uop", 0)),
+                4: str(row.get("uz", 0)),
+                5: str(row.get("uod", 0)),
+                6: row.get("czas_kadry_str", ""),
+                7: "▶",
+                8: row.get("note_full", row.get("note_snippet", "")),
+                9: "➕",
+                10: "✏️",
+            }
+            return mapping.get(col, "")
 
         if role == Qt.ItemDataRole.CheckStateRole and col == self._docs_col():
             return (
@@ -88,7 +109,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 else Qt.CheckState.Unchecked
             )
 
-        if role == Qt.ItemDataRole.EditRole and col == 1:
+        if role == Qt.ItemDataRole.EditRole and col == self.COL_ETAP:
             return row.get("etap", "Brak")
 
         if role == Qt.ItemDataRole.UserRole:
@@ -115,9 +136,9 @@ class MonthlyViewModel(QAbstractTableModel):
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
             if self._mode == "ksiegowosc":
-                headers = ["Firma", "Etap", "Ilość dok.", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "Dokumenty dostarczone"]
+                headers = ["Firma", "Dostarczone", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯"]
             else:
-                headers = ["Firma", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "Dokumenty dostarczone"]
+                headers = ["Firma", "Dostarczone", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()
@@ -126,13 +147,11 @@ class MonthlyViewModel(QAbstractTableModel):
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if index.column() == 1:
+        if index.column() == self.COL_ETAP:
             flags |= Qt.ItemFlag.ItemIsEditable
         if index.column() == self._docs_col():
             flags |= Qt.ItemFlag.ItemIsUserCheckable
-        if self._mode == "ksiegowosc" and index.column() == 2:
-            flags |= Qt.ItemFlag.ItemIsEditable
-        if self._mode == "kadry" and index.column() in (2, 3, 4):
+        if index.column() == self._ilosc_col() or index.column() in self._uop_cols():
             flags |= Qt.ItemFlag.ItemIsEditable
         return flags
 
@@ -156,14 +175,25 @@ class MonthlyViewModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.CheckStateRole and col == self._docs_col():
             checked = value in (Qt.CheckState.Checked, Qt.CheckState.Checked.value, 2, True)
             row["dokumenty_dostarczone"] = 1 if checked else 0
-            self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
-            self._persist(row, dokumenty_dostarczone=row["dokumenty_dostarczone"])
+            row["data_dostarczenia"] = datetime.date.today().isoformat() if checked else None
+            self.dataChanged.emit(index, index)
+            self._persist(
+                row,
+                dokumenty_dostarczone=row["dokumenty_dostarczone"],
+                data_dostarczenia=row["data_dostarczenia"],
+            )
+            return True
+
+        if role == self.DATE_ROLE and col == self._docs_col():
+            row["data_dostarczenia"] = str(value)
+            self.dataChanged.emit(index, index)
+            self._persist(row, dokumenty_dostarczone=1, data_dostarczenia=str(value))
             return True
 
         if role != Qt.ItemDataRole.EditRole:
             return False
 
-        if col == 1:
+        if col == self.COL_ETAP:
             row["etap"] = str(value)
             top = self.index(index.row(), 0)
             bottom = self.index(index.row(), self.columnCount() - 1)
@@ -178,16 +208,11 @@ class MonthlyViewModel(QAbstractTableModel):
 
         changed = False
 
-        if self._mode == "ksiegowosc" and col == 2:
+        if self._mode == "ksiegowosc" and col == self._ilosc_col():
             row["ilosc_dok"] = ivalue
             changed = True
-        elif self._mode == "kadry" and col in (2, 3, 4):
-            if col == 2:
-                row["uop"] = ivalue
-            elif col == 3:
-                row["uz"] = ivalue
-            elif col == 4:
-                row["uod"] = ivalue
+        elif self._mode == "kadry" and col in self._uop_cols():
+            row[{3: "uop", 4: "uz", 5: "uod"}[col]] = ivalue
             changed = True
 
         if changed:
@@ -198,7 +223,7 @@ class MonthlyViewModel(QAbstractTableModel):
             if parent and hasattr(parent, "logic"):
                 try:
                     logic = getattr(parent, "logic")
-                    if self._mode == "ksiegowosc" and col == 2:
+                    if self._mode == "ksiegowosc":
                         logic.save_status_for_company(row["id"], ilosc_dok=row["ilosc_dok"])
                     elif self._mode == "kadry":
                         logic.save_status_for_company(

@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 
 EVENT_FIELDS = (
     "tytul", "opis", "lokalizacja", "start", "koniec",
-    "caly_dzien", "firma_id", "google_event_id",
+    "caly_dzien", "firma_id", "google_event_id", "caldav_uid", "zrodlo",
 )
 
 
@@ -90,6 +90,55 @@ def get_event_by_google_id(pracownik_id: int, google_event_id: str) -> Optional[
         conn.close()
 
 
+def get_event_by_caldav_uid(pracownik_id: int, uid: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND caldav_uid = ?",
+            (pracownik_id, uid),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_caldav_events(pracownik_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND caldav_uid IS NOT NULL",
+            (pracownik_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_events_without_caldav(pracownik_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND caldav_uid IS NULL "
+            "AND google_event_id IS NULL",
+            (pracownik_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_caldav_uid(event_id: int, uid: Optional[str], zrodlo: str = "caldav") -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE wydarzenia SET caldav_uid = ?, zrodlo = ? WHERE id = ?",
+            (uid, zrodlo if uid else "lokalne", event_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_unsynced_events(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -106,6 +155,7 @@ def list_unsynced_events(pracownik_id: int) -> List[Dict[str, Any]]:
 def save_event(pracownik_id: int, data: Dict[str, Any]) -> int:
     values = {k: data.get(k) for k in EVENT_FIELDS}
     values["caly_dzien"] = 1 if values["caly_dzien"] else 0
+    values["zrodlo"] = values["zrodlo"] or "lokalne"
     if not values["tytul"] or not values["start"] or not values["koniec"]:
         raise ValueError("Tytuł, początek i koniec są wymagane.")
     conn = get_conn()

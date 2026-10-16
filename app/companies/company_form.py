@@ -1,11 +1,11 @@
-# app/companies/company_form.py
+﻿# app/companies/company_form.py
 from typing import Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPushButton,
     QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QMessageBox
+    QScrollArea, QMessageBox, QGridLayout, QSizePolicy
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QCompleter
@@ -28,6 +28,75 @@ from app.email.email_storage import (
     ensure_contact_email_filters,
 )
 import logging
+from app.companies.constants import (
+    FORMA_DZIALALNOSCI, FORMA_OPODATKOWANIA, SPOSOB_ZAPLATY,
+    STATUS_PODATKOWY, MIESIACE_FAKTUROWANIE, FORMY_OSOBY_FIZYCZNEJ,
+)
+from app.companies.ceidg_api import get_ceidg_firma_by_nip
+from app.companies.gus_api import get_gus_firma_by_nip
+from app.companies.krs_api import get_krs_firma_by_krs
+from PyQt6.QtCore import QEvent, QObject
+from PyQt6.QtWidgets import QAbstractSpinBox, QApplication
+
+
+ADDR_PREFIXES = [
+    ("Adres działalności", "dz"),
+    ("Adres korespondencyjny", "ko"),
+    ("Adres zamieszkania", "zam"),
+]
+ADDR_FIELDS = ["miasto", "kod", "ulica", "budynek", "lokal",
+               "wojewodztwo", "powiat", "gmina", "kraj"]
+
+
+def _merged_options(field: str, defaults) -> list:
+    """Wartości domyślne + te, które już występują w bazie."""
+    values = list(defaults)
+    for value in get_company_field_options(field):
+        if value not in values:
+            values.append(value)
+    return values
+
+
+class _NoWheelFilter(QObject):
+    """Spinboxy i listy nie przechwytują kółka myszy, nigdy;
+    zdarzenie trafia zawsze do przewijanego formularza."""
+
+    def __init__(self, scroll: QScrollArea):
+        super().__init__(scroll)
+        self._scroll = scroll
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        QApplication.sendEvent(self._scroll.viewport(), event)
+        return True
+
+
+def _grid_row(parent_layout, labels, widgets):
+    """Wiersz etykiet + pól o równych szerokościach kolumn (siatka 12-kolumnowa)."""
+    n = max(len(labels), len(widgets), 1)
+    span = max(12 // n, 1)
+    grid = QGridLayout()
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(8)
+    grid.setVerticalSpacing(2)
+    for c in range(12):
+        grid.setColumnStretch(c, 1)
+        grid.setColumnMinimumWidth(c, 0)
+    for i, text in enumerate(labels):
+        if text:
+            grid.addWidget(QLabel(text), 0, i * span, 1, span)
+    for i, w in enumerate(widgets):
+        if isinstance(w, QHBoxLayout):
+            wrapper = QWidget()
+            w.setContentsMargins(0, 0, 0, 0)
+            wrapper.setLayout(w)
+            w = wrapper
+        if not isinstance(w, QCheckBox):
+            w.setSizePolicy(QSizePolicy.Policy.Ignored, w.sizePolicy().verticalPolicy())
+        grid.addWidget(w, 1, i * span, 1, span)
+    parent_layout.addLayout(grid)
+
 
 logger = logging.getLogger(__name__)
 
@@ -65,41 +134,7 @@ class CompanyForm(QDialog):
         dane_layout.addWidget(title)
 
         def add_row(labels, widgets):
-            row_labels = QHBoxLayout()
-            row_fields = QHBoxLayout()
-
-            for lbl in labels:
-                row_labels.addWidget(
-                    QLabel(lbl),
-                    1
-                )
-
-            for w in widgets:
-
-                if isinstance(w, QHBoxLayout):
-
-                    wrapper = QWidget()
-                    wrapper.setLayout(w)
-
-                    row_fields.addWidget(
-                        wrapper,
-                        1
-                    )
-
-                else:
-
-                    row_fields.addWidget(
-                        w,
-                        1
-                    )
-
-            dane_layout.addLayout(
-                row_labels
-            )
-
-            dane_layout.addLayout(
-                row_fields
-            )
+            _grid_row(dane_layout, labels, widgets)
 
         def make_searchable(combo: QComboBox):
             combo.setEditable(True)
@@ -125,7 +160,7 @@ class CompanyForm(QDialog):
 
         nip_box = QHBoxLayout()
         nip = QLineEdit()
-        self.btn_ceidg = QPushButton("Pobierz dane")
+        self.btn_ceidg = QPushButton("Pobierz z CEIDG/GUS")
         self.btn_ceidg.clicked.connect(self._on_ceidg)
 
         nip_box.addWidget(nip)
@@ -138,15 +173,20 @@ class CompanyForm(QDialog):
             [numer_umowy, nip_box, regon]
         )
 
+        krs_box = QHBoxLayout()
         krs = QLineEdit()
+        self.btn_krs = QPushButton("Pobierz z KRS")
+        self.btn_krs.clicked.connect(self._on_krs)
+        krs_box.addWidget(krs)
+        krs_box.addWidget(self.btn_krs)
         pesel = QLineEdit()
         forma_dzialalnosci = QComboBox()
-        forma_dzialalnosci.addItems(get_company_field_options("forma_dzialalnosci"))
+        forma_dzialalnosci.addItems(_merged_options("forma_dzialalnosci", FORMA_DZIALALNOSCI))
         make_searchable(forma_dzialalnosci)
 
         add_row(
             ["KRS:", "PESEL:", "Forma działalności:"],
-            [krs, pesel, forma_dzialalnosci]
+            [krs_box, pesel, forma_dzialalnosci]
         )
 
 
@@ -159,7 +199,7 @@ class CompanyForm(QDialog):
             urzad_skarbowy.addItem(office["nazwa"], office["nazwa"])
         make_searchable(urzad_skarbowy)
         forma_opodatkowania = QComboBox()
-        forma_opodatkowania.addItems(get_company_field_options("forma_opodatkowania"))
+        forma_opodatkowania.addItems(_merged_options("forma_opodatkowania", FORMA_OPODATKOWANIA))
         make_searchable(forma_opodatkowania)
 
         add_row(
@@ -188,10 +228,10 @@ class CompanyForm(QDialog):
         )
 
         sposob_zaplaty = QComboBox()
-        sposob_zaplaty.addItems(get_company_field_options("sposob_zaplaty"))
+        sposob_zaplaty.addItems(_merged_options("sposob_zaplaty", SPOSOB_ZAPLATY))
         make_searchable(sposob_zaplaty)
         status_podatkowy = QComboBox()
-        status_podatkowy.addItems(get_company_field_options("status_podatkowy"))
+        status_podatkowy.addItems(_merged_options("status_podatkowy", STATUS_PODATKOWY))
         make_searchable(status_podatkowy)
         kategoria_domyslna = QLineEdit()
 
@@ -200,8 +240,10 @@ class CompanyForm(QDialog):
             [sposob_zaplaty, status_podatkowy, kategoria_domyslna]
         )
 
-        miesiac_dok_fakturowanie = QLineEdit()
-        miesiac_prac_fakturowanie = QLineEdit()
+        miesiac_dok_fakturowanie = QComboBox()
+        miesiac_dok_fakturowanie.addItems(MIESIACE_FAKTUROWANIE)
+        miesiac_prac_fakturowanie = QComboBox()
+        miesiac_prac_fakturowanie.addItems(MIESIACE_FAKTUROWANIE)
 
         dzien_dostarczania_dokumentow = QSpinBox()
         dzien_dostarczania_dokumentow.setRange(1, 31)
@@ -209,6 +251,19 @@ class CompanyForm(QDialog):
         add_row(
             ["Miesiąc dok. fakturowanie:", "Miesiąc prac. fakturowanie:", "Dzień dostarczania dokumentów:"],
             [miesiac_dok_fakturowanie, miesiac_prac_fakturowanie, dzien_dostarczania_dokumentow]
+        )
+
+        ksiegowa_id = QComboBox()
+        kadrowa_id = QComboBox()
+        for combo in (ksiegowa_id, kadrowa_id):
+            combo.addItem("— brak —", 0)
+            for emp in get_employees_list():
+                combo.addItem(f"{emp['imie']} {emp['nazwisko']}", emp["id"])
+            make_searchable(combo)
+
+        add_row(
+            ["Księgowa:", "Kadrowa:"],
+            [ksiegowa_id, kadrowa_id]
         )
 
         uwagi_label = QLabel("Uwagi:")
@@ -244,6 +299,8 @@ class CompanyForm(QDialog):
             "miesiac_dok_fakturowanie": miesiac_dok_fakturowanie,
             "miesiac_prac_fakturowanie": miesiac_prac_fakturowanie,
             "dzien_dostarczania_dokumentow": dzien_dostarczania_dokumentow,
+            "ksiegowa_id": ksiegowa_id,
+            "kadrowa_id": kadrowa_id,
             "uwagi": uwagi,
         })
 
@@ -260,29 +317,7 @@ class CompanyForm(QDialog):
         adresy_layout.addWidget(tabs)
 
         def add_addr_row(parent_layout, labels, widgets):
-
-            row_labels = QHBoxLayout()
-            row_fields = QHBoxLayout()
-
-            for lbl in labels:
-                row_labels.addWidget(
-                    QLabel(lbl),
-                    1
-                )
-
-            for w in widgets:
-                row_fields.addWidget(
-                    w,
-                    1
-                )
-
-            parent_layout.addLayout(
-                row_labels
-            )
-
-            parent_layout.addLayout(
-                row_fields
-            )
+            _grid_row(parent_layout, labels, widgets)
 
         # ADRES DZIAŁALNOŚCI
         dz_widget = QWidget()
@@ -380,6 +415,23 @@ class CompanyForm(QDialog):
             "zam_kraj": zam_kraj,
         })
 
+        copy_row = QHBoxLayout()
+        copy_row.addWidget(QLabel("Kopiuj adres z:"))
+        self.addr_copy_from = QComboBox()
+        self.addr_copy_to = QComboBox()
+        for combo in (self.addr_copy_from, self.addr_copy_to):
+            for label, prefix in ADDR_PREFIXES:
+                combo.addItem(label, prefix)
+        self.addr_copy_to.setCurrentIndex(1)
+        btn_copy_addr = QPushButton("Kopiuj")
+        btn_copy_addr.clicked.connect(self._copy_address)
+        copy_row.addWidget(self.addr_copy_from)
+        copy_row.addWidget(QLabel("do:"))
+        copy_row.addWidget(self.addr_copy_to)
+        copy_row.addWidget(btn_copy_addr)
+        copy_row.addStretch()
+        adresy_layout.addLayout(copy_row)
+
         main_layout.addWidget(adresy_box)
 
         # SEKCJA: CENNIKI
@@ -391,31 +443,7 @@ class CompanyForm(QDialog):
         cenniki_layout.addWidget(title_cenniki)
 
         def add_cennik_row(labels, widgets):
-
-            row_labels = QHBoxLayout()
-            row_fields = QHBoxLayout()
-
-            for lbl in labels:
-                row_labels.addWidget(
-                    QLabel(lbl),
-                    1
-                )
-
-            for w in widgets:
-
-                if isinstance(w, QWidget):
-                    row_fields.addWidget(
-                        w,
-                        1
-                    )
-
-            cenniki_layout.addLayout(
-                row_labels
-            )
-
-            cenniki_layout.addLayout(
-                row_fields
-            )
+            _grid_row(cenniki_layout, labels, widgets)
 
         glowny_cennik = QComboBox()
 
@@ -473,29 +501,7 @@ class CompanyForm(QDialog):
         kadry_layout.addWidget(title_kadry)
 
         def add_kadry_row(labels, widgets):
-
-            row_labels = QHBoxLayout()
-            row_fields = QHBoxLayout()
-
-            for lbl in labels:
-                row_labels.addWidget(
-                    QLabel(lbl),
-                    1
-                )
-
-            for w in widgets:
-                row_fields.addWidget(
-                    w,
-                    1
-                )
-
-            kadry_layout.addLayout(
-                row_labels
-            )
-
-            kadry_layout.addLayout(
-                row_fields
-            )
+            _grid_row(kadry_layout, labels, widgets)
 
         kadry_opts = get_pricing_kadry()
 
@@ -569,9 +575,11 @@ class CompanyForm(QDialog):
         self.contacts_table.setMinimumHeight(200)
         kontakty_layout.addWidget(self.contacts_table)
 
-        kont_form = QHBoxLayout()
-        kont_left = QVBoxLayout()
-        kont_right = QVBoxLayout()
+        kont_form = QGridLayout()
+        kont_form.setHorizontalSpacing(8)
+        kont_form.setVerticalSpacing(2)
+        kont_form.setColumnStretch(0, 1)
+        kont_form.setColumnStretch(1, 1)
 
         kont_imie = QLineEdit()
         kont_nazwisko = QLineEdit()
@@ -579,25 +587,17 @@ class CompanyForm(QDialog):
         kont_tel = QLineEdit()
         kont_rola = QLineEdit()
 
-        for lbl, widget in [
-            ("Imię:", kont_imie),
-            ("Nazwisko:", kont_nazwisko),
-        ]:
-            lab = QLabel(lbl)
-            kont_left.addWidget(lab)
-            kont_left.addWidget(widget)
+        for r, (lbl, widget, col) in enumerate([
+            ("Imię:", kont_imie, 0),
+            ("Nazwisko:", kont_nazwisko, 0),
+            ("E-mail:", kont_email, 1),
+            ("Telefon:", kont_tel, 1),
+            ("Rola:", kont_rola, 1),
+        ]):
+            row = (r if col == 0 else r - 2) * 2
+            kont_form.addWidget(QLabel(lbl), row, col)
+            kont_form.addWidget(widget, row + 1, col)
 
-        for lbl, widget in [
-            ("E-mail:", kont_email),
-            ("Telefon:", kont_tel),
-            ("Rola:", kont_rola),
-        ]:
-            lab = QLabel(lbl)
-            kont_right.addWidget(lab)
-            kont_right.addWidget(widget)
-
-        kont_form.addLayout(kont_left)
-        kont_form.addLayout(kont_right)
         kontakty_layout.addLayout(kont_form)
 
         btn_add_contact = QPushButton("Dodaj kontakt")
@@ -752,10 +752,10 @@ class CompanyForm(QDialog):
         self.notes_table.setMinimumHeight(200)
         not_layout.addWidget(self.notes_table)
 
-        note_edit = QTextEdit()
-        note_edit.setMinimumHeight(120)
+        self.note_edit = QTextEdit()
+        self.note_edit.setMinimumHeight(120)
         not_layout.addWidget(QLabel("Nowa notatka:"))
-        not_layout.addWidget(note_edit)
+        not_layout.addWidget(self.note_edit)
 
         btn_add_note = QPushButton("Dodaj notatkę")
         not_layout.addWidget(btn_add_note)
@@ -792,6 +792,14 @@ class CompanyForm(QDialog):
 
         btn_add_note.clicked.connect(self._add_note)
 
+        # Kółko myszy przewija formularz, a nie zmienia wartości pól
+        self._wheel_filter = _NoWheelFilter(scroll)
+        for widget in self.findChildren((QAbstractSpinBox, QComboBox)):
+            widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            widget.installEventFilter(self._wheel_filter)
+
+        self.inputs["pesel"].setPlaceholderText("Wymagany dla osoby fizycznej / JDG")
+
         # ============================================================
         # ŁADOWANIE DANYCH FIRMY
         # ============================================================
@@ -803,13 +811,61 @@ class CompanyForm(QDialog):
             self._load_notes()
 
     # ============================================================
-    # CEIDG
+    # CEIDG / GUS
     # ============================================================
     def _on_ceidg(self):
+        def fetch(nip):
+            res = get_ceidg_firma_by_nip(nip)
+            if res and not res.get("error"):
+                return res
+            gus = get_gus_firma_by_nip(nip)
+            if gus and not gus.get("error"):
+                return gus
+            return res if res and res.get("error") else gus
+
         try:
-            ceidg_fetch(self)
+            ceidg_fetch(self, fetch=fetch, label="Pobierz z CEIDG/GUS", title="CEIDG/GUS")
         except Exception as e:
-            print("CEIDG error:", e)
+            logger.warning("Błąd pobierania z CEIDG/GUS: %s", e)
+            QMessageBox.warning(self, "CEIDG/GUS", f"Błąd pobierania danych: {e}")
+    def _on_krs(self):
+        try:
+            ceidg_fetch(
+                self,
+                fetch=get_krs_firma_by_krs,
+                button="btn_krs",
+                label="Pobierz z KRS",
+                title="KRS",
+                field="krs",
+                field_label="numer KRS",
+            )
+        except Exception as e:
+            logger.warning("Błąd pobierania z KRS: %s", e)
+            QMessageBox.warning(self, "KRS", f"Błąd pobierania danych z KRS: {e}")
+
+    def _copy_address(self):
+        src = self.addr_copy_from.currentData()
+        dst = self.addr_copy_to.currentData()
+        if src == dst:
+            QMessageBox.information(self, "Adres", "Wybierz dwa różne adresy.")
+            return
+        for field in ADDR_FIELDS:
+            self.inputs[f"{dst}_{field}"].setText(self.inputs[f"{src}_{field}"].text())
+
+    def _is_natural_person(self) -> bool:
+        forma = self.inputs["forma_dzialalnosci"].currentText().strip().lower()
+        return any(forma.startswith(f.lower()) for f in FORMY_OSOBY_FIZYCZNEJ)
+
+    def _validate(self) -> Optional[str]:
+        if not self.inputs["nazwa"].text().strip():
+            return "Podaj nazwę firmy."
+        if self._is_natural_person():
+            pesel = self.inputs["pesel"].text().strip()
+            if not pesel:
+                return "PESEL jest wymagany dla jednoosobowej działalności gospodarczej."
+            if not (pesel.isdigit() and len(pesel) == 11):
+                return "PESEL musi składać się z 11 cyfr."
+        return None
 
     # ============================================================
     # ZBIERANIE PAYLOADU
@@ -830,7 +886,10 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QDoubleSpinBox):
                 payload[key] = widget.value()
             elif isinstance(widget, QComboBox):
-                payload[key] = widget.currentText()
+                if key in ("ksiegowa_id", "kadrowa_id"):
+                    payload[key] = int(widget.currentData() or 0)
+                else:
+                    payload[key] = widget.currentText()
             elif isinstance(widget, QCheckBox):
                 payload[key] = 1 if widget.isChecked() else 0
 
@@ -920,6 +979,10 @@ class CompanyForm(QDialog):
             set_pelnomocnictwa(self.firma_id, typ, ids)
 
     def _on_save(self):
+        error = self._validate()
+        if error:
+            QMessageBox.warning(self, "Firma", error)
+            return
         payload = self._collect_payload()
         try:
             self.firma_id = save_company(payload, actor_id=self.actor_id)
@@ -927,7 +990,23 @@ class CompanyForm(QDialog):
             self._sync_contact_email_filters()
             self.accept()
         except Exception as e:
-            print("Save error:", e)
+            logger.exception("Błąd zapisu firmy")
+            QMessageBox.critical(self, "Firma", f"Nie udało się zapisać firmy: {e}")
+
+    @staticmethod
+    def _set_combo_value(key: str, widget: QComboBox, val) -> None:
+        if val is None:
+            return
+        if key in ("ksiegowa_id", "kadrowa_id"):
+            idx = widget.findData(int(val or 0))
+            widget.setCurrentIndex(max(idx, 0))
+            return
+        text = str(val)
+        if text and widget.findText(text) < 0:
+            widget.addItem(text, text)
+        idx = widget.findText(text)
+        if idx >= 0:
+            widget.setCurrentIndex(idx)
 
     # ============================================================
     # ŁADOWANIE DANYCH
@@ -948,15 +1027,9 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QDoubleSpinBox):
                 widget.setValue(float(val or 0))
             elif isinstance(widget, QComboBox):
-                if val is not None:
-                    if widget.findText(str(val)) < 0 and key in (
-                        "forma_dzialalnosci", "forma_opodatkowania", "urzad_skarbowy",
-                        "sposob_zaplaty", "status_podatkowy"
-                    ):
-                        widget.addItem(str(val), str(val))
-                    idx = widget.findText(str(val))
-                    if idx >= 0:
-                        widget.setCurrentIndex(idx)
+                self._set_combo_value(key, widget, val)
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(bool(val))
 
     # ============================================================
     # ŁADOWANIE DANYCH Z PAYLOADU (IMPORT WIZARD)
@@ -988,15 +1061,8 @@ class CompanyForm(QDialog):
                     widget.setValue(0.0)
 
             elif isinstance(widget, QComboBox):
-                if val is not None:
-                    if widget.findText(str(val)) < 0 and key in (
-                        "forma_dzialalnosci", "forma_opodatkowania", "urzad_skarbowy",
-                        "sposob_zaplaty", "status_podatkowy"
-                    ):
-                        widget.addItem(str(val), str(val))
-                    idx = widget.findText(str(val))
-                    if idx >= 0:
-                        widget.setCurrentIndex(idx)
+                self._set_combo_value(key, widget, val)
+
 
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(bool(val))
@@ -1235,14 +1301,18 @@ class CompanyForm(QDialog):
         for r in rows:
             row = self.notes_table.rowCount()
             self.notes_table.insertRow(row)
-            for col, key in enumerate(["tresc", "autor", "data"]):
+            for col, key in enumerate(["tresc", "autor_nazwa", "data_utworzenia"]):
                 self.notes_table.setItem(row, col, QTableWidgetItem(str(r.get(key) or "")))
+        self.notes_table.resizeRowsToContents()
 
     def _add_note(self):
-        if not self.firma_id:
-            return
-        text = self.findChild(QTextEdit).toPlainText().strip()
+        text = self.note_edit.toPlainText().strip()
         if not text:
             return
-        save_company_note(self.firma_id, text)
+        if not self.firma_id:
+            QMessageBox.information(
+                self, "Notatki", "Zapisz firmę, aby móc dodawać notatki.")
+            return
+        save_company_note(self.firma_id, text, self.actor_id)
+        self.note_edit.clear()
         self._load_notes()

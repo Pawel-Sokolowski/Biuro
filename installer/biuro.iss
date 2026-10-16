@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Biuro"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
 
@@ -7,6 +7,7 @@
 Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 
 [Setup]
+
 AppId={{E1D2A7C9-8B4A-4DB7-9F6D-5A6F0A3C1B20}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}

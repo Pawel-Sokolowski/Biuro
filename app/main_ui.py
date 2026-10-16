@@ -1,6 +1,6 @@
 import os
 
-from PyQt6.QtWidgets import QApplication, QFileDialog
+from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog
 from PyQt6.QtCore import QSettings
 from app.utils.ui_imports import *
 from app.config import DEFAULT_DB_NAME, get_database, set_database
@@ -19,11 +19,18 @@ from app.tasks.tasks_ui import TasksPage
 from app.kalendarz.calendar_ui import CalendarPage
 from app.dashboard.dashboard_ui import DashboardPage
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, QSize
 from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class ShrinkableStack(QStackedWidget):
+    """QStackedWidget bierze minimum z najszerszej strony; tu pozwalamy zwężać okno."""
+
+    def minimumSizeHint(self):
+        return QSize(0, 0)
 
 
 class LoginWindow(QDialog):
@@ -139,6 +146,9 @@ class LoginWindow(QDialog):
             self.password_input
         )
 
+        self.remember_check = QCheckBox("Zapamiętaj mnie na tym komputerze")
+        form.addRow("", self.remember_check)
+
         layout.addLayout(form)
 
         row = QHBoxLayout()
@@ -188,7 +198,38 @@ class LoginWindow(QDialog):
             self._on_login
         )
 
-        self.email_input.setFocus()
+        self._load_saved_credentials()
+        if self.email_input.text() and self.password_input.text():
+            self.password_input.setFocus()
+        else:
+            self.email_input.setFocus()
+
+    def _load_saved_credentials(self):
+        settings = QSettings("Biuro", "OfficeManager")
+        if not settings.value("remember_me", False, type=bool):
+            return
+        self.remember_check.setChecked(True)
+        self.email_input.setText(str(settings.value("saved_email", "") or ""))
+        encrypted = str(settings.value("saved_password", "") or "")
+        if encrypted:
+            try:
+                from app.utils.crypto import decrypt_password
+                self.password_input.setText(decrypt_password(encrypted))
+            except Exception:
+                logger.warning("Nie udało się odczytać zapisanego hasła", exc_info=True)
+
+    def _store_credentials(self, email: str, password: str):
+        """Hasło trafia do QSettings wyłącznie w postaci zaszyfrowanej."""
+        settings = QSettings("Biuro", "OfficeManager")
+        if self.remember_check.isChecked():
+            from app.utils.crypto import encrypt_password
+            settings.setValue("remember_me", True)
+            settings.setValue("saved_email", email)
+            settings.setValue("saved_password", encrypt_password(password))
+        else:
+            for key in ("remember_me", "saved_email", "saved_password"):
+                settings.remove(key)
+        settings.sync()
 
     @staticmethod
     def _database_history() -> list[str]:
@@ -255,6 +296,10 @@ class LoginWindow(QDialog):
         if ok:
             self.database_path = database_path
             self._remember_database(database_path)
+            try:
+                self._store_credentials(email, password)
+            except Exception:
+                logger.warning("Nie udało się zapisać danych logowania", exc_info=True)
             self.pracownik_id = user_id
             self.accept()
         else:
@@ -394,6 +439,7 @@ class OfficeManagerApp(QMainWindow):
 
         self.setWindowTitle("System Zarządzania Biurem Rachunkowego")
         self.resize(1400, 850)
+        self.setMinimumSize(900, 600)
 
         # elementy dla nagłówkowego timera
         self.lbl_live_timer = None
@@ -419,6 +465,39 @@ class OfficeManagerApp(QMainWindow):
                 font-weight: bold;
             }
             QPushButton:hover { background-color: #155a8a; }
+            QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit {
+                background-color: white;
+                border: 1px solid #b8b1a8;
+                border-radius: 4px;
+                padding: 4px 6px;
+            }
+            QComboBox { padding: 4px 6px; min-height: 22px; }
+            QTableView, QTreeView, QListView {
+                background-color: white;
+                alternate-background-color: #f6f2ed;
+                border: 1px solid #d0c7bd;
+                selection-background-color: #cfe3f5;
+                selection-color: #1c1c1c;
+            }
+            QHeaderView::section {
+                background-color: #f1e9e0;
+                color: #2c3e50;
+                font-weight: bold;
+                padding: 6px 8px;
+                border: none;
+                border-bottom: 2px solid #d0c7bd;
+            }
+            QTabBar::tab {
+                background: #f1e9e0;
+                padding: 8px 18px;
+                border: 1px solid #d0c7bd;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected { background: white; font-weight: bold; }
+            QGroupBox { border: 1px solid #d0c7bd; border-radius: 6px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
         """)
 
         main_widget = QWidget()
@@ -513,7 +592,7 @@ class OfficeManagerApp(QMainWindow):
 
         content_layout.addWidget(header)
 
-        self.pages = QStackedWidget()
+        self.pages = ShrinkableStack()
         content_layout.addWidget(self.pages)
         main_layout.addWidget(content)
 

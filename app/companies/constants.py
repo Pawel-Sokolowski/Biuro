@@ -14,6 +14,8 @@ Globalne stałe używane w całej aplikacji:
 # ============================================================
 
 FORMA_DZIALALNOSCI = [
+    "Osoba fizyczna (KPiR)",
+    "Osoba fizyczna (Ryczałt)",
     "JDG",
     "Spółka z o.o.",
     "Spółka cywilna",
@@ -21,8 +23,13 @@ FORMA_DZIALALNOSCI = [
     "Spółka komandytowa",
     "Spółka partnerska",
     "Spółka akcyjna",
+    "Fundacja",
+    "Stowarzyszenie",
     "Inna",
 ]
+
+# Formy działalności, w których właścicielem jest osoba fizyczna (PESEL wymagany)
+FORMY_OSOBY_FIZYCZNEJ = ("JDG", "Osoba fizyczna")
 
 # ============================================================
 #  FORMY OPODATKOWANIA
@@ -57,9 +64,10 @@ URZEDY_SKARBOWE = [
 # ============================================================
 
 MIESIACE_FAKTUROWANIE = [
-    "Obecny miesiąc",
+    "Bieżący miesiąc",
     "Poprzedni miesiąc",
     "2 miesiące wstecz",
+    "3 miesiące wstecz",
 ]
 
 # ============================================================

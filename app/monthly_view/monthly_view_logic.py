@@ -85,6 +85,7 @@ class MonthlyViewLogic:
                    f.status,
                    COALESCE(sm.etap, 'Brak') AS etap,
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
+                   sm.data_dostarczenia AS data_dostarczenia,
                    COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
@@ -167,6 +168,7 @@ class MonthlyViewLogic:
 
             result.append(r)
 
+        result.sort(key=lambda item: (item.get("nazwa") or "").casefold())
         return result
 
     def format_seconds(self, sekundy: int) -> str:
@@ -235,6 +237,7 @@ class MonthlyViewLogic:
         uz: Optional[int] = None,
         uod: Optional[int] = None,
         dokumenty_dostarczone: Optional[int] = None,
+        data_dostarczenia: Optional[str] = None,
     ):
         row = get_month_status(firma_id, self.aktualny_miesiac)
         payload: Dict[str, Any] = {}
@@ -243,6 +246,12 @@ class MonthlyViewLogic:
             if dokumenty_dostarczone is not None
             else (row or {}).get("dokumenty_dostarczone", 0)
         )
+        if data_dostarczenia is not None:
+            payload["data_dostarczenia"] = data_dostarczenia
+        else:
+            payload["data_dostarczenia"] = (row or {}).get("data_dostarczenia")
+        if payload["dokumenty_dostarczone"] and not payload["data_dostarczenia"]:
+            payload["data_dostarczenia"] = date.today().isoformat()
 
         if row:
             payload["etap"] = etap if etap is not None else row.get("etap", "Brak")
@@ -458,51 +467,8 @@ class MonthlyViewLogic:
         print("Opcja 3:", firma_id)
 
     def _auto_check_suspension(self):
-        today = date.today()
-        day = today.day
-        last_day = self._last_day_of_month(today)
-
-        if day not in (1, last_day):
-            return
-
-        from app.companies.ceidg_api import get_ceidg_firma_by_nip
-
-        conn = get_conn()
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-
-        cur.execute("SELECT id, nip FROM firmy")
-        rows = cur.fetchall()
-
-        for r in rows:
-            firma_id = r["id"]
-            nip = r["nip"]
-
-            if not nip:
-                continue
-
-            data = get_ceidg_firma_by_nip(nip)
-            if not data or data.get("error"):
-                continue
-
-            status = (data.get("status") or "").upper()
-            zaw = data.get("zawieszenia_dzialalnosci") or ""
-
-            if status == "ZAWIESZONA":
-                cur2 = conn.cursor()
-                cur2.execute(
-                    """
-                    UPDATE firmy
-                    SET status = 'Zawieszone',
-                        zawieszenia_dzialalnosci = ?
-                    WHERE id = ?
-                """,
-                    (zaw, firma_id),
-                )
-                conn.commit()
-
-        conn.close()
-
+        from app.utils.ceidg_suspension import run_in_background
+        run_in_background()
     def _last_day_of_month(self, d: date) -> int:
         next_month = d.replace(day=28) + timedelta(days=4)
         return (next_month - timedelta(days=next_month.day)).day

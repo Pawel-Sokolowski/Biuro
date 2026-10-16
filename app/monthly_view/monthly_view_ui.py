@@ -4,7 +4,7 @@ import os
 import datetime
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent
+from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent, QDate
 from PyQt6.QtGui import (
     QAction,
     QIntValidator,
@@ -32,7 +32,8 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QMessageBox,
     QCheckBox,
-    QStyledItemDelegate, QStyle,
+    QStyledItemDelegate, QStyle, QTableWidget, QTableWidgetItem,
+    QCalendarWidget, QDialogButtonBox, QStyleOptionViewItem,
 )
 
 from app.monthly_view.monthly_view_logic import MonthlyViewLogic
@@ -61,6 +62,48 @@ class EtapComboDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index):
         model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
+
+
+class DeliveredDateDelegate(QStyledItemDelegate):
+    """Checkbox z datą dostarczenia; kliknięcie w datę pozwala ją zmienić."""
+
+    def editorEvent(self, event, model, option, index):
+        if (
+            event.type() == QEvent.Type.MouseButtonRelease
+            and event.button() == Qt.MouseButton.LeftButton
+            and index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+        ):
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+            style = opt.widget.style() if opt.widget else None
+            check_rect = (
+                style.subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, opt.widget)
+                if style else None
+            )
+            if check_rect is not None and not check_rect.contains(event.position().toPoint()):
+                self.choose_date(model, index, opt.widget)
+                return True
+        return super().editorEvent(event, model, option, index)
+
+    @staticmethod
+    def choose_date(model, index, parent=None) -> None:
+        row = model.get_row(index.row()) or {}
+        try:
+            current = datetime.date.fromisoformat(str(row.get("data_dostarczenia") or "")[:10])
+        except ValueError:
+            current = datetime.date.today()
+        dlg = QDialog(parent)
+        dlg.setWindowTitle("Data dostarczenia dokumentów")
+        lay = QVBoxLayout(dlg)
+        cal = QCalendarWidget(dlg)
+        cal.setSelectedDate(QDate(current.year, current.month, current.day))
+        lay.addWidget(cal)
+        box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        box.accepted.connect(dlg.accept)
+        box.rejected.connect(dlg.reject)
+        lay.addWidget(box)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            model.setData(index, cal.selectedDate().toString("yyyy-MM-dd"), model.DATE_ROLE)
 
 
 def icon_path(name: str) -> str:
@@ -116,7 +159,7 @@ class ScrollableNotesDelegate(QStyledItemDelegate):
             Qt.TextFlag.TextWordWrap,
             text,
         ).height()
-        max_offset = max(0, content_height - rect.height())
+        max_offset = max(0, content_height - rect.height() + line_height)
         offset = min(self._offsets.get(key, 0), max_offset)
         self._offsets[key] = offset
 
@@ -124,7 +167,7 @@ class ScrollableNotesDelegate(QStyledItemDelegate):
         painter.translate(0, -offset)
         painter.drawText(
             rect.x(),
-            rect.y() + max(0, line_height // 4),
+            rect.y(),
             rect.width(),
             content_height,
             Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignLeft,
@@ -148,7 +191,10 @@ class ScrollableNotesDelegate(QStyledItemDelegate):
             Qt.TextFlag.TextWordWrap,
             text,
         ).height()
+        line_height = QFontMetrics(index.model().parent().font()).lineSpacing()
         max_offset = max(0, content_height - rect_height)
+        if max_offset > 0:
+            max_offset += line_height
         if max_offset == 0:
             return False
 
@@ -176,6 +222,51 @@ class HoverScrollTextEdit(QTextEdit):
 
     def set_text(self, text: str):
         self.setPlainText(text or "")
+
+
+class ActivityDialog(QDialog):
+    """Lista zarejestrowanych czasów pracy firmy w danym miesiącu."""
+
+    def __init__(self, firma_id: int, miesiac: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Aktywności — {miesiac}")
+        self.resize(760, 420)
+        layout = QVBoxLayout(self)
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["Pracownik", "Typ", "Początek", "Koniec", "Czas"])
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+        for row in self._load(firma_id, miesiac):
+            r = table.rowCount()
+            table.insertRow(r)
+            secs = int(row["sekundy"] or 0)
+            values = [
+                row["pracownik"] or "", row["typ"] or "",
+                row["rozpoczecie"] or "", row["zakonczenie"] or "",
+                f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}",
+            ]
+            for col, value in enumerate(values):
+                table.setItem(r, col, QTableWidgetItem(value))
+        btn = QPushButton("Zamknij")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
+
+    @staticmethod
+    def _load(firma_id: int, miesiac: str):
+        from app.db.dao_conn import get_conn
+        conn = get_conn()
+        try:
+            cur = conn.execute(
+                "SELECT c.typ, c.rozpoczecie, c.zakonczenie, c.sekundy, "
+                "p.imie || ' ' || p.nazwisko AS pracownik "
+                "FROM czasomierze c LEFT JOIN pracownicy p ON p.id = c.pracownik_id "
+                "WHERE c.firma_id = ? AND c.miesiac = ? ORDER BY c.rozpoczecie DESC",
+                (firma_id, miesiac),
+            )
+            return [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
+        finally:
+            conn.close()
 
 
 class ActivitySelectionDialog(QDialog):
@@ -399,6 +490,9 @@ class InlineExtraServiceWindow(QDialog):
 
 
 class MonthlyViewPage(QWidget):
+    NOTE_COL_KS = 6
+    NOTE_COL_KADRY = 8
+
     def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
@@ -462,22 +556,26 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
 
-        self.table_ks.setItemDelegateForColumn(4, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
-        self.table_ks.setItemDelegateForColumn(6, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
-        self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
-        self.table_ks.setItemDelegateForColumn(8, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
+        self.table_ks.setItemDelegateForColumn(5, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
+        self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
+        self.table_ks.setItemDelegateForColumn(8, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
+        self.table_ks.setItemDelegateForColumn(9, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
         self.notes_delegate_ks = ScrollableNotesDelegate(self.table_ks)
-        self.table_ks.setItemDelegateForColumn(5, self.notes_delegate_ks)
+        self.table_ks.setItemDelegateForColumn(self.NOTE_COL_KS, self.notes_delegate_ks)
 
-        self.table_kadry.setItemDelegateForColumn(6, IconButtonDelegate(self.table_kadry, "start.png", "stoper_kadry"))
-        self.table_kadry.setItemDelegateForColumn(8, IconButtonDelegate(self.table_kadry, "add.png", "extra_kadry"))
-        self.table_kadry.setItemDelegateForColumn(9, IconButtonDelegate(self.table_kadry, "edit.png", "edit_kadry"))
+        self.table_kadry.setItemDelegateForColumn(7, IconButtonDelegate(self.table_kadry, "start.png", "stoper_kadry"))
+        self.table_kadry.setItemDelegateForColumn(9, IconButtonDelegate(self.table_kadry, "add.png", "extra_kadry"))
+        self.table_kadry.setItemDelegateForColumn(10, IconButtonDelegate(self.table_kadry, "edit.png", "edit_kadry"))
         self.notes_delegate_kadry = ScrollableNotesDelegate(self.table_kadry)
-        self.table_kadry.setItemDelegateForColumn(7, self.notes_delegate_kadry)
+        self.table_kadry.setItemDelegateForColumn(self.NOTE_COL_KADRY, self.notes_delegate_kadry)
+        self.docs_delegate_ks = DeliveredDateDelegate(self.table_ks)
+        self.docs_delegate_kadry = DeliveredDateDelegate(self.table_kadry)
+        self.table_ks.setItemDelegateForColumn(1, self.docs_delegate_ks)
+        self.table_kadry.setItemDelegateForColumn(1, self.docs_delegate_kadry)
         self.etap_delegate_ks = EtapComboDelegate(self.table_ks)
         self.etap_delegate_kadry = EtapComboDelegate(self.table_kadry)
-        self.table_ks.setItemDelegateForColumn(1, self.etap_delegate_ks)
-        self.table_kadry.setItemDelegateForColumn(1, self.etap_delegate_kadry)
+        self.table_ks.setItemDelegateForColumn(2, self.etap_delegate_ks)
+        self.table_kadry.setItemDelegateForColumn(2, self.etap_delegate_kadry)
 
         self.table_ks.viewport().installEventFilter(self)
         self.table_kadry.viewport().installEventFilter(self)
@@ -495,14 +593,15 @@ class MonthlyViewPage(QWidget):
         if event.type() == QEvent.Type.Wheel:
             table = self.table_ks if obj is self.table_ks.viewport() else self.table_kadry
             index = table.indexAt(event.position().toPoint())
-            note_col = 5 if table is self.table_ks else 7
+            note_col = self.NOTE_COL_KS if table is self.table_ks else self.NOTE_COL_KADRY
             if index.isValid() and index.column() == note_col:
                 delegate = (
                     self.notes_delegate_ks
                     if table is self.table_ks
                     else self.notes_delegate_kadry
                 )
-                delta = event.pixelDelta().y() or event.angleDelta().y()
+                line = QFontMetrics(table.font()).lineSpacing()
+                delta = event.pixelDelta().y() or round(event.angleDelta().y() / 120 * line)
                 if delegate.scroll(
                     index,
                     delta,
@@ -528,35 +627,25 @@ class MonthlyViewPage(QWidget):
 
     def _on_table_double_click(self, index: QModelIndex):
         table = self.sender()
-        note_col = 5 if table is self.table_ks else 7
+        note_col = self.NOTE_COL_KS if table is self.table_ks else self.NOTE_COL_KADRY
         if index.column() == note_col:
             row = index.model().get_row(index.row())
             if row:
                 self._open_notes(row["id"])
 
     def _setup_column_widths(self):
-        header_ks = self.table_ks.horizontalHeader()
-        header_ks.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header_ks.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header_ks.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header_ks.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header_ks.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header_ks.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        header_ks.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        header_ks.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        header_ks.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-
-        header_kadry = self.table_kadry.horizontalHeader()
-        header_kadry.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header_kadry.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        header_kadry.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        header_kadry.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
+        for table, note_col in (
+            (self.table_ks, self.NOTE_COL_KS),
+            (self.table_kadry, self.NOTE_COL_KADRY),
+        ):
+            header = table.horizontalHeader()
+            for col in range(table.model().columnCount()):
+                header.setSectionResizeMode(
+                    col,
+                    QHeaderView.ResizeMode.Stretch
+                    if col in (0, note_col)
+                    else QHeaderView.ResizeMode.ResizeToContents,
+                )
 
     def _populate_months(self):
         now = datetime.datetime.now()
@@ -636,7 +725,7 @@ class MonthlyViewPage(QWidget):
                         fid, "ksiegowosc", row.get("sekundy_ksiegowosc", 0)
                     )
                     row["czas_ks_str"] = TimerUtils.format_seconds(delta)
-                    idx = self.model_ks.index(row_idx, 3)
+                    idx = self.model_ks.index(row_idx, 4)
                     self.model_ks.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
                     break
 
@@ -649,7 +738,7 @@ class MonthlyViewPage(QWidget):
                         fid, "kadry", row.get("sekundy_kadry", 0)
                     )
                     row["czas_kadry_str"] = TimerUtils.format_seconds(delta)
-                    idx = self.model_kadry.index(row_idx, 5)
+                    idx = self.model_kadry.index(row_idx, 6)
                     self.model_kadry.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
                     break
 
@@ -680,6 +769,7 @@ class MonthlyViewPage(QWidget):
     def _open_notes(self, firma_id: int):
         dlg = NotesWindow(firma_id, self.pracownik_id, parent=self)
         dlg.exec()
+        self._reload_rows()
 
     def _on_etap_changed(self, firma_id: int):
         self.logic.schedule_status_autosave(firma_id)
@@ -781,6 +871,9 @@ class MonthlyViewPage(QWidget):
 
         menu.addAction(act_suspend)
         menu.addAction(act_archive)
+        act_restore = QAction("Przywróć do aktywnych", self)
+        menu.addAction(act_restore)
+        act_restore.triggered.connect(lambda: self._on_restore_active(firma_id))
         menu.addSeparator()
         menu.addAction(act_activity)
 
@@ -806,6 +899,11 @@ class MonthlyViewPage(QWidget):
             QMessageBox.warning(self, "Brak uprawnień", str(exc))
             return
         QMessageBox.information(self, "Archiwum", "Firma przeniesiona do archiwum.")
+        self._reload_rows()
+
+    def _on_restore_active(self, firma_id: int):
+        from app.db.dao_companies import set_company_status
+        set_company_status(firma_id, "Aktywne")
         self._reload_rows()
 
     def _on_show_activity(self, firma_id: int):

@@ -16,6 +16,7 @@ from app.db.dao_invoices import (
 )
 from app.invoices.faktury_logic import FakturyLogic
 from app.invoices.invoice_editor import InvoiceEditorDialog
+from app.invoices.manual_invoice_dialog import ManualInvoiceDialog, KontrahenciDialog
 from app.invoices.ksef import ksef_url
 from app.invoices.ksef_client import KsefError
 from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
@@ -94,9 +95,9 @@ def _kind_label(invoice):
 
 
 class FakturyPage(QWidget):
-    DRAFT_HEADERS = ["ID", "Rodzaj", "Firma", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
+    DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
-    ISSUED_HEADERS = ["ID", "Rodzaj", "Firma", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
+    ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                       "Data eksportu", "Numer KSeF"]
     ISSUED_KSEF_COLUMN = 8
 
@@ -150,6 +151,12 @@ class FakturyPage(QWidget):
         controls.addWidget(QLabel("Miesiąc (faktury robocze):"))
         controls.addWidget(self.month_button)
 
+        self.btn_manual = QPushButton("Wystaw faktur\u0119")
+        self.btn_manual.clicked.connect(self._new_manual_invoice)
+        controls.addWidget(self.btn_manual)
+        self.btn_contractors = QPushButton("Kontrahenci")
+        self.btn_contractors.clicked.connect(self._manage_contractors)
+        controls.addWidget(self.btn_contractors)
         self.btn_generate_all = QPushButton("Generuj faktury")
         self.btn_generate_all.clicked.connect(self._on_generate_clicked)
         controls.addWidget(self.btn_generate_all)
@@ -271,6 +278,14 @@ class FakturyPage(QWidget):
         self.refresh()
 
     # ---------------- odświeżanie ----------------
+    def _new_manual_invoice(self):
+        dialog = ManualInvoiceDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _manage_contractors(self):
+        KontrahenciDialog(self).exec()
+
     def refresh(self):
         firma_id = self.firma_combo.currentData()
         self._fill_drafts(list_invoices(self.pracownik_id, False, self._current_month(), firma_id))
@@ -388,7 +403,17 @@ class FakturyPage(QWidget):
         for invoice_id in ids:
             invoice = get_invoice_by_id(invoice_id)
             if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                invoices.append(dict(invoice, firma_nazwa=self._company_name(invoice["firma_id"])))
+                company_name = self._company_name(invoice["firma_id"]) if invoice["firma_id"] else ""
+                invoices.append(dict(
+                    invoice,
+                    firma_nazwa=company_name or invoice.get("nabywca_pelna") or invoice.get("nabywca_skrocona") or "",
+                    firma_nip=invoice.get("nabywca_nip") or "",
+                    firma_regon=invoice.get("nabywca_regon") or "",
+                    firma_miasto=invoice.get("nabywca_miasto") or "",
+                    firma_kod=invoice.get("nabywca_kod") or "",
+                    firma_ulica=invoice.get("nabywca_adres") or "",
+                    firma_email=invoice.get("nabywca_email") or "",
+                ))
         if not invoices:
             QMessageBox.warning(self, "Eksport", "Brak faktur dostępnych do eksportu.")
             return

@@ -31,9 +31,9 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
             firma_id, miesiac,
             etap, ilosc_dok,
             sekundy_ksiegowosc, sekundy_kadry,
-            wartosc_uslug, dokumenty_dostarczone
+            wartosc_uslug, dokumenty_dostarczone, data_dostarczenia
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(firma_id, miesiac)
         DO UPDATE SET
             etap = excluded.etap,
@@ -41,7 +41,8 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
             sekundy_ksiegowosc = excluded.sekundy_ksiegowosc,
             sekundy_kadry = excluded.sekundy_kadry,
             wartosc_uslug = excluded.wartosc_uslug,
-            dokumenty_dostarczone = excluded.dokumenty_dostarczone
+            dokumenty_dostarczone = excluded.dokumenty_dostarczone,
+            data_dostarczenia = excluded.data_dostarczenia
     """, (
         firma_id,
         miesiac,
@@ -51,6 +52,7 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         payload.get("sekundy_kadry", 0),
         payload.get("wartosc_uslug", 0.0),
         1 if payload.get("dokumenty_dostarczone") else 0,
+        payload.get("data_dostarczenia") if payload.get("dokumenty_dostarczone") else None,
     ))
 
     conn.commit()

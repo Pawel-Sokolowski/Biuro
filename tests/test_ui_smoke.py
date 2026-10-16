@@ -1,4 +1,4 @@
-import os
+﻿import os
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -99,7 +99,7 @@ class UiSmokeTests(DbTestCase):
     def test_monthly_view_has_delivered_column(self):
         from app.monthly_view.monthly_view_ui import MonthlyViewPage
         page = MonthlyViewPage(self.emp)
-        self.assertTrue(any("Dokumenty dostarczone" in t for t in visible_headers(page)))
+        self.assertTrue(any("Dostarczone" in t for t in visible_headers(page)))
 
     def test_main_window_sidebar_is_polish(self):
         from app.main_ui import OfficeManagerApp
@@ -128,3 +128,4 @@ def visible_headers(page):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -70,6 +70,27 @@ class AccessTests(DbTestCase):
     def test_known_uids_empty(self):
         self.assertEqual(get_known_uids(1, 1), set())
 
+    def test_access_button_saves_selected_employee(self):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
+
+        from app.admin.global_settings_logic import GlobalSettingsLogic
+        from app.admin.settings import email_settings as es
+
+        _app = QApplication.instance() or QApplication([])
+        acc = GlobalSettingsLogic().add_email_account("b@x.pl", "i", "s", "haslo")
+        page = es.EmailSettings()
+        page.table.selectRow(0)
+
+        def fake_exec(dlg):
+            dlg.list.item(0).setCheckState(Qt.CheckState.Checked)
+            return QDialog.DialogCode.Accepted
+
+        with mock.patch.object(es.EmployeeAccessDialog, "exec", fake_exec):
+            next(b for b in page.findChildren(QPushButton) if b.text() == "Dostęp pracowników").click()
+        self.assertEqual(GlobalSettingsLogic().get_account_employee_ids(acc), [1])
+        self.assertEqual([a["id"] for a in get_email_accounts_for_employee(1)], [acc])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -123,6 +123,8 @@ def init_db():
 
             zdrowotna REAL DEFAULT 0,
             wliczac_zdrowotna INTEGER DEFAULT 0,
+            numer_umowy TEXT,
+            status_vat TEXT,
 
             fakturowac INTEGER DEFAULT 0,
             wysylac_do_ksef INTEGER DEFAULT 0,
@@ -142,7 +144,10 @@ def init_db():
 
             konto_bankowe TEXT,
             uwagi TEXT,
-            kategoria_domyslna TEXT
+            kategoria_domyslna TEXT,
+
+            ksiegowa_id INTEGER,
+            kadrowa_id INTEGER
         );
     """)
 
@@ -164,7 +169,9 @@ def init_db():
     # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS statusy_miesieczne (
-            firma_id INTEGER NOT NULL,
+            firma_id INTEGER,
+            kontrahent_id INTEGER,
+            reczna INTEGER NOT NULL DEFAULT 0,
             miesiac TEXT NOT NULL,
             etap TEXT DEFAULT 'Brak',
             ilosc_dok INTEGER DEFAULT 0,
@@ -172,6 +179,7 @@ def init_db():
             sekundy_kadry INTEGER DEFAULT 0,
             wartosc_uslug REAL DEFAULT 0,
             dokumenty_dostarczone INTEGER NOT NULL DEFAULT 0,
+            data_dostarczenia TEXT,
             PRIMARY KEY(firma_id, miesiac),
             CHECK(etap IN ('Brak', 'Zatwierdzone', 'Zaksięgowane', 'Wysłane wyniki')),
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
@@ -308,7 +316,9 @@ def init_db():
             nazwisko TEXT NOT NULL,
             aktywny INTEGER DEFAULT 1,
             is_admin INTEGER DEFAULT 0,
-            data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP
+            data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP,
+            stopka_html TEXT,
+            stopka_tekst TEXT
         );
     """)
 
@@ -642,6 +652,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS konwersacje (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nazwa TEXT NOT NULL,
+            typ TEXT NOT NULL DEFAULT 'kanal',
             pracownik_creator_id INTEGER,
             data_utworzenia TEXT DEFAULT CURRENT_TIMESTAMP,
             ostatnia_aktualizacja TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -700,12 +711,37 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
 
     # -------------------------
+    # kontrahenci faktur
+    # -------------------------
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS kontrahenci (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            typ TEXT NOT NULL CHECK (typ IN ('osoba_fizyczna', 'firma')),
+            nazwa TEXT NOT NULL,
+            nip TEXT,
+            regon TEXT,
+            adres TEXT,
+            kod TEXT,
+            miasto TEXT,
+            kraj TEXT DEFAULT 'Polska',
+            email TEXT,
+            telefon TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_kontrahenci_nazwa ON kontrahenci(nazwa COLLATE NOCASE);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_kontrahenci_nip ON kontrahenci(nip);")
+
+    # -------------------------
     # faktury
     # -------------------------
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            firma_id INTEGER NOT NULL,
+            firma_id INTEGER,
+            kontrahent_id INTEGER,
+            reczna INTEGER NOT NULL DEFAULT 0,
             miesiac TEXT NOT NULL,
 
             kwota_netto REAL NOT NULL,
@@ -764,13 +800,15 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
+            FOREIGN KEY(kontrahent_id) REFERENCES kontrahenci(id) ON DELETE SET NULL,
             FOREIGN KEY(korygowana_faktura_id) REFERENCES faktury(id) ON DELETE SET NULL
         );
     """)
     # Jedna faktura miesięczna na firmę, ale dowolnie wiele korekt
+    cur.execute("DROP INDEX IF EXISTS ux_faktury_firma_miesiac;")
     cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_faktury_firma_miesiac "
-        "ON faktury(firma_id, miesiac) WHERE rodzaj = 'faktura';"
+        "CREATE UNIQUE INDEX ux_faktury_firma_miesiac "
+        "ON faktury(firma_id, miesiac) WHERE rodzaj = 'faktura' AND reczna = 0;"
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_faktury_korygowana ON faktury(korygowana_faktura_id);")
     cur.execute("CREATE TABLE IF NOT EXISTS faktury_archiwum (id INTEGER PRIMARY KEY AUTOINCREMENT, faktura_id INTEGER, firma_id INTEGER, miesiac TEXT, pozycje_json TEXT, kwota_netto REAL, kwota_brutto REAL, archived_at TEXT DEFAULT (datetime('now')));")
@@ -816,6 +854,8 @@ def init_db():
             pracownik_id INTEGER NOT NULL,
             firma_id INTEGER,
             google_event_id TEXT,
+            caldav_uid TEXT,
+            zrodlo TEXT NOT NULL DEFAULT 'lokalne',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(pracownik_id) REFERENCES pracownicy(id) ON DELETE CASCADE,
@@ -837,6 +877,10 @@ def init_db():
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_wydarzenia_google "
         "ON wydarzenia(pracownik_id, google_event_id) WHERE google_event_id IS NOT NULL;"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_wydarzenia_caldav "
+        "ON wydarzenia(pracownik_id, caldav_uid) WHERE caldav_uid IS NOT NULL;"
     )
 
     # -------------------------

@@ -56,6 +56,8 @@ FIRMA_FIELDS = [
     "wysylac_do_ksef",
     "wysylac_do_kontrahenta",
     "metoda_kasowa",
+    "wliczac_zdrowotna",
+    "numer_umowy", "status_vat",
     "fakturowac",
 
     "adres_doreczen_elektronicznych",
@@ -75,7 +77,12 @@ FIRMA_FIELDS = [
     "konto_bankowe",
     "uwagi",
     "kategoria_domyslna",
+
+    "ksiegowa_id",
+    "kadrowa_id",
 ]
+
+ASSIGNEE_FIELDS = {"ksiegowa_id": "firma:ksiegowa", "kadrowa_id": "firma:kadrowa"}
 
 
 # ============================================================
@@ -389,6 +396,34 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
 #  SAVE COMPANY
 # ============================================================
 
+def _sync_assignees(cur, firma_id: int) -> None:
+    """Przypisuje wybraną księgową/kadrową do firmy w pracownik_firma,
+    dzięki czemu filtr firm pracownika działa automatycznie."""
+    row = cur.execute(
+        "SELECT ksiegowa_id, kadrowa_id FROM firmy WHERE id = ?", (firma_id,)
+    ).fetchone()
+    if row is None:
+        return
+    for column, marker in ASSIGNEE_FIELDS.items():
+        emp_id = row[column]
+        cur.execute(
+            "DELETE FROM pracownik_firma WHERE firma_id = ? AND rola = ? "
+            "AND pracownik_id IS NOT ?",
+            (firma_id, marker, emp_id),
+        )
+        if not emp_id:
+            continue
+        exists = cur.execute(
+            "SELECT 1 FROM pracownik_firma WHERE pracownik_id = ? AND firma_id = ?",
+            (emp_id, firma_id),
+        ).fetchone()
+        if not exists:
+            cur.execute(
+                "INSERT INTO pracownik_firma (pracownik_id, firma_id, rola) VALUES (?, ?, ?)",
+                (emp_id, firma_id, marker),
+            )
+
+
 def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
@@ -427,6 +462,9 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
                 params = [data[col] for col in data.keys()]
                 cur.execute(f"INSERT INTO firmy ({cols}) VALUES ({placeholders})", params)
                 firma_id = cur.lastrowid
+
+        if any(k in mapped for k in ASSIGNEE_FIELDS):
+            _sync_assignees(cur, firma_id)
 
         conn.commit()
     except Exception:
@@ -969,6 +1007,8 @@ def ensure_company_columns_exist():
         "konto_bankowe": "TEXT",
         "uwagi": "TEXT",
         "kategoria_domyslna": "TEXT",
+        "ksiegowa_id": "INTEGER",
+        "kadrowa_id": "INTEGER",
     }
     cur.execute("PRAGMA table_info(firmy)")
     existing = {r[1] for r in cur.fetchall()}
@@ -1124,3 +1164,5 @@ def delete_contact(contact_id: int) -> None:
     cur.execute("DELETE FROM company_contacts WHERE id = ?", (contact_id,))
     conn.commit()
     conn.close()
+
+

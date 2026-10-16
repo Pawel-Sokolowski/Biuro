@@ -20,7 +20,7 @@ def get_conversations(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT DISTINCT k.id, k.nazwa, k.pracownik_creator_id,
+        SELECT DISTINCT k.id, k.nazwa, k.typ, k.pracownik_creator_id,
                         k.data_utworzenia, k.ostatnia_aktualizacja
         FROM konwersacje k
         LEFT JOIN uczestnicy_chat uc ON uc.konwersacja_id = k.id
@@ -61,6 +61,8 @@ def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
     Dodaje wiadomość do konwersacji. Zwraca id nowo dodanej wiadomości.
     Zakłada, że konwersacja_id jest poprawne (jeśli None, wywołujący powinien utworzyć konwersację).
     """
+    if not is_participant(konwersacja_id, pracownik_id):
+        raise PermissionError("Nie masz dostępu do tego kanału.")
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -110,7 +112,8 @@ def get_new_messages(konwersacja_id: int, last_timestamp: str) -> List[Dict[str,
     return [{k: row[k] for k in row.keys()} for row in rows]
 
 
-def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None) -> int:
+def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None,
+                        participant_ids: Optional[List[int]] = None) -> int:
     """
     Tworzy nową konwersację i zwraca jej id.
     """
@@ -120,7 +123,155 @@ def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None) 
         INSERT INTO konwersacje (nazwa, pracownik_creator_id)
         VALUES (?, ?)
     """, (nazwa, pracownik_creator_id))
-    conn.commit()
     last_id = cur.lastrowid
+    ids = set(int(i) for i in (participant_ids or []))
+    if pracownik_creator_id:
+        ids.add(int(pracownik_creator_id))
+    for pid in ids:
+        cur.execute(
+            "INSERT OR IGNORE INTO uczestnicy_chat (konwersacja_id, pracownik_id) VALUES (?, ?)",
+            (last_id, pid),
+        )
+    conn.commit()
     conn.close()
     return last_id
+
+
+def get_conversation(konwersacja_id: int) -> Optional[Dict[str, Any]]:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, nazwa, typ, pracownik_creator_id FROM konwersacje WHERE id = ?",
+        (konwersacja_id,),
+    ).fetchone()
+    conn.close()
+    return {k: row[k] for k in row.keys()} if row else None
+
+
+def get_participant_ids(konwersacja_id: int) -> List[int]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT pracownik_id FROM uczestnicy_chat WHERE konwersacja_id = ?",
+        (konwersacja_id,),
+    ).fetchall()
+    conn.close()
+    return [r["pracownik_id"] for r in rows]
+
+
+def is_participant(konwersacja_id: int, pracownik_id: Optional[int]) -> bool:
+    if not pracownik_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        """
+        SELECT 1 FROM konwersacje k
+        LEFT JOIN uczestnicy_chat uc
+               ON uc.konwersacja_id = k.id AND uc.pracownik_id = ?
+        WHERE k.id = ? AND (uc.id IS NOT NULL OR k.pracownik_creator_id = ?)
+        """,
+        (pracownik_id, konwersacja_id, pracownik_id),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def can_manage_conversation(konwersacja_id: int, pracownik_id: Optional[int]) -> bool:
+    """Zarządzać dostępem może właściciel kanału lub administrator."""
+    if not pracownik_id:
+        return False
+    from app.security.authorization import is_administrator
+    conv = get_conversation(konwersacja_id)
+    if not conv:
+        return False
+    if conv.get("typ") == "prywatna":
+        return False
+    return conv["pracownik_creator_id"] == pracownik_id or is_administrator(pracownik_id)
+
+
+def get_active_employees() -> List[Dict[str, Any]]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, imie, nazwisko, email FROM pracownicy "
+        "WHERE COALESCE(aktywny, 1) = 1 ORDER BY nazwisko, imie"
+    ).fetchall()
+    conn.close()
+    return [{k: r[k] for k in r.keys()} for r in rows]
+
+
+def update_conversation(konwersacja_id: int, nazwa: str, participant_ids: List[int],
+                        actor_id: Optional[int] = None) -> None:
+    """Zmienia nazwę i listę uczestników. Właściciel kanału zawsze pozostaje uczestnikiem."""
+    nazwa = (nazwa or "").strip()
+    if not nazwa:
+        raise ValueError("Nazwa kanału nie może być pusta.")
+    if not can_manage_conversation(konwersacja_id, actor_id):
+        raise PermissionError("Brak uprawnień do zarządzania dostępem do kanału.")
+    conv = get_conversation(konwersacja_id)
+    ids = set(int(i) for i in participant_ids)
+    if conv["pracownik_creator_id"]:
+        ids.add(int(conv["pracownik_creator_id"]))
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE konwersacje SET nazwa = ? WHERE id = ?", (nazwa, konwersacja_id))
+    cur.execute("DELETE FROM uczestnicy_chat WHERE konwersacja_id = ?", (konwersacja_id,))
+    for pid in ids:
+        cur.execute(
+            "INSERT INTO uczestnicy_chat (konwersacja_id, pracownik_id) VALUES (?, ?)",
+            (konwersacja_id, pid),
+        )
+    conn.commit()
+    conn.close()
+
+def _direct_name(a: int, b: int) -> str:
+    lo, hi = sorted((int(a), int(b)))
+    return f"dm:{lo}-{hi}"
+
+
+def ensure_direct_conversations(pracownik_id: int) -> None:
+    """Tworzy brakujące rozmowy indywidualne z każdym innym aktywnym pracownikiem."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    existing = {r["nazwa"] for r in cur.execute(
+        "SELECT nazwa FROM konwersacje WHERE typ = 'prywatna'").fetchall()}
+    for emp in get_active_employees():
+        other = emp["id"]
+        if other == pracownik_id:
+            continue
+        name = _direct_name(pracownik_id, other)
+        if name in existing:
+            continue
+        cur.execute(
+            "INSERT INTO konwersacje (nazwa, typ, pracownik_creator_id) VALUES (?, 'prywatna', ?)",
+            (name, pracownik_id),
+        )
+        kid = cur.lastrowid
+        for pid in (pracownik_id, other):
+            cur.execute(
+                "INSERT OR IGNORE INTO uczestnicy_chat (konwersacja_id, pracownik_id) VALUES (?, ?)",
+                (kid, pid),
+            )
+    conn.commit()
+    conn.close()
+
+
+def get_direct_conversations(pracownik_id: int) -> List[Dict[str, Any]]:
+    """Rozmowy indywidualne pracownika wraz z danymi rozmówcy."""
+    ensure_direct_conversations(pracownik_id)
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT k.id, k.nazwa, p.id AS partner_id, p.imie, p.nazwisko
+        FROM konwersacje k
+        JOIN uczestnicy_chat uc ON uc.konwersacja_id = k.id AND uc.pracownik_id = ?
+        JOIN uczestnicy_chat uo ON uo.konwersacja_id = k.id AND uo.pracownik_id != ?
+        JOIN pracownicy p ON p.id = uo.pracownik_id
+        WHERE k.typ = 'prywatna' AND COALESCE(p.aktywny, 1) = 1
+        ORDER BY p.nazwisko, p.imie
+        """,
+        (pracownik_id, pracownik_id),
+    ).fetchall()
+    conn.close()
+    return [
+        {"id": r["id"], "partner_id": r["partner_id"],
+         "nazwa": f"{r['imie']} {r['nazwisko']}".strip()}
+        for r in rows
+    ]

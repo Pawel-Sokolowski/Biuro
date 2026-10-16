@@ -22,15 +22,16 @@ class WorkerSignals(QObject):
 
 
 class CEIDGWorker(QRunnable):
-    def __init__(self, nip: str, form):
+    def __init__(self, nip: str, form, fetch=None):
         super().__init__()
         self.nip = nip
         self.form = form
+        self.fetch = fetch or get_ceidg_firma_by_nip
         self.signals = WorkerSignals()
 
     def run(self):
         try:
-            res = get_ceidg_firma_by_nip(self.nip)
+            res = self.fetch(self.nip)
             self.signals.result.emit((self.form, res))
         except Exception as e:
             self.signals.error.emit(e)
@@ -79,6 +80,9 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
         _safe_set(form.inputs.get("nip"), wl.get("nip") or raw.get("nip"))
     if form.inputs.get("regon"):
         _safe_set(form.inputs.get("regon"), wl.get("regon") or raw.get("regon"))
+
+    if raw.get("krs") and form.inputs.get("krs") and not form.inputs["krs"].text().strip():
+        _safe_set(form.inputs.get("krs"), raw.get("krs"))
 
     # PKD
     pkd_list = raw.get("pkd") or raw.get("pkdList") or []
@@ -190,53 +194,67 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
     return
 
 
-def ceidg_error(form, error: Exception):
+def ceidg_error(form, error: Exception, title: str = "CEIDG"):
     try:
         from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.warning(form, "CEIDG", f"Błąd pobierania danych z CEIDG: {error}")
+        QMessageBox.warning(form, title, f"Błąd pobierania danych z {title}: {error}")
     except Exception:
         logger.warning("Zignorowany błąd", exc_info=True)
 
 
-def ceidg_finished(form):
+def ceidg_finished(form, button: str = "btn_ceidg", label: str = "Pobierz z CEIDG"):
     form._ceidg_in_progress = False
     try:
-        if hasattr(form, "btn_ceidg"):
-            form.btn_ceidg.setEnabled(True)
-            form.btn_ceidg.setText("Pobierz z CEIDG")
+        btn = getattr(form, button, None)
+        if btn is not None:
+            btn.setEnabled(True)
+            btn.setText(label)
     except Exception:
         logger.warning("Zignorowany błąd", exc_info=True)
 
 
-def ceidg_fetch(form):
+def _apply_or_report(payload, title: str):
+    form, data = payload
+    if not data or data.get("error"):
+        message = (data or {}).get("message") or "Nie znaleziono firmy."
+        ceidg_error(form, Exception(message), title)
+        return
+    ceidg_apply(form, data)
+
+
+def ceidg_fetch(form, fetch=None, button: str = "btn_ceidg",
+                label: str = "Pobierz z CEIDG", title: str = "CEIDG",
+                field: str = "nip", field_label: str = "NIP"):
     """
-    Kick off CEIDG fetch in background. Form must have inputs dict with 'nip' widget and optional btn_ceidg.
+    Pobiera dane firmy po NIP w tle (domyślnie z CEIDG, opcjonalnie z innego źródła, np. GUS).
+    Formularz musi mieć słownik inputs z polem 'nip' oraz opcjonalnie przycisk o nazwie `button`.
     """
     if getattr(form, "_ceidg_in_progress", False):
         return
 
-    nip_widget = form.inputs.get("nip")
-    nip = nip_widget.text().strip() if nip_widget else ""
+    nip_widget = form.inputs.get(field)
+    nip = "".join(ch for ch in (nip_widget.text() if nip_widget else "") if ch.isdigit())
     if not nip:
         try:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(form, "CEIDG", "Podaj NIP przed pobraniem danych z CEIDG.")
+            QMessageBox.warning(form, title, f"Podaj {field_label} przed pobraniem danych z {title}.")
         except Exception:
             logger.warning("Zignorowany błąd", exc_info=True)
         return
 
     form._ceidg_in_progress = True
     try:
-        if hasattr(form, "btn_ceidg"):
-            form.btn_ceidg.setEnabled(False)
-            form.btn_ceidg.setText("Pobieranie...")
+        btn = getattr(form, button, None)
+        if btn is not None:
+            btn.setEnabled(False)
+            btn.setText("Pobieranie...")
     except Exception:
         logger.warning("Zignorowany błąd", exc_info=True)
 
-    worker = CEIDGWorker(nip, form)
-    worker.signals.result.connect(lambda payload: ceidg_apply(*payload))
-    worker.signals.error.connect(lambda err: ceidg_error(form, err))
-    worker.signals.finished.connect(lambda: ceidg_finished(form))
+    worker = CEIDGWorker(nip, form, fetch)
+    worker.signals.result.connect(lambda payload: _apply_or_report(payload, title))
+    worker.signals.error.connect(lambda err: ceidg_error(form, err, title))
+    worker.signals.finished.connect(lambda: ceidg_finished(form, button, label))
     QThreadPool.globalInstance().start(worker)
 
 

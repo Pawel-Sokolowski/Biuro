@@ -11,21 +11,31 @@ CEIDG_BASE_URL = os.getenv("CEIDG_BASE_URL")
 
 
 def get_ceidg_firma_by_nip(nip: str):
-    url = f"{CEIDG_BASE_URL}/firma"
+    key = (os.getenv("CEIDG_API_KEY") or CEIDG_API_KEY or "").strip()
+    base_url = (os.getenv("CEIDG_BASE_URL") or CEIDG_BASE_URL or "").strip().rstrip("/")
+    if not key or not base_url:
+        return {"error": True, "message": "Brak CEIDG_API_KEY lub CEIDG_BASE_URL w pliku .env."}
+
+    url = f"{base_url}/firma"
     params = {"nip": nip}
-    headers = {"Authorization": f"Bearer {CEIDG_API_KEY}"}
+    headers = {"Authorization": "Bearer " + key}
 
-    r = requests.get(url, params=params, headers=headers, timeout=10)
-    print("CEIDG FIRMA STATUS:", r.status_code)
-    print("CEIDG FIRMA JSON:", r.text)
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        return {"error": True, "message": f"Brak połączenia z CEIDG: {exc}"}
 
+    if r.status_code in (401, 403):
+        return {"error": True, "message": "CEIDG odrzucił klucz API."}
+    if r.status_code == 204:
+        return {"error": True, "message": "Nie znaleziono firmy o podanym NIP w CEIDG."}
     if r.status_code != 200:
-        return {"error": True}
+        return {"error": True, "message": f"CEIDG zwrócił błąd HTTP {r.status_code}."}
 
     data = r.json()
     firma_list = data.get("firma", [])
     if not firma_list:
-        return {"error": True}
+        return {"error": True, "message": "Nie znaleziono firmy o podanym NIP w CEIDG."}
 
     # wybór wpisu aktywnego
     f = None
@@ -69,6 +79,8 @@ def get_ceidg_firma_by_nip(nip: str):
         "regon": f.get("wlasciciel", {}).get("regon"),
         "pkd": pkd_codes,
         "data_rozpoczecia": f.get("dataRozpoczecia"),
+        "status": f.get("status"),
+        "data_zawieszenia": f.get("dataZawieszenia"),
 
         "dz_miasto": dz.get("miasto", ""),
         "dz_kod": dz.get("kod", ""),

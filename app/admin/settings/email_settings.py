@@ -4,7 +4,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
     QWidget,
 )
 from PyQt6.QtCore import Qt
@@ -196,8 +196,10 @@ class EmailSettings(QWidget):
             ("Dodaj konto", self._add),
             ("Edytuj wybrane", self._edit_selected),
             ("Testuj połączenie", self._test_selected),
-            ("Dostęp pracowników", self._edit_access),
+            ("Dostęp pracowników", lambda: self._edit_access()),
             ("Aktywuj / Dezaktywuj", self._toggle_active),
+            ("Ustaw jako główne do wysyłania", self._set_default_sender),
+            ("Domyślna stopka…", self._edit_signature_template),
             ("Usuń", self._delete),
         ):
             btn = QPushButton(text)
@@ -300,7 +302,7 @@ class EmailSettings(QWidget):
             _run_test(self, dict(acc))
 
     def _edit_access(self, acc_id=None, after_add=False):
-        if not isinstance(acc_id, int):
+        if acc_id is None or isinstance(acc_id, bool):
             acc_id = self._selected_id()
         if acc_id is None:
             return
@@ -312,6 +314,61 @@ class EmailSettings(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.logic.set_account_employees(acc_id, dlg.selected_ids())
             self._refresh()
+
+    def _set_default_sender(self):
+        from app.email.signature import default_sender_id, set_default_sender_id
+
+        acc_id = self._selected_id()
+        if acc_id is None:
+            return
+        set_default_sender_id(acc_id)
+        QMessageBox.information(
+            self, "E-mail",
+            "To konto będzie domyślnym nadawcą nowych wiadomości "
+            "(dla pracowników, którzy mają do niego dostęp).",
+        )
+
+    def _edit_signature_template(self):
+        from app.email.signature import DEFAULT_TEMPLATE, get_template, save_template
+
+        labels = {
+            "stopka_szablon_pozdrowienie": "Pozdrowienie:",
+            "stopka_szablon_firma": "Nazwa firmy:",
+            "stopka_szablon_adres": "Adres (kilka linii):",
+            "stopka_szablon_telefon": "Telefon:",
+            "stopka_szablon_email": "E-mail biura:",
+            "stopka_szablon_zastrzezenie": "Zastrzeżenie prawne:",
+        }
+        current = get_template()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Domyślna stopka wiadomości")
+        dlg.setMinimumWidth(520)
+        form = QFormLayout(dlg)
+        fields = {}
+        for key in DEFAULT_TEMPLATE:
+            if key in ("stopka_szablon_adres", "stopka_szablon_zastrzezenie"):
+                field = QTextEdit(current[key])
+                field.setFixedHeight(60 if key.endswith("adres") else 130)
+            else:
+                field = QLineEdit(current[key])
+            fields[key] = field
+            form.addRow(labels[key], field)
+        form.addRow(QLabel(
+            "Szablon służy do wygenerowania stopki pracownika (imię i nazwisko "
+            "wstawiane są automatycznie)."
+        ))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            save_template({
+                k: (f.toPlainText() if isinstance(f, QTextEdit) else f.text()).strip()
+                for k, f in fields.items()
+            })
+            QMessageBox.information(self, "OK", "Zapisano szablon stopki.")
 
     def _toggle_active(self):
         acc_id = self._selected_id()

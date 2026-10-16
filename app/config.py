@@ -25,6 +25,7 @@ if _env_db and getattr(sys, "frozen", False) and not os.path.isabs(_env_db):
     _env_db = str(_default_db_path.parent / _env_db)
 DEFAULT_DB_NAME = _env_db or str(_default_db_path)
 DB_NAME = DEFAULT_DB_NAME
+EMAIL_HISTORY_DAYS = int(os.getenv("EMAIL_HISTORY_DAYS", "365"))
 EMAIL_LOCAL_LIMIT = int(os.getenv("EMAIL_LOCAL_LIMIT", "300"))
 
 

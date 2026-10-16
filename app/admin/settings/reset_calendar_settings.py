@@ -1,9 +1,12 @@
+import threading
+
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox, QFormLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 from PyQt6.QtGui import QFont
 
-from app.kalendarz.google_sync import get_client_credentials, save_client_credentials
+from app.kalendarz import caldav_sync
 from app.utils.system_mailbox import get_system_account, save_system_account
 
 SSL_MODES = ("SSL/TLS", "STARTTLS", "Brak")
@@ -11,6 +14,8 @@ SSL_MODES = ("SSL/TLS", "STARTTLS", "Brak")
 
 class CalendarAndResetSettings(QWidget):
     """Ukryte konto systemowe (reset haseł, logi kopii) oraz dane klienta Google Calendar."""
+
+    _test_done = pyqtSignal(bool, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,30 +52,58 @@ class CalendarAndResetSettings(QWidget):
             "skrzynkę przychodzą logi kopii zapasowej pokazywane na Pulpicie."
         ))
 
-        gtitle = QLabel("Google Calendar (OAuth)")
+        gtitle = QLabel("Kalendarz CalDAV (Google Calendar lub inny serwer)")
         gtitle.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(gtitle)
 
-        client_id, client_secret = get_client_credentials()
-        self.client_id = QLineEdit(client_id)
-        self.client_secret = QLineEdit()
-        self.client_secret.setEchoMode(QLineEdit.EchoMode.Password)
-        self.client_secret.setPlaceholderText(
-            "(zapisany)" if client_secret else "Client secret"
-        )
+        cfg = caldav_sync.get_config()
+        self.caldav_url = QLineEdit(cfg["url"])
+        self.caldav_url.setPlaceholderText(caldav_sync.GOOGLE_HINT)
+        self.caldav_login = QLineEdit(cfg["login"])
+        self.caldav_password = QLineEdit()
+        self.caldav_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.caldav_password.setPlaceholderText("(zapisane)" if cfg["haslo"] else "Hasło lub hasło aplikacji")
         gform = QFormLayout()
-        gform.addRow("Identyfikator klienta (Client ID):", self.client_id)
-        gform.addRow("Sekret klienta (Client secret):", self.client_secret)
+        gform.addRow("Adres URL serwera CalDAV:", self.caldav_url)
+        gform.addRow("Login:", self.caldav_login)
+        gform.addRow("Hasło:", self.caldav_password)
         layout.addLayout(gform)
         layout.addWidget(QLabel(
-            "Utwórz w Google Cloud Console dane OAuth typu „Aplikacja na komputer”\n"
-            "i włącz Google Calendar API."
+            "Dla Google podaj adres w postaci\n"
+            f"{caldav_sync.GOOGLE_HINT}\n"
+            "(wymagane uwierzytelnienie obsługiwane przez serwer, np. hasło aplikacji)."
         ))
+        self.caldav_status = QLabel("")
+        self.caldav_status.setWordWrap(True)
+        self.btn_test = QPushButton("Testuj połączenie")
+        self.btn_test.clicked.connect(self._test_caldav)
+        self._test_done.connect(self._show_test_result)
+        layout.addWidget(self.btn_test)
+        layout.addWidget(self.caldav_status)
 
         btn = QPushButton("Zapisz")
         btn.clicked.connect(self._save)
         layout.addWidget(btn)
         layout.addStretch()
+
+    def _test_caldav(self):
+        url, login = self.caldav_url.text(), self.caldav_login.text()
+        password = self.caldav_password.text() or caldav_sync.get_config()["haslo"]
+        self.btn_test.setEnabled(False)
+        self.caldav_status.setText("Łączenie…")
+
+        def work():
+            try:
+                self._test_done.emit(True, caldav_sync.test_connection(url, login, password))
+            except Exception as exc:
+                self._test_done.emit(False, caldav_sync.friendly_error(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_test_result(self, ok: bool, message: str):
+        self.btn_test.setEnabled(True)
+        self.caldav_status.setText(message)
+        self.caldav_status.setStyleSheet("color: #2e7d32;" if ok else "color: #c62828;")
 
     @staticmethod
     def _port(value):
@@ -101,8 +134,12 @@ class CalendarAndResetSettings(QWidget):
     def _save(self):
         try:
             self._save_account()
-            save_client_credentials(self.client_id.text(), self.client_secret.text())
-            self.client_secret.clear()
+            caldav_sync.save_config(
+                self.caldav_url.text(), self.caldav_login.text(), self.caldav_password.text()
+            )
+            if self.caldav_password.text():
+                self.caldav_password.clear()
+                self.caldav_password.setPlaceholderText("(zapisane)")
             QMessageBox.information(self, "OK", "Zapisano ustawienia.")
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać: {e}")

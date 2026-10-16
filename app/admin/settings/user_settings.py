@@ -100,6 +100,10 @@ class UsersSettings(QWidget):
             btn_companies
         )
 
+        btn_signature = QPushButton("Stopka")
+        btn_signature.clicked.connect(self._edit_signature)
+        btn_row.addWidget(btn_signature)
+
         btn_toggle = QPushButton(
             "Aktywuj / Dezaktywuj"
         )
@@ -258,6 +262,40 @@ class UsersSettings(QWidget):
                 QMessageBox.information(self, "OK", "Hasło zresetowane.")
             except Exception as e:
                 QMessageBox.critical(self, "Błąd", f"Nie udało się zresetować: {e}")
+
+    def _edit_signature(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Użytkownicy", "Wybierz użytkownika.")
+            return
+
+        uid = int(self.table.item(row, 0).text())
+        user = self.logic.get_user(uid)
+        if not user:
+            QMessageBox.critical(self, "Błąd", "Nie znaleziono użytkownika.")
+            return
+
+        from app.email import signature as sig
+        from app.email.signature_editor import SignatureEditor
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Stopka e-mail: {user['imie']} {user['nazwisko']}")
+        dlg.resize(560, 460)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Stopka dodawana automatycznie do wiadomości tego pracownika:"))
+        editor = SignatureEditor(lambda: (user["imie"], user["nazwisko"]))
+        text, html = sig.get_employee_signature(uid)
+        editor.set_signature(html, text)
+        layout.addWidget(editor)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            text, html = editor.signature()
+            sig.save_employee_signature(uid, text, html)
+            QMessageBox.information(self, "OK", "Zapisano stopkę.")
 
     def _toggle_active(self):
         row = self.table.currentRow()

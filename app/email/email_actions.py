@@ -12,7 +12,6 @@ from email.utils import formataddr, formatdate, make_msgid
 
 from app.email.email_helpers import (
     attachment_output_path,
-    denormalize_folder_name,
     get_attachments,
     iter_message_attachments,
 )
@@ -63,6 +62,7 @@ def prepare_message(
     attachments: Optional[List[str]] = None,
     cc: Optional[Iterable[str]] = None,
     bcc: Optional[Iterable[str]] = None,
+    html_body: Optional[str] = None,
 ) -> EmailMessage:
     msg = EmailMessage()
 
@@ -81,6 +81,8 @@ def prepare_message(
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
     msg.set_content(body or "")
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
 
     for path_str in attachments or []:
         path = Path(path_str)
@@ -116,6 +118,7 @@ def send_email_smtp(
     cc: Optional[Iterable[str]] = None,
     bcc: Optional[Iterable[str]] = None,
     timeout: int = 30,
+    html_body: Optional[str] = None,
 ) -> Tuple[bool, str]:
 
     cfg = get_smtp_config_for_account(
@@ -131,6 +134,7 @@ def send_email_smtp(
         attachments,
         cc,
         bcc,
+        html_body,
     )
 
     recipients = (
@@ -211,7 +215,7 @@ def load_message(
 
     return fetch_message_from_imap(
         konto_id,
-        denormalize_folder_name(folder),
+        folder,
         uid,
     )
 

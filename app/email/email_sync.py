@@ -3,23 +3,34 @@ from __future__ import annotations
 import email.policy
 import imaplib
 import logging
+import re
 
 from email.message import Message
 from email.parser import BytesHeaderParser
 from typing import Any, Dict, List, Optional
 
-from app.config import EMAIL_LOCAL_LIMIT
+from datetime import datetime, timedelta
+
+from app.config import EMAIL_HISTORY_DAYS
+from app.email import email_cache
 from app.email.email_connection import open_imap
 from app.email.email_helpers import (
-    normalize_folder_name,
-    parse_mailbox_name,
+    decode_mailbox_utf7,
+    format_mail_date,
+    parse_list_response,
     parse_message,
+    quote_mailbox,
     safe_header,
 )
 from app.email.email_storage import (
+    account_has_headers,
     get_account_info as _get_account_info,
     get_folder_id,
+    get_folders_for_account,
+    get_cached_messages,
+    prune_email_storage,
     get_known_uids,
+    save_message_headers,
     get_message_by_uid,
     mark_deleted,
     save_folder,
@@ -29,6 +40,9 @@ from app.email.email_storage import (
 from app.utils.crypto import decrypt_password
 
 logger = logging.getLogger(__name__)
+
+HEADER_BATCH = 100
+_IMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
 def _connect_imap(
@@ -60,47 +74,31 @@ def _select_folder(
     folder: str,
     readonly: bool = True,
 ) -> bool:
-    try:
-        typ, _ = imap_conn.select(
-            folder,
-            readonly=readonly,
-        )
-
-        if typ == "OK":
-            return True
-
-    except Exception:
-        logger.warning("Zignorowany błąd", exc_info=True)
-
-    try:
-        typ, _ = imap_conn.select(
-            f'"{folder}"',
-            readonly=readonly,
-        )
-
-        return typ == "OK"
-
-    except Exception:
-        return False
+    for candidate in (quote_mailbox(folder), folder):
+        try:
+            typ, _ = imap_conn.select(candidate, readonly=readonly)
+            if typ == "OK":
+                return True
+        except Exception:
+            logger.warning("Nie można wybrać folderu %s", folder, exc_info=True)
+    return False
 
 
 def _supports_move(imap_conn: imaplib.IMAP4) -> bool:
     return "MOVE" in getattr(imap_conn, "capabilities", ())
 
 
-def list_folders(
+def list_folder_infos(
     konto_id: int,
     timeout: int = 30,
-) -> List[str]:
+) -> List[Dict[str, Any]]:
+    """Foldery z serwera: surowa nazwa, separator, flagi i nazwa do wyświetlenia."""
     account = _get_account_info(konto_id)
 
     if not account:
         return []
 
-    imap_conn = _connect_imap(
-        account,
-        timeout,
-    )
+    imap_conn = _connect_imap(account, timeout)
 
     if not imap_conn:
         return []
@@ -111,21 +109,18 @@ def list_folders(
         if typ != "OK" or not folders:
             return []
 
-        result: List[str] = []
+        result: Dict[str, Dict[str, Any]] = {}
 
-        for folder in folders:
+        for entry in folders:
             try:
-                name = parse_mailbox_name(folder)
-
-                if name:
-                    result.append(name)
-
+                info = parse_list_response(entry)
             except Exception:
-                logger.exception(
-                    "Failed parsing mailbox"
-                )
+                logger.exception("Failed parsing mailbox")
+                continue
+            if info:
+                result[info["name"]] = info
 
-        return sorted(set(result))
+        return sorted(result.values(), key=lambda i: i["name"])
 
     finally:
         try:
@@ -134,12 +129,34 @@ def list_folders(
             logger.warning("Zignorowany błąd", exc_info=True)
 
 
+def list_folders(
+    konto_id: int,
+    timeout: int = 30,
+) -> List[str]:
+    return [i["name"] for i in list_folder_infos(konto_id, timeout)]
+
+
+def _raw_from_fetch(data: Any) -> Optional[bytes]:
+    for item in data or []:
+        if (
+            isinstance(item, tuple)
+            and len(item) > 1
+            and isinstance(item[1], (bytes, bytearray))
+        ):
+            return bytes(item[1])
+    return None
+
+
 def fetch_message_from_imap(
     konto_id: int,
     folder: str,
     uid: str,
     timeout: int = 30,
 ) -> Optional[Message]:
+    cached = email_cache.read_message(konto_id, folder, str(uid))
+    if cached:
+        return parse_message(cached)
+
     account = _get_account_info(konto_id)
 
     if not account:
@@ -164,29 +181,18 @@ def fetch_message_from_imap(
         typ, data = imap_conn.uid(
             "FETCH",
             str(uid),
-            "(RFC822)",
+            "(BODY.PEEK[])",
         )
 
         if typ != "OK":
             return None
 
-        raw_bytes = None
-
-        for item in data:
-            if (
-                isinstance(item, tuple)
-                and len(item) > 1
-                and isinstance(
-                    item[1],
-                    (bytes, bytearray),
-                )
-            ):
-                raw_bytes = item[1]
-                break
+        raw_bytes = _raw_from_fetch(data)
 
         if not raw_bytes:
             return None
 
+        email_cache.write_message(konto_id, folder, str(uid), raw_bytes)
         return parse_message(raw_bytes)
 
     except Exception:
@@ -197,6 +203,44 @@ def fetch_message_from_imap(
 
         return None
 
+    finally:
+        try:
+            imap_conn.logout()
+        except Exception:
+            logger.warning("Zignorowany błąd", exc_info=True)
+
+
+def prefetch_messages(
+    konto_id: int,
+    folder: str,
+    uids: List[str],
+    timeout: int = 30,
+) -> int:
+    """Pobiera treści wiadomości do cache jednym połączeniem; zwraca liczbę pobranych."""
+    wanted = [str(u) for u in uids if not email_cache.has_message(konto_id, folder, str(u))]
+    if not wanted:
+        return 0
+
+    account = _get_account_info(konto_id)
+    imap_conn = _connect_imap(account, timeout) if account else None
+    if not imap_conn:
+        return 0
+
+    fetched = 0
+    try:
+        if not _select_folder(imap_conn, folder, readonly=True):
+            return 0
+        for uid in wanted:
+            try:
+                typ, data = imap_conn.uid("FETCH", uid, "(BODY.PEEK[])")
+            except Exception:
+                logger.warning("Prefetch przerwany dla uid=%s", uid, exc_info=True)
+                break
+            raw = _raw_from_fetch(data) if typ == "OK" else None
+            if raw:
+                email_cache.write_message(konto_id, folder, uid, raw)
+                fetched += 1
+        return fetched
     finally:
         try:
             imap_conn.logout()
@@ -231,11 +275,9 @@ def fetch_headers(
         ):
             return []
 
-        typ, data = imap_conn.uid(
-            "SEARCH",
-            None,
-            "ALL",
-        )
+        since = datetime.now() - timedelta(days=EMAIL_HISTORY_DAYS)
+        since_str = f"{since.day:02d}-{_IMAP_MONTHS[since.month - 1]}-{since.year}"
+        typ, data = imap_conn.uid("SEARCH", None, "SINCE", since_str)
 
         if typ != "OK":
             return []
@@ -245,59 +287,50 @@ def fetch_headers(
 
         result = []
 
-        # tylko najnowsze wiadomości, których jeszcze nie mamy lokalnie
+        # nagłówki z ostatniego roku, których jeszcze nie mamy lokalnie (najnowsze najpierw)
         uids = [u.decode() if isinstance(u, bytes) else str(u) for u in data[0].split()]
-        uids = [u for u in uids[-EMAIL_LOCAL_LIMIT:] if u not in (known_uids or set())]
+        uids = [u for u in reversed(uids) if u not in (known_uids or set())]
 
-        for uid_str in uids:
-
-            typ_h, hdr_data = imap_conn.uid(
-                "FETCH",
-                uid_str,
-                "(BODY.PEEK[HEADER] FLAGS)"
-            )
-
+        parser = BytesHeaderParser(policy=email.policy.default)
+        for start in range(0, len(uids), HEADER_BATCH):
+            chunk = uids[start:start + HEADER_BATCH]
+            try:
+                typ_h, hdr_data = imap_conn.uid(
+                    "FETCH",
+                    ",".join(chunk),
+                    "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID CONTENT-TYPE)])",
+                )
+            except Exception:
+                logger.warning("Błąd pobierania nagłówków", exc_info=True)
+                break
             if typ_h != "OK":
                 continue
 
-            raw = None
-            flags = ()
-
-            for part in hdr_data:
+            records: List[List[Any]] = []
+            for part in hdr_data or []:
                 if isinstance(part, tuple):
-                    raw = part[1]
-                    meta = part[0]
-                else:
-                    meta = part
-
-                if isinstance(meta, bytes):
-                    flags = flags or imaplib.ParseFlags(meta)
-
-            if not raw:
-                continue
-
-            msg = BytesHeaderParser(policy=email.policy.default).parsebytes(raw)
-
-            result.append(
-                {
-                    "uid": uid_str,
-                    "message_id": str(msg["Message-ID"]) if msg["Message-ID"] else None,
-                    "sender": safe_header(
-                        msg.get("From", "")
-                    ),
-                    "recipient": safe_header(
-                        msg.get("To", "")
-                    ),
-                    "subject": safe_header(
-                        msg.get("Subject", "")
-                    ),
-                    "date": safe_header(
-                        msg.get("Date", "")
-                    ),
-                    "is_seen": b"\\Seen" in flags,
-                    "has_attachments": False,
-                }
-            )
+                    records.append([part[0] if isinstance(part[0], bytes) else b"", part[1]])
+                elif isinstance(part, bytes) and records:
+                    # UID/FLAGS mogą przyjść po literale
+                    records[-1][0] += b" " + part
+            for meta, raw in records:
+                m_uid = re.search(rb"UID (\d+)", meta)
+                if not m_uid or not raw:
+                    continue
+                msg = parser.parsebytes(raw)
+                flags = imaplib.ParseFlags(meta)
+                result.append(
+                    {
+                        "uid": m_uid.group(1).decode(),
+                        "message_id": str(msg["Message-ID"]) if msg["Message-ID"] else None,
+                        "sender": safe_header(msg.get("From", "")),
+                        "recipient": safe_header(msg.get("To", "")),
+                        "subject": safe_header(msg.get("Subject", "")),
+                        "date": format_mail_date(msg.get("Date", "")),
+                        "is_seen": b"\\Seen" in flags,
+                        "has_attachments": msg.get_content_type() == "multipart/mixed",
+                    }
+                )
 
         return result
 
@@ -340,7 +373,7 @@ def move_message(
             typ, _ = imap_conn.uid(
                 "MOVE",
                 uid,
-                dest_folder,
+                quote_mailbox(dest_folder),
             )
 
             if typ == "OK":
@@ -349,7 +382,7 @@ def move_message(
         typ, _ = imap_conn.uid(
             "COPY",
             uid,
-            dest_folder,
+            quote_mailbox(dest_folder),
         )
 
         if typ != "OK":
@@ -419,23 +452,30 @@ def delete_message(
             imap_conn.logout()
         except Exception:
             logger.warning("Zignorowany błąd", exc_info=True)
+def _store_folders(konto_id: int, infos: List[Dict[str, Any]]) -> None:
+    for info in infos:
+        save_folder(
+            konto_id,
+            info["name"],
+            info["display"],
+            info["delimiter"],
+            " ".join(info["flags"]),
+        )
+
+
 def sync_account(
     konto_id: int,
 ) -> None:
 
-    folders = list_folders(konto_id)
+    infos = list_folder_infos(konto_id)
+    _store_folders(konto_id, infos)
 
-    for folder in folders:
-
-        save_folder(
-            konto_id,
-            folder,
-            normalize_folder_name(folder),
-        )
-
+    for info in infos:
+        if "\\noselect" in [f.lower() for f in info["flags"]]:
+            continue
         sync_folder(
             konto_id,
-            folder,
+            info["name"],
         )
 def mark_unread_remote(
     konto_id: int,
@@ -462,7 +502,7 @@ def archive_message(
 def sync_folder(
     konto_id: int,
     folder: str,
-) -> None:
+) -> int:
 
     folder_id = get_folder_id(
         konto_id,
@@ -473,7 +513,7 @@ def sync_folder(
         folder_id = save_folder(
             konto_id,
             folder,
-            normalize_folder_name(folder),
+            decode_mailbox_utf7(folder),
         )
 
     headers = fetch_headers(
@@ -482,28 +522,64 @@ def sync_folder(
         known_uids=get_known_uids(konto_id, folder_id),
     )
 
-    for hdr in headers:
+    save_message_headers(
+        konto_id,
+        folder_id,
+        headers,
+    )
+    return len(headers)
 
-        save_message_header(
-            konto_id=konto_id,
-            folder_id=folder_id,
 
-            uid=hdr["uid"],
+def selectable_folder_names(konto_id: int) -> List[str]:
+    """Nazwy folderów z bazy, do których można wejść (bez \\Noselect)."""
+    names = []
+    for f in get_folders_for_account(konto_id):
+        flags = (f.get("attributes") or "").lower().split()
+        if "\\noselect" not in flags and f.get("server_name"):
+            names.append(f["server_name"])
+    return names
 
-            message_id=hdr["message_id"],
 
-            sender=hdr["sender"],
+def needs_initial_sync(konto_id: int) -> bool:
+    """Pierwsze otwarcie konta: brak folderów lub nagłówków w bazie (gotowa baza = już zsynchronizowane)."""
+    return not account_has_headers(konto_id)
 
-            recipient=hdr["recipient"],
 
-            subject=hdr["subject"],
+def sync_and_prefetch(
+    konto_id: int,
+    folders: List[str],
+    first_run: bool = False,
+    on_headers=None,
+    on_progress=None,
+    all_folders: bool = False,
+) -> int:
+    """Odświeża listę folderów i nagłówki (ok. rok wstecz). Treści trafiają do cache po kliknięciu.
 
-            date_value=hdr["date"],
+    all_folders=True (pierwsza synchronizacja konta) pobiera nagłówki ze wszystkich folderów.
+    on_progress(zrobione_foldery, wszystkie_foldery, nazwa_folderu, pobrane_nagłówki) jest
+    wywoływane przed i po każdym folderze.
+    """
+    if first_run or all_folders or not get_folders_for_account(konto_id):
+        list_folders_from_imap_and_store(konto_id)
 
-            is_seen=hdr["is_seen"],
+    if all_folders:
+        wanted = list(folders)
+        for name in selectable_folder_names(konto_id):
+            if name not in wanted:
+                wanted.append(name)
+        folders = wanted
 
-            has_attachments=hdr["has_attachments"],
-        )
+    total = len(folders)
+    fetched = 0
+    for index, folder in enumerate(folders):
+        if on_progress:
+            on_progress(index, total, folder, fetched)
+        fetched += sync_folder(konto_id, folder) or 0
+        if on_headers:
+            on_headers()
+    if on_progress:
+        on_progress(total, total, "", fetched)
+    return fetched
 
 def _set_seen_remote(
     konto_id: int,
@@ -532,7 +608,7 @@ def _set_seen_remote(
         if typ != "OK":
             return False
 
-        update_message_read_flag(konto_id, str(uid), seen)
+        update_message_read_flag(konto_id, str(uid), seen, get_folder_id(konto_id, folder))
         return True
 
     finally:
@@ -546,9 +622,10 @@ def mark_read_remote(konto_id: int, folder: str, uid: str, timeout: int = 30) ->
     return _set_seen_remote(konto_id, folder, uid, True, timeout)
 
 
-def list_folders_from_imap_and_store(konto_id: int) -> None:
-    for folder in list_folders(konto_id):
-        save_folder(konto_id, folder, normalize_folder_name(folder))
+def list_folders_from_imap_and_store(konto_id: int) -> bool:
+    infos = list_folder_infos(konto_id)
+    _store_folders(konto_id, infos)
+    return bool(infos)
 
 
 def fetch_headers_from_imap_and_store(konto_id: int, folder: str) -> None:
@@ -563,9 +640,8 @@ def delete_email_remote(konto_id: int, folder: str, uid: str) -> bool:
     ok = delete_message(konto_id, uid, folder)
 
     if ok:
-        mark_deleted(konto_id, str(uid))
-
-    return ok
+        mark_deleted(konto_id, str(uid), get_folder_id(konto_id, folder))
+        email_cache.remove_message(konto_id, folder, str(uid))
 
 
 def move_email_and_get_sender(
@@ -574,16 +650,21 @@ def move_email_and_get_sender(
     uid: str,
     dest_folder: str,
 ) -> str:
-    cached = get_message_by_uid(konto_id, str(uid)) or {}
+    folder_id = get_folder_id(konto_id, source_folder)
+    cached = get_message_by_uid(konto_id, str(uid), folder_id) or {}
 
     if not move_message(konto_id, uid, source_folder, dest_folder):
         raise RuntimeError("Serwer odrzucił przeniesienie wiadomości.")
 
-    mark_deleted(konto_id, str(uid))
+    mark_deleted(konto_id, str(uid), folder_id)
+    email_cache.remove_message(konto_id, source_folder, str(uid))
     return cached.get("nadawca") or ""
 
 
 __all__ = [
+    "list_folder_infos",
+    "prefetch_messages",
+    "sync_and_prefetch",
     "list_folders",
     "fetch_headers",
     "fetch_message_from_imap",
@@ -592,6 +673,8 @@ __all__ = [
     "archive_message",
     "sync_account",
     "sync_folder",
+    "selectable_folder_names",
+    "needs_initial_sync",
     "mark_unread_remote",
     "mark_read_remote",
     "list_folders_from_imap_and_store",

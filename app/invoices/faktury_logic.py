@@ -131,10 +131,19 @@ class FakturyLogic:
         glowny = company.get("glowny_cennik")
         pricing = self._get_main_pricing(glowny) if glowny else None
 
+        zdrowotna_val = 0.0
+        wliczona = bool(company.get("wliczac_zdrowotna", 0))
+        if pricing:
+            zdrowotna_val = self._to_float(company.get("zdrowotna", 0.0)) or \
+                self._to_float(pricing.get("zdrowotna", 0.0))
+
         # ---------------- Usługa księgowa ----------------
         if pricing and company.get("fakturowac", 0) == 1:
             netto = self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
             brutto = self._to_float(pricing.get("cena_brutto_ksiegowosc", round(netto * 1.23, 2)))
+            if wliczona and zdrowotna_val > 0:
+                netto = round(netto + zdrowotna_val, 2)
+                brutto = round(brutto + zdrowotna_val * 1.23, 2)
             pozycje.append({
                 "nazwa": "Usługa księgowa",
                 "ilosc": 1,
@@ -169,8 +178,7 @@ class FakturyLogic:
                 })
 
         # ---------------- Zdrowotna ----------------
-        if pricing and company.get("fakturowac", 0) == 1:
-            zdrowotna_val = self._to_float(pricing.get("zdrowotna", 0.0))
+        if pricing and company.get("fakturowac", 0) == 1 and not wliczona:
             if zdrowotna_val > 0:
                 pozycje.append({
                     "nazwa": "Zdrowotna",

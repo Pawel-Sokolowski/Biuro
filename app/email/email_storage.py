@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
 from app.config import EMAIL_LOCAL_LIMIT
-from app.email.email_helpers import denormalize_folder_name
+from app.email.email_helpers import folder_role
 
 
 def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
@@ -183,7 +183,7 @@ def save_folder(
 
         cur.execute(
             """
-            INSERT OR IGNORE INTO foldery_email
+            INSERT INTO foldery_email
             (
                 konto_id,
                 server_name,
@@ -192,6 +192,10 @@ def save_folder(
                 attributes
             )
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(konto_id, server_name) DO UPDATE SET
+                display_name = COALESCE(excluded.display_name, display_name),
+                delimiter    = COALESCE(excluded.delimiter, delimiter),
+                attributes   = COALESCE(excluded.attributes, attributes)
             """,
             (
                 konto_id,
@@ -281,6 +285,22 @@ def get_folders_for_account(
         conn.close()
 
 
+def account_has_headers(konto_id: int) -> bool:
+    """Czy konto ma już zapisane foldery i nagłówki (np. z gotowej, wypełnionej bazy)."""
+    conn = get_conn()
+    try:
+        has_folders = conn.execute(
+            "SELECT 1 FROM foldery_email WHERE konto_id = ? LIMIT 1", (konto_id,)
+        ).fetchone()
+        if not has_folders:
+            return False
+        return conn.execute(
+            "SELECT 1 FROM wiadomosci_email WHERE konto_id = ? LIMIT 1", (konto_id,)
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def save_message_header(
     konto_id: int,
     folder_id: int,
@@ -358,6 +378,53 @@ def save_message_header(
         conn.close()
 
 
+def save_message_headers(
+    konto_id: int,
+    folder_id: int,
+    headers: List[Dict[str, Any]],
+) -> None:
+    """Zapisuje wiele nagłówków w jednej transakcji (znacznie szybciej niż pojedynczo)."""
+    if not headers:
+        return
+    conn = get_conn()
+    try:
+        conn.executemany(
+            """
+            INSERT INTO wiadomosci_email
+                (konto_id, folder_id, uid, message_id, nadawca, odbiorca,
+                 temat, data, przeczytana, has_attachments)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(konto_id, folder_id, uid) DO UPDATE SET
+                message_id      = excluded.message_id,
+                nadawca         = excluded.nadawca,
+                odbiorca        = excluded.odbiorca,
+                temat           = excluded.temat,
+                data            = excluded.data,
+                przeczytana     = excluded.przeczytana,
+                has_attachments = excluded.has_attachments,
+                cached_at       = CURRENT_TIMESTAMP
+            """,
+            [
+                (
+                    konto_id,
+                    folder_id,
+                    h["uid"],
+                    h.get("message_id"),
+                    h.get("sender"),
+                    h.get("recipient"),
+                    h.get("subject"),
+                    h.get("date"),
+                    1 if h.get("is_seen") else 0,
+                    1 if h.get("has_attachments") else 0,
+                )
+                for h in headers
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_known_uids(konto_id: int, folder_id: int) -> set:
     conn = get_conn()
     try:
@@ -401,9 +468,38 @@ def get_cached_messages(
         conn.close()
 
 
+def get_unread_counts(konto_id: int) -> Dict[int, int]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT folder_id, COUNT(*) FROM wiadomosci_email
+            WHERE konto_id = ? AND usunieta = 0 AND COALESCE(przeczytana, 0) = 0
+            GROUP BY folder_id
+            """,
+            (konto_id,),
+        ).fetchall()
+        return {int(r[0]): int(r[1]) for r in rows}
+    finally:
+        conn.close()
+
+
+def find_special_folder(konto_id: int, role: str) -> Optional[str]:
+    """Zwraca surową nazwę serwerową folderu o danej roli (archive/junk/trash/sent/drafts)."""
+    for folder in get_folders_for_account(konto_id):
+        if "\\noselect" in (folder.get("attributes") or "").lower():
+            continue
+        if folder_role(
+            folder["server_name"], folder.get("attributes"), folder.get("delimiter")
+        ) == role:
+            return folder["server_name"]
+    return None
+
+
 def get_message_by_uid(
     konto_id: int,
     uid: str,
+    folder_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
@@ -417,11 +513,14 @@ def get_message_by_uid(
             FROM wiadomosci_email
             WHERE konto_id = ?
               AND uid = ?
+              AND (? IS NULL OR folder_id = ?)
             LIMIT 1
             """,
             (
                 konto_id,
                 uid,
+                folder_id,
+                folder_id,
             ),
         )
 
@@ -437,6 +536,7 @@ def update_message_read_flag(
     konto_id: int,
     uid: str,
     read: bool,
+    folder_id: Optional[int] = None,
 ) -> None:
     conn = get_conn()
 
@@ -447,11 +547,14 @@ def update_message_read_flag(
             SET przeczytana = ?
             WHERE konto_id = ?
               AND uid = ?
+              AND (? IS NULL OR folder_id = ?)
             """,
             (
                 1 if read else 0,
                 konto_id,
                 uid,
+                folder_id,
+                folder_id,
             ),
         )
 
@@ -464,6 +567,7 @@ def update_message_read_flag(
 def mark_deleted(
     konto_id: int,
     uid: str,
+    folder_id: Optional[int] = None,
 ) -> None:
     conn = get_conn()
 
@@ -474,10 +578,13 @@ def mark_deleted(
             SET usunieta = 1
             WHERE konto_id = ?
               AND uid = ?
+              AND (? IS NULL OR folder_id = ?)
             """,
             (
                 konto_id,
                 uid,
+                folder_id,
+                folder_id,
             ),
         )
 
@@ -671,13 +778,14 @@ def get_cached_messages_by_folder_name(
     finally:
         conn.close()
 
-def refresh_email_list(konto_id: int, local_folder: str) -> List[Dict[str, Any]]:
-    return get_cached_messages_by_folder_name(
-        konto_id, denormalize_folder_name(local_folder)
-    )
+def refresh_email_list(konto_id: int, server_folder: str) -> List[Dict[str, Any]]:
+    return get_cached_messages_by_folder_name(konto_id, server_folder)
 
 
 __all__ = [
+    "get_unread_counts",
+    "save_message_headers",
+    "find_special_folder",
     "refresh_email_list",
     "get_account_info",
     "save_folder",

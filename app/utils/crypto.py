@@ -391,10 +391,10 @@ def get_employee_role(pracownik_id: int) -> _t.List[str]:
         # próbujemy dwie możliwe struktury
         try:
             cur.execute("""
-                SELECT DISTINCT r.nazwa
+                SELECT r.nazwa
                 FROM role r
-                JOIN pracownik_firma pf ON r.id = pf.rola_id
-                WHERE pf.pracownik_id = ?
+                JOIN pracownicy p ON r.id = p.rola_id
+                WHERE p.id = ?
             """, (pracownik_id,))
             rows = cur.fetchall()
             if rows:
@@ -426,5 +426,5 @@ def is_admin(pracownik_id: int) -> bool:
     if not isinstance(pracownik_id, int) or pracownik_id <= 0:
         return False
     
-    roles = get_employee_role(pracownik_id)
-    return any(str(r).lower() == "admin" for r in roles)
+    from app.security.authorization import is_administrator
+    return is_administrator(pracownik_id)

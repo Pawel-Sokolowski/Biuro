@@ -84,6 +84,13 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
     if raw.get("krs") and form.inputs.get("krs") and not form.inputs["krs"].text().strip():
         _safe_set(form.inputs.get("krs"), raw.get("krs"))
 
+    status_vat = form.inputs.get("status_vat")
+    if raw.get("status_vat") and status_vat is not None and hasattr(status_vat, "setCurrentText"):
+        status_vat.setCurrentText(raw["status_vat"])
+    konto = form.inputs.get("konto_bankowe")
+    if raw.get("konto_bankowe") and konto is not None and not konto.text().strip():
+        _safe_set(konto, raw["konto_bankowe"])
+
     # PKD
     pkd_list = raw.get("pkd") or raw.get("pkdList") or []
     pkd_codes: List[str] = []
@@ -619,13 +626,13 @@ class CompanyLogic:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ?", (firma_id,))
-
-        for pid in employee_ids:
-            cur.execute("""
-                INSERT INTO pracownik_firma (pracownik_id, firma_id)
-                VALUES (?, ?)
-            """, (pid, firma_id))
+        wanted = {int(p) for p in employee_ids}
+        existing = {r[0] for r in cur.execute(
+            "SELECT pracownik_id FROM pracownik_firma WHERE firma_id = ?", (firma_id,))}
+        for pid in existing - wanted:
+            cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ? AND pracownik_id = ?", (firma_id, pid))
+        for pid in wanted - existing:
+            cur.execute("INSERT INTO pracownik_firma (pracownik_id, firma_id) VALUES (?, ?)", (pid, firma_id))
 
         conn.commit()
         conn.close()

@@ -20,9 +20,9 @@ def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
                 MAX(COALESCE(r.can_view_finances, 0)) AS can_view_finances,
                 MAX(COALESCE(r.can_export_data, 0)) AS can_export_data,
                 MAX(COALESCE(r.can_access_admin_settings, 0)) AS can_access_admin_settings
-            FROM pracownik_firma pf
-            JOIN role r ON r.id = pf.rola_id
-            WHERE pf.pracownik_id = ?
+            FROM pracownicy p
+            JOIN role r ON r.id = p.rola_id
+            WHERE p.id = ?
             """,
             (pracownik_id,),
         ).fetchone()
@@ -37,14 +37,13 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
     conn = get_conn()
     conn.row_factory = sqlite3.Row
     try:
+        # Rola należy do pracownika i nie zależy od przypisań do firm.
         row = conn.execute(
             """
-            SELECT 1
-            FROM pracownik_firma pf
-            JOIN role r ON r.id = pf.rola_id
-            WHERE pf.pracownik_id = ?
-              AND LOWER(r.nazwa) = 'admin'
-            LIMIT 1
+            SELECT 1 FROM pracownicy p
+            LEFT JOIN role r ON r.id = p.rola_id
+            WHERE p.id = ?
+              AND (COALESCE(p.is_admin, 0) = 1 OR LOWER(COALESCE(r.nazwa, '')) = 'admin')
             """,
             (pracownik_id,),
         ).fetchone()

@@ -30,15 +30,11 @@ def create_initial_admin(email: str, password: str, imie: str = "Główny", nazw
     conn = get_conn()
     try:
         cur = conn.execute(
-            "INSERT INTO pracownicy (email, haslo_hash, imie, nazwisko, aktywny) VALUES (?, ?, ?, ?, 1)",
-            (email, hash_password(password), imie, nazwisko),
+            "INSERT INTO pracownicy (email, haslo_hash, imie, nazwisko, aktywny, is_admin, rola_id) VALUES (?, ?, ?, ?, 1, 1, ?)",
+            (email, hash_password(password), imie, nazwisko, ADMIN_ROLE_ID),
         )
         admin_id = int(cur.lastrowid)
         conn.execute("INSERT OR IGNORE INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma')")
-        conn.execute(
-            "INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id) VALUES (?, 1, ?)",
-            (admin_id, ADMIN_ROLE_ID),
-        )
         conn.execute(
             """
             UPDATE role

@@ -139,6 +139,29 @@ def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
         conn.close()
 
 
+def get_known_sender_addresses(konto_id: Optional[int] = None) -> List[str]:
+    """Unikalne adresy nadawców z wiadomości w skrzynce (opcjonalnie jednego konta)."""
+    from email.utils import parseaddr
+
+    conn = get_conn()
+    try:
+        sql = "SELECT DISTINCT nadawca FROM wiadomosci_email WHERE nadawca IS NOT NULL AND nadawca <> ''"
+        params: tuple = ()
+        if konto_id is not None:
+            sql += " AND konto_id = ?"
+            params = (int(konto_id),)
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    addresses = {
+        parseaddr(r[0])[1].strip().lower()
+        for r in rows
+        if "@" in parseaddr(r[0])[1]
+    }
+    return sorted(addresses)
+
+
 def ensure_contact_email_filters(firma_id: int, folder_name: str) -> None:
     """Create a filter for each company contact e-mail that has none yet."""
     conn = get_conn()

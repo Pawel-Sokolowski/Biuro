@@ -141,9 +141,9 @@ def get_user_permissions(pracownik_id: int) -> sqlite3.Row:
                 MAX(COALESCE(r.can_view_invoices, 0)) AS can_view_invoices,
                 MAX(COALESCE(r.can_access_admin_settings, 0)) AS can_access_admin_settings,
                 MAX(COALESCE(r.can_manage_users, 0)) AS can_manage_users
-            FROM pracownik_firma pf
-            JOIN role r ON pf.rola_id = r.id
-            WHERE pf.pracownik_id = ?
+            FROM pracownicy p
+            JOIN role r ON p.rola_id = r.id
+            WHERE p.id = ?
             """,
             (pracownik_id,),
         )
@@ -157,11 +157,8 @@ def assign_role(uid: int, rid: int, firma_id: int = 1) -> None:
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            INSERT OR REPLACE INTO pracownik_firma (pracownik_id, firma_id, rola_id)
-            VALUES (?, ?, ?)
-            """,
-            (uid, firma_id, rid),
+            "UPDATE pracownicy SET rola_id = ?, is_admin = ? WHERE id = ?",
+            (rid, 1 if rid == 4 else 0, uid),
         )
         conn.commit()
     finally:
@@ -173,7 +170,7 @@ def get_user_role(uid: int) -> Optional[int]:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT rola_id FROM pracownik_firma WHERE pracownik_id = ?",
+            "SELECT rola_id FROM pracownicy WHERE id = ?",
             (uid,),
         )
         row = cur.fetchone()

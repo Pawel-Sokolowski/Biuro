@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import io
 import os
 import re
 import sqlite3
@@ -54,7 +55,7 @@ def parse_num(value: Any) -> Optional[float]:
     return None if number != number else number
 
 
-PRICE_PATTERN = r"(\d+(?:[.,]\d{1,2})?)"
+PRICE_PATTERN = r"(\d{1,3}(?:\s\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
 
 
 def _normalize_pricing_text(text: Any) -> str:
@@ -76,6 +77,9 @@ def _find_price(pattern: str, text: str) -> Optional[float]:
     return _price_to_float(match.group(1))
 
 
+_DOC_UNIT = r"(?:szt\.?|st\.?|dok\.?|dokument(?:ów|y)?)"
+
+
 def parse_cennik_ksiegowy(text: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "limit_dokumentow": None,
@@ -88,30 +92,35 @@ def parse_cennik_ksiegowy(text: str) -> Dict[str, Any]:
         return out
 
     normalized = _normalize_pricing_text(text)
+    flags = re.IGNORECASE
 
-    match = re.search(
-        r"\b(?:limit|do)\s+(\d+)\s*"
-        r"(?:szt\.?|dok\.?|dokument(?:ów|y)?)?",
-        normalized,
-        flags=re.IGNORECASE,
+    # „ryczałt” to stała opłata; „do 350 zł” oznacza cenę, nie limit dokumentów.
+    limit_patterns = (
+        rf"\b(?:ponad\s+limit|powyżej\s+limitu)\s+(\d+)\s*{_DOC_UNIT}",
+        rf"(?<![\d.,])(\d+)\s*{_DOC_UNIT}(?!\w)",
+        r"\blimit\s+(\d+)(?!\s*(?:zł|pln|[.,]\d))",
     )
-    if match is not None:
-        out["limit_dokumentow"] = int(match.group(1))
+    for pattern in limit_patterns:
+        match = re.search(pattern, normalized, flags=flags)
+        if match is not None:
+            out["limit_dokumentow"] = int(match.group(1))
+            break
 
     out["cena_za_dokument"] = _find_price(
-        rf"\b(?:ponad\s+limit|powyżej\s+limitu)\b.*?{PRICE_PATTERN}\s*(?:zł|pln)?",
+        r"\b(?:ponad\s+limit|powyżej\s+limitu)\b\s*"
+        rf"(?:\d+\s*{_DOC_UNIT}(?!\w)\s*)?"
+        rf"\D*?{PRICE_PATTERN}\s*(?:zł|pln)?",
         normalized,
     )
     out["ryczalt_ksiegowy"] = _find_price(
-        rf"\bryczałt\b(?!\s+do\s+\d+).*?{PRICE_PATTERN}\s*(?:zł|pln)?",
+        rf"\brycza[łl]t\b\s*(?:do\s+)?{PRICE_PATTERN}",
         normalized,
     )
     out["zdrowotna"] = _find_price(
-        rf"\bzdrowotna\b.*?{PRICE_PATTERN}\s*(?:zł|pln)?",
+        rf"\bzdrowotna\b\D*?{PRICE_PATTERN}",
         normalized,
     )
     return out
-
 
 def _find_service_price(text: str, service_pattern: str) -> Optional[float]:
     pattern = (
@@ -167,7 +176,7 @@ def parse_cennik_czasowy(text: str) -> Dict[str, Any]:
         return out
 
     normalized = _normalize_pricing_text(text)
-    match = re.search(rf"ryczałt.*?{PRICE_PATTERN}", normalized, flags=re.IGNORECASE)
+    match = re.search(rf"rycza[łl]t.*?{PRICE_PATTERN}", normalized, flags=re.IGNORECASE)
     if match:
         out["ryczalt_czasowy"] = _price_to_float(match.group(1))
     return out
@@ -180,13 +189,18 @@ def _load_rows_from_file(filepath: str) -> Tuple[List[str], List[Any]]:
     ext = os.path.splitext(filepath)[1].lower()
 
     if ext == ".csv":
-        with open(filepath, newline="", encoding="utf-8-sig") as file:
-            sample = file.read(4096)
-            file.seek(0)
-            delimiter = "," if sample.count(",") >= sample.count(";") else ";"
-            reader = csv.reader(file, delimiter=delimiter)
-            header = next(reader, None)
-            rows = list(reader)
+        with open(filepath, "rb") as handle:
+            raw = handle.read()
+        try:
+            content = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            content = raw.decode("cp1250")
+        # Separator ustalamy po nagłówku; w danych przecinki są też w cenach (230,00).
+        first_line = content.split("\n", 1)[0]
+        delimiter = max((";", "\t", ","), key=first_line.count)
+        reader = csv.reader(io.StringIO(content, newline=""), delimiter=delimiter)
+        header = next(reader, None)
+        rows = list(reader)
     else:
         workbook = openpyxl.load_workbook(filepath, data_only=True)
         worksheet = workbook.active
@@ -262,6 +276,62 @@ def import_tax_offices_from_excel(filepath: str) -> int:
         conn.close()
 
 
+_TAX_OFFICE_STOPWORDS = {"urzad", "skarbowy", "us", "w", "we", "im", "nr", "i"}
+
+
+def _office_tokens(text: str) -> List[str]:
+    folded = re.sub(r"[^a-z0-9]+", " ", _fold_pl(text))
+    return [t for t in folded.split() if t not in _TAX_OFFICE_STOPWORDS]
+
+
+def _tokens_similar(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    n = min(len(a), len(b))
+    return n >= 4 and a[: n - 1] == b[: n - 1]
+
+
+def match_tax_office(value: Any) -> Optional[str]:
+    """Dopasowuje nazwę z pliku do katalogu urzędów (wielkość liter, polskie znaki,
+    odmiana miasta, skróty „US”); gdy brak dopasowania, zostawia wpisaną nazwę."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return None
+    try:
+        from app.db.dao_companies import get_tax_offices
+        names = [
+            re.sub(r"\s+", " ", str(o.get("nazwa") or "")).strip()
+            for o in get_tax_offices()
+        ]
+        names = [n for n in names if n]
+    except Exception:
+        return text
+
+    for name in names:
+        if name.casefold() == text.casefold():
+            return name
+
+    wanted = _office_tokens(text)
+    if not wanted:
+        return text
+    best, best_score, tie = None, 0.0, False
+    for name in names:
+        tokens = _office_tokens(name)
+        if not tokens:
+            continue
+        hits = sum(1 for w in wanted if any(_tokens_similar(w, t) for t in tokens))
+        if hits < len(wanted):
+            continue
+        score = hits / len(tokens)
+        if score > best_score:
+            best, best_score, tie = name, score, False
+        elif score == best_score:
+            tie = True
+    if best and not tie:
+        return best
+    return text
+
+
 # ============================================================
 # BUDOWANIE PAYLOADU Z WIERSZA
 # ============================================================
@@ -278,6 +348,7 @@ def _build_payload_from_row(
     normalized_index = {_norm(k): v for k, v in header_index.items()}
 
     def get(col: str) -> Any:
+        _CONSUMED_HEADERS.add(_norm(col))
         idx = normalized_index.get(_norm(col))
         value = row[idx] if idx is not None and idx < len(row) else None
         if isinstance(value, str):
@@ -299,17 +370,23 @@ def _build_payload_from_row(
 
     payload["forma_dzialalnosci"] = get("Forma działalności")
     payload["forma_opodatkowania"] = get("Forma opodatkowania")
+    payload["konto_bankowe"] = get("Rachunek bankowy") or get("Numer konta")
+    payload["urzad_skarbowy"] = match_tax_office(get("Urząd Skarbowy") or get("Urząd skarbowy"))
 
     payload["analityka_fk"] = get("Analityka FK")
     payload["osoba_kontaktowa"] = get("Osoba kontaktowa")
     payload["adres_email"] = get("Adres email")
     payload["nr_telefonu"] = get("Nr telefonu")
 
-    payload["vat_czynny"] = (
-        get("VAT czynny")
-        if "VAT czynny" in header_index
-        else get("VAT")
-    )
+    vat_raw = get("VAT czynny")
+    if vat_raw in (None, ""):
+        vat_raw = get("VAT")
+    if vat_raw in (None, ""):
+        vat_raw = get("Status VAT")
+    if vat_raw not in (None, ""):
+        active = _is_vat_active(vat_raw)
+        payload["vat_czynny"] = 1 if active else 0
+        payload["status_vat"] = "Czynny" if active else "Zwolniony"
 
     payload["miasto"] = get("Miasto")
     payload["kod_pocztowy"] = get("Kod pocztowy")
@@ -374,6 +451,7 @@ def _build_payload_from_row(
     payload["cennik_ksiegowy"] = cennik_ksiegowy_text
     payload["cennik_ksiegowy_parsed"] = cks
     payload["limit_dokumentow"] = cks["limit_dokumentow"]
+    payload["glowny_cennik"] = suggest_accounting_cennik_key(payload)
 
     # --------------------------------------------------
     # KADRY
@@ -454,6 +532,11 @@ def import_companies_from_excel_file_payloads(filepath: str) -> Tuple[List[Dict[
 
         payloads.append(payload)
 
+    known = set(_CONSUMED_HEADERS)
+    unknown = [h for h in headers if h and re.sub(r"\s+", " ", h).strip().casefold() not in known]
+    if payloads and unknown:
+        warnings.append("Nie rozpoznano kolumn (dane z nich nie zostaną zaimportowane): " + ", ".join(unknown))
+
     return payloads, warnings
 
 
@@ -464,6 +547,20 @@ def _pricing_key(prefix: str, values: Dict[str, Any]) -> str:
     raw = "|".join(f"{key}={values.get(key)!r}" for key in sorted(values))
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12].upper()
     return f"IMPORT_{prefix}_{digest}"
+
+
+_CONSUMED_HEADERS: set = set()
+
+_VAT_ACTIVE_VALUES = {
+    "tak", "t", "true", "yes", "y", "x", "1", "czynny", "vat czynny", "czynna",
+    "miesieczny", "miesiecznie", "kwartalny", "kwartalnie", "m", "k",
+}
+
+
+def _is_vat_active(value: Any) -> bool:
+    if value in (1, True):
+        return True
+    return _fold_pl(value) in _VAT_ACTIVE_VALUES
 
 
 def _fold_pl(value: Any) -> str:
@@ -478,7 +575,7 @@ def _fold_pl(value: Any) -> str:
 # Prefiks klucza cennika: z formy opodatkowania, nie z tekstu "Ryczałt 1300"
 ACCOUNTING_CENNIK_PREFIXES = {
     "KPIR": ("KPIR",),
-    "RYCZALT": ("Ryczałt", "RYCZALT", "Ryczalt"),
+    "RYCZALT": ("RYCZALT", "Ryczałt", "Ryczalt"),
     "KH": ("KH", "KR"),
 }
 
@@ -528,7 +625,7 @@ def _accounting_cennik_key_candidates(
     ]
 
 
-def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Optional[str]:
+def _accounting_cennik_spec(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     parsed = payload.get("cennik_ksiegowy_parsed") or {}
     text = str(payload.get("cennik_ksiegowy") or "").strip()
     if not text:
@@ -536,7 +633,6 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
 
     limit_price = parsed.get("cena_za_dokument")
     base_price = parsed.get("ryczalt_ksiegowy")
-    zdrowotna = parsed.get("zdrowotna") or 0
     if limit_price is None and base_price is None:
         return None
 
@@ -545,40 +641,40 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
         payload.get("forma_dzialalnosci"),
     )
 
-    # Poprawione ustalanie VAT.
-    vat_value = payload.get("vat_czynny")
-    vat_normalized = _fold_pl(vat_value)
-
-    vat_active = vat_value in (1, True, "1", "T", "t") or vat_normalized in {
-        "tak",
-        "true",
-        "yes",
-        "czynny",
-        "vat czynny",
-    }
-
+    status_vat = _fold_pl(payload.get("status_vat"))
+    if status_vat in {"czynny", "zwolniony"}:
+        vat_active = status_vat == "czynny"
+    else:
+        vat_active = _is_vat_active(payload.get("vat_czynny"))
     vat_flag = "T" if vat_active else "N"
-
     limit = parsed.get("limit_dokumentow") or 0
 
-    # Cena podstawowa jest częścią klucza.
-    # Przykład:
-    # Ryczałt + T + 5 + 330
-    # -> Ryczałt_T_5_330
-    if base_price is not None:
-        candidates = _accounting_cennik_key_candidates(
-            typ,
-            vat_flag,
-            limit,
-            base_price,
-        )
-    else:
-        candidates = _accounting_cennik_key_candidates(
-            typ,
-            vat_flag,
-            limit,
-        )
+    # Cena podstawowa jest częścią klucza, np. KPIR_T_10_300.
+    candidates = _accounting_cennik_key_candidates(typ, vat_flag, limit, base_price)
 
+    return {
+        "typ": typ,
+        "candidates": candidates,
+        "base_price": base_price,
+        "limit_price": limit_price,
+        "zdrowotna": parsed.get("zdrowotna") or payload.get("zdrowotna") or 0,
+    }
+
+
+def suggest_accounting_cennik_key(payload: Dict[str, Any]) -> Optional[str]:
+    spec = _accounting_cennik_spec(payload)
+    return spec["candidates"][0] if spec else None
+
+
+def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Optional[str]:
+    spec = _accounting_cennik_spec(payload)
+    if spec is None:
+        return None
+
+    candidates = spec["candidates"]
+    base_price = spec["base_price"]
+    # „netto” w cenniku to cena księgowości wraz ze zdrowotną.
+    netto = round((base_price or 0) + float(spec["zdrowotna"] or 0), 2)
     placeholders = ", ".join("?" for _ in candidates)
 
     cursor.execute(
@@ -600,13 +696,13 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
         """,
         (
             generated_key,
-            typ,
+            spec["typ"],
             base_price or 0,
             round((base_price or 0) * 1.23, 2),
-            limit_price or 0,
-            zdrowotna,
-            base_price or 0,
-            round((base_price or 0) * 1.23, 2),
+            spec["limit_price"] or 0,
+            spec["zdrowotna"],
+            netto,
+            round(netto * 1.23, 2),
         ),
     )
 
@@ -713,6 +809,13 @@ def _apply_payload_to_db(
         warnings.append(f"Wiersz {row_number}: pominięto pustą nazwę firmy.")
         return False
 
+    from app.db.dao_companies import FIRMA_FIELDS, _apply_aliases
+
+    # Kreator przekazuje klucze formularza (dz_*, ko_*, zam_*, kont_*) – mapujemy je na kolumny.
+    payload.update({k: v for k, v in _apply_aliases(payload).items() if k not in payload})
+    if payload.get("status_vat") in ("Czynny", "Zwolniony") and payload.get("vat_czynny") in (None, ""):
+        payload["vat_czynny"] = 1 if payload["status_vat"] == "Czynny" else 0
+
     normalized_nip = normalize_identifier(payload.get("nip"), {10})
     company_id = None
 
@@ -738,7 +841,7 @@ def _apply_payload_to_db(
 
     company_fields = [
         "nazwa", "nazwa_skrocona", "nip", "regon", "krs", "pesel",
-        "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk",
+        "forma_dzialalnosci", "forma_opodatkowania", "urzad_skarbowy", "konto_bankowe", "analityka_fk",
         "osoba_kontaktowa", "adres_email", "nr_telefonu", "miasto",
         "kod_pocztowy", "ulica", "adres_budynek", "adres_lokal",
         "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
@@ -754,6 +857,13 @@ def _apply_payload_to_db(
         "zdrowotna", "uop_ilosc", "uop_cennik", "uz_ilosc",
         "uz_cennik", "uod_ilosc", "uod_cennik", "wliczac_zdrowotna",
     ]
+
+    existing_columns = {row[1] for row in cursor.execute("PRAGMA table_info(firmy)")}
+    for field in FIRMA_FIELDS:
+        if field in existing_columns and field not in company_fields and field not in (
+            "glowny_cennik", "glowny_cennik_manualny",
+        ):
+            company_fields.append(field)
 
     if accounting_key:
         company_fields.append("glowny_cennik")
@@ -784,8 +894,35 @@ def _apply_payload_to_db(
         company_id = int(cursor.lastrowid)
         created = True
 
+    _ensure_contact(cursor, company_id, payload)
     _assign_employees(cursor, company_id, payload.get("assigned_raw"), warnings, row_number)
     return created
+
+
+def _ensure_contact(cursor: sqlite3.Cursor, firma_id: int, payload: Dict[str, Any]) -> None:
+    """Osoba kontaktowa z pliku trafia też do kontaktów firmy (z nich powstają filtry e-mail)."""
+    email = str(payload.get("adres_email") or "").strip()
+    person = str(payload.get("osoba_kontaktowa") or "").strip()
+    phone = str(payload.get("nr_telefonu") or "").strip()
+    if not (email or person):
+        return
+    if email:
+        exists = cursor.execute(
+            "SELECT 1 FROM company_contacts WHERE firma_id = ? AND lower(email) = ?",
+            (firma_id, email.lower()),
+        ).fetchone()
+    else:
+        exists = cursor.execute(
+            "SELECT 1 FROM company_contacts WHERE firma_id = ? AND (imie || ' ' || COALESCE(nazwisko, '')) LIKE ?",
+            (firma_id, f"{person}%"),
+        ).fetchone()
+    if exists:
+        return
+    first, _, last = person.partition(" ")
+    cursor.execute(
+        "INSERT INTO company_contacts (firma_id, imie, nazwisko, email, telefon, rola) VALUES (?, ?, ?, ?, ?, ?)",
+        (firma_id, first, last.strip(), email, phone, ""),
+    )
 
 
 # ============================================================
@@ -877,6 +1014,18 @@ def import_companies_fast_from_excel_file(filepath: str, db_path: Optional[str] 
 # ============================================================
 # IMPORT CENNIKA KSIĘGOWEGO
 # ============================================================
+def build_pricing_key(base_key: str, price: Any) -> str:
+    """Dokleja cenę podstawową do klucza: KPIR_T_10 + 300 -> KPIR_T_10_300."""
+    key = str(base_key or "").strip()
+    if not key or not price:
+        return key
+    price_key = _format_price_key(price)
+    parts = re.split(r"[_\-]", key)
+    if len(parts) >= 4 and parts[-1] == price_key:
+        return key
+    return f"{key}_{price_key}"
+
+
 def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     del db_path
     try:

@@ -377,7 +377,7 @@ def _apply_aliases(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # kontakt
     imie = payload.get("kont_imie")
-    nazw = payload.get("kont_nazw")
+    nazw = payload.get("kont_nazwisko") or payload.get("kont_nazw")
     if imie or nazw:
         mapped["osoba_kontaktowa"] = " ".join([x for x in [imie, nazw] if x]).strip()
     if "kont_email" in payload:

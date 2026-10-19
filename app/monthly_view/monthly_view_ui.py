@@ -261,7 +261,7 @@ class ActivityDialog(QDialog):
                 "SELECT c.typ, c.rozpoczecie, c.zakonczenie, c.sekundy, "
                 "p.imie || ' ' || p.nazwisko AS pracownik "
                 "FROM czasomierze c LEFT JOIN pracownicy p ON p.id = c.pracownik_id "
-                "WHERE c.firma_id = ? AND c.miesiac = ? ORDER BY c.rozpoczecie DESC",
+                "WHERE c.firma_id = %s AND c.miesiac = %s ORDER BY c.rozpoczecie DESC",
                 (firma_id, miesiac),
             )
             return [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]

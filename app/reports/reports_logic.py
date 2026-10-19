@@ -1,5 +1,5 @@
 # app/reports/reports_logic.py
-import sqlite3
+import psycopg
 from typing import List, Dict, Any
 from app.services.calculator import oblicz_miesieczny_koszt
 from app.db.dao_conn import get_conn
@@ -11,7 +11,6 @@ from app.security.authorization import assigned_company_ids, can, is_administrat
 # ============================================================
 def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     sql = "SELECT id, nazwa FROM firmy"
@@ -23,7 +22,7 @@ def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
         if not ids:
             conn.close()
             return []
-        placeholders = ",".join("?" for _ in ids)
+        placeholders = ",".join("%s" for _ in ids)
         sql += f" WHERE id IN ({placeholders})"
         params.extend(sorted(ids))
     cur.execute(sql + " ORDER BY nazwa", params)
@@ -66,13 +65,12 @@ def get_months_range(start: str, end: str) -> List[str]:
 # ============================================================
 def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
         SELECT sekundy_ksiegowosc, sekundy_kadry
         FROM statusy_miesieczne
-        WHERE firma_id = ? AND miesiac = ?
+        WHERE firma_id = %s AND miesiac = %s
     """, (firma_id, miesiac))
 
     row = cur.fetchone()
@@ -92,13 +90,12 @@ def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]
 # ============================================================
 def get_extra_services_value(firma_id: int, miesiac: str) -> float:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
         SELECT SUM(ilosc * cena_netto) AS suma
         FROM uslugi_dodatkowe_firma
-        WHERE firma_id = ? AND miesiac = ? AND fakturowac = 1
+        WHERE firma_id = %s AND miesiac = %s AND fakturowac = 1
     """, (firma_id, miesiac))
 
     row = cur.fetchone()
@@ -118,9 +115,8 @@ def build_summary_report(
         return []
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    placeholders_firm = ",".join("?" for _ in firma_ids)
-    placeholders_month = ",".join("?" for _ in months)
+    placeholders_firm = ",".join("%s" for _ in firma_ids)
+    placeholders_month = ",".join("%s" for _ in months)
     rows = conn.execute(
         f"""
         SELECT c.firma_id, c.miesiac, c.typ, c.sekundy,
@@ -183,8 +179,8 @@ def build_report(
     if not firma_ids or not months:
         return {}
 
-    placeholders_firm = ",".join("?" for _ in firma_ids)
-    placeholders_month = ",".join("?" for _ in months)
+    placeholders_firm = ",".join("%s" for _ in firma_ids)
+    placeholders_month = ",".join("%s" for _ in months)
     range_start = month_bounds(min(months))[0]
     range_end = month_bounds(max(months))[1]
     conn = get_conn()
@@ -192,13 +188,13 @@ def build_report(
         rows = conn.execute(
             f"""
             WITH selected_months(miesiac) AS (
-                SELECT ? {" UNION ALL SELECT ?" * (len(months) - 1)}
+                SELECT %s {" UNION ALL SELECT %s" * (len(months) - 1)}
             ),
             doc_counts AS (
                 SELECT firma_id, substr(data_wyst, 1, 7) AS miesiac, COUNT(*) AS dokumenty
                 FROM dokumenty
                 WHERE firma_id IN ({placeholders_firm})
-                  AND data_wyst >= ? AND data_wyst < ?
+                  AND data_wyst >= %s AND data_wyst < %s
                 GROUP BY firma_id, substr(data_wyst, 1, 7)
             ),
             extras AS (
@@ -311,7 +307,6 @@ def build_profit_report(
 ) -> Dict[str, Any]:
     firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     out = {}
@@ -323,7 +318,7 @@ def build_profit_report(
             cur.execute("""
                 SELECT sekundy_ksiegowosc, sekundy_kadry, wartosc_uslug
                 FROM statusy_miesieczne
-                WHERE firma_id = ? AND miesiac = ?
+                WHERE firma_id = %s AND miesiac = %s
             """, (fid, miesiac))
 
             row = cur.fetchone()

@@ -17,7 +17,7 @@ class ChatAccessTests(DbTestCase):
         self.inactive = self.make_employee("i@x.pl", "Ignacy", "Nieaktywny")
         from app.db.dao_conn import get_conn
         conn = get_conn()
-        conn.execute("UPDATE pracownicy SET aktywny = 0 WHERE id = ?", (self.inactive,))
+        conn.execute("UPDATE pracownicy SET aktywny = 0 WHERE id = %s", (self.inactive,))
         conn.commit()
         conn.close()
         self.admin = cm_admin_id()

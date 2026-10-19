@@ -52,7 +52,7 @@ def import_ics(pracownik_id: int, path: str) -> Dict[str, int]:
             stats["pominiete"] += 1
             continue
         row.pop("caldav_uid", None)
-        row["zrodlo"] = "ics"
+        row["zrodlo"] = "lokalne"
         dao_calendar.save_event(pracownik_id, row)
         existing.add(key)
         stats["zaimportowane"] += 1

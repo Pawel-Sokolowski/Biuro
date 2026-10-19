@@ -101,7 +101,7 @@ class FolderTreeTests(DbTestCase):
 
 class CacheTests(DbTestCase):
     def test_cache_keeps_last_limit(self):
-        with mock.patch("app.email.email_cache.get_database", return_value=self.db_path):
+        with mock.patch("app.email.email_cache.get_data_dir", return_value=self._tmp):
             for i in range(5):
                 email_cache.write_message(1, "INBOX", str(i), b"x", limit=3)
                 os.utime(email_cache._path(1, "INBOX", str(i)), (1000 + i, 1000 + i))
@@ -129,7 +129,7 @@ class EmailPageTests(DbTestCase):
         raw = b"From: x@y.pl\r\nTo: a@b.pl\r\nSubject: Temat\r\n\r\nTresc listu"
         with mock.patch.object(email_ui, "get_email_accounts_for_employee", return_value=[{"id": 1, "email": "a@b.pl"}]), \
                 mock.patch.object(email_ui, "sync_and_prefetch", return_value=0), \
-                mock.patch("app.email.email_cache.get_database", return_value=self.db_path), \
+                mock.patch("app.email.email_cache.get_data_dir", return_value=self._tmp), \
                 mock.patch("app.email.email_sync.mark_read_remote", return_value=True), \
                 mock.patch.object(email_ui, "mark_read_remote", return_value=True):
             email_cache.write_message(1, "INBOX", "7", raw)
@@ -146,6 +146,7 @@ class EmailPageTests(DbTestCase):
             self.assertTrue(item.font(0).bold())
             self.assertEqual(item.text(2), "01.01.2024, 10:00")
             page.mail_list.setCurrentItem(item)
+            page._open_selected_now()
             self.assertIn("Tresc listu", page.mail_view.toPlainText())
             self.assertFalse(item.font(0).bold())
             self.assertFalse(hasattr(page, "btn_download_message"))

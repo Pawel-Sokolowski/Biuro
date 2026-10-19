@@ -89,7 +89,7 @@ def find_latest_backup_mail() -> Optional[Dict[str, Any]]:
             SELECT w.id, w.konto_id, w.uid, w.data, w.temat, f.server_name
             FROM wiadomosci_email w
             JOIN foldery_email f ON f.id = w.folder_id
-            WHERE w.konto_id = ? AND COALESCE(w.usunieta, 0) = 0
+            WHERE w.konto_id = %s AND COALESCE(w.usunieta, 0) = 0
             ORDER BY w.id DESC
             LIMIT 50
             """,

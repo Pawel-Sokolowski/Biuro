@@ -17,11 +17,13 @@ def add_company_extra_service(
             """
             INSERT INTO uslugi_dodatkowe_firma
                 (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (firma_id, miesiac, usluga_id, ilosc, cena_netto, 1 if fakturowac else 0),
         )
+        new_id = int(cur.fetchone()[0])
         conn.commit()
-        return int(cur.lastrowid)
+        return new_id
     finally:
         conn.close()

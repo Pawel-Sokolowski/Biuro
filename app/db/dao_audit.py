@@ -18,7 +18,7 @@ def record_audit(
         conn.execute(
             """
             INSERT INTO audit_log (tabela, rekord_id, akcja, uzytkownik_id, szczegoly)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
             """,
             (table, record_id, action, user_id, json.dumps(details or {}, ensure_ascii=False)),
         )
@@ -36,7 +36,7 @@ def list_audit(limit: int = 500):
             FROM audit_log a
             LEFT JOIN pracownicy p ON p.id = a.uzytkownik_id
             ORDER BY a.id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (limit,),
         ).fetchall()
@@ -58,7 +58,7 @@ def record_import(
             INSERT INTO import_history
                 (import_type, source_path, created_count, updated_count,
                  warning_count, user_id, completed_at, status, details)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), %s, %s)
             """,
             (
                 import_type,
@@ -85,7 +85,7 @@ def list_import_history(limit: int = 200):
             FROM import_history h
             LEFT JOIN pracownicy p ON p.id = h.user_id
             ORDER BY h.id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (limit,),
         ).fetchall()

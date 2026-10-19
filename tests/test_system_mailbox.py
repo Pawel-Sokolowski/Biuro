@@ -40,7 +40,7 @@ class SystemMailboxTests(DbTestCase):
         account_id = self.save()
         from app.db.dao_conn import get_conn
         conn = get_conn()
-        conn.execute("INSERT INTO pracownik_konto_email (pracownik_id, konto_id) VALUES (?, ?)", (emp, account_id))
+        conn.execute("INSERT INTO pracownik_konto_email (pracownik_id, konto_id) VALUES (%s, %s)", (emp, account_id))
         conn.commit()
         conn.close()
         self.assertEqual(storage_accounts(emp), [])

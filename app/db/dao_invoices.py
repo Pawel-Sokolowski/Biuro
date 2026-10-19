@@ -1,9 +1,9 @@
-import sqlite3
+import psycopg
 import json
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
-from app.db.dao_conn import get_conn
+from app.db.dao_conn import get_conn, Row
 from app.invoices.positions import normalize_position, reverse_positions, totals
 from app.security.authorization import assigned_company_ids, can, is_administrator
 
@@ -23,7 +23,7 @@ def _now_datetime() -> str:
     return datetime.now().strftime(DATETIME_FMT)
 
 
-def _safe_commit(conn: sqlite3.Connection):
+def _safe_commit(conn: psycopg.Connection):
     try:
         conn.commit()
     except Exception:
@@ -31,7 +31,7 @@ def _safe_commit(conn: sqlite3.Connection):
         raise
 
 
-def _row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+def _row_to_dict(row: Optional[Row]) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
     return dict(row)
@@ -39,10 +39,9 @@ def _row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
 
 def get_invoice_by_id(invoice_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM faktury WHERE id = ?", (invoice_id,))
+        cur.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,))
         row = cur.fetchone()
         return _row_to_dict(row)
     finally:
@@ -51,11 +50,10 @@ def get_invoice_by_id(invoice_id: int) -> Optional[Dict[str, Any]]:
 
 def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT * FROM faktury WHERE firma_id = ? AND miesiac = ? AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0",
+            "SELECT * FROM faktury WHERE firma_id = %s AND miesiac = %s AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0",
             (firma_id, miesiac),
         )
         row = cur.fetchone()
@@ -66,11 +64,10 @@ def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[
 
 def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT * FROM faktury WHERE firma_id = ? ORDER BY miesiac DESC, created_at DESC",
+            "SELECT * FROM faktury WHERE firma_id = %s ORDER BY miesiac DESC, created_at DESC",
             (firma_id,),
         )
         rows = cur.fetchall()
@@ -81,7 +78,6 @@ def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
 
 def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
         sql = """
@@ -98,7 +94,7 @@ def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, 
             ids = assigned_company_ids(pracownik_id)
             if not ids:
                 return []
-            placeholders = ",".join("?" for _ in ids)
+            placeholders = ",".join("%s" for _ in ids)
             sql += f" AND f.firma_id IN ({placeholders})"
             params.extend(sorted(ids))
         cur.execute(sql + " ORDER BY f.updated_at DESC, f.created_at DESC", params)
@@ -112,15 +108,14 @@ def _get_or_create_draft_invoice_for_company(
     firma_id: int, miesiac: str, pracownik_id: Optional[int] = None
 ) -> int:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
         cur.execute(
             """
             SELECT id
             FROM faktury
-            WHERE firma_id = ?
-              AND miesiac = ?
+            WHERE firma_id = %s
+              AND miesiac = %s
               AND COALESCE(eksportowana, 0) = 0
               AND rodzaj = 'faktura'
               AND COALESCE(reczna, 0) = 0
@@ -143,27 +138,28 @@ def _get_or_create_draft_invoice_for_company(
                 firma_id, miesiac, kwota_netto, kwota_brutto,
                 data_wystawienia, data_sprzedazy, termin_platnosci,
                 pozycje_json, eksportowana, status, created_at, updated_at
-            ) VALUES (?, ?, 0, 0, ?, ?, ?, ?, 0, 'robocza', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (%s, %s, 0, 0, %s, %s, %s, %s, 0, 'robocza', to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
             """,
             (firma_id, miesiac, today, today, termin, "[]"),
         )
-        invoice_id = cur.lastrowid
+        _new_id = cur.fetchone()[0]
+        invoice_id = _new_id
         conn.commit()
         return invoice_id
     finally:
         conn.close()
 
 
-def _recalculate_invoice_totals(conn: sqlite3.Connection, invoice_id: int):
+def _recalculate_invoice_totals(conn: psycopg.Connection, invoice_id: int):
     cur = conn.cursor()
     cur.execute(
-        "SELECT ilosc, cena_netto, wartosc_netto FROM faktury_pozycje WHERE invoice_id = ?",
+        "SELECT ilosc, cena_netto, wartosc_netto FROM faktury_pozycje WHERE invoice_id = %s",
         (invoice_id,),
     )
     rows = cur.fetchall()
     total_netto = 0.0
     for r in rows:
-        if isinstance(r, sqlite3.Row):
+        if isinstance(r, Row):
             wart_net = r["wartosc_netto"] if r["wartosc_netto"] is not None else 0.0
         else:
             wart_net = r[2] if len(r) > 2 and r[2] is not None else 0.0
@@ -171,7 +167,7 @@ def _recalculate_invoice_totals(conn: sqlite3.Connection, invoice_id: int):
     total_netto = round(total_netto, 2)
     total_brutto = round(total_netto * 1.23, 2)
     cur.execute(
-        "UPDATE faktury SET kwota_netto = ?, kwota_brutto = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE faktury SET kwota_netto = %s, kwota_brutto = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
         (total_netto, total_brutto, invoice_id),
     )
 
@@ -188,11 +184,10 @@ def add_invoice_item_for_service(
         return None
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT id, nazwa, cena_netto, stawka_vat FROM uslugi_dodatkowe WHERE id = ?",
+            "SELECT id, nazwa, cena_netto, stawka_vat FROM uslugi_dodatkowe WHERE id = %s",
             (usluga_id,),
         )
         svc_row = cur.fetchone()
@@ -214,7 +209,7 @@ def add_invoice_item_for_service(
         vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
         wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
 
-        cur.execute("SELECT pozycje_json FROM faktury WHERE id = ?", (invoice_id,))
+        cur.execute("SELECT pozycje_json FROM faktury WHERE id = %s", (invoice_id,))
         invoice_row = cur.fetchone()
         try:
             positions = json.loads(invoice_row["pozycje_json"] or "[]") if invoice_row else []
@@ -240,7 +235,7 @@ def add_invoice_item_for_service(
             """
             INSERT INTO faktury_pozycje (
                 invoice_id, usluga_id, nazwa, ilosc, cena_netto, wartosc_netto, stawka_vat, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 invoice_id,
@@ -257,9 +252,9 @@ def add_invoice_item_for_service(
         cur.execute(
             """
             UPDATE faktury
-            SET kwota_netto = ?, kwota_brutto = ?,
-                pozycje_json = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            SET kwota_netto = %s, kwota_brutto = %s,
+                pozycje_json = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id = %s
             """,
             (
                 round(sum(float(p.get("netto") or 0) for p in positions), 2),
@@ -288,7 +283,6 @@ def add_custom_invoice_item(
     stawka_vat: str = "23",
 ) -> bool:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
         ilosc_r = round(float(ilosc), 2)
@@ -298,10 +292,11 @@ def add_custom_invoice_item(
             """
             INSERT INTO faktury_pozycje (
                 invoice_id, usluga_id, nazwa, ilosc, cena_netto, wartosc_netto, stawka_vat, created_at
-            ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
             (invoice_id, opis, ilosc_r, cena_r, wart_net, str(stawka_vat), _now_datetime()),
         )
+        _new_id = cur.fetchone()[0]
         _recalculate_invoice_totals(conn, invoice_id)
         conn.commit()
         return True
@@ -330,10 +325,9 @@ def create_manual_invoice(
         raise ValueError("Ka\u017Cda pozycja musi mie\u0107 nazw\u0119.")
     netto, brutto = totals(normalized)
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
         if buyer_type == "firma":
-            buyer = conn.execute("SELECT * FROM firmy WHERE id = ?", (buyer_id,)).fetchone()
+            buyer = conn.execute("SELECT * FROM firmy WHERE id = %s", (buyer_id,)).fetchone()
             if not buyer:
                 raise ValueError("Nie znaleziono firmy.")
             buyer = dict(buyer)
@@ -347,7 +341,7 @@ def create_manual_invoice(
                 "nabywca_kraj": buyer.get("kraj") or "Polska", "nabywca_email": buyer.get("adres_email"),
             }
         else:
-            buyer = conn.execute("SELECT * FROM kontrahenci WHERE id = ?", (buyer_id,)).fetchone()
+            buyer = conn.execute("SELECT * FROM kontrahenci WHERE id = %s", (buyer_id,)).fetchone()
             if not buyer:
                 raise ValueError("Nie znaleziono kontrahenta.")
             buyer = dict(buyer)
@@ -366,10 +360,10 @@ def create_manual_invoice(
         values = [firma_id, kontrahent_id, 1, miesiac, netto, brutto, data_wystawienia,
                   data_sprzedazy, termin_platnosci, json.dumps(normalized, ensure_ascii=False), "robocza", "faktura"]
         values.extend(buyer_data.values())
-        marks = ", ".join("?" for _ in columns)
-        cur = conn.execute(f"INSERT INTO faktury ({', '.join(columns)}) VALUES ({marks})", values)
+        marks = ", ".join("%s" for _ in columns)
+        cur = conn.execute(f"INSERT INTO faktury ({', '.join(columns)}) VALUES ({marks}) RETURNING id", values)
         conn.commit()
-        return int(cur.lastrowid)
+        return int(cur.fetchone()[0])
     except Exception:
         conn.rollback()
         raise
@@ -401,7 +395,7 @@ def create_or_update_invoice(
     try:
         if existing_invoice_id:
             locked = cur.execute(
-                "SELECT COALESCE(eksportowana, 0) FROM faktury WHERE id = ?", (existing_invoice_id,)
+                "SELECT COALESCE(eksportowana, 0) FROM faktury WHERE id = %s", (existing_invoice_id,)
             ).fetchone()
             if locked and locked[0]:
                 raise InvoiceLockedError(
@@ -410,10 +404,10 @@ def create_or_update_invoice(
             cur.execute(
                 """
                 UPDATE faktury
-                SET kwota_netto = ?, kwota_brutto = ?, pozycje_json = ?,
-                    data_wystawienia = ?, data_sprzedazy = ?, termin_platnosci = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                SET kwota_netto = %s, kwota_brutto = %s, pozycje_json = %s,
+                    data_wystawienia = %s, data_sprzedazy = %s, termin_platnosci = %s,
+                    updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                WHERE id = %s
             """,
                 (
                     round(kwota_netto, 2),
@@ -439,7 +433,7 @@ def create_or_update_invoice(
                     kwota_netto, kwota_brutto,
                     data_wystawienia, data_sprzedazy, termin_platnosci,
                     pozycje_json, eksportowana, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
             """,
                 (
                     firma_id,
@@ -452,16 +446,17 @@ def create_or_update_invoice(
                     pozycje_json,
                 ),
             )
+            _new_id = cur.fetchone()[0]
 
-            invoice_id = cur.lastrowid
+            invoice_id = _new_id
 
         _safe_commit(conn)
         return invoice_id
 
-    except sqlite3.IntegrityError as e:
+    except psycopg.IntegrityError as e:
         conn.rollback()
         raise ValueError(
-            f"SQLite IntegrityError podczas zapisu faktury dla firmy {firma_id}, miesiac={miesiac}: {e}"
+            f"IntegrityError podczas zapisu faktury dla firmy {firma_id}, miesiac={miesiac}: {e}"
         )
 
     except ValueError:
@@ -482,10 +477,10 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     conn = get_conn()
     cur = conn.cursor()
     try:
-        placeholders = ",".join(["?"] * len(invoice_ids))
+        placeholders = ",".join(["%s"] * len(invoice_ids))
         params: List[Any] = list(invoice_ids)
         sql = (
-            f"UPDATE faktury SET eksportowana = 1, status = 'wystawiona', data_eksportu = CURRENT_TIMESTAMP "
+            f"UPDATE faktury SET eksportowana = 1, status = 'wystawiona', data_eksportu = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') "
             f"WHERE id IN ({placeholders})"
         )
         if pracownik_id and not (
@@ -494,7 +489,7 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
             sql += (
                 " AND EXISTS ("
                 "SELECT 1 FROM pracownik_firma pf "
-                "WHERE pf.firma_id = faktury.firma_id AND pf.pracownik_id = ?)"
+                "WHERE pf.firma_id = faktury.firma_id AND pf.pracownik_id = %s)"
             )
             params.append(pracownik_id)
         cur.execute(sql, params)
@@ -503,13 +498,13 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
         conn.close()
 
 
-def archive_invoice_positions(conn: sqlite3.Connection, invoice_row: Dict[str, Any]):
+def archive_invoice_positions(conn: psycopg.Connection, invoice_row: Dict[str, Any]):
     cur = conn.cursor()
     cur.execute(
         """
         INSERT INTO faktury_archiwum (
             faktura_id, firma_id, miesiac, pozycje_json, kwota_netto, kwota_brutto, archived_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
     """,
         (
             invoice_row.get("id"),
@@ -521,14 +516,14 @@ def archive_invoice_positions(conn: sqlite3.Connection, invoice_row: Dict[str, A
             _now_datetime(),
         ),
     )
+    _new_id = cur.fetchone()[0]
 
 
 def delete_invoice_keep_positions(invoice_id: int) -> bool:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM faktury WHERE id = ?", (invoice_id,))
+        cur.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,))
         row = cur.fetchone()
         if not row:
             return False
@@ -536,8 +531,8 @@ def delete_invoice_keep_positions(invoice_id: int) -> bool:
         invoice = dict(row)
         archive_invoice_positions(conn, invoice)
 
-        cur.execute("DELETE FROM faktury_pozycje WHERE invoice_id = ?", (invoice_id,))
-        cur.execute("DELETE FROM faktury WHERE id = ?", (invoice_id,))
+        cur.execute("DELETE FROM faktury_pozycje WHERE invoice_id = %s", (invoice_id,))
+        cur.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
         conn.commit()
         return True
 
@@ -553,7 +548,6 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
     report = {"generated": [], "skipped": [], "errors": []}
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     try:
@@ -563,13 +557,17 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
         firms_rows = cur.fetchall()
         firms = [dict(r) for r in firms_rows]
 
+        cur.execute(
+            "SELECT DISTINCT firma_id FROM faktury WHERE miesiac = %s AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0",
+            (miesiac,),
+        )
+        invoiced_ids = {r[0] for r in cur.fetchall()}
+
         for firma in firms:
             fid = firma["id"]
             fakturowac_flag = bool(firma.get("fakturowac", 0))
 
-            cur2 = conn.cursor()
-            cur2.execute("SELECT id FROM faktury WHERE firma_id = ? AND miesiac = ? AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0", (fid, miesiac))
-            if cur2.fetchone():
+            if fid in invoiced_ids:
                 report["skipped"].append((fid, "Faktura już istnieje"))
                 continue
 
@@ -580,7 +578,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
             klucz = firma.get("glowny_cennik")
             ccur = conn.cursor()
             ccur.execute(
-                "SELECT cena_netto_ksiegowosc, zdrowotna, netto FROM cenniki WHERE klucz = ?",
+                "SELECT cena_netto_ksiegowosc, zdrowotna, netto FROM cenniki WHERE klucz = %s",
                 (klucz,),
             )
             crow_row = ccur.fetchone()
@@ -678,23 +676,22 @@ def list_invoices(
     firma_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Faktury robocze (wystawione=False) albo wystawione (wystawione=True) widoczne dla pracownika."""
-    where = ["COALESCE(f.eksportowana, 0) = ?"]
+    where = ["COALESCE(f.eksportowana, 0) = %s"]
     params: List[Any] = [1 if wystawione else 0]
     if miesiac:
-        where.append("f.miesiac = ?")
+        where.append("f.miesiac = %s")
         params.append(miesiac)
     if firma_id:
-        where.append("f.firma_id = ?")
+        where.append("f.firma_id = %s")
         params.append(firma_id)
     if not _has_full_finance_access(pracownik_id):
         ids = sorted(assigned_company_ids(pracownik_id))
         if not ids:
             return []
-        where.append(f"f.firma_id IN ({','.join('?' for _ in ids)})")
+        where.append(f"f.firma_id IN ({','.join('%s' for _ in ids)})")
         params.extend(ids)
-    order = "f.data_eksportu DESC, f.id DESC" if wystawione else "COALESCE(c.nazwa, k.nazwa, f.nabywca_pelna) COLLATE NOCASE, f.id"
+    order = "f.data_eksportu DESC, f.id DESC" if wystawione else "lower(COALESCE(c.nazwa, k.nazwa, f.nabywca_pelna)), f.id"
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(f"{INVOICE_LIST_SQL} WHERE {' AND '.join(where)} ORDER BY {order}", params).fetchall()
         return [dict(r) for r in rows]
@@ -737,10 +734,10 @@ def update_invoice_draft(
         conn.execute(
             """
             UPDATE faktury
-            SET pozycje_json = ?, kwota_netto = ?, kwota_brutto = ?, numer = ?,
-                data_wystawienia = ?, data_sprzedazy = ?, termin_platnosci = ?,
-                przyczyna_korekty = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            SET pozycje_json = %s, kwota_netto = %s, kwota_brutto = %s, numer = %s,
+                data_wystawienia = %s, data_sprzedazy = %s, termin_platnosci = %s,
+                przyczyna_korekty = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id = %s
             """,
             (
                 json.dumps(normalized, ensure_ascii=False), netto, brutto, (numer or "").strip() or None,
@@ -763,7 +760,7 @@ def delete_draft_invoice(invoice_id: int) -> None:
         raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
     conn = get_conn()
     try:
-        conn.execute("DELETE FROM faktury WHERE id = ?", (invoice_id,))
+        conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
         conn.commit()
     finally:
         conn.close()
@@ -793,15 +790,16 @@ def create_correction(invoice_id: int, przyczyna: str = "") -> int:
                 termin_platnosci, pozycje_json, eksportowana, status, rodzaj,
                 korygowana_faktura_id, przyczyna_korekty, {', '.join(columns)}
             )
-            SELECT firma_id, miesiac, ?, ?, ?, ?, ?, ?, 0, 'robocza', 'korekta', id, ?,
+            SELECT firma_id, miesiac, %s, %s, %s, %s, %s, %s, 0, 'robocza', 'korekta', id, %s,
                    {', '.join(columns)}
-            FROM faktury WHERE id = ?
+            FROM faktury WHERE id = %s RETURNING id
             """,
             (netto, brutto, today, today, original.get("termin_platnosci") or today,
              json.dumps(positions, ensure_ascii=False), przyczyna or "", invoice_id),
         )
+        new_id = cur.fetchone()[0]
         conn.commit()
-        return int(cur.lastrowid)
+        return int(new_id)
     finally:
         conn.close()
 
@@ -811,8 +809,8 @@ def set_ksef_number(invoice_id: int, ksef_numer: str) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE faktury SET ksef_numer = ?, ksef_data = CASE WHEN ? = '' THEN NULL ELSE CURRENT_TIMESTAMP END, "
-            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE faktury SET ksef_numer = %s, ksef_data = CASE WHEN %s = '' THEN NULL ELSE to_char(now(), 'YYYY-MM-DD HH24:MI:SS') END, "
+            "updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
             (ksef_numer or None, ksef_numer, invoice_id),
         )
         conn.commit()
@@ -822,7 +820,6 @@ def set_ksef_number(invoice_id: int, ksef_numer: str) -> None:
 def list_issued_without_ksef() -> List[Dict[str, Any]]:
     """Wystawione faktury bez numeru KSeF, z NIP-em firmy, do dopasowania po firmie i kwocie."""
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
             "SELECT f.id, f.numer, f.miesiac, f.kwota_brutto, f.firma_id, COALESCE(fi.nip, f.nabywca_nip) AS firma_nip "
@@ -838,7 +835,7 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
 def set_invoice_number(invoice_id: int, numer: str) -> None:
     conn = get_conn()
     try:
-        conn.execute("UPDATE faktury SET numer = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (numer, invoice_id))
+        conn.execute("UPDATE faktury SET numer = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s", (numer, invoice_id))
         conn.commit()
     finally:
         conn.close()

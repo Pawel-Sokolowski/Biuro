@@ -26,7 +26,7 @@ def get_system_account() -> Optional[Dict[str, Any]]:
         return None
     conn = get_conn()
     try:
-        row = conn.execute("SELECT * FROM konta_email WHERE id = ?", (account_id,)).fetchone()
+        row = conn.execute("SELECT * FROM konta_email WHERE id = %s", (account_id,)).fetchone()
     finally:
         conn.close()
     return dict(row) if row else None
@@ -63,10 +63,10 @@ def save_system_account(
             conn.execute(
                 """
                 UPDATE konta_email
-                SET email = ?, serwer_imap = ?, port_imap = ?, ssl_imap = ?,
-                    serwer_smtp = ?, port_smtp = ?, ssl_smtp = ?, haslo_enc = ?,
+                SET email = %s, serwer_imap = %s, port_imap = %s, ssl_imap = %s,
+                    serwer_smtp = %s, port_smtp = %s, ssl_smtp = %s, haslo_enc = %s,
                     aktywne = 1, systemowe = 1, pracownik_id = NULL
-                WHERE id = ?
+                WHERE id = %s
                 """,
                 values + (current["id"],),
             )
@@ -77,11 +77,12 @@ def save_system_account(
                 INSERT INTO konta_email (
                     email, serwer_imap, port_imap, ssl_imap,
                     serwer_smtp, port_smtp, ssl_smtp, haslo_enc, aktywne, systemowe
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1, 1)
+                RETURNING id
                 """,
                 values,
             )
-            account_id = int(cur.lastrowid)
+            account_id = int(cur.fetchone()[0])
         conn.commit()
     finally:
         conn.close()

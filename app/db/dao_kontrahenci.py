@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
+import psycopg
 from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
@@ -34,17 +34,17 @@ def save_kontrahent(data: Dict[str, Any], kontrahent_id: Optional[int] = None) -
     conn = get_conn()
     try:
         if kontrahent_id:
-            assignments = ", ".join(f"{key} = ?" for key in FIELDS)
-            cur = conn.execute(f"UPDATE kontrahenci SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            assignments = ", ".join(f"{key} = %s" for key in FIELDS)
+            cur = conn.execute(f"UPDATE kontrahenci SET {assignments}, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
                                [values[key] for key in FIELDS] + [kontrahent_id])
             if not cur.rowcount:
                 raise ValueError("Nie znaleziono kontrahenta.")
             result = int(kontrahent_id)
         else:
             columns = ", ".join(FIELDS)
-            marks = ", ".join("?" for _ in FIELDS)
-            cur = conn.execute(f"INSERT INTO kontrahenci ({columns}) VALUES ({marks})", [values[key] for key in FIELDS])
-            result = int(cur.lastrowid)
+            marks = ", ".join("%s" for _ in FIELDS)
+            cur = conn.execute(f"INSERT INTO kontrahenci ({columns}) VALUES ({marks}) RETURNING id", [values[key] for key in FIELDS])
+            result = int(cur.fetchone()[0])
         conn.commit()
         return result
     except Exception:
@@ -56,9 +56,8 @@ def save_kontrahent(data: Dict[str, Any], kontrahent_id: Optional[int] = None) -
 
 def get_kontrahent(kontrahent_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute("SELECT * FROM kontrahenci WHERE id = ?", (kontrahent_id,)).fetchone()
+        row = conn.execute("SELECT * FROM kontrahenci WHERE id = %s", (kontrahent_id,)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -66,9 +65,8 @@ def get_kontrahent(kontrahent_id: int) -> Optional[Dict[str, Any]]:
 
 def list_kontrahenci() -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
-        return [dict(row) for row in conn.execute("SELECT * FROM kontrahenci ORDER BY nazwa COLLATE NOCASE, id")]
+        return [dict(row) for row in conn.execute("SELECT * FROM kontrahenci ORDER BY lower(nazwa), id")]
     finally:
         conn.close()
 
@@ -76,14 +74,13 @@ def list_kontrahenci() -> List[Dict[str, Any]]:
 def search_kontrahenci(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     term = (query or "").strip()
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
         if term:
             like = f"%{term}%"
-            rows = conn.execute("SELECT * FROM kontrahenci WHERE nazwa LIKE ? COLLATE NOCASE OR nip LIKE ? ORDER BY nazwa COLLATE NOCASE LIMIT ?",
+            rows = conn.execute("SELECT * FROM kontrahenci WHERE nazwa ILIKE %s OR nip ILIKE %s ORDER BY lower(nazwa) LIMIT %s",
                                 (like, like, max(1, int(limit)))).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM kontrahenci ORDER BY nazwa COLLATE NOCASE LIMIT ?", (max(1, int(limit)),)).fetchall()
+            rows = conn.execute("SELECT * FROM kontrahenci ORDER BY lower(nazwa) LIMIT %s", (max(1, int(limit)),)).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -92,7 +89,7 @@ def search_kontrahenci(query: str, limit: int = 50) -> List[Dict[str, Any]]:
 def delete_kontrahent(kontrahent_id: int) -> None:
     conn = get_conn()
     try:
-        conn.execute("DELETE FROM kontrahenci WHERE id = ?", (kontrahent_id,))
+        conn.execute("DELETE FROM kontrahenci WHERE id = %s", (kontrahent_id,))
         conn.commit()
     finally:
         conn.close()

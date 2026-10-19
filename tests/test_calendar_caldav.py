@@ -176,5 +176,14 @@ class CalendarPageTests(DbTestCase):
         self.assertEqual(page.tree.topLevelItemCount(), 0)
 
 
+    def test_imported_ics_events_are_listed(self):
+        app = QApplication.instance() or QApplication([])
+        from app.kalendarz.calendar_ui import CalendarPage
+        emp = self.make_employee()
+        today = date.today().isoformat()
+        dao_calendar.save_event(emp, {"tytul": "Z pliku", "start": today + "T09:00", "koniec": today + "T10:00", "zrodlo": "ics"})
+        page = CalendarPage(emp)
+        self.assertEqual(page.tree.topLevelItemCount(), 1)
+
 if __name__ == "__main__":
     unittest.main()

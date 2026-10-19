@@ -56,7 +56,7 @@ class RolesSettings(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            # defensywny odczyt pól (działa zarówno dla dict jak i sqlite3.Row)
+            # defensywny odczyt pól (działa zarówno dla dict jak i Row)
             try:
                 rid = r["id"]
             except Exception:

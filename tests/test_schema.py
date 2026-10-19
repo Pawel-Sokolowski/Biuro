@@ -1,14 +1,17 @@
-import sqlite3
 import unittest
+
+import psycopg
+
+from app.db.dao_conn import get_conn
 
 from tests.base import DbTestCase
 
 
 class SchemaTests(DbTestCase):
     def tables(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = get_conn()
         try:
-            return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {r[0] for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()")}
         finally:
             conn.close()
 
@@ -23,14 +26,16 @@ class SchemaTests(DbTestCase):
         init_db()
 
     def test_monthly_status_columns_and_check(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = get_conn()
         try:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(statusy_miesieczne)")}
+            cols = {r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'statusy_miesieczne'")}
             self.assertIn("dokumenty_dostarczone", cols)
             firma = self.make_company()
-            with self.assertRaises(sqlite3.IntegrityError):
+            with self.assertRaises(psycopg.IntegrityError):
                 conn.execute(
-                    "INSERT INTO statusy_miesieczne (firma_id, miesiac, etap) VALUES (?, '2026-01', 'Nieznany')",
+                    "INSERT INTO statusy_miesieczne (firma_id, miesiac, etap) VALUES (%s, '2026-01', 'Nieznany')",
                     (firma,),
                 )
         finally:
@@ -39,11 +44,11 @@ class SchemaTests(DbTestCase):
     def test_pelnomocnictwa_type_is_restricted(self):
         firma = self.make_company()
         emp = self.make_employee()
-        conn = sqlite3.connect(self.db_path)
+        conn = get_conn()
         try:
-            with self.assertRaises(sqlite3.IntegrityError):
+            with self.assertRaises(psycopg.IntegrityError):
                 conn.execute(
-                    "INSERT INTO pelnomocnictwa (firma_id, pracownik_id, typ) VALUES (?, ?, 'XYZ')",
+                    "INSERT INTO pelnomocnictwa (firma_id, pracownik_id, typ) VALUES (%s, %s, 'XYZ')",
                     (firma, emp),
                 )
         finally:

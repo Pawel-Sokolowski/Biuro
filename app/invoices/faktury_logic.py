@@ -1,6 +1,6 @@
 # app/invoices/faktury_logic.py
 import json
-import sqlite3
+import psycopg
 from app.utils.parsing import to_float
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -21,12 +21,11 @@ class FakturyLogic:
     # ---------------- STATUS MIESIĘCZNY ----------------
     def _get_month_status(self, firma_id: int, miesiac: str) -> Optional[dict]:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT *
             FROM statusy_miesieczne
-            WHERE firma_id = ? AND miesiac = ?
+            WHERE firma_id = %s AND miesiac = %s
         """, (firma_id, miesiac))
         row = cur.fetchone()
         conn.close()
@@ -45,13 +44,12 @@ class FakturyLogic:
     # ---------------- USŁUGI DODATKOWE ----------------
     def _get_extra_services(self, firma_id: int, miesiac: str) -> List[dict]:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT u.nazwa, u.kategoria, u.stawka_vat, uf.ilosc, uf.cena_netto
             FROM uslugi_dodatkowe_firma uf
             JOIN uslugi_dodatkowe u ON uf.usluga_id = u.id
-            WHERE uf.firma_id = ? AND uf.miesiac = ? AND uf.fakturowac = 1
+            WHERE uf.firma_id = %s AND uf.miesiac = %s AND uf.fakturowac = 1
             ORDER BY u.nazwa
         """, (firma_id, miesiac))
         rows = cur.fetchall()
@@ -61,9 +59,8 @@ class FakturyLogic:
     # ---------------- FIRMA ----------------
     def _get_company(self, firma_id: int) -> Optional[dict]:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT * FROM firmy WHERE id = ?", (firma_id,))
+        cur.execute("SELECT * FROM firmy WHERE id = %s", (firma_id,))
         row = cur.fetchone()
         conn.close()
         if not row:
@@ -96,7 +93,6 @@ class FakturyLogic:
         if not klucz:
             return None
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT
@@ -108,7 +104,7 @@ class FakturyLogic:
                 netto,
                 brutto
             FROM cenniki
-            WHERE klucz = ?
+            WHERE klucz = %s
         """, (klucz,))
         row = cur.fetchone()
         conn.close()
@@ -332,7 +328,6 @@ class FakturyLogic:
             return {"processed": 0, "created": 0, "updated": 0, "errors": ["Brak miesiąca."]}
 
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         if only_active:
             cur.execute("SELECT id FROM firmy WHERE status = 'Aktywne' OR status IS NULL")

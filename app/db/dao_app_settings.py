@@ -13,7 +13,7 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT wartosc FROM app_settings WHERE klucz = ?", (key,))
+        cur.execute("SELECT wartosc FROM app_settings WHERE klucz = %s", (key,))
         row = cur.fetchone()
         if not row:
             return default
@@ -44,7 +44,7 @@ def set_setting(key: str, value: str) -> None:
         cur.execute(
             """
             INSERT INTO app_settings (klucz, wartosc)
-            VALUES (?, ?)
+            VALUES (%s, %s)
             ON CONFLICT(klucz) DO UPDATE SET wartosc = excluded.wartosc
             """,
             (key, value),
@@ -58,7 +58,7 @@ def delete_setting(key: str) -> None:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM app_settings WHERE klucz = ?", (key,))
+        cur.execute("DELETE FROM app_settings WHERE klucz = %s", (key,))
         conn.commit()
     finally:
         conn.close()

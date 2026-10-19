@@ -1,5 +1,5 @@
 # app/companies/company_logic.py
-import sqlite3
+import psycopg
 from typing import Any, Dict, Optional, List
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
@@ -393,13 +393,12 @@ class CompanyLogic:
     # ---------------------------------------------------------
     def get_company(self, firma_id: int) -> Optional[Dict[str, Any]]:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
         cur.execute("""
             SELECT *
             FROM firmy
-            WHERE id = ?
+            WHERE id = %s
         """, (firma_id,))
 
         row = cur.fetchone()
@@ -412,7 +411,6 @@ class CompanyLogic:
     # ---------------------------------------------------------
     def get_all_companies(self) -> List[Dict[str, Any]]:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
         cur.execute("SELECT * FROM firmy ORDER BY nazwa")
@@ -442,10 +440,11 @@ class CompanyLogic:
 
         cur.execute(f"""
             INSERT INTO firmy ({", ".join(fields)})
-            VALUES ({", ".join(["?"] * len(values))})
+            VALUES ({", ".join(["%s"] * len(values))}) RETURNING id
         """, values)
+        _new_id = cur.fetchone()[0]
 
-        firma_id = cur.lastrowid
+        firma_id = _new_id
         conn.commit()
         conn.close()
 
@@ -461,7 +460,7 @@ class CompanyLogic:
         for key, val in payload.items():
             if key not in FIRMA_FIELDS:
                 continue
-            fields.append(f"{key} = ?")
+            fields.append(f"{key} = %s")
             values.append(val)
         if not fields:
             return
@@ -474,7 +473,7 @@ class CompanyLogic:
         cur.execute(f"""
             UPDATE firmy
             SET {", ".join(fields)}
-            WHERE id = ?
+            WHERE id = %s
         """, values)
 
         conn.commit()
@@ -569,13 +568,13 @@ class CompanyLogic:
         cur.execute("""
             UPDATE firmy
             SET
-                uop_ilosc = ?,
-                uz_ilosc = ?,
-                uod_ilosc = ?,
-                uop_cennik = ?,
-                uz_cennik = ?,
-                uod_cennik = ?
-            WHERE id = ?
+                uop_ilosc = %s,
+                uz_ilosc = %s,
+                uod_ilosc = %s,
+                uop_cennik = %s,
+                uz_cennik = %s,
+                uod_cennik = %s
+            WHERE id = %s
         """, (
             uop_ilosc,
             uz_ilosc,
@@ -596,7 +595,7 @@ class CompanyLogic:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("DELETE FROM firmy WHERE id = ?", (firma_id,))
+        cur.execute("DELETE FROM firmy WHERE id = %s", (firma_id,))
 
         conn.commit()
         conn.close()
@@ -611,7 +610,7 @@ class CompanyLogic:
         cur.execute("""
             SELECT pracownik_id
             FROM pracownik_firma
-            WHERE firma_id = ?
+            WHERE firma_id = %s
         """, (firma_id,))
 
         rows = cur.fetchall()
@@ -628,11 +627,11 @@ class CompanyLogic:
 
         wanted = {int(p) for p in employee_ids}
         existing = {r[0] for r in cur.execute(
-            "SELECT pracownik_id FROM pracownik_firma WHERE firma_id = ?", (firma_id,))}
+            "SELECT pracownik_id FROM pracownik_firma WHERE firma_id = %s", (firma_id,))}
         for pid in existing - wanted:
-            cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ? AND pracownik_id = ?", (firma_id, pid))
+            cur.execute("DELETE FROM pracownik_firma WHERE firma_id = %s AND pracownik_id = %s", (firma_id, pid))
         for pid in wanted - existing:
-            cur.execute("INSERT INTO pracownik_firma (pracownik_id, firma_id) VALUES (?, ?)", (pid, firma_id))
+            cur.execute("INSERT INTO pracownik_firma (pracownik_id, firma_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (pid, firma_id))
 
         conn.commit()
         conn.close()
@@ -642,7 +641,6 @@ class CompanyLogic:
     # ---------------------------------------------------------
     def get_kadry_options(self) -> List[Dict[str, Any]]:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
             SELECT klucz, cena, opis

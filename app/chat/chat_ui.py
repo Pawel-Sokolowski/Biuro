@@ -16,7 +16,7 @@ from app.chat.chat_model import (
     get_direct_conversations,
 )
 
-import sqlite3
+import psycopg
 
 
 class ChatMessageEdit(QTextEdit):

@@ -34,18 +34,18 @@ def _register_attempt(email: str) -> bool:
     """Zapisuje próbę resetu; zwraca False, gdy przekroczono limit na godzinę."""
     conn = get_conn()
     try:
-        conn.execute("DELETE FROM reset_hasla_proby WHERE czas < datetime('now', '-1 day')")
+        conn.execute("DELETE FROM reset_hasla_proby WHERE czas < to_char(now() - interval '1 day', 'YYYY-MM-DD HH24:MI:SS')")
         per_email = conn.execute(
-            "SELECT COUNT(*) FROM reset_hasla_proby WHERE email = ? AND czas >= datetime('now', '-1 hour')",
+            "SELECT COUNT(*) FROM reset_hasla_proby WHERE email = %s AND czas >= to_char(now() - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS')",
             (email.lower(),),
         ).fetchone()[0]
         total = conn.execute(
-            "SELECT COUNT(*) FROM reset_hasla_proby WHERE czas >= datetime('now', '-1 hour')"
+            "SELECT COUNT(*) FROM reset_hasla_proby WHERE czas >= to_char(now() - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS')"
         ).fetchone()[0]
         if per_email >= MAX_ATTEMPTS_PER_EMAIL or total >= MAX_ATTEMPTS_TOTAL:
             conn.commit()
             return False
-        conn.execute("INSERT INTO reset_hasla_proby (email) VALUES (?)", (email.lower(),))
+        conn.execute("INSERT INTO reset_hasla_proby (email) VALUES (%s)", (email.lower(),))
         conn.commit()
         return True
     finally:
@@ -72,7 +72,7 @@ def reset_password(email: str) -> Tuple[bool, str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, imie FROM pracownicy WHERE LOWER(email) = LOWER(?) AND aktywny = 1",
+            "SELECT id, imie FROM pracownicy WHERE LOWER(email) = LOWER(%s) AND aktywny = 1",
             (email,),
         ).fetchone()
     finally:

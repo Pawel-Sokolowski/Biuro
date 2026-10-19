@@ -1,15 +1,19 @@
 ﻿# app/email/email_page.py
 from __future__ import annotations
 
+import base64
+import json
 import os
 import re
 import email
 import tempfile
 import threading
 import unicodedata
+import urllib.request
+from urllib.parse import unquote
 from datetime import datetime
 from collections import Counter
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from html import escape as html_escape
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -18,16 +22,25 @@ from PyQt6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton,
     QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit,
     QToolButton, QStyle, QLineEdit, QApplication, QTextBrowser, QMenu,
-    QHeaderView, QAbstractItemView, QFileDialog, QProgressBar
+    QHeaderView, QAbstractItemView, QFileDialog, QProgressBar, QScrollArea,
+    QButtonGroup, QInputDialog
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QImage
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QFont, QImage, QKeySequence, QShortcut, QTextDocument, QDesktopServices
 
+from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_employees import list_employees
+from app.email.email_labels import label_color, resolve_label_numbers
 from app.email.compose_dialog import ComposeDialog
 from app.email.email_connection import check_imap
+from app.email import email_cache
 from app.email.email_storage import (
+    count_assigned_by_employee,
     find_special_folder,
+    get_assignment_map,
+    list_assigned_rows,
+    set_employee_assignment,
+    update_message_read_flag,
     get_account_info,
     get_email_accounts_for_employee,
     get_folder_id,
@@ -41,11 +54,15 @@ from app.email.email_sync import (
     mark_read_remote,
     delete_email_remote,
     mark_unread_remote,
-    move_email_and_get_sender,
+    create_folder,
+    move_emails,
+    prefetch_recent,
+    rename_folder,
     needs_initial_sync,
     sync_and_prefetch,
 )
 
+from app.email.email_rules import apply_rules_to_folder, import_thunderbird_filters
 from app.email.email_actions import (
     send_email_smtp,
     load_message,
@@ -69,7 +86,41 @@ logger = logging.getLogger(__name__)
 AUTO_SYNC_INTERVAL_MS = 120_000
 ROLE_DATA = Qt.ItemDataRole.UserRole
 ROLE_ACCOUNT = Qt.ItemDataRole.UserRole + 2
+ROLE_ROW_ID = Qt.ItemDataRole.UserRole + 3
+ROLE_FOLDER = Qt.ItemDataRole.UserRole + 4
+MAX_NUMBER_KEYS = 7
+ROLE_MSGID = Qt.ItemDataRole.UserRole + 20
+ROLE_REFS = Qt.ItemDataRole.UserRole + 21
+DEFAULT_COLUMN_WIDTHS = [430, 220, 180]
+MAX_REMOTE_IMAGE_BYTES = 8_000_000
+PREFETCH_COUNT = 20
 _SUBJECT_PREFIX = re.compile(r"^\s*(re|odp|fw|fwd|pd|wg|aw|przekaż)\s*:\s*", re.IGNORECASE)
+
+
+def group_threads(entries: List[Tuple[Any, str, str]]) -> List[List[Any]]:
+    """Grupuje (element, message_id, refs) w wątki po In-Reply-To/References; kolejność jak na wejściu."""
+    parent = list(range(len(entries)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    by_id = {mid: i for i, (_, mid, _) in enumerate(entries) if mid}
+    by_ref: Dict[str, int] = {}
+    for i, (_, _, refs) in enumerate(entries):
+        for ref in (refs or "").split():
+            if ref in by_id:
+                parent[find(i)] = find(by_id[ref])
+            elif ref in by_ref:
+                parent[find(i)] = find(by_ref[ref])
+            else:
+                by_ref[ref] = i
+    groups: Dict[int, List[Any]] = {}
+    for i, (item, _, _) in enumerate(entries):
+        groups.setdefault(find(i), []).append(item)
+    return list(groups.values())
 
 
 def thread_key(subject: str) -> str:
@@ -107,11 +158,29 @@ def employee_label(label: str, employees: List[Dict[str, Any]]) -> str:
 
 
 def format_list_date(value: str) -> str:
-    """'2026-10-15 08:00' -> '15.10.2026, 08:00'."""
+    """'2026-10-15 08:00' -> '15.10.2026, 08:00' (dzisiaj tylko godzina)."""
     try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y, %H:%M")
+        moment = datetime.strptime(value, "%Y-%m-%d %H:%M")
+        if moment.date() == datetime.now().date():
+            return moment.strftime("%H:%M")
+        return moment.strftime("%d.%m.%Y, %H:%M")
     except (TypeError, ValueError):
         return value or ""
+
+
+def display_names(value: str) -> str:
+    """'Jan Kowalski <jan@x.pl>, b@y.pl' -> 'Jan Kowalski, b@y.pl' (sam adres tylko gdy brak nazwy)."""
+    names = []
+    for name, address in getaddresses([value or ""]):
+        label = (name or "").strip().strip('"').strip() or address
+        if label:
+            names.append(label)
+    return ", ".join(names) or (value or "")
+
+
+def employee_tag(employee: Dict[str, Any]) -> str:
+    surname = (employee.get("nazwisko") or "").strip()
+    return f"{employee.get('imie') or ''} {surname[:1]}.".strip() if surname else (employee.get("imie") or "")
 
 
 def build_folder_tree(folders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -169,27 +238,150 @@ def build_folder_tree(folders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 class MailBrowser(QTextBrowser):
-    """Podgląd wiadomości z obsługą obrazków wbudowanych (cid:)."""
+    """Podgląd wiadomości: obrazki wbudowane (cid:), data: oraz zdalne (http/https, pobierane w tle)."""
+
+    remote_ready = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.resources: Dict[str, Any] = {}
+        self._html = ""
+        self._remote: Dict[str, bytes] = {}
+        self._requested: set = set()
+        self._reload_timer = QTimer(self)
+        self._reload_timer.setSingleShot(True)
+        self._reload_timer.setInterval(200)
+        self._reload_timer.timeout.connect(self._reload)
+        self.remote_ready.connect(self._reload_timer.start)
+
+    def show_html(self, html: str) -> None:
+        self._html = html
+        self.setHtml(html)
+
+    def setPlainText(self, text: str) -> None:
+        self._html = ""
+        super().setPlainText(text)
+
+    def clear(self) -> None:
+        self._html = ""
+        super().clear()
+
+    def _reload(self) -> None:
+        if not self._html:
+            return
+        bar = self.verticalScrollBar()
+        position = bar.value()
+        self.setHtml(self._html)
+        bar.setValue(position)
+
+    def _image(self, data: bytes):
+        image = QImage.fromData(data)
+        if image.isNull():
+            return None
+        limit = max(200, self.viewport().width() - 40)
+        if image.width() > limit:
+            image = image.scaledToWidth(limit, Qt.TransformationMode.SmoothTransformation)
+        return image
+
+    def _fetch_remote(self, url: str) -> None:
+        data = b""
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                if response.headers.get_content_type().startswith("image/"):
+                    data = response.read(MAX_REMOTE_IMAGE_BYTES + 1)
+                    if len(data) > MAX_REMOTE_IMAGE_BYTES:
+                        data = b""
+        except Exception:
+            logger.debug("Nie udało się pobrać obrazka %s", url, exc_info=True)
+        self._remote[url] = data
+        try:
+            self.remote_ready.emit()
+        except RuntimeError:
+            pass  # widżet został już zamknięty
 
     def loadResource(self, rtype, url):
-        if url.scheme() == "cid":
-            entry = self.resources.get(url.path() or url.toString()[4:])
-            if entry:
-                image = QImage.fromData(entry[0])
-                if not image.isNull():
-                    return image
+        if rtype != QTextDocument.ResourceType.ImageResource.value:
+            return super().loadResource(rtype, url)
+        scheme = url.scheme().lower()
+        if scheme == "cid":
+            key = unquote(url.path() or url.toString()[4:]).strip("<> ")
+            entry = self.resources.get(key)
+            if entry is None:
+                entry = next((v for k, v in self.resources.items() if k.lower() == key.lower()), None)
+            return self._image(entry[0]) if entry else None
+        if scheme == "data":
+            header, _, payload = url.toString().partition(",")
+            try:
+                raw = base64.b64decode(unquote(payload)) if ";base64" in header else unquote(payload).encode("latin-1")
+            except Exception:
+                return None
+            return self._image(raw)
+        if scheme in ("http", "https"):
+            key = url.toString()
+            if key in self._remote:
+                return self._image(self._remote[key]) if self._remote[key] else None
+            if key not in self._requested:
+                if len(self._requested) > 500:
+                    self._requested.clear()
+                    self._remote.clear()
+                self._requested.add(key)
+                threading.Thread(target=self._fetch_remote, args=(key,), daemon=True).start()
             return None
         return super().loadResource(rtype, url)
+
+
+class FolderTree(QTreeWidget):
+    """Drzewo folderów przyjmujące upuszczone wiadomości i foldery (przenoszenie obsługuje strona)."""
+
+    mails_dropped = pyqtSignal(object)
+    folder_dropped = pyqtSignal(object, object)
+
+    def __init__(self, mail_source: QWidget, parent=None):
+        super().__init__(parent)
+        self.mail_source = mail_source
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+
+    def _accepts(self, event) -> bool:
+        return event.source() in (self, self.mail_source)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._accepts(event):
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        item = self.itemAt(event.position().toPoint())
+        if self._accepts(event) and item is not None and item.data(0, ROLE_FOLDER):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        item = self.itemAt(event.position().toPoint())
+        if item is None or not item.data(0, ROLE_FOLDER) or not self._accepts(event):
+            event.ignore()
+            return
+        event.setDropAction(Qt.DropAction.CopyAction)
+        event.accept()
+        if event.source() is self:
+            dragged = self.currentItem()
+            if dragged is not None:
+                self.folder_dropped.emit(dragged, item)
+        else:
+            self.mails_dropped.emit(item)
 
 
 class EmailPage(QWidget):
     sync_finished = pyqtSignal(bool)
     headers_ready = pyqtSignal()
     sync_progress = pyqtSignal(object)
+    async_result = pyqtSignal(object)
 
     def __init__(self, pracownik_id: int):
         super().__init__()
@@ -204,8 +396,21 @@ class EmailPage(QWidget):
         self._resync_pending = False
         self._synced_accounts: set = set()
         self._tree_signature = None
+        self.employee_filter: Optional[int] = None
+        self.employees: List[Dict[str, Any]] = []
+        self.assign_map: Dict[int, List[int]] = {}
+        self._chips_signature = None
+        self._load_token = 0
+        self.label_numbers: Dict[int, int] = {}
+        self._reload_employees()
+
+        self._select_timer = QTimer(self)
+        self._select_timer.setSingleShot(True)
+        self._select_timer.setInterval(120)
+        self._select_timer.timeout.connect(self._open_selected_now)
 
         self._build_ui()
+        self.async_result.connect(self._on_async_result)
         self.sync_finished.connect(self._on_sync_finished)
         self.headers_ready.connect(self._on_headers_ready)
         self.sync_progress.connect(self._on_sync_progress)
@@ -229,6 +434,38 @@ class EmailPage(QWidget):
     # ------------------------------------------------------------------
     # Automatyczna synchronizacja w tle
     # ------------------------------------------------------------------
+    def _reload_employees(self) -> None:
+        try:
+            employees = [e for e in list_employees() if e.get('aktywny', 1)]
+        except Exception:
+            employees = []
+        self.label_numbers = resolve_label_numbers(employees)
+        employees.sort(key=lambda e: (self.label_numbers.get(e["id"], 99), e["id"]))
+        self.employees = employees
+        self._chips_signature = None
+
+    def _columns_key(self) -> str:
+        return f"email_kolumny_{self.pracownik_id}"
+
+    def _saved_column_widths(self) -> List[int]:
+        try:
+            widths = json.loads(get_setting(self._columns_key()) or "[]")
+            if len(widths) == 3 and all(isinstance(w, int) and 30 <= w <= 3000 for w in widths):
+                return widths
+        except Exception:
+            logger.debug("Nie można wczytać szerokości kolumn", exc_info=True)
+        return list(DEFAULT_COLUMN_WIDTHS)
+
+    def _save_column_widths(self) -> None:
+        widths = [self.mail_list.columnWidth(c) for c in range(3)]
+        try:
+            set_setting(self._columns_key(), json.dumps(widths))
+        except Exception:
+            logger.debug("Nie można zapisać szerokości kolumn", exc_info=True)
+
+    def _employee_color(self, employee_id: int) -> str:
+        return label_color(self.label_numbers.get(employee_id))
+
     def start_background_sync(self) -> None:
         if not self.current_account:
             return
@@ -265,6 +502,8 @@ class EmailPage(QWidget):
                         on_headers=lambda: self.headers_ready.emit(),
                         on_progress=on_progress, all_folders=initial,
                     )
+                    for name in folders:
+                        prefetch_recent(konto_id, name, PREFETCH_COUNT)
                 except Exception:
                     logger.warning("Synchronizacja konta %s nie powiodła się", konto_id, exc_info=True)
                     ok = False
@@ -290,7 +529,7 @@ class EmailPage(QWidget):
         if not self.current_account:
             return
         self.load_folders_from_db()
-        if self.current_folder_local and self.current_uid is None:
+        if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local, keep_view=True)
 
     def _on_sync_finished(self, ok: bool) -> None:
@@ -314,6 +553,15 @@ class EmailPage(QWidget):
         btn_refresh = QPushButton("Odśwież widok")
         btn_refresh.clicked.connect(self.refresh_all)
         toolbar.addWidget(btn_refresh)
+
+        btn_filters = QToolButton()
+        btn_filters.setText("Filtry")
+        btn_filters.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        filters_menu = QMenu(btn_filters)
+        filters_menu.addAction("Importuj filtry z Thunderbirda…").triggered.connect(self.on_import_filters)
+        filters_menu.addAction("Zastosuj filtry do folderu Odebrane").triggered.connect(self.on_apply_filters)
+        btn_filters.setMenu(filters_menu)
+        toolbar.addWidget(btn_filters)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Szukaj w temacie, nadawcy lub odbiorcy...")
@@ -368,7 +616,8 @@ class EmailPage(QWidget):
         main_layout.addWidget(splitter)
 
         # Folder tree
-        self.folder_tree = QTreeWidget()
+        self.mail_list = QTreeWidget()
+        self.folder_tree = FolderTree(self.mail_list)
         self.folder_tree.setHeaderLabel("Foldery")
         self.folder_tree.setIndentation(16)
         self.folder_tree.setMinimumWidth(240)
@@ -376,6 +625,10 @@ class EmailPage(QWidget):
         self.folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.folder_tree.setHeaderHidden(True)
         self.folder_tree.currentItemChanged.connect(self._on_folder_current_changed)
+        self.folder_tree.mails_dropped.connect(self._on_mails_dropped)
+        self.folder_tree.folder_dropped.connect(self._on_folder_dropped)
+        self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
         splitter.addWidget(self.folder_tree)
 
         # Middle panel
@@ -384,24 +637,46 @@ class EmailPage(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_container.setLayout(right_layout)
 
-        self.mail_list = QTreeWidget()
+        self.chips_frame = QFrame()
+        self.chips_layout = QHBoxLayout(self.chips_frame)
+        self.chips_layout.setContentsMargins(4, 2, 4, 2)
+        self.chips_layout.setSpacing(6)
+        self.chips_group = QButtonGroup(self)
+        self.chips_group.setExclusive(True)
+        right_layout.addWidget(self.chips_frame)
+
         self.mail_list.setColumnCount(3)
         self.mail_list.setHeaderLabels(["Temat", "Korespondent", "Data"])
         self.mail_list.setRootIsDecorated(True)
         self.mail_list.setUniformRowHeights(True)
         self.mail_list.setAlternatingRowColors(True)
-        self.mail_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.mail_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.mail_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.mail_list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.mail_list.setStyleSheet("QTreeWidget::item { padding: 4px 6px; }")
+        self.mail_list.setDragEnabled(True)
+        self.mail_list.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.mail_list.setDefaultDropAction(Qt.DropAction.CopyAction)
+        for number in range(1, MAX_NUMBER_KEYS + 1):
+            shortcut = QShortcut(QKeySequence(str(number)), self.mail_list)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(lambda n=number: self._toggle_employee_by_number(n))
+        self.mail_list.setStyleSheet(
+            "QTreeWidget::item { padding: 5px 6px; }"
+            "QTreeWidget::item:selected { background: #cfe3f7; color: #000; }"
+        )
         hdr = self.mail_list.header()
         hdr.setStretchLastSection(False)
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.mail_list.setColumnWidth(1, 220)
-        self.mail_list.setColumnWidth(2, 140)
-        self.mail_list.currentItemChanged.connect(self._on_mail_current_changed)
+        hdr.setSectionsMovable(True)
+        for column in range(3):
+            hdr.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        for column, width in enumerate(self._saved_column_widths()):
+            self.mail_list.setColumnWidth(column, width)
+        self._columns_timer = QTimer(self)
+        self._columns_timer.setSingleShot(True)
+        self._columns_timer.setInterval(600)
+        self._columns_timer.timeout.connect(self._save_column_widths)
+        hdr.sectionResized.connect(lambda *_: self._columns_timer.start())
+        self.mail_list.itemSelectionChanged.connect(self._select_timer.start)
         self.mail_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.mail_list.customContextMenuRequested.connect(self._on_mail_context_menu)
         right_layout.addWidget(self.mail_list)
@@ -422,6 +697,8 @@ class EmailPage(QWidget):
         self.att_list = QListWidget()
         self.att_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.att_list.itemDoubleClicked.connect(self.on_attachment_item_activated)
+        self.att_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.att_list.customContextMenuRequested.connect(self._on_att_list_menu)
         self.att_list.hide()
         message_layout.addWidget(self.att_list)
 
@@ -435,9 +712,11 @@ class EmailPage(QWidget):
         self.att_toggle.clicked.connect(self._toggle_att_list)
         bar.addWidget(self.att_toggle)
         self.att_summary = QLabel("")
+        self.att_summary.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.att_summary.customContextMenuRequested.connect(self._on_att_summary_menu)
         bar.addWidget(self.att_summary, 1)
         self.att_save = QPushButton("Zapisz")
-        self.att_save.setToolTip("Zapisz załączniki (zaznaczone lub wszystkie)")
+        self.att_save.setToolTip("Zapisz załączniki")
         self.att_save.clicked.connect(self.on_save_attachments_clicked)
         bar.addWidget(self.att_save)
         self.att_bar.hide()
@@ -447,7 +726,7 @@ class EmailPage(QWidget):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
-        splitter.setSizes([280, 480, 760])
+        splitter.setSizes([260, 880, 700])
 
         self.sync_progress_frame = QFrame()
         self.sync_progress_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -508,6 +787,8 @@ class EmailPage(QWidget):
         except Exception:
             employees = []
 
+        previously_expanded = self._expanded_folder_keys()
+        had_tree = self.folder_tree.topLevelItemCount() > 0
         self.folder_tree.blockSignals(True)
         self.folder_tree.clear()
         selected_item: Optional[QTreeWidgetItem] = None
@@ -536,6 +817,8 @@ class EmailPage(QWidget):
                 font = item.font(0)
                 font.setBold(True)
                 item.setFont(0, font)
+            item.setData(0, ROLE_FOLDER, node["path"])
+            item.setData(0, ROLE_ACCOUNT, account_id)
             parent.addChild(item)
             if selectable and account_id == current_id and node["path"] == self.current_folder_local:
                 selected_item = item
@@ -548,6 +831,7 @@ class EmailPage(QWidget):
         for account, folders, unread in data:
             account_item = QTreeWidgetItem([account.get("email", "")])
             account_item.setFlags(account_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            account_item.setData(0, ROLE_ACCOUNT, account["id"])
             font = account_item.font(0)
             font.setBold(True)
             account_item.setFont(0, font)
@@ -562,6 +846,8 @@ class EmailPage(QWidget):
                 else:
                     add(account["id"], unread, root, account_item)
 
+        if had_tree:
+            self._restore_expanded(previously_expanded)
         if selected_item is not None:
             self.folder_tree.setCurrentItem(selected_item)
             parent = selected_item.parent()
@@ -569,6 +855,35 @@ class EmailPage(QWidget):
                 parent.setExpanded(True)
                 parent = parent.parent()
         self.folder_tree.blockSignals(False)
+
+    @staticmethod
+    def _folder_key(item: QTreeWidgetItem):
+        return (item.data(0, ROLE_ACCOUNT), item.data(0, ROLE_FOLDER) or item.text(0))
+
+    def _expanded_folder_keys(self) -> set:
+        keys = set()
+
+        def walk(item: QTreeWidgetItem) -> None:
+            if item.childCount() and item.isExpanded():
+                keys.add(self._folder_key(item))
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(self.folder_tree.topLevelItemCount()):
+            walk(self.folder_tree.topLevelItem(i))
+        return keys
+
+    def _restore_expanded(self, keys: set) -> None:
+        def walk(item: QTreeWidgetItem, top: bool) -> None:
+            if item.childCount():
+                wanted = self._folder_key(item) in keys
+                if top or wanted:
+                    item.setExpanded(wanted)
+            for i in range(item.childCount()):
+                walk(item.child(i), False)
+
+        for i in range(self.folder_tree.topLevelItemCount()):
+            walk(self.folder_tree.topLevelItem(i), True)
 
     def _on_folder_current_changed(self, current, previous) -> None:
         if current is not None:
@@ -585,6 +900,7 @@ class EmailPage(QWidget):
                 break
         self.current_folder_local = server_name
         self.current_uid = None
+        self.employee_filter = None
         self.load_mail_list_from_db(server_name)
         self.start_background_sync()
 
@@ -594,7 +910,20 @@ class EmailPage(QWidget):
             font.setBold(bool(unread))
             item.setFont(col, font)
 
+    def _folder_roles(self, konto_id: int) -> Dict[str, Optional[str]]:
+        try:
+            return {
+                f["server_name"]: folder_role(f["server_name"], f.get("attributes"), f.get("delimiter"))
+                for f in get_folders_for_account(konto_id)
+            }
+        except Exception:
+            return {}
+
     def load_mail_list_from_db(self, local_folder: str, keep_view: bool = False) -> None:
+        selected_uids = {
+            it.data(0, Qt.ItemDataRole.UserRole) for it in self.mail_list.selectedItems()
+        } if keep_view else set()
+        scroll = self.mail_list.verticalScrollBar().value() if keep_view else 0
         selected_uid = self.current_uid if keep_view else None
         self.mail_list.blockSignals(True)
         self.mail_list.clear()
@@ -602,15 +931,20 @@ class EmailPage(QWidget):
             self._clear_view()
             self.cached_message = None
         self.unread_map.clear()
+        self.assign_map = {}
 
         if not self.current_account:
             self.mail_list.blockSignals(False)
             return
 
         konto_id = self.current_account["id"]
+        roles = self._folder_roles(konto_id)
 
         try:
-            rows = refresh_email_list(konto_id, local_folder)
+            if self.employee_filter:
+                rows = list_assigned_rows(konto_id, self.employee_filter)
+            else:
+                rows = refresh_email_list(konto_id, local_folder)
         except Exception:
             rows = []
 
@@ -624,26 +958,57 @@ class EmailPage(QWidget):
                 ).casefold()
             ]
 
+        try:
+            self.assign_map = get_assignment_map([r["id"] for r in rows if r.get("id")])
+        except Exception:
+            self.assign_map = {}
+        by_id = {e["id"]: e for e in self.employees}
+
         restore: Optional[QTreeWidgetItem] = None
-        threads: Dict[Any, List[QTreeWidgetItem]] = {}
+        all_items: List[QTreeWidgetItem] = []
+        to_select: List[QTreeWidgetItem] = []
         for r in rows:
             uid = r.get("uid")
+            folder = r.get("server_name") or local_folder
             is_unread = not bool(r.get("przeczytana"))
             self.unread_map[uid] = is_unread
+            outgoing = roles.get(folder) in ("sent", "drafts")
+            full = (r.get("odbiorca") if outgoing else r.get("nadawca")) or ""
+            tags = [by_id[i] for i in self.assign_map.get(r.get("id"), []) if i in by_id]
+            subject = r.get("temat") or "(brak tematu)"
+            if r.get("has_attachments"):
+                subject = "\U0001F4CE " + subject
             item = QTreeWidgetItem([
-                r.get("temat") or "(brak tematu)",
-                r.get("nadawca") or "",
+                subject,
+                display_names(full),
                 format_list_date(r.get("data") or ""),
             ])
+            item.setToolTip(1, full)
+            if tags:
+                tags.sort(key=lambda e: self.label_numbers.get(e["id"], 99))
+                item.setToolTip(0, "Pracownicy: " + ", ".join(employee_tag(e) for e in tags))
+                color = QColor(self._employee_color(tags[0]["id"]))
+                for column in range(item.columnCount()):
+                    item.setForeground(column, color)
             item.setData(0, Qt.ItemDataRole.UserRole, uid)
-            item.setData(0, Qt.ItemDataRole.UserRole + 1, local_folder)
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, folder)
+            item.setData(0, ROLE_ROW_ID, r.get("id"))
             self._style_mail_item(item, is_unread)
-            key = thread_key(r.get("temat") or "") or ("uid", uid)
-            threads.setdefault(key, []).append(item)
+            item.setData(0, ROLE_MSGID, (r.get("message_id") or "").strip())
+            item.setData(0, ROLE_REFS, r.get("refs") or "")
+            all_items.append(item)
             if selected_uid is not None and uid == selected_uid:
                 restore = item
+            if uid in selected_uids:
+                to_select.append(item)
 
-        for members in threads.values():
+        if self.employee_filter:
+            grouped = [[it] for it in all_items]
+        else:
+            grouped = group_threads(
+                [(it, it.data(0, ROLE_MSGID), it.data(0, ROLE_REFS)) for it in all_items]
+            )
+        for members in grouped:
             head = members[0]
             for child in members[1:]:
                 head.addChild(child)
@@ -652,45 +1017,240 @@ class EmailPage(QWidget):
                 if any(self.unread_map.get(m.data(0, Qt.ItemDataRole.UserRole)) for m in members):
                     self._style_mail_item(head, True)
             self.mail_list.addTopLevelItem(head)
-            if restore is not None and restore.parent() is head:
+            if any(m.parent() is head for m in to_select) or (restore is not None and restore.parent() is head):
                 head.setExpanded(True)
         if restore is not None:
             self.mail_list.setCurrentItem(restore)
+        for it in to_select:
+            it.setSelected(True)
+        if keep_view:
+            self.mail_list.verticalScrollBar().setValue(scroll)
         self.mail_list.blockSignals(False)
+        self._refresh_chips()
+
+    # ------------------------------------------------------------------
+    # Etykiety pracowników nad listą
+    # ------------------------------------------------------------------
+    def _refresh_chips(self) -> None:
+        if not self.current_account:
+            return
+        try:
+            counts = count_assigned_by_employee(self.current_account["id"])
+        except Exception:
+            counts = {}
+        shown = [e for e in self.employees if counts.get(e["id"]) or e["id"] == self.employee_filter]
+        signature = (
+            self.current_account["id"], self.employee_filter,
+            tuple((e["id"], counts.get(e["id"], 0)) for e in shown),
+        )
+        if signature == self._chips_signature:
+            return
+        self._chips_signature = signature
+        while self.chips_layout.count():
+            w = self.chips_layout.takeAt(0).widget()
+            if w is not None:
+                self.chips_group.removeButton(w) if isinstance(w, QPushButton) else None
+                w.deleteLater()
+
+        def chip(text: str, color: str, emp_id: Optional[int]) -> QPushButton:
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setChecked(self.employee_filter == emp_id)
+            number = self.label_numbers.get(emp_id)
+            if number:
+                btn.setToolTip(f"Klawisz {number} przypisuje zaznaczone wiadomości")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"QPushButton {{ border: 1px solid {color}; border-radius: 10px; padding: 2px 10px;"
+                f" color: {color}; background: white; }}"
+                f"QPushButton:checked {{ background: {color}; color: white; }}"
+            )
+            btn.clicked.connect(lambda _=False, e=emp_id: self._on_chip_clicked(e))
+            self.chips_group.addButton(btn)
+            self.chips_layout.addWidget(btn)
+            return btn
+
+        chip("Wszystkie", "#555555", None)
+        for emp in shown:
+            number = self.label_numbers.get(emp["id"])
+            prefix = f"{number} " if number else ""
+            chip(f"{prefix}{employee_tag(emp)} ({counts.get(emp['id'], 0)})", self._employee_color(emp["id"]), emp["id"])
+        if not shown:
+            hint = QLabel("Prawy przycisk na wiadomości → Przypisz do pracownika (lub klawisze 1–7)")
+            hint.setStyleSheet("color: #888;")
+            self.chips_layout.addWidget(hint)
+        self.chips_layout.addStretch()
+
+    def _on_chip_clicked(self, employee_id: Optional[int]) -> None:
+        self.employee_filter = employee_id
+        self.current_uid = None
+        if self.current_folder_local:
+            self.load_mail_list_from_db(self.current_folder_local)
+
+    # ------------------------------------------------------------------
+    # Asynchroniczne akcje (sieć poza wątkiem interfejsu)
+    # ------------------------------------------------------------------
+    def _run_async(self, work, done) -> None:
+        def target() -> None:
+            try:
+                payload = (done, work(), None)
+            except Exception as exc:
+                logger.warning("Akcja e-mail nie powiodła się", exc_info=True)
+                payload = (done, None, exc)
+            try:
+                self.async_result.emit(payload)
+            except RuntimeError:
+                pass  # widżet został już zamknięty
+
+        threading.Thread(target=target, daemon=True).start()
+
+    def _on_async_result(self, payload) -> None:
+        done, result, error = payload
+        done(result, error)
+
+    # ------------------------------------------------------------------
+    # Zaznaczenie
+    # ------------------------------------------------------------------
+    def _selected_refs(self) -> List[Tuple[QTreeWidgetItem, str, str]]:
+        """[(pozycja, folder, uid)] dla zaznaczonych wiadomości."""
+        refs = []
+        for it in self.mail_list.selectedItems():
+            uid = it.data(0, Qt.ItemDataRole.UserRole)
+            folder = it.data(0, Qt.ItemDataRole.UserRole + 1)
+            if uid and folder:
+                refs.append((it, folder, uid))
+        return refs
+
+    def _open_selected_now(self) -> None:
+        items = self.mail_list.selectedItems()
+        if len(items) == 1:
+            if items[0].data(0, Qt.ItemDataRole.UserRole) != self.current_uid or self.cached_message is None:
+                self.on_mail_clicked(items[0])
+        elif not items:
+            self.current_uid = None
 
     def _on_mail_current_changed(self, current, previous) -> None:
-        if current is not None:
-            self.on_mail_clicked(current)
+        self._open_selected_now()
 
     def _on_mail_context_menu(self, pos) -> None:
         item = self.mail_list.itemAt(pos)
-        if item is None:
+        if item is None or not self.current_account:
             return
-        uid = item.data(0, Qt.ItemDataRole.UserRole)
-        folder = item.data(0, Qt.ItemDataRole.UserRole + 1)
-        unread = self.unread_map.get(uid, False)
-        menu = QMenu(self)
-        act = menu.addAction("Oznacz jako przeczytane" if unread else "Oznacz jako nieprzeczytane")
-        if menu.exec(self.mail_list.viewport().mapToGlobal(pos)) is act:
-            self.on_toggle_read(uid, item, folder)
-
-    def on_toggle_read(self, uid: str, item: QTreeWidgetItem, local_folder: str) -> None:
+        if not item.isSelected():
+            self.mail_list.clearSelection()
+            item.setSelected(True)
+        refs = self._selected_refs()
+        if not refs:
+            return
         konto_id = self.current_account["id"]
-        is_unread = self.unread_map.get(uid, False)
+        count = len(refs)
+        any_unread = any(self.unread_map.get(uid, False) for _, _, uid in refs)
+        menu = QMenu(self)
+        suffix = f" ({count})" if count > 1 else ""
 
+        read_act = menu.addAction(
+            ("Oznacz jako przeczytane" if any_unread else "Oznacz jako nieprzeczytane") + suffix
+        )
+        read_act.triggered.connect(lambda: self._set_read_selected(any_unread))
+        menu.addSeparator()
+
+        source_folders = {folder for _, folder, _ in refs}
+        move_menu = menu.addMenu("Przenieś do" + suffix)
         try:
-            if is_unread:
-                ok = mark_read_remote(konto_id, local_folder, uid)
-            else:
-                ok = mark_unread_remote(konto_id, local_folder, uid)
+            tree = build_folder_tree(get_folders_for_account(konto_id))
         except Exception:
-            ok = False
+            tree = []
+        self._fill_move_menu(move_menu, tree, source_folders, False)
+        if move_menu.isEmpty():
+            move_menu.setEnabled(False)
 
-        if ok:
-            self.unread_map[uid] = not is_unread
-            self._style_mail_item(item, not is_unread)
-            self.load_folders_from_db()
-            self.load_mail_list_from_db(local_folder, keep_view=True)
+        assign_menu = menu.addMenu("Przypisz do pracownika" + suffix)
+        row_ids = [it.data(0, ROLE_ROW_ID) for it, _, _ in refs if it.data(0, ROLE_ROW_ID)]
+        for emp in self.employees:
+            number = self.label_numbers.get(emp["id"])
+            name = f"{emp.get('imie') or ''} {emp.get('nazwisko') or ''}".strip()
+            act = assign_menu.addAction(f"{name}\t{number}" if number else name)
+            act.setCheckable(True)
+            has = bool(row_ids) and all(emp["id"] in self.assign_map.get(rid, []) for rid in row_ids)
+            act.setChecked(has)
+            act.triggered.connect(lambda _=False, e=emp["id"], h=has: self._assign_selected(e, not h))
+        if not self.employees:
+            assign_menu.setEnabled(False)
+
+        menu.addSeparator()
+        arch = menu.addAction("Archiwizuj" + suffix)
+        arch.triggered.connect(self.on_archive)
+        spam = menu.addAction("Oznacz jako niechciane" + suffix)
+        spam.triggered.connect(self.on_spam)
+        delete = menu.addAction("Usuń" + suffix)
+        delete.triggered.connect(self.on_delete)
+        menu.exec(self.mail_list.viewport().mapToGlobal(pos))
+
+    def _folder_menu_label(self, node: Dict[str, Any], under_staff: bool) -> str:
+        label = SPECIAL_FOLDER_LABELS.get(node["role"]) if node["role"] else None
+        if label is None:
+            label = clean_folder_label(node["label"])
+            if under_staff:
+                label = employee_label(label, self.employees)
+        return label
+
+    def _fill_move_menu(self, menu: QMenu, nodes: List[Dict[str, Any]], exclude: set,
+                        under_staff: bool) -> None:
+        for node in nodes:
+            folder = node["folder"]
+            selectable = folder is not None and "\\noselect" not in (folder.get("attributes") or "").lower()
+            label = self._folder_menu_label(node, under_staff)
+            staff = clean_folder_label(node["label"]).casefold() == "pracownicy"
+            children = node["children"]
+            if node["role"] == "inbox":
+                if selectable and node["path"] not in exclude:
+                    menu.addAction(label).triggered.connect(
+                        lambda _=False, t=node["path"]: self._move_selected_to(t))
+                self._fill_move_menu(menu, children, exclude, False)
+                continue
+            if children:
+                sub = menu.addMenu(label)
+                if selectable and node["path"] not in exclude:
+                    sub.addAction(label).triggered.connect(
+                        lambda _=False, t=node["path"]: self._move_selected_to(t))
+                    sub.addSeparator()
+                self._fill_move_menu(sub, children, exclude, staff)
+            elif selectable and node["path"] not in exclude:
+                menu.addAction(label).triggered.connect(
+                    lambda _=False, t=node["path"]: self._move_selected_to(t))
+
+    def _set_read_selected(self, read: bool) -> None:
+        refs = self._selected_refs()
+        if not refs or not self.current_account:
+            return
+        konto_id = self.current_account["id"]
+        for item, folder, uid in refs:
+            self.unread_map[uid] = not read
+            self._style_mail_item(item, not read)
+            try:
+                update_message_read_flag(konto_id, uid, read, get_folder_id(konto_id, folder))
+            except Exception:
+                logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
+        self.load_folders_from_db()
+
+        def work():
+            remote = mark_read_remote if read else mark_unread_remote
+            return [remote(konto_id, folder, uid) for _, folder, uid in refs]
+
+        self._run_async(work, lambda res, err: None)
+
+    def _assign_selected(self, employee_id: int, assigned: bool) -> None:
+        row_ids = [it.data(0, ROLE_ROW_ID) for it, _, _ in self._selected_refs() if it.data(0, ROLE_ROW_ID)]
+        if not row_ids:
+            return
+        try:
+            set_employee_assignment(row_ids, employee_id, assigned)
+        except Exception as e:
+            QMessageBox.warning(self, "Przypisanie", f"Nie udało się zapisać przypisania:\n{e}")
+            return
+        self._chips_signature = None
+        if self.current_folder_local:
+            self.load_mail_list_from_db(self.current_folder_local, keep_view=True)
 
     def on_mail_clicked(self, item: QTreeWidgetItem, column: int = 0) -> None:
         uid = item.data(0, Qt.ItemDataRole.UserRole)
@@ -703,37 +1263,47 @@ class EmailPage(QWidget):
         self.current_folder_local = local_folder
         self.cached_message = None
         konto_id = self.current_account["id"]
-
-        # treść jest pobierana automatycznie i zapisywana w cache (ostatnie 300 wiadomości)
+        self._load_token += 1
+        token = self._load_token
         self._clear_view()
-        self.mail_view.setPlainText("Pobieranie wiadomości…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            msg = load_message(konto_id, local_folder, uid)
-        except Exception:
-            logger.warning("Nie można pobrać wiadomości", exc_info=True)
-            msg = None
-        finally:
-            QApplication.restoreOverrideCursor()
 
-        if not msg:
-            self.mail_view.setPlainText(
-                "Nie udało się pobrać treści wiadomości z serwera.\n"
-                "Sprawdź połączenie (Ustawienia → Konta e-mail → Testuj) i kliknij wiadomość ponownie."
-            )
-            return
+        def show(msg) -> None:
+            if not msg:
+                self.mail_view.setPlainText(
+                    "Nie udało się pobrać treści wiadomości z serwera.\n"
+                    "Sprawdź połączenie (Ustawienia → Konta e-mail → Testuj) i kliknij wiadomość ponownie."
+                )
+                return
+            self._render_message(msg)
+            self._mark_opened_as_read(item, konto_id, local_folder, uid)
 
-        self._render_message(msg)
-
-        if self.unread_map.get(uid, False):
+        if email_cache.has_message(konto_id, local_folder, uid):
             try:
-                mark_read_remote(konto_id, local_folder, uid)
+                show(load_message(konto_id, local_folder, uid))
+                return
             except Exception:
-                logger.warning("Zignorowany błąd", exc_info=True)
-            self.unread_map[uid] = False
-            self._style_mail_item(item, False)
-            self.load_folders_from_db()
+                logger.warning("Nie można odczytać wiadomości z cache", exc_info=True)
+
+        self.mail_view.setPlainText("Pobieranie wiadomości…")
+
+        def done(msg, err) -> None:
+            if token != self._load_token:
+                return  # użytkownik wybrał już inną wiadomość
+            show(None if err else msg)
+
+        self._run_async(lambda: load_message(konto_id, local_folder, uid), done)
+
+    def _mark_opened_as_read(self, item: QTreeWidgetItem, konto_id: int, folder: str, uid: str) -> None:
+        if not self.unread_map.get(uid, False):
+            return
+        self.unread_map[uid] = False
+        self._style_mail_item(item, False)
+        try:
+            update_message_read_flag(konto_id, uid, True, get_folder_id(konto_id, folder))
+        except Exception:
+            logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
+        self.load_folders_from_db()
+        self._run_async(lambda: mark_read_remote(konto_id, folder, uid), lambda res, err: None)
 
     def _render_message(self, msg: email.message.Message) -> None:
         self.cached_message = msg
@@ -747,9 +1317,9 @@ class EmailPage(QWidget):
         self.mail_view.resources = inline_resources(msg)
 
         if html:
-            self.mail_view.setHtml(header + html)
+            self.mail_view.show_html(header + html)
         else:
-            self.mail_view.setHtml(
+            self.mail_view.show_html(
                 header + "<pre style='white-space: pre-wrap;'>"
                 + html_escape(extract_text(msg)) + "</pre>"
             )
@@ -791,6 +1361,7 @@ class EmailPage(QWidget):
             total = sum(a.get("size") or 0 for a in attachments)
             summary = f"{count} załączników  {self._format_size(total)}"
         self.att_summary.setText(summary)
+        self.att_save.setText("Zapisz" if count == 1 else "Zapisz wszystkie")
         self.att_list.setFixedHeight(min(26 * count + 8, 130))
         self.att_list.setVisible(count > 1)
         self.att_toggle.setText("v" if count > 1 else ">")
@@ -875,16 +1446,61 @@ class EmailPage(QWidget):
         self._save_dir = path
 
     def on_save_attachments_clicked(self) -> None:
-        selected = [it.data(Qt.ItemDataRole.UserRole) for it in self.att_list.selectedItems()]
-        if not selected:
-            selected = [
-                self.att_list.item(i).data(Qt.ItemDataRole.UserRole)
-                for i in range(self.att_list.count())
-            ]
-        self.save_attachments(selected)
+        self.save_attachments([
+            self.att_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.att_list.count())
+        ])
+
+    def _attachment_menu(self, indices: List[int], global_pos) -> None:
+        if not indices:
+            return
+        menu = QMenu(self)
+        if len(indices) == 1:
+            index = indices[0]
+            menu.addAction("Otwórz", lambda: self._open_attachment_index(index))
+            menu.addAction("Zapisz jako…", lambda: self.save_attachments([index]))
+        else:
+            menu.addAction("Zapisz zaznaczone…", lambda: self.save_attachments(indices))
+        menu.exec(global_pos)
+
+    def _on_att_list_menu(self, pos) -> None:
+        item = self.att_list.itemAt(pos)
+        if item is not None and not item.isSelected():
+            self.att_list.clearSelection()
+            item.setSelected(True)
+        indices = [it.data(Qt.ItemDataRole.UserRole) for it in self.att_list.selectedItems()]
+        self._attachment_menu(indices, self.att_list.viewport().mapToGlobal(pos))
+
+    def _on_att_summary_menu(self, pos) -> None:
+        if self.att_list.count() == 1:
+            index = self.att_list.item(0).data(Qt.ItemDataRole.UserRole)
+            self._attachment_menu([index], self.att_summary.mapToGlobal(pos))
+
+    def _open_attachment_index(self, index: int) -> None:
+        parts = self._attachment_parts()
+        if isinstance(index, int) and 0 <= index < len(parts):
+            if not self._open_attachment_externally(parts[index]):
+                self.save_attachments([index])
 
     def on_attachment_item_activated(self, item: QListWidgetItem) -> None:
-        self.save_attachments([item.data(Qt.ItemDataRole.UserRole)])
+        index = item.data(Qt.ItemDataRole.UserRole)
+        parts = self._attachment_parts()
+        part = parts[index] if isinstance(index, int) and 0 <= index < len(parts) else None
+        is_pdf = part is not None and (
+            part.get_content_type() == "application/pdf"
+            or str(part.get_filename() or "").lower().endswith(".pdf")
+        )
+        if is_pdf and self._open_attachment_externally(part):
+            return
+        self.save_attachments([index])
+
+    def _open_attachment_externally(self, part) -> bool:
+        name = os.path.basename(str(part.get_filename() or "zalacznik.pdf")) or "zalacznik.pdf"
+        directory = tempfile.mkdtemp(prefix="biuro_zal_")
+        path = os.path.join(directory, name)
+        if not self._write_attachment(part, path):
+            return False
+        return QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def on_manual_sync(self) -> None:
         if not self.current_account:
@@ -901,6 +1517,7 @@ class EmailPage(QWidget):
         self.start_background_sync()
 
     def refresh_all(self) -> None:
+        self._reload_employees()
         self.load_folders_from_db()
         if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local)
@@ -913,7 +1530,8 @@ class EmailPage(QWidget):
         name = acc.get("display_name") or ""
         return f"{name} <{acc.get('email', '')}>" if name else acc.get("email", "")
 
-    def _open_compose(self, title: str, **kwargs) -> bool:
+    def _open_compose(self, title: str, reply_to: Optional[email.message.Message] = None,
+                      copy_folder: Optional[str] = None, **kwargs) -> bool:
         """Pokazuje okno wiadomości; przy błędzie wysyłki zostawia je otwarte z treścią."""
         from app.email.signature import choose_sender
 
@@ -930,8 +1548,20 @@ class EmailPage(QWidget):
             values = dlg.values()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
+                account_id = values["account_id"] or sender["id"]
+                target = copy_folder
+                if target is None:
+                    try:
+                        from app.email.email_actions import choose_copy_folder
+                        account = next((a for a in self.accounts if a["id"] == account_id), sender)
+                        target = choose_copy_folder(
+                            account_id, account.get("email", ""),
+                            list(values["to"]) + list(values["cc"] or []), values["subject"],
+                        )
+                    except Exception:
+                        target = None
                 ok, info = send_email_smtp(
-                    values["account_id"] or sender["id"],
+                    account_id,
                     values["to"],
                     values["subject"],
                     values["body"],
@@ -939,6 +1569,10 @@ class EmailPage(QWidget):
                     cc=values["cc"] or None,
                     bcc=values["bcc"] or None,
                     html_body=values["html"],
+                    in_reply_to=str(reply_to.get("Message-ID") or "").strip() if reply_to else None,
+                    references=str(reply_to.get("References") or "").strip() if reply_to else None,
+                    save_copy=True,
+                    copy_folder=target,
                 )
             finally:
                 QApplication.restoreOverrideCursor()
@@ -974,9 +1608,17 @@ class EmailPage(QWidget):
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"
         self._open_compose(
-            "Odpowiedź", to=to_addr, subject=subject,
+            "Odpowiedź", reply_to=original, copy_folder=self._reply_copy_folder(),
+            to=to_addr, subject=subject,
             html=self._quote_html(original, "reply"),
         )
+
+    def _reply_copy_folder(self) -> Optional[str]:
+        """Odpowiedź zostaje w folderze oryginału (chyba że to kosz, spam albo szkice)."""
+        folder = self.current_folder_local
+        if not folder or self._role_of(folder) in ("trash", "junk", "drafts"):
+            return None
+        return folder
 
     def on_forward(self) -> None:
         original = self._current_original()
@@ -1033,40 +1675,60 @@ class EmailPage(QWidget):
     # ------------------------------------------------------------------
     # Przenoszenie wiadomości
     # ------------------------------------------------------------------
+    def _role_of(self, folder: str) -> Optional[str]:
+        return self._folder_roles(self.current_account["id"]).get(folder) if self.current_account else None
+
     def _current_folder_role(self) -> Optional[str]:
-        if not self.current_account or not self.current_folder_local:
-            return None
-        for f in get_folders_for_account(self.current_account["id"]):
-            if f["server_name"] == self.current_folder_local:
-                return folder_role(f["server_name"], f.get("attributes"), f.get("delimiter"))
-        return folder_role(self.current_folder_local)
+        return self._role_of(self.current_folder_local) if self.current_folder_local else None
+
+    def _targets(self) -> List[Tuple[QTreeWidgetItem, str, str]]:
+        refs = self._selected_refs()
+        if not refs and self.current_uid and self.current_folder_local:
+            refs = [(None, self.current_folder_local, self.current_uid)]
+        return refs
+
+    def _after_change(self) -> None:
+        self.current_uid = None
+        self.cached_message = None
+        self._chips_signature = None
+        self._clear_view()
+        if self.current_folder_local:
+            self.load_mail_list_from_db(self.current_folder_local)
+        self.load_folders_from_db()
+
+    def _move_refs(self, refs, target: str, title: str) -> None:
+        if not self.current_account or not refs:
+            return
+        konto_id = self.current_account["id"]
+        by_folder: Dict[str, List[str]] = {}
+        for _, folder, uid in refs:
+            by_folder.setdefault(folder, []).append(uid)
+
+        def work():
+            for folder, uids in by_folder.items():
+                move_emails(konto_id, folder, uids, target)
+
+        def done(res, err) -> None:
+            if err is not None:
+                QMessageBox.warning(self, title, f"Nie udało się przenieść wiadomości:\n{err}")
+            self._after_change()
+
+        # lista odświeża się od razu, a serwer pracuje w tle
+        self.mail_view.setPlainText("Przenoszenie…")
+        self._run_async(work, done)
+
+    def _move_selected_to(self, target: str) -> None:
+        self._move_refs(self._targets(), target, "Przenieś do folderu")
 
     def _move_current(self, role: str, title: str, label: str) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
+        refs = self._targets()
+        if not self.current_account or not refs:
             return
-
-        konto_id = self.current_account["id"]
-        target = find_special_folder(konto_id, role)
+        target = find_special_folder(self.current_account["id"], role)
         if not target:
-            QMessageBox.warning(
-                self, title, f"Nie znaleziono na serwerze folderu „{label}”."
-            )
+            QMessageBox.warning(self, title, f"Nie znaleziono na serwerze folderu „{label}”.")
             return
-        if target == self.current_folder_local:
-            return
-
-        try:
-            move_email_and_get_sender(
-                konto_id, self.current_folder_local, self.current_uid, target
-            )
-        except Exception as e:
-            QMessageBox.warning(self, title, f"Nie udało się przenieść wiadomości:\n{e}")
-            return
-
-        self.current_uid = None
-        self._clear_view()
-        self.load_mail_list_from_db(self.current_folder_local)
-        self.load_folders_from_db()
+        self._move_refs([r for r in refs if r[1] != target], target, title)
 
     def on_archive(self) -> None:
         self._move_current("archive", "Archiwizuj", "Archiwum")
@@ -1075,30 +1737,195 @@ class EmailPage(QWidget):
         self._move_current("junk", "Niechciane", "Spam")
 
     def on_delete(self) -> None:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
+        refs = self._targets()
+        if not self.current_account or not refs:
             return
+        konto_id = self.current_account["id"]
+        in_trash = [r for r in refs if self._role_of(r[1]) == "trash"]
+        if in_trash and len(in_trash) == len(refs):
+            noun = "wiadomość" if len(refs) == 1 else f"wiadomości ({len(refs)})"
+            if QMessageBox.question(self, "Usuń", f"Usunąć {noun} bezpowrotnie?") \
+                    != QMessageBox.StandardButton.Yes:
+                return
 
-        if self._current_folder_role() == "trash":
-            answer = QMessageBox.question(
-                self, "Usuń", "Usunąć wiadomość bezpowrotnie?"
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            try:
-                if not delete_email_remote(
-                    self.current_account["id"], self.current_folder_local, self.current_uid
-                ):
-                    raise RuntimeError("Serwer odrzucił usunięcie wiadomości.")
-            except Exception as e:
-                QMessageBox.warning(self, "Usuń", f"Nie udało się usunąć wiadomości:\n{e}")
-                return
-            self.current_uid = None
-            self._clear_view()
-            self.load_mail_list_from_db(self.current_folder_local)
-            self.load_folders_from_db()
+            def work():
+                for _, folder, uid in refs:
+                    if not delete_email_remote(konto_id, folder, uid):
+                        raise RuntimeError("Serwer odrzucił usunięcie wiadomości.")
+
+            def done(res, err) -> None:
+                if err is not None:
+                    QMessageBox.warning(self, "Usuń", f"Nie udało się usunąć wiadomości:\n{err}")
+                self._after_change()
+
+            self._run_async(work, done)
             return
 
         self._move_current("trash", "Usuń", "Kosz")
+
+    def _toggle_employee_by_number(self, number: int) -> None:
+        emp = next((e for e in self.employees if self.label_numbers.get(e["id"]) == number), None)
+        if emp is None:
+            return
+        row_ids = [it.data(0, ROLE_ROW_ID) for it, _, _ in self._selected_refs() if it.data(0, ROLE_ROW_ID)]
+        if not row_ids:
+            return
+        has = all(emp["id"] in self.assign_map.get(rid, []) for rid in row_ids)
+        self._assign_selected(emp["id"], not has)
+
+    # ------------------------------------------------------------------
+    # Foldery: tworzenie, zmiana nazwy i przenoszenie (także na serwerze)
+    # ------------------------------------------------------------------
+    def _folder_delimiter(self, konto_id: int, path: str) -> str:
+        folders = get_folders_for_account(konto_id)
+        for f in folders:
+            if f["server_name"] == path and f.get("delimiter"):
+                return f["delimiter"]
+        return next((f["delimiter"] for f in folders if f.get("delimiter")), ".")
+
+    @staticmethod
+    def _leaf_of(path: str, delimiter: str) -> str:
+        return path.rsplit(delimiter, 1)[-1] if delimiter in path else path
+
+    @staticmethod
+    def _parent_of(path: str, delimiter: str) -> str:
+        return path.rsplit(delimiter, 1)[0] if delimiter in path else ""
+
+    def _reload_after_folder_change(self, renamed: Optional[Tuple[str, str]] = None) -> None:
+        if renamed and self.current_folder_local:
+            old, new = renamed
+            cur = self.current_folder_local
+            if cur == old or cur.startswith(old):
+                self.current_folder_local = new + cur[len(old):]
+        self._tree_signature = None
+        self.load_folders_from_db()
+        if self.current_folder_local:
+            self.load_mail_list_from_db(self.current_folder_local)
+
+    def _on_folder_context_menu(self, pos) -> None:
+        item = self.folder_tree.itemAt(pos)
+        account_id = item.data(0, ROLE_ACCOUNT) if item is not None else None
+        if item is None or account_id is None:
+            return
+        path = item.data(0, ROLE_FOLDER)
+        menu = QMenu(self)
+        menu.addAction("Nowy folder…").triggered.connect(lambda: self._new_folder(account_id, path))
+        if path:
+            role = folder_role(path, None, self._folder_delimiter(account_id, path))
+            rename = menu.addAction("Zmień nazwę…")
+            rename.setEnabled(role is None and path.upper() != "INBOX")
+            rename.triggered.connect(lambda: self._rename_folder(account_id, path))
+        menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+
+    def _folder_name_dialog(self, title: str, text: str = "") -> Optional[str]:
+        name, ok = QInputDialog.getText(self, title, "Nazwa folderu:", text=text)
+        name = name.strip()
+        if not ok or not name:
+            return None
+        if any(ch in name for ch in "./\\"):
+            QMessageBox.warning(self, title, "Nazwa folderu nie może zawierać znaków . / \\")
+            return None
+        return name
+
+    def _new_folder(self, konto_id: int, parent_path: Optional[str]) -> None:
+        name = self._folder_name_dialog("Nowy folder")
+        if not name:
+            return
+        parent = parent_path or "INBOX"
+        delimiter = self._folder_delimiter(konto_id, parent)
+        full = decode_mailbox_utf7(parent) + delimiter + name
+
+        def done(res, err) -> None:
+            if err is not None:
+                QMessageBox.warning(self, "Nowy folder", f"Nie udało się utworzyć folderu:\n{err}")
+                return
+            self._reload_after_folder_change()
+
+        self._run_async(lambda: create_folder(konto_id, full), done)
+
+    def _rename_folder(self, konto_id: int, path: str) -> None:
+        delimiter = self._folder_delimiter(konto_id, path)
+        name = self._folder_name_dialog(
+            "Zmień nazwę folderu", decode_mailbox_utf7(self._leaf_of(path, delimiter))
+        )
+        if not name:
+            return
+        parent = self._parent_of(path, delimiter)
+        full = (decode_mailbox_utf7(parent) + delimiter if parent else "") + name
+        self._run_folder_rename(konto_id, path, full)
+
+    def _run_folder_rename(self, konto_id: int, old: str, new_name: str) -> None:
+        def done(res, err) -> None:
+            if err is not None:
+                QMessageBox.warning(self, "Folder", f"Serwer nie zmienił nazwy folderu:\n{err}")
+                return
+            self._reload_after_folder_change((old, res))
+
+        self._run_async(lambda: rename_folder(konto_id, old, new_name), done)
+
+    def _on_folder_dropped(self, source, target) -> None:
+        konto_id = source.data(0, ROLE_ACCOUNT)
+        if konto_id is None or konto_id != target.data(0, ROLE_ACCOUNT):
+            return
+        src, dst = source.data(0, ROLE_FOLDER), target.data(0, ROLE_FOLDER)
+        if not src or not dst or src == dst or src.upper() == "INBOX":
+            return
+        delimiter = self._folder_delimiter(konto_id, src)
+        if dst.startswith(src + delimiter) or self._parent_of(src, delimiter) == dst:
+            return
+        if folder_role(src, None, delimiter) is not None:
+            QMessageBox.information(self, "Folder", "Folderów systemowych nie można przenosić.")
+            return
+        leaf = decode_mailbox_utf7(self._leaf_of(src, delimiter))
+        label = clean_folder_label(decode_mailbox_utf7(dst))
+        if QMessageBox.question(self, "Przenieś folder", f"Przenieść folder „{leaf}” do „{label}”?") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        self._run_folder_rename(konto_id, src, decode_mailbox_utf7(dst) + delimiter + leaf)
+
+    def _on_mails_dropped(self, target) -> None:
+        folder = target.data(0, ROLE_DATA)
+        if not folder or not self.current_account or target.data(0, ROLE_ACCOUNT) != self.current_account["id"]:
+            return
+        refs = [r for r in self._selected_refs() if r[1] != folder]
+        self._move_refs(refs, folder, "Przenieś do folderu")
+
+    # ------------------------------------------------------------------
+    # Filtry (import z Thunderbirda, stosowanie do Odebranych)
+    # ------------------------------------------------------------------
+    def on_import_filters(self) -> None:
+        if not self.current_account:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Importuj filtry z Thunderbirda", "", "Filtry (*.json);;Wszystkie pliki (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                data = json.load(fh)
+            added, duplicates, skipped = import_thunderbird_filters(self.current_account["id"], data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Filtry", f"Nie udało się zaimportować filtrów:\n{exc}")
+            return
+        text = f"Dodano reguł: {added}, pominięto duplikaty: {duplicates}."
+        if skipped:
+            text += f"\n\nNieobsługiwane filtry ({len(skipped)}):\n" + "\n".join(skipped[:15])
+        QMessageBox.information(self, "Filtry", text)
+
+    def on_apply_filters(self) -> None:
+        if not self.current_account:
+            return
+        konto_id = self.current_account["id"]
+
+        def done(res, err) -> None:
+            if err is not None:
+                QMessageBox.warning(self, "Filtry", f"Nie udało się zastosować filtrów:\n{err}")
+            else:
+                QMessageBox.information(self, "Filtry", f"Przeniesiono wiadomości: {res}")
+            self._after_change()
+
+        self._run_async(lambda: apply_rules_to_folder(konto_id, "INBOX"), done)
 
     def on_more(self) -> None:
         QMessageBox.information(self, "Więcej", "Dodatkowe opcje w przygotowaniu.")

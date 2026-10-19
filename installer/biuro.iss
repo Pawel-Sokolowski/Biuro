@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Biuro"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
 

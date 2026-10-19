@@ -12,9 +12,10 @@ def assign_message(message_id: int, employee_id: Optional[int], company_id: Opti
     try:
         conn.execute(
             """
-            INSERT OR IGNORE INTO email_message_assignments
+            INSERT INTO email_message_assignments
                 (message_id, employee_id, company_id)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
+            ON CONFLICT DO NOTHING
             """,
             (message_id, employee_id, company_id),
         )
@@ -30,21 +31,20 @@ def list_assigned_messages(
     limit: int = 300,
 ):
     conn = get_conn()
-    conn.row_factory = __import__("sqlite3").Row
     try:
         return conn.execute(
             """
             SELECT w.id, w.uid, w.konto_id, w.nadawca, w.odbiorca, w.temat,
-                   w.data, w.przeczytana, f.nazwa AS folder
+                   w.data, w.przeczytana, f.server_name AS folder
             FROM wiadomosci_email w
             JOIN email_message_assignments a ON a.message_id = w.id
             JOIN foldery_email f ON f.id = w.folder_id
-            WHERE w.konto_id = ?
+            WHERE w.konto_id = %s
               AND w.usunieta = 0
-              AND (? IS NULL OR a.employee_id = ?)
-              AND (? IS NULL OR a.company_id = ?)
-            ORDER BY datetime(w.data) DESC, w.id DESC
-            LIMIT ?
+              AND (%s::integer IS NULL OR a.employee_id = %s)
+              AND (%s::integer IS NULL OR a.company_id = %s)
+            ORDER BY w.data DESC, w.id DESC
+            LIMIT %s
             """,
             (konto_id, employee_id, employee_id, company_id, company_id, limit),
         ).fetchall()

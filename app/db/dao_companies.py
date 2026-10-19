@@ -1,9 +1,9 @@
 # app/db/dao_companies.py
-import sqlite3
+import psycopg
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-from app.db.dao_conn import get_conn
+from app.db.dao_conn import get_conn, Row
 from app.security.authorization import assigned_company_ids, can, is_administrator
 
 # ============================================================
@@ -100,7 +100,6 @@ def _attach_pelnomocnictwa(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     sql = """
         SELECT id, nazwa, nip, miasto, status,
@@ -114,7 +113,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
         if not ids:
             conn.close()
             return []
-        placeholders = ",".join("?" for _ in ids)
+        placeholders = ",".join("%s" for _ in ids)
         sql += f" WHERE id IN ({placeholders})"
         params.extend(sorted(ids))
     cur.execute(sql + " ORDER BY nazwa", params)
@@ -130,7 +129,6 @@ def get_companies_filtered(
     actor_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     base_select = """
@@ -144,20 +142,20 @@ def get_companies_filtered(
 
     if employee_id:
         base_from += " JOIN pracownik_firma pf ON pf.firma_id = f.id"
-        where.append("pf.pracownik_id = ?")
+        where.append("pf.pracownik_id = %s")
         params.append(employee_id)
     elif actor_id and not is_administrator(actor_id):
         base_from += " JOIN pracownik_firma pf_actor ON pf_actor.firma_id = f.id"
-        where.append("pf_actor.pracownik_id = ?")
+        where.append("pf_actor.pracownik_id = %s")
         params.append(actor_id)
 
     if search:
-        where.append("(LOWER(f.nazwa) LIKE ? OR LOWER(f.nip) LIKE ?)")
+        where.append("(LOWER(f.nazwa) LIKE %s OR LOWER(f.nip) LIKE %s)")
         q = f"%{search.lower()}%"
         params.extend([q, q])
 
     if status and status != "Wszystkie":
-        where.append("COALESCE(f.status, 'Aktywne') = ?")
+        where.append("COALESCE(f.status, 'Aktywne') = %s")
         params.append(status)
 
     sql = base_select + base_from
@@ -186,7 +184,7 @@ def get_pelnomocnictwa(firma_id: int) -> Dict[str, List[int]]:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT typ, pracownik_id FROM pelnomocnictwa WHERE firma_id = ?",
+        "SELECT typ, pracownik_id FROM pelnomocnictwa WHERE firma_id = %s",
         (firma_id,),
     )
     result: Dict[str, List[int]] = {t: [] for t in PELNOMOCNICTWO_TYPES}
@@ -201,9 +199,9 @@ def set_pelnomocnictwa(firma_id: int, typ: str, employee_ids: List[int]) -> None
         raise ValueError(f"Nieznany typ: {typ}")
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM pelnomocnictwa WHERE firma_id = ? AND typ = ?", (firma_id, typ))
+    cur.execute("DELETE FROM pelnomocnictwa WHERE firma_id = %s AND typ = %s", (firma_id, typ))
     cur.executemany(
-        "INSERT OR IGNORE INTO pelnomocnictwa (firma_id, pracownik_id, typ) VALUES (?, ?, ?)",
+        "INSERT INTO pelnomocnictwa (firma_id, pracownik_id, typ) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
         [(firma_id, int(e), typ) for e in employee_ids],
     )
     conn.commit()
@@ -219,7 +217,7 @@ def get_pelnomocnictwa_initials(firma_ids: List[int]) -> Dict[int, Dict[str, str
     ids = list(firma_ids)
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
-        placeholders = ",".join("?" for _ in chunk)
+        placeholders = ",".join("%s" for _ in chunk)
         cur.execute(
             f"""
             SELECT p.firma_id, p.typ, e.imie, e.nazwisko
@@ -240,7 +238,6 @@ def get_pelnomocnictwa_initials(firma_ids: List[int]) -> Dict[int, Dict[str, str
 
 def get_employees_list() -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT id, imie, nazwisko
@@ -259,9 +256,8 @@ def get_employees_list() -> List[Dict[str, Any]]:
 
 def get_company(firma_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT * FROM firmy WHERE id = ?", (firma_id,))
+    cur.execute("SELECT * FROM firmy WHERE id = %s", (firma_id,))
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -297,9 +293,8 @@ def _find_company_by_nip(nip: str) -> Optional[int]:
     if not nip:
         return None
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT id FROM firmy WHERE nip = ?", (nip.strip(),))
+    cur.execute("SELECT id FROM firmy WHERE nip = %s", (nip.strip(),))
     row = cur.fetchone()
     conn.close()
     return int(row["id"]) if row else None
@@ -400,33 +395,32 @@ def _sync_assignees(cur, firma_id: int) -> None:
     """Przypisuje wybraną księgową/kadrową do firmy w pracownik_firma,
     dzięki czemu filtr firm pracownika działa automatycznie."""
     row = cur.execute(
-        "SELECT ksiegowa_id, kadrowa_id FROM firmy WHERE id = ?", (firma_id,)
+        "SELECT ksiegowa_id, kadrowa_id FROM firmy WHERE id = %s", (firma_id,)
     ).fetchone()
     if row is None:
         return
     for column, marker in ASSIGNEE_FIELDS.items():
         emp_id = row[column]
         cur.execute(
-            "DELETE FROM pracownik_firma WHERE firma_id = ? AND rola = ? "
-            "AND pracownik_id IS NOT ?",
+            "DELETE FROM pracownik_firma WHERE firma_id = %s AND rola = %s "
+            "AND pracownik_id IS DISTINCT FROM %s::integer",
             (firma_id, marker, emp_id),
         )
         if not emp_id:
             continue
         exists = cur.execute(
-            "SELECT 1 FROM pracownik_firma WHERE pracownik_id = ? AND firma_id = ?",
+            "SELECT 1 FROM pracownik_firma WHERE pracownik_id = %s AND firma_id = %s",
             (emp_id, firma_id),
         ).fetchone()
         if not exists:
             cur.execute(
-                "INSERT INTO pracownik_firma (pracownik_id, firma_id, rola) VALUES (?, ?, ?)",
+                "INSERT INTO pracownik_firma (pracownik_id, firma_id, rola) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
                 (emp_id, firma_id, marker),
             )
 
 
 def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     mapped = _apply_aliases(payload)
@@ -444,24 +438,25 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
             ):
                 raise PermissionError("Brak dostępu do tej firmy.")
             if data:
-                set_clause = ", ".join([f"{col} = ?" for col in data.keys()])
+                set_clause = ", ".join([f"{col} = %s" for col in data.keys()])
                 params = [data[col] for col in data.keys()] + [firma_id]
-                cur.execute(f"UPDATE firmy SET {set_clause} WHERE id = ?", params)
+                cur.execute(f"UPDATE firmy SET {set_clause} WHERE id = %s", params)
         else:
             nip = mapped.get("nip")
             existing = _find_company_by_nip(nip) if nip else None
             if existing:
                 firma_id = existing
                 if data:
-                    set_clause = ", ".join([f"{col} = ?" for col in data.keys()])
+                    set_clause = ", ".join([f"{col} = %s" for col in data.keys()])
                     params = [data[col] for col in data.keys()] + [firma_id]
-                    cur.execute(f"UPDATE firmy SET {set_clause} WHERE id = ?", params)
+                    cur.execute(f"UPDATE firmy SET {set_clause} WHERE id = %s", params)
             else:
                 cols = ", ".join(data.keys())
-                placeholders = ", ".join(["?"] * len(data))
+                placeholders = ", ".join(["%s"] * len(data))
                 params = [data[col] for col in data.keys()]
-                cur.execute(f"INSERT INTO firmy ({cols}) VALUES ({placeholders})", params)
-                firma_id = cur.lastrowid
+                cur.execute(f"INSERT INTO firmy ({cols}) VALUES ({placeholders}) RETURNING id", params)
+                _new_id = cur.fetchone()[0]
+                firma_id = _new_id
 
         if any(k in mapped for k in ASSIGNEE_FIELDS):
             _sync_assignees(cur, firma_id)
@@ -493,11 +488,11 @@ def delete_company(firma_id: int, actor_id: Optional[int] = None) -> None:
     ):
         conn.close()
         raise PermissionError("Brak dostępu do tej firmy.")
-    cur.execute("DELETE FROM firmy WHERE id = ?", (firma_id,))
-    cur.execute("DELETE FROM pracownik_firma WHERE firma_id = ?", (firma_id,))
-    cur.execute("DELETE FROM company_notes WHERE firma_id = ?", (firma_id,))
-    cur.execute("DELETE FROM udzialowcy WHERE firma_id = ?", (firma_id,))
-    cur.execute("DELETE FROM company_contacts WHERE firma_id = ?", (firma_id,))
+    cur.execute("DELETE FROM firmy WHERE id = %s", (firma_id,))
+    cur.execute("DELETE FROM pracownik_firma WHERE firma_id = %s", (firma_id,))
+    cur.execute("DELETE FROM company_notes WHERE firma_id = %s", (firma_id,))
+    cur.execute("DELETE FROM udzialowcy WHERE firma_id = %s", (firma_id,))
+    cur.execute("DELETE FROM company_contacts WHERE firma_id = %s", (firma_id,))
     conn.commit()
     conn.close()
 
@@ -508,11 +503,11 @@ def set_company_status(firma_id: int, status: str, zawieszenia_dzialalnosci: Opt
     if zawieszenia_dzialalnosci is not None:
         cur.execute("""
             UPDATE firmy
-            SET status = ?, zawieszenia_dzialalnosci = ?
-            WHERE id = ?
+            SET status = %s, zawieszenia_dzialalnosci = %s
+            WHERE id = %s
         """, (status, zawieszenia_dzialalnosci, firma_id))
     else:
-        cur.execute("UPDATE firmy SET status = ? WHERE id = ?", (status, firma_id))
+        cur.execute("UPDATE firmy SET status = %s WHERE id = %s", (status, firma_id))
     conn.commit()
     conn.close()
 
@@ -531,14 +526,13 @@ def suspend_company_manual(firma_id: int, date_str: str) -> None:
 
 def get_company_notes(firma_id: int, limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT id, tresc, autor_id, data_utworzenia
         FROM company_notes
-        WHERE firma_id = ?
+        WHERE firma_id = %s
         ORDER BY data_utworzenia DESC
-        LIMIT ?
+        LIMIT %s
     """, (firma_id, limit))
     rows = cur.fetchall()
     conn.close()
@@ -552,9 +546,9 @@ def get_company_notes(firma_id: int, limit: int = 20) -> List[Dict[str, Any]]:
 def assign_employee_to_company(pracownik_id: int, firma_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM pracownik_firma WHERE pracownik_id = ? AND firma_id = ?", (pracownik_id, firma_id))
+    cur.execute("SELECT 1 FROM pracownik_firma WHERE pracownik_id = %s AND firma_id = %s", (pracownik_id, firma_id))
     if not cur.fetchone():
-        cur.execute("INSERT INTO pracownik_firma (pracownik_id, firma_id) VALUES (?, ?)", (pracownik_id, firma_id))
+        cur.execute("INSERT INTO pracownik_firma (pracownik_id, firma_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (pracownik_id, firma_id))
         conn.commit()
     conn.close()
 
@@ -562,20 +556,19 @@ def assign_employee_to_company(pracownik_id: int, firma_id: int) -> None:
 def unassign_employee_from_company(pracownik_id: int, firma_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM pracownik_firma WHERE pracownik_id = ? AND firma_id = ?", (pracownik_id, firma_id))
+    cur.execute("DELETE FROM pracownik_firma WHERE pracownik_id = %s AND firma_id = %s", (pracownik_id, firma_id))
     conn.commit()
     conn.close()
 
 
 def get_company_employees(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT p.id, p.imie, p.nazwisko, p.email
         FROM pracownicy p
         JOIN pracownik_firma pf ON pf.pracownik_id = p.id
-        WHERE pf.firma_id = ?
+        WHERE pf.firma_id = %s
         ORDER BY p.imie, p.nazwisko
     """, (firma_id,))
     rows = cur.fetchall()
@@ -587,7 +580,7 @@ def get_company_employees(firma_id: int) -> List[Dict[str, Any]]:
 #  CENNIKI OGÓLNE
 # ============================================================
 
-def _sort_cenniki_rosnaco(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+def _sort_cenniki_rosnaco(rows: List[Row]) -> List[Dict[str, Any]]:
     def extract(row):
         klucz = row["klucz"]
         parts = klucz.replace("-", "_").split("_")
@@ -603,9 +596,8 @@ def _sort_cenniki_rosnaco(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
 
 def get_cennik_by_key(klucz: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT * FROM cenniki WHERE klucz = ?", (klucz,))
+    cur.execute("SELECT * FROM cenniki WHERE klucz = %s", (klucz,))
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -617,7 +609,6 @@ def get_cennik_by_key(klucz: str) -> Optional[Dict[str, Any]]:
 
 def get_global_pricing() -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT klucz,
@@ -662,14 +653,13 @@ def opis_cennika_z_klucza(klucz: str) -> str:
 
 def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     vat_suffix = "T" if vat_czynny else "N"
     pattern = f"{typ}_{vat_suffix}_%"
     cur.execute("""
         SELECT *
         FROM cenniki
-        WHERE klucz LIKE ?
+        WHERE klucz ILIKE %s
         ORDER BY klucz ASC
     """, (pattern,))
     rows = cur.fetchall()
@@ -696,7 +686,6 @@ def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optiona
 
 def get_ksiegowosc_options() -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT klucz,
@@ -734,7 +723,6 @@ def get_ksiegowosc_by_key(klucz: str) -> Optional[Dict[str, Any]]:
 
 def get_pricing_kadry() -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT klucz, cena_netto_kadry
@@ -752,12 +740,11 @@ def get_pricing_kadry() -> List[Dict[str, Any]]:
 
 def get_kpir_cenniki() -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, netto, brutto
         FROM cenniki
-        WHERE typ = 'KPIR' OR klucz LIKE 'KPIR_%' OR klucz LIKE 'KPIR-%' OR klucz LIKE 'KPIR%'
+        WHERE typ = 'KPIR' OR klucz ILIKE 'KPIR_%%' OR klucz ILIKE 'KPIR-%%' OR klucz ILIKE 'KPIR%%'
     """)
     rows = cur.fetchall()
     conn.close()
@@ -795,9 +782,8 @@ def choose_kpir_for_limit(limit: int) -> Optional[Tuple[str, float]]:
 
 def update_company_cennik_auto(firma_id: int, limit_dokumentow: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT manual_cennik_override FROM firmy WHERE id = ?", (firma_id,))
+    cur.execute("SELECT manual_cennik_override FROM firmy WHERE id = %s", (firma_id,))
     row = cur.fetchone()
     if not row:
         conn.close()
@@ -809,8 +795,8 @@ def update_company_cennik_auto(firma_id: int, limit_dokumentow: int) -> Optional
     if not choice:
         cur.execute("""
             UPDATE firmy
-            SET cennik_kpir_auto = NULL, cena_ksiegowosc_auto = 0, limit_dokumentow = ?
-            WHERE id = ?
+            SET cennik_kpir_auto = NULL, cena_ksiegowosc_auto = 0, limit_dokumentow = %s
+            WHERE id = %s
         """, (limit_dokumentow, firma_id))
         conn.commit()
         conn.close()
@@ -818,8 +804,8 @@ def update_company_cennik_auto(firma_id: int, limit_dokumentow: int) -> Optional
     klucz, cena = choice
     cur.execute("""
         UPDATE firmy
-        SET cennik_kpir_auto = ?, cena_ksiegowosc_auto = ?, limit_dokumentow = ?
-        WHERE id = ?
+        SET cennik_kpir_auto = %s, cena_ksiegowosc_auto = %s, limit_dokumentow = %s
+        WHERE id = %s
     """, (klucz, cena, limit_dokumentow, firma_id))
     conn.commit()
     conn.close()
@@ -828,13 +814,12 @@ def update_company_cennik_auto(firma_id: int, limit_dokumentow: int) -> Optional
 
 def set_manual_cennik_for_company(firma_id: int, manual_klucz: Optional[str]) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     if not manual_klucz:
         cur.execute("""
             UPDATE firmy
             SET cennik_kpir_manual = NULL, manual_cennik_override = 0
-            WHERE id = ?
+            WHERE id = %s
         """, (firma_id,))
         conn.commit()
         conn.close()
@@ -842,7 +827,7 @@ def set_manual_cennik_for_company(firma_id: int, manual_klucz: Optional[str]) ->
     cur.execute("""
         SELECT klucz, cena_netto_ksiegowosc, netto
         FROM cenniki
-        WHERE klucz = ? AND (typ = 'KPIR' OR klucz LIKE 'KPIR_%' OR klucz LIKE 'KPIR-%' OR klucz LIKE 'KPIR%')
+        WHERE klucz = %s AND (typ = 'KPIR' OR klucz ILIKE 'KPIR_%%' OR klucz ILIKE 'KPIR-%%' OR klucz ILIKE 'KPIR%%')
         LIMIT 1
     """, (manual_klucz,))
     row = cur.fetchone()
@@ -852,8 +837,8 @@ def set_manual_cennik_for_company(firma_id: int, manual_klucz: Optional[str]) ->
     cena = row["cena_netto_ksiegowosc"] if row["cena_netto_ksiegowosc"] is not None else row.get("netto", 0.0)
     cur.execute("""
         UPDATE firmy
-        SET cennik_kpir_manual = ?, manual_cennik_override = 1, cena_ksiegowosc_auto = ?
-        WHERE id = ?
+        SET cennik_kpir_manual = %s, manual_cennik_override = 1, cena_ksiegowosc_auto = %s
+        WHERE id = %s
     """, (manual_klucz, cena, firma_id))
     conn.commit()
     conn.close()
@@ -862,13 +847,12 @@ def set_manual_cennik_for_company(firma_id: int, manual_klucz: Optional[str]) ->
 
 def get_company_pricing_info(firma_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT cennik_kpir_auto, cennik_kpir_manual, manual_cennik_override,
                cena_ksiegowosc_auto, limit_dokumentow
         FROM firmy
-        WHERE id = ?
+        WHERE id = %s
     """, (firma_id,))
     row = cur.fetchone()
     conn.close()
@@ -881,12 +865,11 @@ def get_company_pricing_info(firma_id: int) -> Optional[Dict[str, Any]]:
 
 def get_company_limits(firma_id: int) -> Dict[str, Any]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT limit_dokumentow
         FROM firmy
-        WHERE id = ?
+        WHERE id = %s
     """, (firma_id,))
     row = cur.fetchone()
     conn.close()
@@ -901,11 +884,11 @@ def update_company_limits(firma_id: int, limit_dok: Optional[int] = None) -> Non
     parts = []
     params = []
     if limit_dok is not None:
-        parts.append("limit_dokumentow = ?")
+        parts.append("limit_dokumentow = %s")
         params.append(limit_dok)
     if parts:
         params.append(firma_id)
-        cur.execute(f"UPDATE firmy SET {', '.join(parts)} WHERE id = ?", tuple(params))
+        cur.execute(f"UPDATE firmy SET {', '.join(parts)} WHERE id = %s", tuple(params))
         conn.commit()
     conn.close()
 
@@ -919,12 +902,11 @@ def find_company_by_identifier(identifier: str) -> List[Dict[str, Any]]:
         return []
     identifier = identifier.strip()
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT id, nazwa, nip, regon, krs, miasto
         FROM firmy
-        WHERE nip = ? OR regon = ? OR krs = ?
+        WHERE nip = %s OR regon = %s OR krs = %s
         LIMIT 50
     """, (identifier, identifier, identifier))
     rows = cur.fetchall()
@@ -955,13 +937,12 @@ def count_companies_by_status() -> Dict[str, int]:
 
 def recent_companies(limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT id, nazwa, nip, data_rozpoczecia_dg
         FROM firmy
         ORDER BY id DESC
-        LIMIT ?
+        LIMIT %s
     """, (limit,))
     rows = cur.fetchall()
     conn.close()
@@ -1010,11 +991,14 @@ def ensure_company_columns_exist():
         "ksiegowa_id": "INTEGER",
         "kadrowa_id": "INTEGER",
     }
-    cur.execute("PRAGMA table_info(firmy)")
-    existing = {r[1] for r in cur.fetchall()}
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = \'firmy\'"
+    )
+    existing = {r[0] for r in cur.fetchall()}
     for col, typ in cols.items():
         if col not in existing:
-            cur.execute(f"ALTER TABLE firmy ADD COLUMN {col} {typ}")
+            cur.execute(f"ALTER TABLE firmy ADD COLUMN IF NOT EXISTS {col} {typ}")
     conn.commit()
     conn.close()
 
@@ -1026,7 +1010,6 @@ def ensure_company_columns_exist():
 def export_companies_csv(path: str) -> None:
     import csv
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM firmy")
     rows = cur.fetchall()
@@ -1069,12 +1052,11 @@ PARTNER_FIELDS = [
 
 def get_partners(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT *
         FROM udzialowcy
-        WHERE firma_id = ?
+        WHERE firma_id = %s
         ORDER BY id
     """, (firma_id,))
     rows = cur.fetchall()
@@ -1089,16 +1071,16 @@ def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
     values = [data.get(f) for f in PARTNER_FIELDS]
 
     if data.get("id"):
-        placeholders = ", ".join([f"{f} = ?" for f in PARTNER_FIELDS])
+        placeholders = ", ".join([f"{f} = %s" for f in PARTNER_FIELDS])
         cur.execute(f"""
             UPDATE udzialowcy SET {placeholders}
-            WHERE id = ?
+            WHERE id = %s
         """, values + [data["id"]])
     else:
-        placeholders = ", ".join(["?" for _ in PARTNER_FIELDS])
+        placeholders = ", ".join(["%s" for _ in PARTNER_FIELDS])
         cur.execute(f"""
             INSERT INTO udzialowcy (firma_id, {", ".join(PARTNER_FIELDS)})
-            VALUES (?, {placeholders})
+            VALUES (%s, {placeholders})
         """, [firma_id] + values)
 
     conn.commit()
@@ -1108,7 +1090,7 @@ def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
 def delete_partner(partner_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM udzialowcy WHERE id = ?", (partner_id,))
+    cur.execute("DELETE FROM udzialowcy WHERE id = %s", (partner_id,))
     conn.commit()
     conn.close()
 
@@ -1122,12 +1104,11 @@ CONTACT_FIELDS = ["imie", "nazwisko", "email", "telefon", "rola"]
 
 def get_contacts(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
         SELECT *
         FROM company_contacts
-        WHERE firma_id = ?
+        WHERE firma_id = %s
         ORDER BY id
     """, (firma_id,))
     rows = cur.fetchall()
@@ -1142,16 +1123,16 @@ def save_contact(firma_id: int, data: Dict[str, Any]) -> None:
     values = [data.get(f) for f in CONTACT_FIELDS]
 
     if data.get("id"):
-        placeholders = ", ".join([f"{f} = ?" for f in CONTACT_FIELDS])
+        placeholders = ", ".join([f"{f} = %s" for f in CONTACT_FIELDS])
         cur.execute(f"""
             UPDATE company_contacts SET {placeholders}
-            WHERE id = ?
+            WHERE id = %s
         """, values + [data["id"]])
     else:
-        placeholders = ", ".join(["?" for _ in CONTACT_FIELDS])
+        placeholders = ", ".join(["%s" for _ in CONTACT_FIELDS])
         cur.execute(f"""
             INSERT INTO company_contacts (firma_id, {", ".join(CONTACT_FIELDS)})
-            VALUES (?, {placeholders})
+            VALUES (%s, {placeholders})
         """, [firma_id] + values)
 
     conn.commit()
@@ -1161,7 +1142,7 @@ def save_contact(firma_id: int, data: Dict[str, Any]) -> None:
 def delete_contact(contact_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM company_contacts WHERE id = ?", (contact_id,))
+    cur.execute("DELETE FROM company_contacts WHERE id = %s", (contact_id,))
     conn.commit()
     conn.close()
 

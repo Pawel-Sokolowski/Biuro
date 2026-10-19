@@ -429,6 +429,7 @@ class ReportsPage(QWidget):
         import openpyxl
         from openpyxl.styles import Font
         from PyQt6.QtWidgets import QFileDialog
+        from app.utils.xlsx_safe import safe_row
 
         mode = self.mode_combo.currentText()
 
@@ -466,11 +467,11 @@ class ReportsPage(QWidget):
                 ws.title = "Zestawienie"
                 ws.append(["Klient", "Księgowa", "Miesiąc", "Typ", "Czas pracy", "Cena za usługę"])
                 for row in rows:
-                    ws.append([
+                    ws.append(safe_row([
                         row["klient"], row["ksiegowa"], row["miesiac"],
                         row["typ"], format_hours(row["sekundy"]),
                         row["cena_za_usluge"],
-                    ])
+                    ]))
                 wb.save(filepath)
                 QMessageBox.information(self, "Sukces", f"Zestawienie zapisane:\n{filepath}")
                 return

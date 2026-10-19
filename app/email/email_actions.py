@@ -63,6 +63,8 @@ def prepare_message(
     cc: Optional[Iterable[str]] = None,
     bcc: Optional[Iterable[str]] = None,
     html_body: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
 ) -> EmailMessage:
     msg = EmailMessage()
 
@@ -80,6 +82,9 @@ def prepare_message(
     msg["Subject"] = subject or ""
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = f"{references} {in_reply_to}".strip() if references else in_reply_to
     msg.set_content(body or "")
     if html_body:
         msg.add_alternative(html_body, subtype="html")
@@ -109,6 +114,37 @@ def prepare_message(
     return msg
 
 
+def choose_copy_folder(konto_id: int, from_addr: str, to_addrs: Iterable[str], subject: str) -> Optional[str]:
+    """Folder z reguły filtra pasującej do wychodzącej wiadomości (np. folder klienta)."""
+    from app.email.email_rules import _active_rules, rule_matches
+
+    header = {"sender": from_addr, "recipient": ", ".join(to_addrs or []), "subject": subject}
+    for rule in _active_rules(konto_id):
+        if rule_matches(rule, header):
+            return rule["target"]
+    return None
+
+
+def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> None:
+    """Zapisuje kopię wysłanej wiadomości na serwerze i w bazie; błąd nie psuje wysyłki."""
+    import logging
+    from app.email.email_storage import find_special_folder
+    from app.email.email_sync import append_message, sync_folder
+
+    log = logging.getLogger(__name__)
+    try:
+        target = folder or find_special_folder(konto_id, "sent")
+        if not target:
+            return
+        bcc = msg.get("Bcc")
+        if append_message(konto_id, target, msg.as_bytes()):
+            sync_folder(konto_id, target)
+        else:
+            log.warning("Nie udało się zapisać kopii wysłanej wiadomości w %s", target)
+    except Exception:
+        log.warning("Nie udało się zapisać kopii wysłanej wiadomości", exc_info=True)
+
+
 def send_email_smtp(
     konto_id: int,
     to_addrs: Iterable[str],
@@ -119,7 +155,13 @@ def send_email_smtp(
     bcc: Optional[Iterable[str]] = None,
     timeout: int = 30,
     html_body: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
+    save_copy: bool = False,
+    copy_folder: Optional[str] = None,
 ) -> Tuple[bool, str]:
+    """Wysyła wiadomość. Przy `save_copy` kopia trafia do `copy_folder` (np. folder oryginału,
+    folder z reguły filtra), a gdy go brak - do folderu Wysłane."""
 
     cfg = get_smtp_config_for_account(
         konto_id
@@ -135,6 +177,8 @@ def send_email_smtp(
         cc,
         bcc,
         html_body,
+        in_reply_to,
+        references,
     )
 
     recipients = (
@@ -153,6 +197,8 @@ def send_email_smtp(
                 to_addrs=recipients,
             )
 
+        if save_copy:
+            store_sent_copy(konto_id, msg, copy_folder)
         return True, "OK"
 
     except Exception as exc:

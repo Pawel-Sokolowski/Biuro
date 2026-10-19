@@ -134,7 +134,7 @@ class FakturyPage(QWidget):
                     """
                     SELECT DISTINCT f.id, f.nazwa FROM firmy f
                     JOIN pracownik_firma pf ON pf.firma_id = f.id
-                    WHERE pf.pracownik_id = ? ORDER BY f.nazwa
+                    WHERE pf.pracownik_id = %s ORDER BY f.nazwa
                     """,
                     (self.pracownik_id,),
                 ).fetchall()
@@ -434,7 +434,7 @@ class FakturyPage(QWidget):
     def _company_name(firma_id):
         conn = get_conn()
         try:
-            row = conn.execute("SELECT nazwa FROM firmy WHERE id = ?", (firma_id,)).fetchone()
+            row = conn.execute("SELECT nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
             return row[0] if row else ""
         finally:
             conn.close()

@@ -90,7 +90,6 @@ class CompanyBatchTests(DbTestCase):
         from app.db.dao_companies import save_company
         from app.db.dao_conn import get_conn
         from app.db.dao_invoices import generate_monthly_invoices_for_month
-        import sqlite3
         conn = get_conn()
         conn.execute("INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, netto, brutto) VALUES ('K1', 300, 300, 369)")
         conn.commit()
@@ -101,7 +100,6 @@ class CompanyBatchTests(DbTestCase):
                                 "zdrowotna": 60, "wliczac_zdrowotna": 0})
         generate_monthly_invoices_for_month("2026-09")
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         netto = {r["firma_id"]: r["kwota_netto"] for r in conn.execute(
             "SELECT firma_id, kwota_netto FROM faktury WHERE miesiac = '2026-09'")}
         conn.close()

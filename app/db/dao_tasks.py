@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
+import psycopg
 from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
@@ -16,7 +16,6 @@ def list_tasks_for_timer(
 ) -> List[Dict[str, Any]]:
     """Return open tasks available for a timer started from a company row."""
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
             """
@@ -27,8 +26,8 @@ def list_tasks_for_timer(
             LEFT JOIN pracownicy p ON p.id = z.pracownik_id
             WHERE z.status IN ('Nowe', 'W toku')
               AND (
-                    (? IS NOT NULL AND z.firma_id = ?)
-                    OR (? IS NULL AND ? IS NOT NULL AND z.pracownik_id = ?)
+                    (%s::integer IS NOT NULL AND z.firma_id = %s)
+                    OR (%s::integer IS NULL AND %s::integer IS NOT NULL AND z.pracownik_id = %s)
                   )
             ORDER BY
                 CASE WHEN z.status = 'W toku' THEN 0 ELSE 1 END,
@@ -51,28 +50,27 @@ def list_tasks(
     viewer_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     try:
         filters = []
         params: List[Any] = []
         if pracownik_id:
-            filters.append("z.pracownik_id = ?")
+            filters.append("z.pracownik_id = %s")
             params.append(pracownik_id)
         if firma_id:
-            filters.append("z.firma_id = ?")
+            filters.append("z.firma_id = %s")
             params.append(firma_id)
         if status:
-            filters.append("z.status = ?")
+            filters.append("z.status = %s")
             params.append(status)
         if viewer_id and not is_administrator(viewer_id):
             filters.append(
                 """
                 (
-                    z.pracownik_id = ?
-                    OR z.created_by = ?
+                    z.pracownik_id = %s
+                    OR z.created_by = %s
                     OR EXISTS (
                         SELECT 1 FROM pracownik_firma pf_view
-                        WHERE pf_view.pracownik_id = ? AND pf_view.firma_id = z.firma_id
+                        WHERE pf_view.pracownik_id = %s AND pf_view.firma_id = z.firma_id
                     )
                 )
                 """
@@ -136,13 +134,13 @@ def save_task(
                     """
                     SELECT 1
                     FROM zadania z
-                    WHERE z.id = ?
+                    WHERE z.id = %s
                       AND (
-                        z.pracownik_id = ?
-                        OR z.created_by = ?
+                        z.pracownik_id = %s
+                        OR z.created_by = %s
                         OR EXISTS (
                             SELECT 1 FROM pracownik_firma pf
-                            WHERE pf.pracownik_id = ? AND pf.firma_id = z.firma_id
+                            WHERE pf.pracownik_id = %s AND pf.firma_id = z.firma_id
                         )
                       )
                     """,
@@ -153,9 +151,9 @@ def save_task(
             conn.execute(
                 """
                 UPDATE zadania
-                SET tytul = ?, opis = ?, status = ?, termin = ?,
-                    firma_id = ?, pracownik_id = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                SET tytul = %s, opis = %s, status = %s, termin = %s,
+                    firma_id = %s, pracownik_id = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                WHERE id = %s
                 """,
                 (tytul.strip(), opis.strip(), status, termin, firma_id, pracownik_id, task_id),
             )
@@ -170,15 +168,15 @@ def save_task(
                     raise PermissionError(
                         "Nie można przypisać zadania do nieprzypisanej firmy."
                     )
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO zadania (
                     tytul, opis, status, termin, firma_id, pracownik_id, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
                 (tytul.strip(), opis.strip(), status, termin, firma_id, pracownik_id, created_by),
             )
-            result = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            result = int(cur.fetchone()[0])
         conn.commit()
         return result
     finally:
@@ -195,13 +193,13 @@ def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
                 """
                 SELECT 1
                 FROM zadania z
-                WHERE z.id = ?
+                WHERE z.id = %s
                   AND (
-                    z.pracownik_id = ?
-                    OR z.created_by = ?
+                    z.pracownik_id = %s
+                    OR z.created_by = %s
                     OR EXISTS (
                         SELECT 1 FROM pracownik_firma pf
-                        WHERE pf.pracownik_id = ? AND pf.firma_id = z.firma_id
+                        WHERE pf.pracownik_id = %s AND pf.firma_id = z.firma_id
                     )
                   )
                 """,
@@ -209,7 +207,7 @@ def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
             ).fetchone()
             if not allowed:
                 raise PermissionError("Brak uprawnień do usunięcia tego zadania.")
-        conn.execute("DELETE FROM zadania WHERE id = ?", (task_id,))
+        conn.execute("DELETE FROM zadania WHERE id = %s", (task_id,))
         conn.commit()
     finally:
         conn.close()

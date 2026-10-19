@@ -1,6 +1,7 @@
 # app/utils/saldeo_exporter.py
 import json
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -67,6 +68,37 @@ def format_amount_pl(amount: float) -> str:
     except Exception:
         return str(amount)
 
+def _default_due_date(issue_date: Any, days_raw: Any) -> str:
+    try:
+        return (datetime.strptime(str(issue_date)[:10], "%Y-%m-%d") + timedelta(days=int(days_raw))).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _parse_vat(raw: Any, default: Any):
+    """Zwraca (etykieta dla Saldeo, procent). Obsługuje 23%, 0 WDT, zw., np."""
+    text = str(raw).strip() if raw not in (None, "") else ""
+    low = text.lower().replace(" ", "")
+    if low.startswith("zw"):
+        return "zw.", 0.0
+    if low.startswith("np"):
+        return text.strip(), 0.0
+    if low.startswith("0") and re.search(r"[a-z]", low):
+        return text.upper().replace("%", "").strip(), 0.0
+    try:
+        pct = float(text.replace("%", "").replace(",", ".")) if text else float(default)
+    except Exception:
+        pct = float(default)
+    return (f"{int(pct)}%" if pct == int(pct) else f"{pct}%"), pct
+
+
+def _fmt_paid(value: Any) -> str:
+    try:
+        return format_amount_pl(float(value)) if value not in ("", None) else ""
+    except Exception:
+        return str(value)
+
+
 def export_saldeo_xlsx(
     invoices: List[Dict[str, Any]],
     output_path: str,
@@ -85,6 +117,9 @@ def export_saldeo_xlsx(
 
     default_vat_str = get_setting_first(("domyslna_stawka_vat", "default_vat"), "23")
     default_gtu_str = get_setting_first(("domyslne_gtu", "default_gtu"), "")
+    default_wystawca = get_setting_first(("wystawca_faktur", "wystawca", "faktury_wystawca"), "")
+    default_konto = get_setting_first(("konto_bankowe_biura", "faktury_konto_bankowe"), "")
+    default_termin_dni = get_setting_first(("termin_platnosci_dni", "faktury_termin_dni"), "14")
 
     def _to_bool(v: Any) -> Optional[bool]:
         if v is None:
@@ -124,11 +159,12 @@ def export_saldeo_xlsx(
         firma_id = _get_field(fv, "firma_id", _get_field(fv, "id", None))
 
         miesiac = _get_field(fv, "miesiac", _get_field(fv, "data", ""))
-        data_wyst = (
+        data_wyst = _get_field(fv, "data_wystawienia", "") or (
             f"{miesiac}-01"
             if miesiac and re.match(r"^\d{4}-\d{2}$", str(miesiac))
-            else _get_field(fv, "data_wystawienia", _get_field(fv, "data", ""))
+            else _get_field(fv, "data", "")
         )
+        termin = _get_field(fv, "termin_platnosci", "") or _default_due_date(data_wyst, default_termin_dni)
 
         fr = {}
         if firma_id is not None:
@@ -150,21 +186,30 @@ def export_saldeo_xlsx(
                 fr = {}
 
         # zamiana fr.get → fr["pole"]
-        nazwa_pelna = fr["nazwa"] if "nazwa" in fr else _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
-        nazwa_skrocona = fr["nazwa_skrocona"] if "nazwa_skrocona" in fr else nazwa_pelna
-        nip = fr["nip"] if "nip" in fr else _get_field(fv, "firma_nip", _get_field(fv, "nabywca_nip", ""))
-        regon = fr["regon"] if "regon" in fr else ""
-        miasto = fr["miasto"] if "miasto" in fr else _get_field(fv, "firma_miasto", "")
-        kod = fr["kod_pocztowy"] if "kod_pocztowy" in fr else _get_field(fv, "firma_kod", "")
-        ulica = fr["ulica"] if "ulica" in fr else _get_field(fv, "firma_ulica", "")
-        budynek = fr["adres_budynek"] if "adres_budynek" in fr else ""
-        lokal = fr["adres_lokal"] if "adres_lokal" in fr else ""
-        email = fr["adres_email"] if "adres_email" in fr else _get_field(fv, "firma_email", "")
-        konto_bankowe = fr["konto_bankowe"] if "konto_bankowe" in fr else _get_field(fv, "konto_bankowe", "")
-        uwagi_firma = fr["uwagi"] if "uwagi" in fr else ""
-        kategoria_domyslna = fr["kategoria_domyslna"] if "kategoria_domyslna" in fr else ""
-
-        adres = " ".join(p for p in [ulica, budynek, f"/{lokal}" if lokal else ""] if p).replace(" /", "/").strip()
+                firm_name = fr.get("nazwa") or _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
+        nazwa_pelna = _get_field(fv, "nabywca_pelna", "") or firm_name
+        nazwa_skrocona = _get_field(fv, "nabywca_skrocona", "") or fr.get("nazwa_skrocona") or nazwa_pelna
+        nip = _get_field(fv, "nabywca_nip", "") or fr.get("nip") or _get_field(fv, "firma_nip", "")
+        regon = _get_field(fv, "nabywca_regon", "") or fr.get("regon") or ""
+        miasto = _get_field(fv, "nabywca_miasto", "") or fr.get("miasto") or _get_field(fv, "firma_miasto", "")
+        kod = _get_field(fv, "nabywca_kod", "") or fr.get("kod_pocztowy") or _get_field(fv, "firma_kod", "")
+        inv_adres = _get_field(fv, "nabywca_adres", "")
+        if inv_adres:
+            adres = inv_adres
+        else:
+            ulica = fr.get("ulica") or _get_field(fv, "firma_ulica", "")
+            budynek = fr.get("adres_budynek") or ""
+            lokal = fr.get("adres_lokal") or ""
+            adres = " ".join(p for p in [ulica, budynek, f"/{lokal}" if lokal else ""] if p).replace(" /", "/").strip()
+        email = _get_field(fv, "nabywca_email", "") or fr.get("adres_email") or _get_field(fv, "firma_email", "")
+        kraj = _get_field(fv, "nabywca_kraj", "") or "PL"
+        # Konto bankowe w Saldeo to rachunek wystawcy, nie nabywcy.
+        konto_bankowe = _get_field(fv, "konto_bankowe", "") or default_konto
+        wystawca = _get_field(fv, "wystawca", "") or default_wystawca
+        kategoria_domyslna = fr.get("kategoria_domyslna") or ""
+        odb_skrocona = _get_field(fv, "odbiorca_skrocona", "") or ""
+        odb_pelna = _get_field(fv, "odbiorca_pelna", "") or ""
+        has_odbiorca = bool(odb_skrocona or odb_pelna)
 
         pozycje_json = _get_field(fv, "pozycje_json", _get_field(fv, "pozycje", "[]"))
         try:
@@ -179,16 +224,23 @@ def export_saldeo_xlsx(
             price_mode = "brutto"
 
         inv_metoda_kasowa = _get_field(fv, "metoda_kasowa", None)
-        inv_wysylac_do_ksef = _get_field(fv, "wysylac_do_ksef", None)
-        inv_wysylac_do_kontrahenta = _get_field(fv, "wysylac_do_kontrahenta", None)
+        inv_wysylac_do_ksef = _get_field(fv, "wyslij_do_ksef", _get_field(fv, "wysylac_do_ksef", None))
+        inv_wysylac_do_kontrahenta = _get_field(fv, "wyslij_do_kontrahenta", _get_field(fv, "wysylac_do_kontrahenta", None))
 
         comp_metoda_kasowa = fr["metoda_kasowa"] if "metoda_kasowa" in fr else None
         comp_wysylac_do_ksef = fr["wysylac_do_ksef"] if "wysylac_do_ksef" in fr else None
         comp_wysylac_do_kontrahenta = fr["wysylac_do_kontrahenta"] if "wysylac_do_kontrahenta" in fr else None
 
-        resolved_metoda = _to_bool(inv_metoda_kasowa) or _to_bool(comp_metoda_kasowa) or bool(default_metoda_kasowa)
-        resolved_ksef = _to_bool(inv_wysylac_do_ksef) or _to_bool(comp_wysylac_do_ksef) or bool(default_wysylac_do_ksef)
-        resolved_kontr = _to_bool(inv_wysylac_do_kontrahenta) or _to_bool(comp_wysylac_do_kontrahenta) or bool(default_wysylac_do_kontrahenta)
+        def _first(*vals, default=False):
+            for v in vals:
+                b = _to_bool(v)
+                if b is not None:
+                    return b
+            return bool(default)
+
+        resolved_metoda = _first(inv_metoda_kasowa, comp_metoda_kasowa, default=default_metoda_kasowa)
+        resolved_ksef = _first(inv_wysylac_do_ksef, comp_wysylac_do_ksef, default=default_wysylac_do_ksef)
+        resolved_kontr = _first(inv_wysylac_do_kontrahenta, comp_wysylac_do_kontrahenta, default=default_wysylac_do_kontrahenta)
 
         mark_kasowa = "X" if resolved_metoda else ""
         mark_ksef = "X" if resolved_ksef else ""
@@ -206,13 +258,7 @@ def export_saldeo_xlsx(
             raw_brutto = poz.get("brutto", poz.get("cena_brutto", None))
             vat_raw = poz.get("vat", poz.get("stawka_vat", ""))
 
-            try:
-                vat_pct = float(str(vat_raw).replace("%", "").strip()) if vat_raw not in ("", None) else None
-            except Exception:
-                vat_pct = None
-
-            if vat_pct is None:
-                vat_pct = float(default_vat_str)
+            vat_label, vat_pct = _parse_vat(vat_raw, default_vat_str)
 
             if price_mode == "netto":
                 # Invoice JSON stores ``netto`` as the line total.  Saldeo
@@ -230,10 +276,11 @@ def export_saldeo_xlsx(
 
             cena_netto_fmt = format_amount_pl(netto)
             cena_brutto_fmt = format_amount_pl(brutto)
-            vat = f"{int(vat_pct)}%"
+            vat = vat_label
 
             forma_platnosci = _get_field(fv, "forma_platnosci", "przelew")
 
+            gtu = poz.get("gtu") or _get_field(fv, "gtu", "") or default_gtu_str
             if first:
                 row_out = [
                     lp_counter,
@@ -243,7 +290,7 @@ def export_saldeo_xlsx(
                     _get_field(fv, "vat_marza", ""),
                     data_wyst,
                     _get_field(fv, "data_sprzedazy", data_wyst),
-                    _get_field(fv, "termin_platnosci", ""),
+                    termin,
                     mark_ksef,
                     mark_kontr,
                     nazwa_skrocona,
@@ -253,20 +300,20 @@ def export_saldeo_xlsx(
                     miasto,
                     nip,
                     regon,
-                    "PL",
+                    kraj,
                     email,
-                    nazwa_skrocona,
-                    nazwa_pelna,
-                    _get_field(fv, "odbiorca_rola", "Odbiorca"),
+                    odb_skrocona,
+                    odb_pelna,
+                    (_get_field(fv, "odbiorca_rola", "") or "Odbiorca") if has_odbiorca else "",
                     _get_field(fv, "id_wew", ""),
-                    adres,
-                    kod,
-                    miasto,
-                    nip,
-                    regon,
-                    "PL",
-                    email,
-                    "PLN",
+                    _get_field(fv, "odbiorca_adres", ""),
+                    _get_field(fv, "odbiorca_kod", ""),
+                    _get_field(fv, "odbiorca_miasto", ""),
+                    _get_field(fv, "odbiorca_nip", ""),
+                    _get_field(fv, "odbiorca_regon", ""),
+                    (_get_field(fv, "odbiorca_kraj", "") or "PL") if has_odbiorca else "",
+                    _get_field(fv, "odbiorca_email", ""),
+                    _get_field(fv, "waluta", "") or "PLN",
                     nazwa_towaru,
                     poz.get("pkwiu", ""),
                     str(ilosc),
@@ -274,29 +321,29 @@ def export_saldeo_xlsx(
                     cena_netto_fmt,
                     cena_brutto_fmt,
                     vat,
-                    "",
+                    poz.get("podstawa_zw", "") if vat_label.lower().startswith("zw") else "",
                     forma_platnosci,
-                    "",
-                    "",
+                    _fmt_paid(_get_field(fv, "zaplacono", "")),
+                    _get_field(fv, "data_wplaty", ""),
                     konto_bankowe,
                     poz.get("transport", ""),
                     poz.get("data_dopuszczenia", ""),
                     poz.get("przebieg", ""),
-                    poz.get("uwagi", "") or uwagi_firma,
-                    nazwa_pelna,
-                    "",
+                    poz.get("uwagi", "") or _get_field(fv, "uwagi", ""),
+                    wystawca,
+                    gtu,
                     poz.get("zamowienie_nr", ""),
                     poz.get("zamowienie_data", ""),
                     poz.get("umowa_nr", ""),
                     poz.get("umowa_data", ""),
                     poz.get("kategoria", kategoria_domyslna),
-                    poz.get("opis", ""),
-                    poz.get("rejestr", ""),
+                    _get_field(fv, "opis_zdarzenia", "") or (poz.get("opis", "") if poz.get("opis", "") != nazwa_towaru else ""),
+                    poz.get("rejestr", "") or _get_field(fv, "rejestr", ""),
                 ]
             else:
                 row_out = [""] * 58
                 row_out[10] = nazwa_skrocona
-                row_out[30] = "PLN"
+                row_out[30] = _get_field(fv, "waluta", "") or "PLN"
                 row_out[31] = nazwa_towaru
                 row_out[32] = poz.get("pkwiu", "")
                 row_out[33] = str(ilosc)
@@ -305,6 +352,7 @@ def export_saldeo_xlsx(
                 row_out[36] = cena_brutto_fmt
                 row_out[37] = vat
                 row_out[39] = forma_platnosci
+                row_out[47] = wystawca
 
             for col, val in enumerate(row_out):
                 worksheet.write(row_idx, col, val, fmt)

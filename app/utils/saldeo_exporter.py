@@ -355,7 +355,14 @@ def export_saldeo_xlsx(
                 row_out[47] = wystawca
 
             for col, val in enumerate(row_out):
-                worksheet.write(row_idx, col, val, fmt)
+                if isinstance(val, str):
+                    # write_string, bo write() zamienia tekst zaczynający się od "=" na formułę
+                    text = val
+                    if text[:1] in ("=", "+", "-", "@") and not re.fullmatch(r"-?[\d\s.,]+", text):
+                        text = "'" + text
+                    worksheet.write_string(row_idx, col, text, fmt)
+                else:
+                    worksheet.write(row_idx, col, val, fmt)
 
             row_idx += 1
             first = False

@@ -413,7 +413,10 @@ class CalendarPage(QWidget):
         rows = dao_calendar.list_events(self.pracownik_id, first.isoformat(), last.isoformat())
         out = []
         for ev in rows:
-            if (ev.get("zrodlo") or "lokalne") not in sources:
+            source = ev.get("zrodlo") or "lokalne"
+            if source not in SOURCE_COLORS:
+                source = "lokalne"  # np. zaimportowane z .ics
+            if source not in sources:
                 continue
             hay = f"{ev['tytul']} {ev.get('opis') or ''} {ev.get('lokalizacja') or ''} {ev.get('firma_nazwa') or ''}"
             if needle and needle not in hay.lower():

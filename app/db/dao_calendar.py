@@ -18,15 +18,15 @@ def list_events(pracownik_id: int, start: str, end: str) -> List[Dict[str, Any]]
         cur.execute(
             """
             SELECT w.*, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa,
-                   (w.pracownik_id != ?) AS udostepnione,
+                   (w.pracownik_id != %s) AS udostepnione,
                    (SELECT imie || ' ' || nazwisko FROM pracownicy WHERE id = w.pracownik_id)
                        AS wlasciciel
             FROM wydarzenia w
             LEFT JOIN firmy f ON f.id = w.firma_id
-            WHERE (w.pracownik_id = ?
+            WHERE (w.pracownik_id = %s
                    OR EXISTS (SELECT 1 FROM wydarzenia_dostep d
-                              WHERE d.wydarzenie_id = w.id AND d.pracownik_id = ?))
-              AND w.start < ? AND w.koniec >= ?
+                              WHERE d.wydarzenie_id = w.id AND d.pracownik_id = %s))
+              AND w.start < %s AND w.koniec >= %s
             ORDER BY w.start
             """,
             (pracownik_id, pracownik_id, pracownik_id, end, start),
@@ -40,7 +40,7 @@ def get_event_access(event_id: int) -> List[int]:
     conn = get_conn()
     try:
         cur = conn.execute(
-            "SELECT pracownik_id FROM wydarzenia_dostep WHERE wydarzenie_id = ?", (event_id,)
+            "SELECT pracownik_id FROM wydarzenia_dostep WHERE wydarzenie_id = %s", (event_id,)
         )
         return [r[0] for r in cur.fetchall()]
     finally:
@@ -52,12 +52,12 @@ def set_event_access(event_id: int, pracownik_ids: List[int]) -> None:
     conn = get_conn()
     try:
         owner = conn.execute(
-            "SELECT pracownik_id FROM wydarzenia WHERE id = ?", (event_id,)
+            "SELECT pracownik_id FROM wydarzenia WHERE id = %s", (event_id,)
         ).fetchone()
         owner_id = owner[0] if owner else None
-        conn.execute("DELETE FROM wydarzenia_dostep WHERE wydarzenie_id = ?", (event_id,))
-        conn.executemany(
-            "INSERT OR IGNORE INTO wydarzenia_dostep (wydarzenie_id, pracownik_id) VALUES (?, ?)",
+        conn.execute("DELETE FROM wydarzenia_dostep WHERE wydarzenie_id = %s", (event_id,))
+        conn.cursor().executemany(
+            "INSERT INTO wydarzenia_dostep (wydarzenie_id, pracownik_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             [(event_id, int(p)) for p in set(pracownik_ids) if int(p) != owner_id],
         )
         conn.commit()
@@ -69,7 +69,7 @@ def get_event(event_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM wydarzenia WHERE id = ?", (event_id,))
+        cur.execute("SELECT * FROM wydarzenia WHERE id = %s", (event_id,))
         row = cur.fetchone()
         return dict(row) if row else None
     finally:
@@ -81,7 +81,7 @@ def get_event_by_google_id(pracownik_id: int, google_event_id: str) -> Optional[
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND google_event_id = ?",
+            "SELECT * FROM wydarzenia WHERE pracownik_id = %s AND google_event_id = %s",
             (pracownik_id, google_event_id),
         )
         row = cur.fetchone()
@@ -94,7 +94,7 @@ def get_event_by_caldav_uid(pracownik_id: int, uid: str) -> Optional[Dict[str, A
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND caldav_uid = ?",
+            "SELECT * FROM wydarzenia WHERE pracownik_id = %s AND caldav_uid = %s",
             (pracownik_id, uid),
         ).fetchone()
         return dict(row) if row else None
@@ -106,7 +106,7 @@ def list_caldav_events(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND caldav_uid IS NOT NULL",
+            "SELECT * FROM wydarzenia WHERE pracownik_id = %s AND caldav_uid IS NOT NULL",
             (pracownik_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -118,7 +118,7 @@ def list_events_without_caldav(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND caldav_uid IS NULL "
+            "SELECT * FROM wydarzenia WHERE pracownik_id = %s AND caldav_uid IS NULL "
             "AND google_event_id IS NULL",
             (pracownik_id,),
         ).fetchall()
@@ -131,7 +131,7 @@ def set_caldav_uid(event_id: int, uid: Optional[str], zrodlo: str = "caldav") ->
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE wydarzenia SET caldav_uid = ?, zrodlo = ? WHERE id = ?",
+            "UPDATE wydarzenia SET caldav_uid = %s, zrodlo = %s WHERE id = %s",
             (uid, zrodlo if uid else "lokalne", event_id),
         )
         conn.commit()
@@ -144,7 +144,7 @@ def list_unsynced_events(pracownik_id: int) -> List[Dict[str, Any]]:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM wydarzenia WHERE pracownik_id = ? AND google_event_id IS NULL",
+            "SELECT * FROM wydarzenia WHERE pracownik_id = %s AND google_event_id IS NULL",
             (pracownik_id,),
         )
         return [dict(r) for r in cur.fetchall()]
@@ -163,20 +163,21 @@ def save_event(pracownik_id: int, data: Dict[str, Any]) -> int:
         cur = conn.cursor()
         event_id = data.get("id")
         if event_id:
-            sets = ", ".join(f"{k} = ?" for k in EVENT_FIELDS)
+            sets = ", ".join(f"{k} = %s" for k in EVENT_FIELDS)
             cur.execute(
-                f"UPDATE wydarzenia SET {sets}, updated_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND pracownik_id = ?",
+                f"UPDATE wydarzenia SET {sets}, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') "
+                "WHERE id = %s AND pracownik_id = %s",
                 (*values.values(), event_id, pracownik_id),
             )
         else:
             cols = ", ".join(EVENT_FIELDS)
-            marks = ", ".join("?" for _ in EVENT_FIELDS)
+            marks = ", ".join("%s" for _ in EVENT_FIELDS)
             cur.execute(
-                f"INSERT INTO wydarzenia (pracownik_id, {cols}) VALUES (?, {marks})",
+                f"INSERT INTO wydarzenia (pracownik_id, {cols}) VALUES (%s, {marks}) RETURNING id",
                 (pracownik_id, *values.values()),
             )
-            event_id = cur.lastrowid
+            _new_id = cur.fetchone()[0]
+            event_id = _new_id
         conn.commit()
         return int(event_id)
     finally:
@@ -187,7 +188,7 @@ def set_google_event_id(event_id: int, google_event_id: Optional[str]) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE wydarzenia SET google_event_id = ? WHERE id = ?",
+            "UPDATE wydarzenia SET google_event_id = %s WHERE id = %s",
             (google_event_id, event_id),
         )
         conn.commit()
@@ -199,7 +200,7 @@ def delete_event(event_id: int, pracownik_id: int) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "DELETE FROM wydarzenia WHERE id = ? AND pracownik_id = ?",
+            "DELETE FROM wydarzenia WHERE id = %s AND pracownik_id = %s",
             (event_id, pracownik_id),
         )
         conn.commit()

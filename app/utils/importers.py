@@ -3,14 +3,14 @@ import hashlib
 import io
 import os
 import re
-import sqlite3
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
+import psycopg
 
-from app.config import get_database
 from app.db.dao_audit import record_import
+from app.db.dao_conn import get_conn
 from app.utils.parsing import (
     to_float,
     normalize_identifier,
@@ -246,14 +246,14 @@ def import_tax_offices_from_excel(filepath: str) -> int:
     if not records:
         raise ValueError("Nie znaleziono wierszy urzędów skarbowych.")
 
-    conn = sqlite3.connect(get_database(), timeout=30)
+    conn = get_conn()
     try:
-        conn.executemany(
+        conn.cursor().executemany(
             """
             INSERT INTO urzedy_skarbowe (
                 wojewodztwo, typ, nazwa, kod, miasto, ulica, nr_budynku_lokalu,
                 poczta, nr_telefonu, nr_faxu, email, kod_jednostki, adresy_bip
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(kod_jednostki) DO UPDATE SET
                 wojewodztwo = excluded.wojewodztwo,
                 typ = excluded.typ,
@@ -666,7 +666,7 @@ def suggest_accounting_cennik_key(payload: Dict[str, Any]) -> Optional[str]:
     return spec["candidates"][0] if spec else None
 
 
-def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Optional[str]:
+def _ensure_accounting_cennik(cursor: psycopg.Cursor, payload: Dict[str, Any]) -> Optional[str]:
     spec = _accounting_cennik_spec(payload)
     if spec is None:
         return None
@@ -675,7 +675,7 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
     base_price = spec["base_price"]
     # „netto” w cenniku to cena księgowości wraz ze zdrowotną.
     netto = round((base_price or 0) + float(spec["zdrowotna"] or 0), 2)
-    placeholders = ", ".join("?" for _ in candidates)
+    placeholders = ", ".join("%s" for _ in candidates)
 
     cursor.execute(
         f"SELECT klucz FROM cenniki WHERE klucz IN ({placeholders}) LIMIT 1",
@@ -692,7 +692,7 @@ def _ensure_accounting_cennik(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -
         INSERT INTO cenniki (
             klucz, typ, cena_netto_ksiegowosc, cena_brutto_ksiegowosc,
             cena_za_dokument_ponad_limit, zdrowotna, netto, brutto
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             generated_key,
@@ -727,7 +727,7 @@ def _format_price_key(value: Any) -> str:
     return format(price, "f").rstrip("0").rstrip(".").replace(".", "_")
 
 
-def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) -> Dict[str, str]:
+def _ensure_employee_cenniki(cursor: psycopg.Cursor, payload: Dict[str, Any]) -> Dict[str, str]:
     text = str(payload.get("cennik_kadrowy") or "").strip()
     if not text:
         return {}
@@ -761,12 +761,12 @@ def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) ->
             """
             INSERT INTO cenniki_kadry (
                 klucz, cena_netto_kadry, cena_brutto_kadry, opis
-            ) VALUES (?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s)
             ON CONFLICT(klucz) DO UPDATE SET
                 cena_netto_kadry = excluded.cena_netto_kadry,
                 cena_brutto_kadry = excluded.cena_brutto_kadry,
                 opis = excluded.opis,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (key, float(price_netto), float(price_brutto), f"Import z Excela: {service_code}"),
         )
@@ -776,7 +776,7 @@ def _ensure_employee_cenniki(cursor: sqlite3.Cursor, payload: Dict[str, Any]) ->
 
 
 def _assign_employees(
-    cursor: sqlite3.Cursor,
+    cursor: psycopg.Cursor,
     firma_id: int,
     assigned_raw: Any,
     warnings: List[str],
@@ -788,7 +788,7 @@ def _assign_employees(
     assigned_ids, unresolved = resolve_employee_ids(cursor, assigned_raw)
     for employee_id in assigned_ids:
         cursor.execute(
-            "INSERT OR IGNORE INTO pracownik_firma (pracownik_id, firma_id, rola_id) VALUES (?, ?, NULL)",
+            "INSERT INTO pracownik_firma (pracownik_id, firma_id, rola_id) VALUES (%s, %s, NULL) ON CONFLICT DO NOTHING",
             (employee_id, firma_id),
         )
     if unresolved:
@@ -799,7 +799,7 @@ def _assign_employees(
 # ZAPIS DO DB
 # ============================================================
 def _apply_payload_to_db(
-    cursor: sqlite3.Cursor,
+    cursor: psycopg.Cursor,
     payload: Dict[str, Any],
     row_number: int,
     warnings: List[str],
@@ -820,12 +820,12 @@ def _apply_payload_to_db(
     company_id = None
 
     if normalized_nip:
-        cursor.execute("SELECT id FROM firmy WHERE nip = ?", (normalized_nip,))
+        cursor.execute("SELECT id FROM firmy WHERE nip = %s", (normalized_nip,))
         row_db = cursor.fetchone()
         company_id = row_db[0] if row_db else None
 
     if company_id is None:
-        cursor.execute("SELECT id FROM firmy WHERE nazwa = ?", (company_name,))
+        cursor.execute("SELECT id FROM firmy WHERE nazwa = %s", (company_name,))
         row_db = cursor.fetchone()
         company_id = row_db[0] if row_db else None
 
@@ -858,7 +858,11 @@ def _apply_payload_to_db(
         "uz_cennik", "uod_ilosc", "uod_cennik", "wliczac_zdrowotna",
     ]
 
-    existing_columns = {row[1] for row in cursor.execute("PRAGMA table_info(firmy)")}
+    cursor.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'firmy'"
+    )
+    existing_columns = {row[0] for row in cursor.fetchall()}
     for field in FIRMA_FIELDS:
         if field in existing_columns and field not in company_fields and field not in (
             "glowny_cennik", "glowny_cennik_manualny",
@@ -879,19 +883,20 @@ def _apply_payload_to_db(
             values.append(value)
 
     if company_id:
-        assignments = ", ".join(f"{field} = ?" for field in fields)
+        assignments = ", ".join(f"{field} = %s" for field in fields)
         cursor.execute(
-            f"UPDATE firmy SET {assignments} WHERE id = ?",
+            f"UPDATE firmy SET {assignments} WHERE id = %s",
             (*values, company_id),
         )
         created = False
     else:
-        placeholders = ", ".join("?" for _ in fields)
+        placeholders = ", ".join("%s" for _ in fields)
         cursor.execute(
-            f"INSERT INTO firmy ({', '.join(fields)}) VALUES ({placeholders})",
+            f"INSERT INTO firmy ({', '.join(fields)}) VALUES ({placeholders}) RETURNING id",
             values,
         )
-        company_id = int(cursor.lastrowid)
+        _new_id = cursor.fetchone()[0]
+        company_id = int(_new_id)
         created = True
 
     _ensure_contact(cursor, company_id, payload)
@@ -899,7 +904,7 @@ def _apply_payload_to_db(
     return created
 
 
-def _ensure_contact(cursor: sqlite3.Cursor, firma_id: int, payload: Dict[str, Any]) -> None:
+def _ensure_contact(cursor: psycopg.Cursor, firma_id: int, payload: Dict[str, Any]) -> None:
     """Osoba kontaktowa z pliku trafia też do kontaktów firmy (z nich powstają filtry e-mail)."""
     email = str(payload.get("adres_email") or "").strip()
     person = str(payload.get("osoba_kontaktowa") or "").strip()
@@ -908,19 +913,19 @@ def _ensure_contact(cursor: sqlite3.Cursor, firma_id: int, payload: Dict[str, An
         return
     if email:
         exists = cursor.execute(
-            "SELECT 1 FROM company_contacts WHERE firma_id = ? AND lower(email) = ?",
+            "SELECT 1 FROM company_contacts WHERE firma_id = %s AND lower(email) = %s",
             (firma_id, email.lower()),
         ).fetchone()
     else:
         exists = cursor.execute(
-            "SELECT 1 FROM company_contacts WHERE firma_id = ? AND (imie || ' ' || COALESCE(nazwisko, '')) LIKE ?",
+            "SELECT 1 FROM company_contacts WHERE firma_id = %s AND (imie || ' ' || COALESCE(nazwisko, '')) ILIKE %s",
             (firma_id, f"{person}%"),
         ).fetchone()
     if exists:
         return
     first, _, last = person.partition(" ")
     cursor.execute(
-        "INSERT INTO company_contacts (firma_id, imie, nazwisko, email, telefon, rola) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO company_contacts (firma_id, imie, nazwisko, email, telefon, rola) VALUES (%s, %s, %s, %s, %s, %s)",
         (firma_id, first, last.strip(), email, phone, ""),
     )
 
@@ -935,7 +940,7 @@ def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = Non
         return {"created": 0, "updated": 0, "warnings": [f"Plik nie mógł zostać wczytany: {exc}"]}
 
     header_index = {header: idx for idx, header in enumerate(headers)}
-    conn = sqlite3.connect(db_path or get_database(), timeout=30)
+    conn = get_conn()
     cursor = conn.cursor()
     created_count = 0
     updated_count = 0
@@ -967,7 +972,7 @@ def save_imported_payload(
     row_number: int = 2,
 ) -> Dict[str, Any]:
     """Zapisuje jeden zatwierdzony payload z kreatora importu."""
-    conn = sqlite3.connect(db_path or get_database(), timeout=30)
+    conn = get_conn()
     cursor = conn.cursor()
     warnings: List[str] = []
     try:
@@ -985,10 +990,8 @@ def import_companies_fast_from_excel_file(filepath: str, db_path: Optional[str] 
         return {"created": 0, "updated": 0, "warnings": [f"Plik nie mógł zostać wczytany: {exc}"]}
 
     header_index = {header: idx for idx, header in enumerate(headers)}
-    conn = sqlite3.connect(db_path or get_database(), timeout=30)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
     created = 0
     updated = 0
     warnings: List[str] = []

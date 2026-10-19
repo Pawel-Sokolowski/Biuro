@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-import sqlite3
+import psycopg
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -51,7 +51,6 @@ class MonthlyViewLogic:
 
     def get_employee_filter_list(self) -> List:
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute(
             """
@@ -76,7 +75,6 @@ class MonthlyViewLogic:
             selected_employee = self.pracownik_id
 
         conn = get_conn()
-        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         month_start, month_end = month_bounds(selected_month)
 
@@ -91,11 +89,11 @@ class MonthlyViewLogic:
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
-                ON sm.firma_id = f.id AND sm.miesiac = ?
+                ON sm.firma_id = f.id AND sm.miesiac = %s
             LEFT JOIN (
                 SELECT firma_id, COUNT(*) AS ilosc_dok
                 FROM dokumenty
-                WHERE data_wyst >= ? AND data_wyst < ?
+                WHERE data_wyst >= %s AND data_wyst < %s
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
         """
@@ -105,31 +103,25 @@ class MonthlyViewLogic:
             if not company_ids:
                 conn.close()
                 return []
-            placeholders = ",".join("?" for _ in company_ids)
+            placeholders = ",".join("%s" for _ in company_ids)
             sql += f" WHERE f.id IN ({placeholders})"
             params.extend(sorted(company_ids))
         sql += " ORDER BY f.nazwa"
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
-
-        result: List[Dict[str, Any]] = []
 
         assigned_map: Dict[int, bool] = {}
         if selected_employee:
-            conn2 = get_conn()
-            conn2.row_factory = sqlite3.Row
-            cur2 = conn2.cursor()
-            cur2.execute(
-                """
-                SELECT firma_id FROM pracownik_firma WHERE pracownik_id = ?
-            """,
+            cur.execute(
+                "SELECT firma_id FROM pracownik_firma WHERE pracownik_id = %s",
                 (selected_employee,),
             )
-            for r in cur2.fetchall():
+            for r in cur.fetchall():
                 assigned_map[r["firma_id"]] = True
-            conn2.close()
+        conn.close()
+
+        result: List[Dict[str, Any]] = []
 
         firm_ids = [r["id"] for r in rows]
         notes_map: Dict[int, Dict[str, Any]] = {}
@@ -203,18 +195,17 @@ class MonthlyViewLogic:
             if firma_id is None:
                 continue
             conn = get_conn()
-            conn.row_factory = sqlite3.Row
             try:
                 company = conn.execute(
                     "SELECT COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa "
-                    "FROM firmy WHERE id = ?",
+                    "FROM firmy WHERE id = %s",
                     (firma_id,),
                 ).fetchone()
                 activity = getattr(self, fields[2]) or {}
                 task_name = activity.get("task_title")
                 if not task_name and activity.get("task_id"):
                     task = conn.execute(
-                        "SELECT tytul FROM zadania WHERE id = ?",
+                        "SELECT tytul FROM zadania WHERE id = %s",
                         (activity["task_id"],),
                     ).fetchone()
                     task_name = task["tytul"] if task else None
@@ -294,8 +285,8 @@ class MonthlyViewLogic:
         cur.execute(
             f"""
             UPDATE statusy_miesieczne
-            SET {fields[3]} = {fields[3]} + ?
-            WHERE firma_id = ? AND miesiac = ?
+            SET {fields[3]} = {fields[3]} + %s
+            WHERE firma_id = %s AND miesiac = %s
             """,
             (delta, firma_id, self.aktualny_miesiac),
         )
@@ -306,7 +297,7 @@ class MonthlyViewLogic:
             INSERT INTO czasomierze (
                 firma_id, pracownik_id, miesiac, typ, usluga_id, fakturowac,
                 task_id, rozpoczecie, zakonczenie, sekundy
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 firma_id,
@@ -377,8 +368,8 @@ class MonthlyViewLogic:
                     """
                     UPDATE zadania
                     SET status = 'W toku',
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
+                        updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    WHERE id = %s
                       AND status = 'Nowe'
                     """,
                     (task_id,),
@@ -434,8 +425,8 @@ class MonthlyViewLogic:
             """
             UPDATE firmy
             SET status = 'Zawieszone',
-                zawieszenia_dzialalnosci = ?
-            WHERE id = ?
+                zawieszenia_dzialalnosci = %s
+            WHERE id = %s
         """,
             (today, firma_id),
         )
@@ -450,7 +441,7 @@ class MonthlyViewLogic:
             """
             UPDATE firmy
             SET status = 'Archiwalne'
-            WHERE id = ?
+            WHERE id = %s
         """,
             (firma_id,),
         )

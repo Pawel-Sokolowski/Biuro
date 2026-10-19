@@ -146,7 +146,7 @@ class ImportDetailsTests(DbTestCase):
         save_imported_payload(payload, self.db_path)
         conn = get_conn()
         firm = conn.execute("SELECT * FROM firmy WHERE nip = '6741006281'").fetchone()
-        contacts = conn.execute("SELECT * FROM company_contacts WHERE firma_id = ?", (firm["id"],)).fetchall()
+        contacts = conn.execute("SELECT * FROM company_contacts WHERE firma_id = %s", (firm["id"],)).fetchall()
         price = conn.execute("SELECT * FROM cenniki WHERE klucz = 'KPIR_T_10_350'").fetchone()
         conn.close()
         self.assertEqual(firm["miasto"], "Szczecin")

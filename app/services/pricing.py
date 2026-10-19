@@ -40,7 +40,7 @@ def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optiona
     vat_suffix = "T" if vat_czynny else "N"
     pattern = f"{typ}_{vat_suffix}_%"
 
-    cur.execute("SELECT * FROM cenniki WHERE klucz LIKE ? ORDER BY klucz", (pattern,))
+    cur.execute("SELECT * FROM cenniki WHERE klucz ILIKE %s ORDER BY klucz", (pattern,))
     rows = cur.fetchall()
     conn.close()
 

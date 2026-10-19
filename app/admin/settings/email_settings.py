@@ -1,6 +1,6 @@
 ﻿# app/admin/settings/email_settings.py
 
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -200,6 +200,7 @@ class EmailSettings(QWidget):
             ("Aktywuj / Dezaktywuj", self._toggle_active),
             ("Ustaw jako główne do wysyłania", self._set_default_sender),
             ("Domyślna stopka…", self._edit_signature_template),
+            ("Etykiety pracowników…", self._edit_labels),
             ("Usuń", self._delete),
         ):
             btn = QPushButton(text)
@@ -209,6 +210,39 @@ class EmailSettings(QWidget):
         layout.addLayout(btn_row)
 
         self._refresh()
+
+    def _edit_labels(self) -> None:
+        from app.email.email_labels import LABEL_COUNT, label_color, resolve_label_numbers, save_label_map
+
+        employees = [e for e in self.logic.list_employees() if e.get("aktywny", 1)]
+        current = resolve_label_numbers(employees)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Etykiety pracowników (klawisze 1–7)")
+        form = QFormLayout(dlg)
+        combos = {}
+        for emp in employees:
+            combo = QComboBox()
+            combo.addItem("— brak —", 0)
+            for n in range(1, LABEL_COUNT + 1):
+                combo.addItem(f"{n}", n)
+                combo.setItemData(combo.count() - 1, QColor(label_color(n)), Qt.ItemDataRole.ForegroundRole)
+            combo.setCurrentIndex(max(0, combo.findData(current.get(emp["id"], 0))))
+            combos[emp["id"]] = combo
+            name = f"{emp.get('imie') or ''} {emp.get('nazwisko') or ''}".strip() or emp.get("email", "")
+            form.addRow(name, combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        mapping = {eid: c.currentData() for eid, c in combos.items() if c.currentData()}
+        try:
+            save_label_map(mapping)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Etykiety", str(exc))
+            return
+        QMessageBox.information(self, "Etykiety", "Zapisano. Odśwież zakładkę poczty, aby zobaczyć zmiany.")
 
     def _employee_names(self):
         names = {}

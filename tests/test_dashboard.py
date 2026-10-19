@@ -52,12 +52,12 @@ class DashboardDataTests(DbTestCase):
         conn = get_conn()
         conn.execute(
             "INSERT INTO czasomierze (firma_id, pracownik_id, miesiac, typ, rozpoczecie, zakonczenie, sekundy) "
-            "VALUES (?, ?, '2026-03', 'ksiegowosc', '2026-03-01 08:00', '2026-03-01 09:00', 3600)",
+            "VALUES (%s, %s, '2026-03', 'ksiegowosc', '2026-03-01 08:00', '2026-03-01 09:00', 3600)",
             (firma, emp),
         )
         conn.execute(
             "INSERT INTO czasomierze (firma_id, pracownik_id, miesiac, typ, rozpoczecie, zakonczenie, sekundy) "
-            "VALUES (?, ?, '2026-03', 'ksiegowosc', '2026-03-10 08:00', '2026-03-10 08:30', 1800)",
+            "VALUES (%s, %s, '2026-03', 'ksiegowosc', '2026-03-10 08:00', '2026-03-10 08:30', 1800)",
             (firma, emp),
         )
         conn.commit()

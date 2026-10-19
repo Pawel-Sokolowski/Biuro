@@ -7,3 +7,4 @@ requests
 xlsxwriter
 python-dateutil
 caldav
+psycopg[binary]

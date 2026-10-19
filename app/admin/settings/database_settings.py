@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
+from app.config import get_database
 
 
 class DatabaseSettings(QWidget):
@@ -22,20 +23,13 @@ class DatabaseSettings(QWidget):
         title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        self.path_edit = QLineEdit()
-        self.path_edit.setText(self.logic.get_setting("db_path") or "")
-        layout.addWidget(self.path_edit)
+        layout.addWidget(QLabel(f"PostgreSQL: {get_database()}"))
+        layout.addWidget(QLabel("Po??czenie jest ustawiane w pliku .env (DB_URL). Zmiana wymaga restartu aplikacji."))
 
         btn_row = QHBoxLayout()
-
-        btn_choose = QPushButton("Wybierz plik bazy")
-        btn_choose.clicked.connect(self._choose_file)
-        btn_row.addWidget(btn_choose)
-
-        btn_save = QPushButton("Zapisz")
-        btn_save.clicked.connect(self._save)
-        btn_row.addWidget(btn_save)
-
+        btn_dump = QPushButton("Zapisz kopi? bazy do pliku...")
+        btn_dump.clicked.connect(self._dump)
+        btn_row.addWidget(btn_dump)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -98,24 +92,12 @@ class DatabaseSettings(QWidget):
         from app.utils.backup_status import get_backup_status
         self.backup_status.setText(get_backup_status()["komunikat"])
 
-    def _choose_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Wybierz bazę danych",
-            "",
-            "SQLite (*.db *.sqlite *.sqlite3);;Wszystkie pliki (*)"
-        )
-        if path:
-            self.path_edit.setText(path)
-
-    def _save(self):
-        path = self.path_edit.text().strip()
+    def _dump(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Zapisz kopi? bazy", "biuro.dump", "Kopia PostgreSQL (*.dump);;Wszystkie pliki (*)")
         if not path:
-            QMessageBox.warning(self, "Baza", "Podaj ścieżkę do bazy.")
             return
-
         try:
-            self.logic.set_setting("db_path", path)
-            QMessageBox.information(self, "OK", "Zapisano ścieżkę bazy danych.\nRestart aplikacji wymagany.")
+            self.logic.backup_database(path)
+            QMessageBox.information(self, "OK", "Zapisano kopi? bazy.")
         except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać: {e}")
+            QMessageBox.critical(self, "B??d", f"Nie uda?o si? wykona? kopii: {e}")

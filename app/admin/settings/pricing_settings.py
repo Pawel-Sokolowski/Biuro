@@ -53,7 +53,7 @@ class PricingSettings(QWidget):
         self._refresh()
 
     def _get_field(self, obj, key, default=None):
-        """Defensywny getter: działa z sqlite3.Row i dict."""
+        """Defensywny getter: działa z Row i dict."""
         if obj is None:
             return default
         if isinstance(obj, dict):
@@ -62,7 +62,7 @@ class PricingSettings(QWidget):
             return obj[key]
         except Exception:
             try:
-                # sqlite3.Row może wspierać .keys()
+                # Row może wspierać .keys()
                 return obj.get(key, default)
             except Exception:
                 return default

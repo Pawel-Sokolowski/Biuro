@@ -15,7 +15,7 @@ from PyQt6.QtGui import (
     QFont
 )
 
-import sqlite3
+import psycopg
 import datetime
 
 from typing import (

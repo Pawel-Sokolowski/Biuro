@@ -14,9 +14,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 
 import openpyxl
-import sqlite3
+import psycopg
 
-from app.db.dao_conn import get_conn
+from app.db.dao_conn import get_conn, Row
 from app.utils.importers import build_pricing_key
 from app.db.dao_companies import list_companies
 from app.db.dao_employees import (
@@ -76,18 +76,13 @@ class GlobalSettingsLogic:
         except Exception:
             logger.warning("Zignorowany błąd", exc_info=True)
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = get_conn()
-        try:
-            conn.row_factory = sqlite3.Row
-        except Exception:
-            logger.warning("Zignorowany błąd", exc_info=True)
-        return conn
+    def _get_conn(self) -> psycopg.Connection:
+        return get_conn()
 
     # -------------------------
     # Użytkownicy (delegacja do DAO)
     # -------------------------
-    def get_users(self) -> List[sqlite3.Row]:
+    def get_users(self) -> List[Row]:
         return list_employees()
 
     def get_user(self, pracownik_id: int) -> Optional[Dict[str, Any]]:
@@ -103,7 +98,7 @@ class GlobalSettingsLogic:
                     nazwisko,
                     aktywny
                 FROM pracownicy
-                WHERE id = ?
+                WHERE id = %s
                 """,
                 (pracownik_id,),
             ).fetchone()
@@ -144,14 +139,14 @@ class GlobalSettingsLogic:
     def toggle_user_active(self, pracownik_id: int):
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT aktywny FROM pracownicy WHERE id = ?", (pracownik_id,))
+        cur.execute("SELECT aktywny FROM pracownicy WHERE id = %s", (pracownik_id,))
         row = cur.fetchone()
         if not row:
             conn.close()
             return
         new_val = 0 if row["aktywny"] else 1
         cur.execute(
-            "UPDATE pracownicy SET aktywny = ? WHERE id = ?",
+            "UPDATE pracownicy SET aktywny = %s WHERE id = %s",
             (new_val, pracownik_id),
         )
         conn.commit()
@@ -174,7 +169,7 @@ class GlobalSettingsLogic:
                 """
                 SELECT firma_id
                 FROM pracownik_firma
-                WHERE pracownik_id = ?
+                WHERE pracownik_id = %s
                 """,
                 (pracownik_id,),
             ).fetchall()
@@ -195,10 +190,10 @@ class GlobalSettingsLogic:
             cur = conn.cursor()
             wanted = {int(c) for c in company_ids}
             existing = {r[0] for r in cur.execute(
-                "SELECT firma_id FROM pracownik_firma WHERE pracownik_id = ?", (pracownik_id,))}
+                "SELECT firma_id FROM pracownik_firma WHERE pracownik_id = %s", (pracownik_id,))}
             for firma_id in existing - wanted:
                 cur.execute(
-                    "DELETE FROM pracownik_firma WHERE pracownik_id = ? AND firma_id = ?",
+                    "DELETE FROM pracownik_firma WHERE pracownik_id = %s AND firma_id = %s",
                     (pracownik_id, firma_id),
                 )
             for firma_id in wanted - existing:
@@ -208,8 +203,9 @@ class GlobalSettingsLogic:
                         pracownik_id,
                         firma_id
                     )
-                    VALUES (?, ?)
-                    """,
+                    VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+            """,
                     (
                         pracownik_id,
                         firma_id,),
@@ -221,10 +217,10 @@ class GlobalSettingsLogic:
     # -------------------------
     # Role + uprawnienia
     # -------------------------
-    def get_roles(self) -> List[sqlite3.Row]:
+    def get_roles(self) -> List[Row]:
         return dao_global_settings.get_roles()
 
-    def get_role(self, rid: int) -> Optional[sqlite3.Row]:
+    def get_role(self, rid: int) -> Optional[Row]:
         return dao_global_settings.get_role(rid)
 
     def add_role(
@@ -290,10 +286,10 @@ class GlobalSettingsLogic:
     # -------------------------
     # Konta email i przypisania
     # -------------------------
-    def get_email_accounts(self) -> List[sqlite3.Row]:
+    def get_email_accounts(self) -> List[Row]:
         return dao_global_settings.get_email_accounts()
 
-    def get_email_account(self, acc_id: int) -> Optional[sqlite3.Row]:
+    def get_email_account(self, acc_id: int) -> Optional[Row]:
         return dao_global_settings.get_email_account(acc_id)
 
     def add_email_account(
@@ -368,7 +364,7 @@ class GlobalSettingsLogic:
     def delete_email_account(self, konto_id: int):
         dao_global_settings.delete_email_account(konto_id)
 
-    def get_email_assignments(self) -> List[sqlite3.Row]:
+    def get_email_assignments(self) -> List[Row]:
         return dao_global_settings.get_email_assignments()
 
     def assign_email_to_employee(self, konto_id: int, pracownik_id: int):
@@ -380,7 +376,7 @@ class GlobalSettingsLogic:
     # -------------------------
     # Cennik księgowość (globalny)
     # -------------------------
-    def get_global_pricing(self) -> List[sqlite3.Row]:
+    def get_global_pricing(self) -> List[Row]:
         return dao_global_settings.get_global_pricing()
 
     def update_global_pricing_item(
@@ -445,14 +441,14 @@ class GlobalSettingsLogic:
                             netto,
                             brutto
                         )
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT(klucz) DO UPDATE SET
                             cena_netto_ksiegowosc = excluded.cena_netto_ksiegowosc,
                             cena_za_dokument_ponad_limit = excluded.cena_za_dokument_ponad_limit,
                             zdrowotna = excluded.zdrowotna,
                             netto = excluded.netto,
                             brutto = excluded.brutto,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                         """,
                         (
                             klucz,
@@ -511,14 +507,14 @@ class GlobalSettingsLogic:
                         netto,
                         brutto
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT(klucz) DO UPDATE SET
                         cena_netto_ksiegowosc = excluded.cena_netto_ksiegowosc,
                         cena_za_dokument_ponad_limit = excluded.cena_za_dokument_ponad_limit,
                         zdrowotna = excluded.zdrowotna,
                         netto = excluded.netto,
                         brutto = excluded.brutto,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     """,
                     (
                         klucz,
@@ -537,7 +533,7 @@ class GlobalSettingsLogic:
     # ============================
     # CENNIK KADRY
     # ============================
-    def get_pricing_kadry(self) -> List[sqlite3.Row]:
+    def get_pricing_kadry(self) -> List[Row]:
         return dao_global_settings.get_pricing_kadry()
 
     def update_pricing_kadry_item(
@@ -576,12 +572,12 @@ class GlobalSettingsLogic:
                     cur.execute(
                         """
                         INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, cena_brutto_kadry, opis)
-                        VALUES (?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s)
                         ON CONFLICT(klucz) DO UPDATE SET
                             cena_netto_kadry = excluded.cena_netto_kadry,
                             cena_brutto_kadry = excluded.cena_brutto_kadry,
                             opis = excluded.opis,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                         """,
                         (
                             klucz,
@@ -620,12 +616,12 @@ class GlobalSettingsLogic:
                 cur.execute(
                     """
                     INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, cena_brutto_kadry, opis)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                     ON CONFLICT(klucz) DO UPDATE SET
                         cena_netto_kadry = excluded.cena_netto_kadry,
                         cena_brutto_kadry = excluded.cena_brutto_kadry,
                         opis = excluded.opis,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     """,
                     (klucz, cena_netto_kadry, brutto, opis),
                 )
@@ -638,7 +634,7 @@ class GlobalSettingsLogic:
     # ============================
     # USŁUGI DODATKOWE
     # ============================
-    def get_extra_services(self) -> List[sqlite3.Row]:
+    def get_extra_services(self) -> List[Row]:
         return dao_global_settings.get_extra_services()
 
     def add_extra_service(
@@ -677,16 +673,16 @@ class GlobalSettingsLogic:
     # -------------------------
     # Firmy
     # -------------------------
-    def get_all_companies(self) -> List[sqlite3.Row]:
+    def get_all_companies(self) -> List[Row]:
         return list_companies()
 
-    def get_companies(self) -> List[sqlite3.Row]:
+    def get_companies(self) -> List[Row]:
         return self.get_all_companies()
 
-    def get_company(self, firma_id: int) -> Optional[sqlite3.Row]:
+    def get_company(self, firma_id: int) -> Optional[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM firmy WHERE id = ?", (firma_id,))
+        cur.execute("SELECT * FROM firmy WHERE id = %s", (firma_id,))
         row = cur.fetchone()
         conn.close()
         return row
@@ -713,11 +709,11 @@ class GlobalSettingsLogic:
         cur.execute(
             """
             UPDATE firmy
-            SET nazwa=?, nip=?, regon=?, miasto=?, ulica=?, kod_pocztowy=?,
-                vat_czynny=?, fakturowac=?, forma_dzialalnosci=?,
-                forma_opodatkowania=?, limit_dokumentow=?, zdrowotna=?,
-                glowny_cennik=?
-            WHERE id=?
+            SET nazwa=%s, nip=%s, regon=%s, miasto=%s, ulica=%s, kod_pocztowy=%s,
+                vat_czynny=%s, fakturowac=%s, forma_dzialalnosci=%s,
+                forma_opodatkowania=%s, limit_dokumentow=%s, zdrowotna=%s,
+                glowny_cennik=%s
+            WHERE id=%s
             """,
             (
                 nazwa,
@@ -742,21 +738,21 @@ class GlobalSettingsLogic:
     def delete_company(self, firma_id: int):
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM firmy WHERE id = ?", (firma_id,))
+        cur.execute("DELETE FROM firmy WHERE id = %s", (firma_id,))
         conn.commit()
         conn.close()
 
     # -------------------------
     # Faktury (CRUD + pozycje)
     # -------------------------
-    def list_invoices_for_company(self, firma_id: int) -> List[sqlite3.Row]:
+    def list_invoices_for_company(self, firma_id: int) -> List[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
             """
             SELECT id, firma_id, miesiac, kwota_netto, kwota_brutto, data_wystawienia, eksportowana
             FROM faktury
-            WHERE firma_id = ?
+            WHERE firma_id = %s
             ORDER BY data_wystawienia DESC, id DESC
             """,
             (firma_id,),
@@ -765,10 +761,10 @@ class GlobalSettingsLogic:
         conn.close()
         return rows
 
-    def get_invoice(self, invoice_id: int) -> Optional[sqlite3.Row]:
+    def get_invoice(self, invoice_id: int) -> Optional[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM faktury WHERE id = ?", (invoice_id,))
+        cur.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,))
         row = cur.fetchone()
         conn.close()
         return row
@@ -795,7 +791,7 @@ class GlobalSettingsLogic:
                 firma_id, miesiac, kwota_netto, kwota_brutto,
                 data_wystawienia, data_sprzedazy, termin_platnosci,
                 nabywca_pelna, nabywca_nip, pozycje_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
             """,
             (
                 firma_id,
@@ -810,7 +806,8 @@ class GlobalSettingsLogic:
                 pozycje_json,
             ),
         )
-        fid = cur.lastrowid
+        _new_id = cur.fetchone()[0]
+        fid = _new_id
         conn.commit()
         conn.close()
         return fid
@@ -837,7 +834,7 @@ class GlobalSettingsLogic:
         params = []
         for k, v in fields.items():
             if k in allowed:
-                updates.append(f"{k} = ?")
+                updates.append(f"{k} = %s")
                 params.append(v)
         if not updates:
             return
@@ -845,7 +842,7 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            f"UPDATE faktury SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            f"UPDATE faktury SET {', '.join(updates)}, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
             params,
         )
         conn.commit()
@@ -854,15 +851,15 @@ class GlobalSettingsLogic:
     def delete_invoice(self, invoice_id: int) -> None:
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM faktury WHERE id = ?", (invoice_id,))
+        cur.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
         conn.commit()
         conn.close()
 
-    def list_invoice_positions(self, invoice_id: int) -> List[sqlite3.Row]:
+    def list_invoice_positions(self, invoice_id: int) -> List[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM faktury_pozycje WHERE faktura_id = ? ORDER BY id",
+            "SELECT * FROM faktury_pozycje WHERE faktura_id = %s ORDER BY id",
             (invoice_id,),
         )
         rows = cur.fetchall()
@@ -890,7 +887,7 @@ class GlobalSettingsLogic:
             INSERT INTO faktury_pozycje (
                 faktura_id, opis, ilosc, jednostka, cena_netto, cena_brutto,
                 stawka_vat, pkwiu, gtu, wartosc_netto, wartosc_brutto, generated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0) RETURNING id
             """,
             (
                 invoice_id,
@@ -906,7 +903,8 @@ class GlobalSettingsLogic:
                 wartosc_brutto,
             ),
         )
-        pid = cur.lastrowid
+        _new_id = cur.fetchone()[0]
+        pid = _new_id
         conn.commit()
         conn.close()
         return pid
@@ -926,7 +924,7 @@ class GlobalSettingsLogic:
         params = []
         for k, v in fields.items():
             if k in allowed:
-                updates.append(f"{k} = ?")
+                updates.append(f"{k} = %s")
                 params.append(v)
         if not updates:
             return
@@ -934,7 +932,7 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            f"UPDATE faktury_pozycje SET {', '.join(updates)} WHERE id = ?",
+            f"UPDATE faktury_pozycje SET {', '.join(updates)} WHERE id = %s",
             params,
         )
         conn.commit()
@@ -943,14 +941,14 @@ class GlobalSettingsLogic:
     def delete_invoice_position(self, position_id: int) -> None:
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM faktury_pozycje WHERE id = ?", (position_id,))
+        cur.execute("DELETE FROM faktury_pozycje WHERE id = %s", (position_id,))
         conn.commit()
         conn.close()
 
     # -------------------------
     # Tags i mapowanie tagów
     # -------------------------
-    def list_tags(self) -> List[sqlite3.Row]:
+    def list_tags(self) -> List[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute("SELECT id, nazwa FROM tags ORDER BY nazwa")
@@ -961,9 +959,9 @@ class GlobalSettingsLogic:
     def add_tag(self, nazwa: str) -> int:
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("INSERT OR IGNORE INTO tags (nazwa) VALUES (?)", (nazwa,))
+        cur.execute("INSERT INTO tags (nazwa) VALUES (%s) ON CONFLICT DO NOTHING", (nazwa,))
         conn.commit()
-        cur.execute("SELECT id FROM tags WHERE nazwa = ?", (nazwa,))
+        cur.execute("SELECT id FROM tags WHERE nazwa = %s", (nazwa,))
         row = cur.fetchone()
         conn.close()
         return row["id"] if row else 0
@@ -972,10 +970,11 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO tag_map (tag_id, tabela, rekord_id) VALUES (?, ?, ?)",
+            "INSERT INTO tag_map (tag_id, tabela, rekord_id) VALUES (%s, %s, %s) RETURNING id",
             (tag_id, tabela, rekord_id),
         )
-        tm_id = cur.lastrowid
+        _new_id = cur.fetchone()[0]
+        tm_id = _new_id
         conn.commit()
         conn.close()
         return tm_id
@@ -983,7 +982,7 @@ class GlobalSettingsLogic:
     def unmap_tag(self, tag_map_id: int) -> None:
         conn = self._get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM tag_map WHERE id = ?", (tag_map_id,))
+        cur.execute("DELETE FROM tag_map WHERE id = %s", (tag_map_id,))
         conn.commit()
         conn.close()
 
@@ -1002,11 +1001,12 @@ class GlobalSettingsLogic:
         cur.execute(
             """
             INSERT INTO dokumenty_attachments (dokument_id, filename, path, mime)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s) RETURNING id
             """,
             (dokument_id, filename, path_str, mime),
         )
-        aid = cur.lastrowid
+        _new_id = cur.fetchone()[0]
+        aid = _new_id
         conn.commit()
         conn.close()
         return aid
@@ -1014,14 +1014,14 @@ class GlobalSettingsLogic:
     def list_document_attachments(
         self,
         dokument_id: int,
-    ) -> List[sqlite3.Row]:
+    ) -> List[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
             """
             SELECT id, filename, path, mime, data_dodania
             FROM dokumenty_attachments
-            WHERE dokument_id = ?
+            WHERE dokument_id = %s
             ORDER BY id
             """,
             (dokument_id,),
@@ -1034,7 +1034,7 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM dokumenty_attachments WHERE id = ?",
+            "DELETE FROM dokumenty_attachments WHERE id = %s",
             (attachment_id,),
         )
         conn.commit()
@@ -1043,11 +1043,11 @@ class GlobalSettingsLogic:
     # -------------------------
     # Logi / narzędzia
     # -------------------------
-    def get_logs(self, limit: int = 500) -> List[sqlite3.Row]:
+    def get_logs(self, limit: int = 500) -> List[Row]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM system_logs ORDER BY id DESC LIMIT ?",
+            "SELECT * FROM system_logs ORDER BY id DESC LIMIT %s",
             (limit,),
         )
         rows = cur.fetchall()
@@ -1060,7 +1060,7 @@ class GlobalSettingsLogic:
         cur.execute(
             """
             INSERT INTO system_logs (poziom, modul, wiadomosc, data)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (%s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (poziom, modul, wiadomosc),
         )
@@ -1075,20 +1075,9 @@ class GlobalSettingsLogic:
         conn.close()
 
     def backup_database(self, target_path: str):
-        try:
-            conn = self._get_conn()
-            dest = sqlite3.connect(target_path)
-            conn.backup(dest)
-            dest.close()
-            conn.close()
-        except Exception:
-            src = Path(get_conn().__dict__.get("database", "") or "")
-            if src and src.exists():
-                import shutil
+        from app.utils.pg_backup import dump_database
 
-                shutil.copy(src, Path(target_path))
-            else:
-                raise
+        dump_database(target_path)
 
     def cleanup_old_emails(self, older_than_days: int):
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
@@ -1096,7 +1085,7 @@ class GlobalSettingsLogic:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM wiadomosci_email WHERE data < ?",
+            "DELETE FROM wiadomosci_email WHERE data < %s",
             (cutoff_str,),
         )
         conn.commit()
@@ -1116,11 +1105,14 @@ class GlobalSettingsLogic:
             "can_export_data": "INTEGER DEFAULT 0",
             "can_access_admin_settings": "INTEGER DEFAULT 0",
         }
-        cur.execute("PRAGMA table_info(role)")
-        existing = [r["name"] for r in cur.fetchall()]
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'role'"
+        )
+        existing = [r[0] for r in cur.fetchall()]
         for col, spec in cols.items():
             if col not in existing:
-                cur.execute(f"ALTER TABLE role ADD COLUMN {col} {spec}")
+                cur.execute(f"ALTER TABLE role ADD COLUMN IF NOT EXISTS {col} {spec}")
         conn.commit()
         conn.close()
 

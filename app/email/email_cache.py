@@ -6,13 +6,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from app.config import EMAIL_LOCAL_LIMIT, get_database
+from app.config import EMAIL_LOCAL_LIMIT, get_data_dir
 
 logger = logging.getLogger(__name__)
 
 
 def cache_dir(konto_id: int) -> Path:
-    path = Path(get_database()).resolve().parent / "email_cache" / str(int(konto_id))
+    path = Path(get_data_dir()).resolve() / "email_cache" / str(int(konto_id))
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -64,7 +64,7 @@ class MailRefreshTests(DbTestCase):
         ]
         for uid, sender, date in rows:
             conn.execute(
-                "INSERT INTO wiadomosci_email (konto_id, folder_id, uid, nadawca, data) VALUES (1, 1, ?, ?, ?)",
+                "INSERT INTO wiadomosci_email (konto_id, folder_id, uid, nadawca, data) VALUES (1, 1, %s, %s, %s)",
                 (uid, sender, date),
             )
         conn.commit()

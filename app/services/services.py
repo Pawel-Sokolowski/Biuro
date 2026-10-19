@@ -18,7 +18,7 @@ def pobierz_uslugi_firmy(firma_id: int, miesiac: str):
         SELECT u.nazwa, f.ilosc, f.cena_netto, u.stawka_vat
         FROM uslugi_dodatkowe_firma f
         JOIN uslugi_dodatkowe u ON u.id = f.usluga_id
-        WHERE f.firma_id = ? AND f.miesiac = ?
+        WHERE f.firma_id = %s AND f.miesiac = %s
     """, (firma_id, miesiac))
     rows = cur.fetchall()
     conn.close()

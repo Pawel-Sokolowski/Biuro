@@ -139,7 +139,7 @@ def get_employee_signature(pracownik_id: int) -> Tuple[str, str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT imie, nazwisko, stopka_tekst, stopka_html FROM pracownicy WHERE id = ?",
+            "SELECT imie, nazwisko, stopka_tekst, stopka_html FROM pracownicy WHERE id = %s",
             (pracownik_id,),
         ).fetchone()
     finally:
@@ -156,7 +156,7 @@ def get_saved_signature(pracownik_id: int) -> Tuple[str, str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT stopka_tekst, stopka_html FROM pracownicy WHERE id = ?", (pracownik_id,)
+            "SELECT stopka_tekst, stopka_html FROM pracownicy WHERE id = %s", (pracownik_id,)
         ).fetchone()
     finally:
         conn.close()
@@ -167,7 +167,7 @@ def save_employee_signature(pracownik_id: int, text: str, html: str) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE pracownicy SET stopka_tekst = ?, stopka_html = ? WHERE id = ?",
+            "UPDATE pracownicy SET stopka_tekst = %s, stopka_html = %s WHERE id = %s",
             (text or None, html or None, pracownik_id),
         )
         conn.commit()

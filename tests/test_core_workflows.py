@@ -1,10 +1,8 @@
-import os
-import sqlite3
-import tempfile
 import unittest
 from unittest.mock import patch
 
-from app.config import set_database
+from app.db.dao_conn import get_conn
+from tests.base import DbTestCase
 from app.services.calculator import oblicz_miesieczny_koszt
 from app.utils.importers import resolve_accounting_cennik_typ, split_address_line
 from app.utils.months import month_bounds
@@ -36,36 +34,6 @@ class CoreWorkflowTests(unittest.TestCase):
     def test_timer_formatting(self):
         self.assertEqual(TimerUtils.format_seconds(3661), "01:01:01")
 
-    def test_monthly_cost_uses_document_date_range(self):
-        fd, path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        try:
-            set_database(path)
-            conn = sqlite3.connect(path)
-            conn.executescript(
-                """
-                CREATE TABLE firmy (
-                    id INTEGER PRIMARY KEY, typ_rozliczenia TEXT, vat_czynny INTEGER,
-                    limit_dokumentow INTEGER, glowny_cennik TEXT
-                );
-                CREATE TABLE dokumenty (firma_id INTEGER, data_wyst TEXT);
-                CREATE TABLE cenniki (
-                    klucz TEXT, cena_netto_ksiegowosc REAL, cena_brutto_ksiegowosc REAL,
-                    cena_za_dokument_ponad_limit REAL, zdrowotna REAL,
-                    netto REAL, brutto REAL
-                );
-                INSERT INTO firmy VALUES (1, 'KPIR', 1, 1, 'basic');
-                INSERT INTO cenniki VALUES ('basic', 100, 123, 10, 50, 100, 123);
-                INSERT INTO dokumenty VALUES (1, '2026-02-10');
-                INSERT INTO dokumenty VALUES (1, '2026-03-01');
-                """
-            )
-            conn.commit()
-            conn.close()
-            self.assertEqual(oblicz_miesieczny_koszt(1, "2026-02")["netto"], 100.0)
-        finally:
-            os.remove(path)
-
     def test_invoice_includes_only_billable_extra_service(self):
         logic = FakturyLogic.__new__(FakturyLogic)
         with patch.object(logic, "_get_company", return_value={
@@ -79,6 +47,31 @@ class CoreWorkflowTests(unittest.TestCase):
         self.assertEqual(len(positions), 1)
         self.assertEqual(positions[0]["netto"], 100.0)
         self.assertEqual(positions[0]["vat"], 23)
+
+
+class MonthlyCostTests(DbTestCase):
+    def test_monthly_cost_uses_document_date_range(self):
+        conn = get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_brutto_ksiegowosc, "
+                "cena_za_dokument_ponad_limit, zdrowotna, netto, brutto) "
+                "VALUES ('basic', 100, 123, 10, 50, 100, 123)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        firma = self.make_company(
+            "Firma", typ_rozliczenia="KPIR", vat_czynny=1, limit_dokumentow=1, glowny_cennik="basic"
+        )
+        conn = get_conn()
+        try:
+            conn.execute("INSERT INTO dokumenty (firma_id, data_wyst) VALUES (%s, '2026-02-10')", (firma,))
+            conn.execute("INSERT INTO dokumenty (firma_id, data_wyst) VALUES (%s, '2026-03-01')", (firma,))
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(oblicz_miesieczny_koszt(firma, "2026-02")["netto"], 100.0)
 
 
 if __name__ == "__main__":

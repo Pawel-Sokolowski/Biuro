@@ -1,5 +1,5 @@
 # app/globals/calculator.py
-import sqlite3
+import psycopg
 from typing import Dict, Any
 from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
@@ -15,7 +15,6 @@ def _get_company_basic(firma_id: int) -> Dict[str, Any]:
     - glowny_cennik (klucz cennika)
     """
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
@@ -26,7 +25,7 @@ def _get_company_basic(firma_id: int) -> Dict[str, Any]:
             limit_dokumentow,
             glowny_cennik
         FROM firmy
-        WHERE id = ?
+        WHERE id = %s
     """, (firma_id,))
     row = cur.fetchone()
     conn.close()
@@ -54,16 +53,15 @@ def _get_docs_count_for_month(firma_id: int, miesiac: str) -> int:
     miesiac = '2026-08'
     """
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     start, end = month_bounds(miesiac)
     cur.execute("""
         SELECT COUNT(*) AS cnt
         FROM dokumenty
-        WHERE firma_id = ?
-          AND data_wyst >= ?
-          AND data_wyst < ?
+        WHERE firma_id = %s
+          AND data_wyst >= %s
+          AND data_wyst < %s
     """, (firma_id, start, end))
 
     row = cur.fetchone()
@@ -90,7 +88,6 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
         }
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
@@ -102,7 +99,7 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
             netto,
             brutto
         FROM cenniki
-        WHERE klucz = ?
+        WHERE klucz = %s
     """, (klucz,))
     row = cur.fetchone()
     conn.close()

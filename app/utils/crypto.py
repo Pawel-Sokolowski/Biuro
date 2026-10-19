@@ -9,7 +9,7 @@ Zawiera:
 - pomocnicze funkcje pobierania informacji o pracowniku i ról
 """
 
-import sqlite3
+import psycopg
 import os
 import typing as _t
 import logging
@@ -146,14 +146,17 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 # --- Pomocniczne funkcje do wykrywania kolumn w tabeli pracownicy ---
-def _get_pracownicy_columns(conn: sqlite3.Connection) -> _t.List[str]:
+def _get_pracownicy_columns(conn: psycopg.Connection) -> _t.List[str]:
     """Get available columns in pracownicy table."""
     try:
         cur = conn.cursor()
-        cur.execute("PRAGMA table_info(pracownicy)")
-        cols = [row[1] for row in cur.fetchall()]  # row[1] = name
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = \'pracownicy\'"
+        )
+        cols = [row[0] for row in cur.fetchall()]
         return cols
-    except sqlite3.OperationalError as e:
+    except psycopg.Error as e:
         logger.error(f"Failed to get pracownicy columns: {e}")
         return []
 
@@ -198,7 +201,7 @@ def register_user(email: str, password: str, imie: str = "", nazwisko: str = "",
     cur = conn.cursor()
     try:
         # sprawdź czy email już istnieje
-        cur.execute("SELECT id FROM pracownicy WHERE email = ?", (email,))
+        cur.execute("SELECT id FROM pracownicy WHERE email = %s", (email,))
         if cur.fetchone():
             return False, None, "Użytkownik o podanym adresie email już istnieje."
 
@@ -212,27 +215,30 @@ def register_user(email: str, password: str, imie: str = "", nazwisko: str = "",
             # Use parameterized query to prevent SQL injection
             try:
                 cur.execute(
-                    f"INSERT INTO pracownicy (email, {pwd_col}, imie, nazwisko, aktywny, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO pracownicy (email, {pwd_col}, imie, nazwisko, aktywny, is_admin) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
                     (email, pwd_hash, imie, nazwisko, 1, 1 if is_admin_flag else 0),
                 )
+                _new_id = cur.fetchone()[0]
                 conn.commit()
-                user_id = cur.lastrowid
+                user_id = _new_id
                 logger.info(f"User registered: {email} (ID: {user_id})")
                 return True, user_id, "Użytkownik zarejestrowany pomyślnie."
-            except sqlite3.OperationalError:
+            except psycopg.Error:
+                conn.rollback()
                 pass
 
         # fallback: spróbuj wstawić minimalny rekord
         try:
             cur.execute(
-                "INSERT INTO pracownicy (email, imie, nazwisko, aktywny, is_admin) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO pracownicy (email, imie, nazwisko, aktywny, is_admin) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                 (email, imie, nazwisko, 1, 1 if is_admin_flag else 0),
             )
-            user_id = cur.lastrowid
+            _new_id = cur.fetchone()[0]
+            user_id = _new_id
             
             # spróbuj zapisać hash w kolumnie haslo_hash lub haslo jeśli istnieje
             if pwd_col:
-                cur.execute(f"UPDATE pracownicy SET {pwd_col} = ? WHERE id = ?", (pwd_hash, user_id))
+                cur.execute(f"UPDATE pracownicy SET {pwd_col} = %s WHERE id = %s", (pwd_hash, user_id))
             
             conn.commit()
             logger.info(f"User registered (fallback): {email} (ID: {user_id})")
@@ -273,7 +279,7 @@ def login_user(email: str, password: str) -> _t.Tuple[bool, _t.Optional[int], st
         else:
             select_cols.append("haslo_hash")  # może nie istnieć, zapytanie obsłuży wyjątek
 
-        q = f"SELECT {', '.join(select_cols)} FROM pracownicy WHERE email = ?"
+        q = f"SELECT {', '.join(select_cols)} FROM pracownicy WHERE email = %s"
         cur.execute(q, (email,))
         row = cur.fetchone()
         if not row:
@@ -299,7 +305,7 @@ def login_user(email: str, password: str) -> _t.Tuple[bool, _t.Optional[int], st
         
         logger.warning(f"Failed login attempt: {email} (incorrect password)")
         return False, None, "Nieprawidłowe hasło."
-    except sqlite3.OperationalError:
+    except psycopg.Error:
         logger.error("Database structure error: missing password column")
         return False, None, "Błąd struktury bazy danych (brak kolumny hasła)."
     finally:
@@ -322,7 +328,7 @@ def get_employee_info(pracownik_id: int) -> _t.Optional[_t.Dict[str, _t.Any]]:
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, email, imie, nazwisko, aktywny FROM pracownicy WHERE id = ?", (pracownik_id,))
+        cur.execute("SELECT id, email, imie, nazwisko, aktywny FROM pracownicy WHERE id = %s", (pracownik_id,))
         row = cur.fetchone()
         if not row:
             return None
@@ -333,7 +339,7 @@ def get_employee_info(pracownik_id: int) -> _t.Optional[_t.Dict[str, _t.Any]]:
             "nazwisko": row[3],
             "aktywny": bool(row[4]) if row[4] is not None else True,
         }
-    except sqlite3.OperationalError as e:
+    except psycopg.Error as e:
         logger.error(f"Failed to get employee info: {e}")
         return None
     finally:
@@ -361,11 +367,11 @@ def get_employee_assigned_companies(pracownik_id: int) -> _t.List[_t.Tuple]:
             SELECT DISTINCT f.id, f.nazwa, f.nip, pf.rola
             FROM firmy f
             JOIN pracownik_firma pf ON f.id = pf.firma_id
-            WHERE pf.pracownik_id = ?
+            WHERE pf.pracownik_id = %s
             ORDER BY f.nazwa
         """, (pracownik_id,))
         return cur.fetchall()
-    except sqlite3.OperationalError as e:
+    except psycopg.Error as e:
         logger.error(f"Failed to get employee companies: {e}")
         return []
     finally:
@@ -394,20 +400,20 @@ def get_employee_role(pracownik_id: int) -> _t.List[str]:
                 SELECT r.nazwa
                 FROM role r
                 JOIN pracownicy p ON r.id = p.rola_id
-                WHERE p.id = ?
+                WHERE p.id = %s
             """, (pracownik_id,))
             rows = cur.fetchall()
             if rows:
                 return [r[0] for r in rows]
-        except sqlite3.OperationalError:
+        except psycopg.Error:
             pass
 
         # fallback: pobierz pole 'rola' z pracownik_firma
         try:
-            cur.execute("SELECT DISTINCT rola FROM pracownik_firma WHERE pracownik_id = ?", (pracownik_id,))
+            cur.execute("SELECT DISTINCT rola FROM pracownik_firma WHERE pracownik_id = %s", (pracownik_id,))
             rows = cur.fetchall()
             return [r[0] for r in rows if r[0] is not None]
-        except sqlite3.OperationalError:
+        except psycopg.Error:
             return []
     finally:
         conn.close()

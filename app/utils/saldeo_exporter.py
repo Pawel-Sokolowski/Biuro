@@ -7,7 +7,8 @@ from typing import List, Dict, Any, Optional
 
 import xlsxwriter
 
-from app.db.dao_conn import get_conn
+from app.utils.xlsx_safe import safe_cell
+from app.db.dao_conn import get_conn, Row
 from app.db.dao_app_settings import get_setting_bool, get_setting_first
 import logging
 
@@ -44,7 +45,7 @@ def _get_conn():
 
 
 def _get_field(obj: Any, key: str, default: Any = "") -> Any:
-    """Defensywny getter: działa z dict i sqlite3.Row."""
+    """Defensywny getter: działa z dict i Row."""
     if obj is None:
         return default
     if isinstance(obj, dict):
@@ -177,7 +178,7 @@ def export_saldeo_xlsx(
                         konto_bankowe, uwagi, kategoria_domyslna,
                         forma_opodatkowania, vat_czynny, glowny_cennik, limit_dokumentow,
                         wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa
-                    FROM firmy WHERE id = ?
+                    FROM firmy WHERE id = %s
                 """, (firma_id,))
                 row = cur.fetchone()
                 if row:
@@ -357,10 +358,7 @@ def export_saldeo_xlsx(
             for col, val in enumerate(row_out):
                 if isinstance(val, str):
                     # write_string, bo write() zamienia tekst zaczynający się od "=" na formułę
-                    text = val
-                    if text[:1] in ("=", "+", "-", "@") and not re.fullmatch(r"-?[\d\s.,]+", text):
-                        text = "'" + text
-                    worksheet.write_string(row_idx, col, text, fmt)
+                    worksheet.write_string(row_idx, col, safe_cell(val), fmt)
                 else:
                     worksheet.write(row_idx, col, val, fmt)
 
@@ -386,7 +384,7 @@ def apply_default_main_pricing(cur, firma_id: int, ilosc_dok: int) -> None:
         cur.execute("""
             SELECT glowny_cennik, limit_dokumentow, forma_opodatkowania,
                    COALESCE(vat_czynny, 0) AS vat_czynny, COALESCE(glowny_cennik_manualny, 0) AS manual
-            FROM firmy WHERE id = ?
+            FROM firmy WHERE id = %s
         """, (firma_id,))
     except Exception:
         return
@@ -396,7 +394,7 @@ def apply_default_main_pricing(cur, firma_id: int, ilosc_dok: int) -> None:
         return
 
     try:
-        # próbujemy odczytać jako dict (sqlite3.Row)
+        # próbujemy odczytać jako dict (Row)
         glowny_cennik = row["glowny_cennik"]
         limit_dokumentow = row["limit_dokumentow"]
         forma_opodatkowania = row["forma_opodatkowania"]
@@ -427,7 +425,7 @@ def apply_default_main_pricing(cur, firma_id: int, ilosc_dok: int) -> None:
     vat_suffix = "T" if bool(vat_czynny) else "N"
     pattern = f"{typ}_{vat_suffix}_%"
 
-    cur.execute("SELECT klucz FROM cenniki WHERE klucz LIKE ? ORDER BY klucz", (pattern,))
+    cur.execute("SELECT klucz FROM cenniki WHERE klucz ILIKE %s ORDER BY klucz", (pattern,))
     keys = [r[0] for r in cur.fetchall()] if cur.description else []
     if not keys:
         return
@@ -458,4 +456,4 @@ def apply_default_main_pricing(cur, firma_id: int, ilosc_dok: int) -> None:
                 break
 
     if best_key:
-        cur.execute("UPDATE firmy SET glowny_cennik = ?, limit_dokumentow = ? WHERE id = ?", (best_key, limit, firma_id))
+        cur.execute("UPDATE firmy SET glowny_cennik = %s, limit_dokumentow = %s WHERE id = %s", (best_key, limit, firma_id))

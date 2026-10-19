@@ -1,5 +1,5 @@
 # app/db/dao_monthly.py
-import sqlite3
+import psycopg
 from typing import Dict, Any, Optional
 from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
@@ -7,13 +7,12 @@ from app.utils.months import month_bounds
 
 def get_month_status(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
         SELECT *
         FROM statusy_miesieczne
-        WHERE firma_id = ? AND miesiac = ?
+        WHERE firma_id = %s AND miesiac = %s
     """, (firma_id, miesiac))
 
     row = cur.fetchone()
@@ -33,7 +32,7 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
             sekundy_ksiegowosc, sekundy_kadry,
             wartosc_uslug, dokumenty_dostarczone, data_dostarczenia
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(firma_id, miesiac)
         DO UPDATE SET
             etap = excluded.etap,
@@ -61,16 +60,15 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
 
 def count_documents_for_month(firma_id: int, miesiac: str) -> int:
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     start, end = month_bounds(miesiac)
     cur.execute("""
         SELECT COUNT(*) AS cnt
         FROM dokumenty
-        WHERE firma_id = ?
-          AND data_wyst >= ?
-          AND data_wyst < ?
+        WHERE firma_id = %s
+          AND data_wyst >= %s
+          AND data_wyst < %s
     """, (firma_id, start, end))
 
     row = cur.fetchone()

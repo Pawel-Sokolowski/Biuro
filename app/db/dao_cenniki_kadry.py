@@ -1,5 +1,5 @@
 # app/db/dao_cenniki_kadry.py
-import sqlite3
+import psycopg
 from typing import List, Dict, Optional, Any
 from app.db.dao_conn import get_conn
 
@@ -9,7 +9,6 @@ def get_all_kadry_pricing() -> List[Dict[str, Any]]:
     Zwraca listę cenników kadrowych z kolumnami netto/brutto.
     """
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
@@ -36,13 +35,12 @@ def get_kadry_price(klucz: str) -> Optional[float]:
         return None
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
         SELECT COALESCE(cena_netto_kadry, cena) AS cena_netto
         FROM cenniki_kadry
-        WHERE klucz = ?
+        WHERE klucz = %s
     """, (klucz,))
 
     row = cur.fetchone()
@@ -60,13 +58,12 @@ def get_kadry_brutto(klucz: str) -> Optional[float]:
         return None
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     cur.execute("""
         SELECT cena_brutto_kadry, COALESCE(cena_netto_kadry, cena) AS cena_netto
         FROM cenniki_kadry
-        WHERE klucz = ?
+        WHERE klucz = %s
     """, (klucz,))
 
     row = cur.fetchone()
@@ -87,10 +84,9 @@ def get_kadry_description(klucz: str) -> Optional[str]:
         return None
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("SELECT opis FROM cenniki_kadry WHERE klucz = ?", (klucz,))
+    cur.execute("SELECT opis FROM cenniki_kadry WHERE klucz = %s", (klucz,))
     row = cur.fetchone()
     conn.close()
     return row["opis"] if row else None
@@ -134,20 +130,20 @@ def import_kadry_pricing(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         if cena_brutto is None:
             cena_brutto = round(cena_netto * 1.23, 2)
 
-        cur.execute("SELECT id FROM cenniki_kadry WHERE klucz = ?", (klucz,))
+        cur.execute("SELECT id FROM cenniki_kadry WHERE klucz = %s", (klucz,))
         exists = cur.fetchone()
 
         if exists:
             cur.execute("""
                 UPDATE cenniki_kadry
-                SET cena_netto_kadry = ?, cena_brutto_kadry = ?, opis = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE klucz = ?
+                SET cena_netto_kadry = %s, cena_brutto_kadry = %s, opis = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                WHERE klucz = %s
             """, (cena_netto, cena_brutto, opis, klucz))
             updated += 1
         else:
             cur.execute("""
                 INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, cena_brutto_kadry, opis)
-                VALUES (?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s)
             """, (klucz, cena_netto, cena_brutto, opis))
             inserted += 1
 

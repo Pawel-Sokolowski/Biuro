@@ -1,43 +1,30 @@
-import os
-import sqlite3
-import tempfile
 import unittest
 
-from app.config import set_database
+from app.db.dao_conn import get_conn
 from app.email.email_storage import get_email_filters_for_company
+from tests.base import DbTestCase
 
 
-class EmailFilterTests(unittest.TestCase):
+class EmailFilterTests(DbTestCase):
     def test_company_filter_is_scoped_to_company(self):
-        fd, path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
+        f7 = self.make_company("A")
+        f8 = self.make_company("B")
+        conn = get_conn()
         try:
-            set_database(path)
-            conn = sqlite3.connect(path)
-            conn.executescript(
-                """
-                CREATE TABLE reguly_filtrow (
-                    id INTEGER PRIMARY KEY, pracownik_id INTEGER, konto_id INTEGER,
-                    firma_id INTEGER, od TEXT, do TEXT, nadawca_zawiera TEXT,
-                    temat_zawiera TEXT, tresc_zawiera TEXT, folder_docelowy TEXT,
-                    aktywna INTEGER
-                );
-                CREATE TABLE konta_email (id INTEGER PRIMARY KEY, email TEXT);
-                INSERT INTO konta_email (id, email) VALUES (1, 'office@example.com');
-                INSERT INTO reguly_filtrow
-                    (id, konto_id, firma_id, od, folder_docelowy, aktywna)
-                VALUES (1, 1, 7, 'client@example.com', 'Client', 1);
-                INSERT INTO reguly_filtrow
-                    (id, konto_id, firma_id, od, folder_docelowy, aktywna)
-                VALUES (2, 1, 8, 'other@example.com', 'Other', 1);
-                """
-            )
+            konto = conn.execute(
+                "INSERT INTO konta_email (email) VALUES ('office@example.com') RETURNING id"
+            ).fetchone()[0]
+            ids = []
+            for firma, od, folder in ((f7, "client@example.com", "Client"), (f8, "other@example.com", "Other")):
+                ids.append(conn.execute(
+                    "INSERT INTO reguly_filtrow (konto_id, firma_id, od, folder_docelowy, aktywna) "
+                    "VALUES (%s, %s, %s, %s, 1) RETURNING id", (konto, firma, od, folder),
+                ).fetchone()[0])
             conn.commit()
-            conn.close()
-            rows = get_email_filters_for_company(7)
-            self.assertEqual([row["id"] for row in rows], [1])
         finally:
-            os.remove(path)
+            conn.close()
+        rows = get_email_filters_for_company(f7)
+        self.assertEqual([row["id"] for row in rows], [ids[0]])
 
 
 if __name__ == "__main__":

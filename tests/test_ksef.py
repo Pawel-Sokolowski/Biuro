@@ -81,7 +81,7 @@ class KsefTests(DbTestCase):
             firma_id, "2026-10", [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100, "netto": 100, "vat": 23, "brutto": 123}], 100, 123
         )
         conn = get_conn()
-        conn.execute("UPDATE firmy SET nip = ? WHERE id = ?", ("525-252-52-52", firma_id))
+        conn.execute("UPDATE firmy SET nip = %s WHERE id = %s", ("525-252-52-52", firma_id))
         conn.commit()
         conn.close()
         dao_invoices.mark_exported([invoice_id], 1)

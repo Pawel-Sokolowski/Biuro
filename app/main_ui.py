@@ -3,7 +3,7 @@ import os
 from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog
 from PyQt6.QtCore import QSettings
 from app.utils.ui_imports import *
-from app.config import DEFAULT_DB_NAME, get_database, set_database
+from app.config import get_database
 
 from app.db.dao_employees import get_employee_info
 from app.db.dao_companies import get_company
@@ -39,7 +39,7 @@ class LoginWindow(QDialog):
         self.setWindowTitle("Logowanie")
         self.setMinimumSize(520, 380)
         self.pracownik_id: Optional[int] = None
-        self.database_path = self._last_database() or get_database()
+        self.database_path = get_database()
         self._build_ui()
 
     def _build_ui(self):
@@ -88,41 +88,12 @@ class LoginWindow(QDialog):
         form = QFormLayout()
 
         self.database_combo = QComboBox()
-        self.database_combo.setEditable(True)
-        self.database_combo.setInsertPolicy(
-            QComboBox.InsertPolicy.NoInsert
-        )
-
-        self.database_combo.addItems(
-            self._database_history()
-        )
-
-        self.database_combo.setCurrentText(
-            self.database_path
-        )
-
-        self.database_combo.lineEdit().setPlaceholderText(
-            "Wybierz plik SQLite..."
-        )
-
-        # TAB nie zatrzymuje się na polu bazy
-        self.database_combo.setFocusPolicy(
-            Qt.FocusPolicy.ClickFocus
-        )
-
-        btn_browse = QPushButton("...")
-        btn_browse.setFixedWidth(42)
-        btn_browse.clicked.connect(
-            self._choose_database
-        )
+        self.database_combo.addItem(self.database_path)
+        self.database_combo.setEnabled(False)
+        self.database_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         database_row = QHBoxLayout()
-        database_row.addWidget(
-            self.database_combo
-        )
-        database_row.addWidget(
-            btn_browse
-        )
+        database_row.addWidget(self.database_combo)
 
         form.addRow(
             "Baza danych:",
@@ -231,46 +202,6 @@ class LoginWindow(QDialog):
                 settings.remove(key)
         settings.sync()
 
-    @staticmethod
-    def _database_history() -> list[str]:
-        settings = QSettings("Biuro", "OfficeManager")
-        values = settings.value("databases", [], type=list)
-        if isinstance(values, str):
-            values = [values]
-        paths = [str(value).strip() for value in values if str(value).strip()]
-        last_database = str(settings.value("last_database", "") or "").strip()
-        if last_database:
-            paths = [last_database] + [path for path in paths if path != last_database]
-        if DEFAULT_DB_NAME not in paths:
-            paths.insert(0, DEFAULT_DB_NAME)
-        return paths
-
-    @staticmethod
-    def _last_database() -> str:
-        settings = QSettings("Biuro", "OfficeManager")
-        return str(settings.value("last_database", "") or "").strip()
-
-    def _choose_database(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Wybierz bazę SQLite",
-            self.database_combo.currentText() or DEFAULT_DB_NAME,
-            "Baza SQLite (*.db *.sqlite *.sqlite3);;Wszystkie pliki (*)",
-        )
-        if path:
-            self.database_combo.setCurrentText(path)
-
-    def _remember_database(self, path: str):
-        settings = QSettings("Biuro", "OfficeManager")
-        selected = os.path.abspath(os.path.expanduser(path))
-        paths = [selected]
-        for existing in self._database_history():
-            if existing != selected:
-                paths.append(existing)
-        settings.setValue("databases", paths[:10])
-        settings.setValue("last_database", selected)
-        settings.sync()
-
     def _on_login(self):
         from app.utils.crypto import login_user
         database_path = self.database_combo.currentText().strip()
@@ -280,7 +211,6 @@ class LoginWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Uzupełnij bazę danych, email i hasło")
             return
         try:
-            set_database(database_path)
             from app.db.schema import init_db
             init_db()
             if not self._ensure_initial_admin():
@@ -295,7 +225,6 @@ class LoginWindow(QDialog):
             ok, user_id = bool(result), result
         if ok:
             self.database_path = database_path
-            self._remember_database(database_path)
             try:
                 self._store_credentials(email, password)
             except Exception:
@@ -358,7 +287,6 @@ class LoginWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Uzupełnij bazę danych i email")
             return
         try:
-            set_database(database_path)
             from app.db.schema import init_db
             init_db()
             ok, message = reset_password(email)
@@ -377,7 +305,6 @@ class LoginWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Wybierz bazę danych przed rejestracją")
             return
         try:
-            set_database(database_path)
             from app.db.schema import init_db
             init_db()
         except Exception as e:
@@ -420,7 +347,6 @@ class LoginWindow(QDialog):
                 ok = ok[0]
             if ok:
                 self.database_path = database_path
-                self._remember_database(database_path)
                 QMessageBox.information(self, "OK", "Rejestracja udana.")
             else:
                 QMessageBox.critical(self, "Błąd", "Rejestracja nie powiodła się.")

@@ -2,6 +2,7 @@ import os
 
 import requests
 
+from app.companies.company_names import clean_company_name
 from app.utils.env_config import load_environment
 
 load_environment()
@@ -72,11 +73,14 @@ def get_ceidg_firma_by_nip(nip: str):
     pkd_list = f.get("pkd", []) or []
     pkd_codes = [p.get("kod") for p in pkd_list if p.get("kod")]
 
+    owner = f.get("wlasciciel") or {}
     return {
         "id": f.get("id"),
-        "nazwa": f.get("nazwa"),
-        "nip": f.get("wlasciciel", {}).get("nip"),
-        "regon": f.get("wlasciciel", {}).get("regon"),
+        "nazwa": clean_company_name(f.get("nazwa")),
+        "imie": owner.get("imie") or owner.get("imiona"),
+        "nazwisko": owner.get("nazwisko"),
+        "nip": owner.get("nip"),
+        "regon": owner.get("regon"),
         "pkd": pkd_codes,
         "data_rozpoczecia": f.get("dataRozpoczecia"),
         "status": f.get("status"),

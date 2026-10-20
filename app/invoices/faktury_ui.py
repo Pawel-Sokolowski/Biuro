@@ -1,19 +1,22 @@
 import logging
+import math
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex
 from PyQt6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     InvoiceLockedError, can_access_invoice, create_correction, delete_draft_invoice,
     get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
+    update_invoice_draft,
 )
+from app.invoices.positions import normalize_position
 from app.invoices.faktury_logic import FakturyLogic
 from app.invoices.invoice_editor import InvoiceEditorDialog
 from app.invoices.manual_invoice_dialog import ManualInvoiceDialog, KontrahenciDialog
@@ -92,6 +95,14 @@ def _cell(text, align_right=False):
 
 def _kind_label(invoice):
     return "Korekta" if invoice.get("rodzaj") == "korekta" else "Faktura"
+
+
+class QuantityDelegate(QStyledItemDelegate):
+    committed = pyqtSignal(QModelIndex)
+
+    def setModelData(self, editor, model, index):
+        super().setModelData(editor, model, index)
+        self.committed.emit(index)
 
 
 class FakturyPage(QWidget):
@@ -187,6 +198,15 @@ class FakturyPage(QWidget):
 
         layout.addWidget(QLabel("Pozycje faktury"))
         self.positions_table = _make_table(["Nazwa", "Ilość", "Jednostka", "Netto", "VAT", "Kategoria"])
+        quantity_delegate = QuantityDelegate(self.positions_table)
+        quantity_delegate.committed.connect(self._on_draft_position_changed)
+        self.positions_table.setItemDelegateForColumn(1, quantity_delegate)
+        self.positions_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self._shown_draft_id = None
         layout.addWidget(self.positions_table)
 
     def _build_tab_wystawione(self):
@@ -328,10 +348,18 @@ class FakturyPage(QWidget):
 
     # ---------------- faktury robocze ----------------
     def _show_draft_positions(self):
+        self._shown_draft_id = None
+        self.positions_table.blockSignals(True)
         self.positions_table.setRowCount(0)
         ids = self._selected_ids(self.draft_table)
         if len(ids) != 1:
+            self.positions_table.blockSignals(False)
             return
+        invoice = get_invoice_by_id(ids[0])
+        if not invoice or invoice.get("eksportowana"):
+            self.positions_table.blockSignals(False)
+            return
+        self._shown_draft_id = ids[0]
         for position in get_invoice_positions(ids[0]):
             row = self.positions_table.rowCount()
             self.positions_table.insertRow(row)
@@ -344,7 +372,53 @@ class FakturyPage(QWidget):
                       position.get("jednostka", ""), netto,
                       position.get("vat") or position.get("stawka_vat", ""), position.get("kategoria", "")]
             for column, value in enumerate(values):
-                self.positions_table.setItem(row, column, _cell(value))
+                item = _cell(value)
+                if column == 1:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                self.positions_table.setItem(row, column, item)
+        self.positions_table.blockSignals(False)
+
+    def _on_draft_position_changed(self, index):
+        if index.column() != 1 or self._shown_draft_id is None:
+            return
+        invoice_id = self._shown_draft_id
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice or invoice.get("eksportowana") or not can_access_invoice(
+            self.pracownik_id, invoice["firma_id"]
+        ):
+            self._show_draft_positions()
+            return
+        try:
+            quantity = float(self.positions_table.item(index.row(), index.column()).text().replace(",", "."))
+            if not math.isfinite(quantity):
+                raise ValueError("Ilość musi być skończoną liczbą.")
+            positions = get_invoice_positions(invoice_id)
+            if index.row() >= len(positions):
+                raise ValueError("Nie znaleziono edytowanej pozycji.")
+            positions[index.row()] = normalize_position(positions[index.row()])
+            positions[index.row()]["ilosc"] = quantity
+            update_invoice_draft(
+                invoice_id,
+                positions,
+                numer=invoice.get("numer"),
+                data_wystawienia=invoice.get("data_wystawienia"),
+                data_sprzedazy=invoice.get("data_sprzedazy"),
+                termin_platnosci=invoice.get("termin_platnosci"),
+                przyczyna_korekty=invoice.get("przyczyna_korekty"),
+            )
+        except (TypeError, ValueError, InvoiceLockedError) as exc:
+            QMessageBox.warning(self, "Pozycja faktury", f"Nie udało się zapisać ilości: {exc}")
+            self._show_draft_positions()
+            return
+        self.refresh()
+        self._select_draft(invoice_id)
+
+    def _select_draft(self, invoice_id):
+        for row in range(self.draft_table.rowCount()):
+            item = self.draft_table.item(row, 0)
+            if item and item.text() == str(invoice_id):
+                self.draft_table.selectRow(row)
+                return
 
     def _edit_selected_draft(self):
         ids = self._selected_ids(self.draft_table)

@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from app.companies.company_names import clean_company_name, sole_proprietor_short_name
+
 logger = logging.getLogger(__name__)
 
 _FILL_KEYS = ("regon", "krs", "konto_bankowe", "kody_pkd", "data_rozpoczecia_dg")
@@ -32,6 +34,15 @@ def enrich_payload(
         return f"NIP {nip}: {exc}"
     if data.get("error"):
         return f"NIP {nip}: {data.get('message')}"
+    if data.get("nazwa"):
+        data["nazwa"] = clean_company_name(data["nazwa"])
+        if payload.get("nazwa") not in (None, ""):
+            payload["nazwa"] = clean_company_name(payload["nazwa"])
+        else:
+            payload["nazwa"] = data["nazwa"]
+    short_name = sole_proprietor_short_name(data.get("imie"), data.get("nazwisko"))
+    if short_name:
+        payload["nazwa_skrocona"] = short_name
 
     def put(key: str, value: Any) -> None:
         if value not in (None, "", []) and payload.get(key) in (None, ""):

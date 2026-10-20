@@ -116,10 +116,14 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
         placeholders = ",".join("%s" for _ in ids)
         sql += f" WHERE id IN ({placeholders})"
         params.extend(sorted(ids))
-    cur.execute(sql + " ORDER BY nazwa", params)
+    cur.execute(sql, params)
     rows = cur.fetchall()
     conn.close()
-    return _attach_pelnomocnictwa([dict(r) for r in rows])
+    from app.utils.polish_sort import polish_sort_key
+
+    return _attach_pelnomocnictwa(sorted(
+        (dict(r) for r in rows), key=lambda row: polish_sort_key(row.get("nazwa"))
+    ))
 
 
 def get_companies_filtered(
@@ -161,12 +165,14 @@ def get_companies_filtered(
     sql = base_select + base_from
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY f.nazwa"
-
     cur.execute(sql, params)
     rows = cur.fetchall()
     conn.close()
-    return _attach_pelnomocnictwa([dict(r) for r in rows])
+    from app.utils.polish_sort import polish_sort_key
+
+    return _attach_pelnomocnictwa(sorted(
+        (dict(r) for r in rows), key=lambda row: polish_sort_key(row.get("nazwa"))
+    ))
 
 
 # ============================================================
@@ -425,6 +431,11 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
 
     mapped = _apply_aliases(payload)
     data = {f: mapped.get(f) for f in FIRMA_FIELDS if mapped.get(f) is not None}
+    from app.companies.company_names import clean_company_name
+
+    for name_field in ("nazwa", "nazwa_skrocona"):
+        if name_field in data:
+            data[name_field] = clean_company_name(data[name_field])
     services_changed: Optional[bool] = None
 
     try:
@@ -1186,5 +1197,4 @@ def delete_contact(contact_id: int) -> None:
     cur.execute("DELETE FROM company_contacts WHERE id = %s", (contact_id,))
     conn.commit()
     conn.close()
-
 

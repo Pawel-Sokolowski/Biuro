@@ -114,10 +114,12 @@ class MonthlyViewLogic:
             placeholders = ",".join("%s" for _ in company_ids)
             sql += f" WHERE f.id IN ({placeholders})"
             params.extend(sorted(company_ids))
-        sql += " ORDER BY f.nazwa"
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
+        from app.utils.polish_sort import polish_sort_key
+
+        rows.sort(key=lambda row: polish_sort_key(row.get("nazwa")))
 
         assigned_map: Dict[int, bool] = {}
         if selected_employee:

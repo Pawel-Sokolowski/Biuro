@@ -9,7 +9,8 @@ class EnrichPayloadTests(unittest.TestCase):
         data = {
             "regon": "999", "pkd": ["62.01.Z", "62.02.Z"], "data_rozpoczecia": "2020-01-02",
             "dz_miasto": "Lublin", "koresp_ulica": "Długa", "status": "AKTYWNY",
-            "status_vat": "Czynny",
+            "status_vat": "Czynny", "imie": "Jan", "nazwisko": "Kowalski",
+            "nazwa": "„Firma Test” sp. z o.o.",
         }
         self.assertIsNone(enrich_payload(payload, lambda nip: data))
         self.assertEqual(payload["regon"], "111")
@@ -19,6 +20,8 @@ class EnrichPayloadTests(unittest.TestCase):
         self.assertEqual(payload["data_rozpoczecia_dg"], "2020-01-02")
         self.assertEqual(payload["status_vat"], "Czynny")
         self.assertEqual(payload["vat_czynny"], 1)
+        self.assertEqual(payload["nazwa_skrocona"], "Kowalski Jan")
+        self.assertEqual(payload["nazwa"], "Firma Test sp. z o.o.")
         self.assertNotIn("status", payload)
 
     def test_error_and_bad_nip(self):

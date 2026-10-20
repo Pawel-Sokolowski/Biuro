@@ -30,15 +30,21 @@ from PyQt6.QtGui import QAction, QColor, QFont, QImage, QKeySequence, QShortcut,
 
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_employees import list_employees
-from app.email.email_labels import label_color, resolve_label_numbers
+from app.email.email_labels import (
+    COMPLETED_LABEL_NUMBER,
+    label_color,
+    resolve_label_numbers,
+)
 from app.email.compose_dialog import ComposeDialog
 from app.email.email_connection import check_imap
 from app.email import email_cache
 from app.email.email_storage import (
-    count_assigned_by_employee,
     find_special_folder,
     get_assignment_map,
+    get_completed_map,
     list_assigned_rows,
+    list_completed_rows,
+    set_messages_completed,
     set_employee_assignment,
     update_message_read_flag,
     get_account_info,
@@ -391,14 +397,17 @@ class EmailPage(QWidget):
         self.current_folder_local: Optional[str] = None
         self.current_uid: Optional[str] = None
         self.cached_message: Optional[email.message.Message] = None
+        self.current_message_labels: List[Tuple[str, str]] = []
         self.unread_map: Dict[str, bool] = {}
         self._sync_running = False
         self._resync_pending = False
         self._synced_accounts: set = set()
         self._tree_signature = None
         self.employee_filter: Optional[int] = None
+        self.completed_filter = False
         self.employees: List[Dict[str, Any]] = []
         self.assign_map: Dict[int, List[int]] = {}
+        self.completed_map: set[int] = set()
         self._chips_signature = None
         self._load_token = 0
         self.label_numbers: Dict[int, int] = {}
@@ -615,7 +624,7 @@ class EmailPage(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
 
-        # Folder tree
+        # Labels and folder tree
         self.mail_list = QTreeWidget()
         self.folder_tree = FolderTree(self.mail_list)
         self.folder_tree.setHeaderLabel("Foldery")
@@ -629,21 +638,29 @@ class EmailPage(QWidget):
         self.folder_tree.folder_dropped.connect(self._on_folder_dropped)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
-        splitter.addWidget(self.folder_tree)
+
+        left_container = QFrame()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 2, 2, 0)
+        left_layout.setSpacing(2)
+        labels_title = QLabel("Etykiety")
+        labels_title.setStyleSheet("font-weight: bold; padding: 3px 6px;")
+        left_layout.addWidget(labels_title)
+        self.chips_frame = QFrame()
+        self.chips_layout = QVBoxLayout(self.chips_frame)
+        self.chips_layout.setContentsMargins(4, 0, 4, 4)
+        self.chips_layout.setSpacing(1)
+        self.chips_group = QButtonGroup(self)
+        self.chips_group.setExclusive(True)
+        left_layout.addWidget(self.chips_frame)
+        left_layout.addWidget(self.folder_tree, 1)
+        splitter.addWidget(left_container)
 
         # Middle panel
         right_container = QFrame()
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_container.setLayout(right_layout)
-
-        self.chips_frame = QFrame()
-        self.chips_layout = QHBoxLayout(self.chips_frame)
-        self.chips_layout.setContentsMargins(4, 2, 4, 2)
-        self.chips_layout.setSpacing(6)
-        self.chips_group = QButtonGroup(self)
-        self.chips_group.setExclusive(True)
-        right_layout.addWidget(self.chips_frame)
 
         self.mail_list.setColumnCount(3)
         self.mail_list.setHeaderLabels(["Temat", "Korespondent", "Data"])
@@ -659,7 +676,10 @@ class EmailPage(QWidget):
         for number in range(1, MAX_NUMBER_KEYS + 1):
             shortcut = QShortcut(QKeySequence(str(number)), self.mail_list)
             shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
-            shortcut.activated.connect(lambda n=number: self._toggle_employee_by_number(n))
+            if number == COMPLETED_LABEL_NUMBER:
+                shortcut.activated.connect(self._toggle_completed_by_number)
+            else:
+                shortcut.activated.connect(lambda n=number: self._toggle_employee_by_number(n))
         self.mail_list.setStyleSheet(
             "QTreeWidget::item { padding: 5px 6px; }"
             "QTreeWidget::item:selected { background: #cfe3f7; color: #000; }"
@@ -901,6 +921,7 @@ class EmailPage(QWidget):
         self.current_folder_local = server_name
         self.current_uid = None
         self.employee_filter = None
+        self.completed_filter = False
         self.load_mail_list_from_db(server_name)
         self.start_background_sync()
 
@@ -941,7 +962,9 @@ class EmailPage(QWidget):
         roles = self._folder_roles(konto_id)
 
         try:
-            if self.employee_filter:
+            if self.completed_filter:
+                rows = list_completed_rows(konto_id)
+            elif self.employee_filter:
                 rows = list_assigned_rows(konto_id, self.employee_filter)
             else:
                 rows = refresh_email_list(konto_id, local_folder)
@@ -962,6 +985,11 @@ class EmailPage(QWidget):
             self.assign_map = get_assignment_map([r["id"] for r in rows if r.get("id")])
         except Exception:
             self.assign_map = {}
+        try:
+            self.completed_map = get_completed_map([r["id"] for r in rows if r.get("id")])
+        except Exception:
+            logger.warning("Nie można wczytać statusu ukończenia wiadomości", exc_info=True)
+            self.completed_map = set()
         by_id = {e["id"]: e for e in self.employees}
 
         restore: Optional[QTreeWidgetItem] = None
@@ -976,6 +1004,13 @@ class EmailPage(QWidget):
             full = (r.get("odbiorca") if outgoing else r.get("nadawca")) or ""
             tags = [by_id[i] for i in self.assign_map.get(r.get("id"), []) if i in by_id]
             subject = r.get("temat") or "(brak tematu)"
+            completed = r.get("id") in self.completed_map
+            if completed:
+                subject = "✓ " + subject
+            if tags:
+                tags.sort(key=lambda e: self.label_numbers.get(e["id"], 99))
+                tag_text = ", ".join(employee_tag(emp) for emp in tags)
+                subject = f"[{tag_text}] {subject}"
             if r.get("has_attachments"):
                 subject = "\U0001F4CE " + subject
             item = QTreeWidgetItem([
@@ -985,11 +1020,22 @@ class EmailPage(QWidget):
             ])
             item.setToolTip(1, full)
             if tags:
-                tags.sort(key=lambda e: self.label_numbers.get(e["id"], 99))
-                item.setToolTip(0, "Pracownicy: " + ", ".join(employee_tag(e) for e in tags))
+                tooltip = "Pracownicy: " + ", ".join(employee_tag(e) for e in tags)
                 color = QColor(self._employee_color(tags[0]["id"]))
                 for column in range(item.columnCount()):
-                    item.setForeground(column, color)
+                    item.setBackground(column, color.lighter(185))
+                    item.setForeground(column, QColor("#202020"))
+            else:
+                tooltip = ""
+            if completed:
+                tooltip = f"{tooltip}\nZrobione" if tooltip else "Zrobione"
+                if not tags:
+                    color = QColor(label_color(COMPLETED_LABEL_NUMBER))
+                    for column in range(item.columnCount()):
+                        item.setBackground(column, color.lighter(185))
+                        item.setForeground(column, QColor("#202020"))
+            if tooltip:
+                item.setToolTip(0, tooltip)
             item.setData(0, Qt.ItemDataRole.UserRole, uid)
             item.setData(0, Qt.ItemDataRole.UserRole + 1, folder)
             item.setData(0, ROLE_ROW_ID, r.get("id"))
@@ -1002,7 +1048,7 @@ class EmailPage(QWidget):
             if uid in selected_uids:
                 to_select.append(item)
 
-        if self.employee_filter:
+        if self.employee_filter or self.completed_filter:
             grouped = [[it] for it in all_items]
         else:
             grouped = group_threads(
@@ -1032,16 +1078,9 @@ class EmailPage(QWidget):
     # Etykiety pracowników nad listą
     # ------------------------------------------------------------------
     def _refresh_chips(self) -> None:
-        if not self.current_account:
-            return
-        try:
-            counts = count_assigned_by_employee(self.current_account["id"])
-        except Exception:
-            counts = {}
-        shown = [e for e in self.employees if counts.get(e["id"]) or e["id"] == self.employee_filter]
         signature = (
-            self.current_account["id"], self.employee_filter,
-            tuple((e["id"], counts.get(e["id"], 0)) for e in shown),
+            self.employee_filter, self.completed_filter,
+            tuple((e["id"], self.label_numbers.get(e["id"])) for e in self.employees),
         )
         if signature == self._chips_signature:
             return
@@ -1052,37 +1091,59 @@ class EmailPage(QWidget):
                 self.chips_group.removeButton(w) if isinstance(w, QPushButton) else None
                 w.deleteLater()
 
-        def chip(text: str, color: str, emp_id: Optional[int]) -> QPushButton:
+        def chip(text: str, color: str, checked: bool, on_click, tooltip: str = "") -> QPushButton:
             btn = QPushButton(text)
             btn.setCheckable(True)
-            btn.setChecked(self.employee_filter == emp_id)
-            number = self.label_numbers.get(emp_id)
-            if number:
-                btn.setToolTip(f"Klawisz {number} przypisuje zaznaczone wiadomości")
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setChecked(checked)
+            btn.setMinimumHeight(22)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            selected_background = QColor(color).lighter(175).name()
             btn.setStyleSheet(
-                f"QPushButton {{ border: 1px solid {color}; border-radius: 10px; padding: 2px 10px;"
-                f" color: {color}; background: white; }}"
-                f"QPushButton:checked {{ background: {color}; color: white; }}"
+                f"QPushButton {{ border: 0; border-radius: 3px; padding: 2px 6px;"
+                f" text-align: left; color: {color}; background: transparent; }}"
+                f"QPushButton:checked {{ color: #111; background: {selected_background}; font-weight: bold; }}"
+                f"QPushButton:hover {{ background: {selected_background}; }}"
             )
-            btn.clicked.connect(lambda _=False, e=emp_id: self._on_chip_clicked(e))
+            if tooltip:
+                btn.setToolTip(tooltip)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(on_click)
             self.chips_group.addButton(btn)
             self.chips_layout.addWidget(btn)
             return btn
 
-        chip("Wszystkie", "#555555", None)
-        for emp in shown:
+        chip(
+            "Wszystkie", "#555555",
+            self.employee_filter is None and not self.completed_filter,
+            lambda _=False: self._on_chip_clicked(None),
+        )
+        chip(
+            f"{COMPLETED_LABEL_NUMBER} Zrobione", label_color(COMPLETED_LABEL_NUMBER),
+            self.completed_filter,
+            lambda _=False: self._on_completed_chip_clicked(),
+            f"Klawisz {COMPLETED_LABEL_NUMBER} oznacza zaznaczone wiadomości jako zrobione; "
+            "kliknij, aby je wyświetlić",
+        )
+        for emp in self.employees:
             number = self.label_numbers.get(emp["id"])
-            prefix = f"{number} " if number else ""
-            chip(f"{prefix}{employee_tag(emp)} ({counts.get(emp['id'], 0)})", self._employee_color(emp["id"]), emp["id"])
-        if not shown:
-            hint = QLabel("Prawy przycisk na wiadomości → Przypisz do pracownika (lub klawisze 1–7)")
-            hint.setStyleSheet("color: #888;")
-            self.chips_layout.addWidget(hint)
-        self.chips_layout.addStretch()
+            chip(
+                employee_tag(emp),
+                self._employee_color(emp["id"]),
+                not self.completed_filter and self.employee_filter == emp["id"],
+                lambda _=False, e=emp["id"]: self._on_chip_clicked(e),
+                f"Klawisz {number} przypisuje zaznaczone wiadomości" if number else "",
+            )
 
     def _on_chip_clicked(self, employee_id: Optional[int]) -> None:
         self.employee_filter = employee_id
+        self.completed_filter = False
+        self.current_uid = None
+        if self.current_folder_local:
+            self.load_mail_list_from_db(self.current_folder_local)
+
+    def _on_completed_chip_clicked(self) -> None:
+        self.employee_filter = None
+        self.completed_filter = True
         self.current_uid = None
         if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local)
@@ -1177,6 +1238,13 @@ class EmailPage(QWidget):
         if not self.employees:
             assign_menu.setEnabled(False)
 
+        completed = bool(row_ids) and all(rid in self.completed_map for rid in row_ids)
+        completed_action = menu.addAction(
+            ("Oznacz jako niewykonane" if completed else "Oznacz jako zrobione") + suffix
+        )
+        completed_action.setToolTip("Klawisz 3")
+        completed_action.triggered.connect(lambda: self._set_selected_completed(not completed))
+
         menu.addSeparator()
         arch = menu.addAction("Archiwizuj" + suffix)
         arch.triggered.connect(self.on_archive)
@@ -1252,6 +1320,33 @@ class EmailPage(QWidget):
         if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local, keep_view=True)
 
+    def _set_selected_completed(self, completed: bool) -> None:
+        row_ids = [
+            it.data(0, ROLE_ROW_ID)
+            for it, _, _ in self._selected_refs()
+            if it.data(0, ROLE_ROW_ID)
+        ]
+        if not row_ids:
+            return
+        try:
+            set_messages_completed(row_ids, completed)
+        except Exception as exc:
+            QMessageBox.warning(self, "Status wiadomości", f"Nie udało się zapisać statusu:\n{exc}")
+            return
+        self._chips_signature = None
+        if self.current_folder_local:
+            self.load_mail_list_from_db(self.current_folder_local, keep_view=True)
+
+    def _toggle_completed_by_number(self) -> None:
+        row_ids = [
+            it.data(0, ROLE_ROW_ID)
+            for it, _, _ in self._selected_refs()
+            if it.data(0, ROLE_ROW_ID)
+        ]
+        if row_ids:
+            completed = all(rid in self.completed_map for rid in row_ids)
+            self._set_selected_completed(not completed)
+
     def on_mail_clicked(self, item: QTreeWidgetItem, column: int = 0) -> None:
         uid = item.data(0, Qt.ItemDataRole.UserRole)
         local_folder = item.data(0, Qt.ItemDataRole.UserRole + 1)
@@ -1262,6 +1357,20 @@ class EmailPage(QWidget):
         self.current_uid = uid
         self.current_folder_local = local_folder
         self.cached_message = None
+        row_id = item.data(0, ROLE_ROW_ID)
+        by_id = {employee["id"]: employee for employee in self.employees}
+        row_labels = sorted(
+            self.assign_map.get(row_id, []),
+            key=lambda employee_id: self.label_numbers.get(employee_id, 99),
+        )
+        self.current_message_labels = [
+            (employee_tag(by_id[employee_id]), self._employee_color(employee_id))
+            for employee_id in row_labels if employee_id in by_id
+        ]
+        if row_id in self.completed_map:
+            self.current_message_labels.append(
+                ("Zrobione", label_color(COMPLETED_LABEL_NUMBER))
+            )
         konto_id = self.current_account["id"]
         self._load_token += 1
         token = self._load_token
@@ -1307,11 +1416,21 @@ class EmailPage(QWidget):
 
     def _render_message(self, msg: email.message.Message) -> None:
         self.cached_message = msg
+        labels_html = ""
+        if self.current_message_labels:
+            badges = "".join(
+                f"<span style='display:inline-block; margin:2px 4px 2px 0; padding:3px 8px;"
+                f" border-radius:3px; background:{html_escape(color)}; color:#fff;'>"
+                f"{html_escape(name)}</span>"
+                for name, color in self.current_message_labels
+            )
+            labels_html = f"Etykiety: {badges}<br>"
         header = (
             f"<b>{html_escape(str(msg.get('Subject') or '(brak tematu)'))}</b><br>"
             f"Od: {html_escape(str(msg.get('From') or ''))}<br>"
             f"Do: {html_escape(str(msg.get('To') or ''))}<br>"
-            f"Data: {html_escape(str(msg.get('Date') or ''))}<hr>"
+            f"Data: {html_escape(str(msg.get('Date') or ''))}<br>"
+            f"{labels_html}<hr>"
         )
         html = extract_html(msg)
         self.mail_view.resources = inline_resources(msg)
@@ -1764,6 +1883,8 @@ class EmailPage(QWidget):
         self._move_current("trash", "Usuń", "Kosz")
 
     def _toggle_employee_by_number(self, number: int) -> None:
+        if number == COMPLETED_LABEL_NUMBER:
+            return
         emp = next((e for e in self.employees if self.label_numbers.get(e["id"]) == number), None)
         if emp is None:
             return

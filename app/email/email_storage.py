@@ -922,6 +922,90 @@ def set_employee_assignment(row_ids: List[int], employee_id: int, assigned: bool
         conn.close()
 
 
+def get_completed_map(row_ids: List[int]) -> set[int]:
+    if not row_ids:
+        return set()
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT we.id
+            FROM wiadomosci_email we
+            JOIN wiadomosci_email w2 ON w2.konto_id = we.konto_id AND {_SAME_MESSAGE}
+            WHERE we.id = ANY(%s) AND COALESCE(w2.email_done, 0) = 1
+            """,
+            (list(row_ids),),
+        ).fetchall()
+        return {int(row[0]) for row in rows}
+    finally:
+        conn.close()
+
+
+def set_messages_completed(row_ids: List[int], completed: bool) -> None:
+    if not row_ids:
+        return
+    conn = get_conn()
+    try:
+        conn.execute(
+            f"""
+            UPDATE wiadomosci_email w2
+            SET email_done = %s
+            FROM wiadomosci_email we
+            WHERE we.id = ANY(%s) AND w2.konto_id = we.konto_id
+              AND {_SAME_MESSAGE}
+            """,
+            (int(completed), list(row_ids)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_completed_messages(konto_id: int) -> int:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM wiadomosci_email we
+            WHERE we.konto_id = %s AND we.usunieta = 0 AND EXISTS (
+                SELECT 1
+                FROM wiadomosci_email w2
+                WHERE w2.konto_id = we.konto_id AND {_SAME_MESSAGE}
+                  AND COALESCE(w2.email_done, 0) = 1
+            )
+            """,
+            (konto_id,),
+        ).fetchone()
+        return int(row[0])
+    finally:
+        conn.close()
+
+
+def list_completed_rows(konto_id: int, limit: int = 500) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT we.*, fe.server_name
+            FROM wiadomosci_email we
+            JOIN foldery_email fe ON fe.id = we.folder_id
+            WHERE we.konto_id = %s AND we.usunieta = 0 AND EXISTS (
+                SELECT 1
+                FROM wiadomosci_email w2
+                WHERE w2.konto_id = we.konto_id AND {_SAME_MESSAGE}
+                  AND COALESCE(w2.email_done, 0) = 1
+            )
+            ORDER BY we.data DESC
+            LIMIT %s
+            """,
+            (konto_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def count_assigned_by_employee(konto_id: int) -> Dict[int, int]:
     conn = get_conn()
     try:
@@ -971,6 +1055,10 @@ __all__ = [
     "apply_server_state",
     "get_assignment_map",
     "set_employee_assignment",
+    "get_completed_map",
+    "set_messages_completed",
+    "count_completed_messages",
+    "list_completed_rows",
     "count_assigned_by_employee",
     "list_assigned_rows",
     "get_unread_counts",

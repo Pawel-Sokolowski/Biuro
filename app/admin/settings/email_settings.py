@@ -212,18 +212,23 @@ class EmailSettings(QWidget):
         self._refresh()
 
     def _edit_labels(self) -> None:
-        from app.email.email_labels import LABEL_COUNT, label_color, resolve_label_numbers, save_label_map
+        from app.email.email_labels import (
+            EMPLOYEE_LABEL_NUMBERS,
+            label_color,
+            resolve_label_numbers,
+            save_label_map,
+        )
 
         employees = [e for e in self.logic.list_employees() if e.get("aktywny", 1)]
         current = resolve_label_numbers(employees)
         dlg = QDialog(self)
-        dlg.setWindowTitle("Etykiety pracowników (klawisze 1–7)")
+        dlg.setWindowTitle("Etykiety pracowników (klawisze 1–2, 4–7; 3 = Zrobione)")
         form = QFormLayout(dlg)
         combos = {}
         for emp in employees:
             combo = QComboBox()
             combo.addItem("— brak —", 0)
-            for n in range(1, LABEL_COUNT + 1):
+            for n in EMPLOYEE_LABEL_NUMBERS:
                 combo.addItem(f"{n}", n)
                 combo.setItemData(combo.count() - 1, QColor(label_color(n)), Qt.ItemDataRole.ForegroundRole)
             combo.setCurrentIndex(max(0, combo.findData(current.get(emp["id"], 0))))

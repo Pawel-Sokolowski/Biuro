@@ -12,10 +12,56 @@ class LabelsAndImagesTests(DbTestCase):
         from app.email import email_labels
         emps = [{"id": 5}, {"id": 2}]
         self.assertEqual(email_labels.resolve_label_numbers(emps), {5: 1, 2: 2})
-        email_labels.save_label_map({5: 3, 2: 1})
-        self.assertEqual(email_labels.resolve_label_numbers(emps), {5: 3, 2: 1})
+        many = [{"id": employee_id} for employee_id in range(1, 8)]
+        self.assertEqual(
+            email_labels.resolve_label_numbers(many),
+            {1: 1, 2: 2, 3: 4, 4: 5, 5: 6, 6: 7},
+        )
+        email_labels.save_label_map({5: 4, 2: 1})
+        self.assertEqual(email_labels.resolve_label_numbers(emps), {5: 4, 2: 1})
         with self.assertRaises(ValueError):
             email_labels.save_label_map({5: 1, 2: 1})
+        with self.assertRaises(ValueError):
+            email_labels.save_label_map({5: 3})
+
+    def test_completed_status_follows_message_after_move(self):
+        from app.email.email_storage import (
+            count_completed_messages,
+            get_completed_map,
+            list_completed_rows,
+            save_folder,
+            set_messages_completed,
+        )
+        from app.db.dao_conn import get_conn
+
+        conn = get_conn()
+        conn.execute("INSERT INTO konta_email (id, email) VALUES (1, 'a@b.pl')")
+        conn.commit()
+        conn.close()
+        inbox_id = save_folder(1, "INBOX", "INBOX", ".", "")
+        archive_id = save_folder(1, "INBOX/Archive", "Archive", ".", "")
+
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO wiadomosci_email "
+            "(konto_id, folder_id, uid, message_id, temat) VALUES "
+            "(1, %s, '1', '<same@x>', 'Temat'), "
+            "(1, %s, '2', '<same@x>', 'Temat')",
+            (inbox_id, archive_id),
+        )
+        conn.commit()
+        row_ids = [row[0] for row in conn.execute(
+            "SELECT id FROM wiadomosci_email ORDER BY id"
+        ).fetchall()]
+        conn.close()
+
+        set_messages_completed([row_ids[0]], True)
+        self.assertEqual(get_completed_map(row_ids), set(row_ids))
+        self.assertEqual(count_completed_messages(1), 2)
+        self.assertEqual(len(list_completed_rows(1)), 2)
+
+        set_messages_completed([row_ids[0]], False)
+        self.assertEqual(get_completed_map(row_ids), set())
 
     def test_browser_resolves_cid_and_data(self):
         import base64

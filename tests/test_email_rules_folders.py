@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 
 from PyQt6.QtWidgets import QApplication
+from app.email import email_ui
 
 from tests.base import DbTestCase
 

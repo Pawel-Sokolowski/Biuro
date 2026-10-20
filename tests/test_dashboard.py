@@ -46,6 +46,23 @@ class DashboardDataTests(DbTestCase):
         data = get_dashboard_data(emp, today=TODAY)
         self.assertEqual([e["tytul"] for e in data["wydarzenia"]], ["Za 2 dni"])
 
+    def test_missing_documents_list_includes_all_and_excludes_delivered(self):
+        emp = self.make_employee()
+        delivered_company = self.make_company("Dostarczone")
+        missing_companies = [
+            self.make_company(f"Brak {index:02}") for index in range(12)
+        ]
+        save_month_status(delivered_company, "2026-03", {"dokumenty_dostarczone": 1})
+
+        data = get_dashboard_data(emp, today=TODAY)
+        missing_names = {company["nazwa"] for company in data["brak_dokumentow"]}
+
+        self.assertTrue(
+            {f"Brak {index:02}" for index in range(12)}.issubset(missing_names)
+        )
+        self.assertGreater(len(missing_names), 10)
+        self.assertNotIn("Dostarczone", missing_names)
+
     def test_timer_seconds_and_sessions_today(self):
         emp = self.make_employee()
         firma = self.make_company()

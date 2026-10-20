@@ -41,6 +41,8 @@ a = Analysis(
           for m in collect_submodules(
               pkg, filter=lambda name: not name.startswith(("caldav.jmap", "niquests.extensions.pyodide")))],
         "PyQt6.QtCharts",
+        "PyQt6.QtWebEngineCore",
+        "PyQt6.QtWebEngineWidgets",
         "openpyxl",
         "bcrypt",
         "cryptography",

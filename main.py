@@ -6,6 +6,7 @@ from app.utils.env_config import load_environment, ensure_encryption_key
 load_environment()
 ensure_encryption_key()
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QApplication, QDialog)
 import traceback
 
@@ -22,6 +23,7 @@ sys.excepthook = excepthook
 
 if __name__ == "__main__":
 
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     install_polish_translations(app)
     login_window = LoginWindow()

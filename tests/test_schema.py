@@ -25,6 +25,27 @@ class SchemaTests(DbTestCase):
         init_db()
         init_db()
 
+    def test_deleted_demo_company_is_not_recreated(self):
+        from app.db.schema import init_db
+
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM firmy WHERE nazwa = 'Domyślna firma'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        init_db()
+
+        conn = get_conn()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM firmy WHERE nazwa = 'Domyślna firma'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(count, 0)
+
     def test_monthly_status_columns_and_check(self):
         conn = get_conn()
         try:

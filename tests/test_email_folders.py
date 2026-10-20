@@ -1,12 +1,14 @@
 import os
+import json
 import tempfile
 import unittest
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QTextBrowser
 
+from app.email import email_ui
 from app.email import email_cache
 from app.email.email_helpers import (
     decode_mailbox_utf7,
@@ -112,6 +114,43 @@ class CacheTests(DbTestCase):
 
 
 class EmailPageTests(DbTestCase):
+    def test_folder_visibility_is_saved_and_applied_to_tree(self):
+        from app.db.dao_conn import get_conn
+        from app.email.email_storage import save_folder
+
+        conn = get_conn()
+        conn.execute("INSERT INTO konta_email (id, email) VALUES (1, 'a@b.pl')")
+        conn.commit()
+        conn.close()
+        save_folder(1, "INBOX", "INBOX", ".", "")
+        save_folder(1, "INBOX.Sent", "Sent", ".", "\\Sent")
+        stored = {}
+        with mock.patch.object(
+            email_ui, "get_email_accounts_for_employee",
+            return_value=[{"id": 1, "email": "a@b.pl"}],
+        ), mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
+                mock.patch.object(email_ui, "MailBrowser", QTextBrowser), \
+                mock.patch.object(email_ui, "get_setting", return_value="{}"), \
+                mock.patch.object(
+                    email_ui, "set_setting", side_effect=lambda key, value: stored.update({key: value})
+                ):
+            page = email_ui.EmailPage(5)
+
+            account = page.folder_tree.topLevelItem(0)
+            self.assertEqual(account.childCount(), 2)
+            page._set_folder_hidden(1, "INBOX.Sent", True)
+            account = page.folder_tree.topLevelItem(0)
+            self.assertEqual(account.childCount(), 1)
+            self.assertEqual(
+                json.loads(stored["email_ukryte_foldery_5"]), {"1": ["INBOX.Sent"]}
+            )
+
+            page.show_hidden_button.setChecked(True)
+            account = page.folder_tree.topLevelItem(0)
+            self.assertEqual(account.childCount(), 2)
+            self.assertIn("(ukryty)", account.child(1).text(0))
+            page.close()
+
     def test_page_builds_tree_and_renders_cached_message(self):
         from app.db.dao_conn import get_conn
         from app.email import email_ui
@@ -178,8 +217,10 @@ class EmailPageTests(DbTestCase):
             self.assertFalse(page.att_bar.isHidden())
             self.assertEqual(page.att_list.count(), 2)  # obrazek cid nie jest załącznikiem
             self.assertIn("img1", page.mail_view.resources)
-            from PyQt6.QtCore import QUrl
-            self.assertFalse(page.mail_view.loadResource(2, QUrl("cid:img1")).isNull())
+            rendered = email_ui.MailBrowser.prepare_html(
+                '<body><img src="cid:img1"></body>', page.mail_view.resources
+            )
+            self.assertIn("data:image/png;base64,", rendered)
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(email_ui.QFileDialog, "getExistingDirectory", return_value=d):
                 page.on_save_attachments_clicked()

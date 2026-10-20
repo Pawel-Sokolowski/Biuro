@@ -34,7 +34,6 @@ def create_initial_admin(email: str, password: str, imie: str = "Główny", nazw
             (email, hash_password(password), imie, nazwisko, ADMIN_ROLE_ID),
         )
         admin_id = int(cur.fetchone()[0])
-        conn.execute("INSERT INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma') ON CONFLICT DO NOTHING")
         conn.execute(
             """
             UPDATE role

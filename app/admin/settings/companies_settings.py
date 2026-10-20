@@ -39,6 +39,7 @@ class ImportWorker(QThread):
 class FastImportWorker(QThread):
     finished_with_result = pyqtSignal(object, name="finished_with_result")
     error = pyqtSignal(str, name="error")
+    progress = pyqtSignal(str, name="progress")
 
     def __init__(self, filepath: str):
         super().__init__()
@@ -46,7 +47,9 @@ class FastImportWorker(QThread):
 
     def run(self):
         try:
-            self.finished_with_result.emit(import_companies_fast_from_excel_file(self.filepath))
+            self.finished_with_result.emit(
+                import_companies_fast_from_excel_file(self.filepath, progress=self.progress.emit)
+            )
         except Exception as e:
             self.error.emit(str(e))
 
@@ -97,6 +100,10 @@ class CompaniesSettings(QWidget):
         btn_fast_import = QPushButton("Importuj bez weryfikacji")
         btn_fast_import.clicked.connect(self._import_without_verification)
         btn_row.addWidget(btn_fast_import)
+
+        btn_roles = QPushButton("Importuj przypisania księgowych/kadrowych")
+        btn_roles.clicked.connect(self._import_role_assignments)
+        btn_row.addWidget(btn_roles)
 
         btn_tax_offices = QPushButton("Importuj urzędy skarbowe")
         btn_tax_offices.clicked.connect(self._import_tax_offices)
@@ -227,6 +234,27 @@ class CompaniesSettings(QWidget):
 
         self._current_worker = worker
 
+    def _import_role_assignments(self):
+        from app.utils.import_assignments import import_role_assignments_from_file
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plik z przypisaniami pracowników",
+            "",
+            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)",
+        )
+        if not path:
+            return
+        try:
+            result = import_role_assignments_from_file(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd importu", str(exc))
+            return
+        if result["warnings"]:
+            QMessageBox.warning(self, "Ostrzeżenia importu", "\n".join(result["warnings"][:40]))
+        QMessageBox.information(self, "Import zakończony", f"Zaktualizowano firm: {result['updated']}")
+        self._refresh()
+
     def _import_tax_offices(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -256,9 +284,21 @@ class CompaniesSettings(QWidget):
         if not path:
             return
         worker = FastImportWorker(path)
+        dialog = QProgressDialog("Przygotowanie importu...", None, 0, 0, self)
+        dialog.setWindowTitle("Import firm")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumWidth(420)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        worker.progress.connect(dialog.setLabelText)
+        worker.finished_with_result.connect(lambda *_: dialog.close())
+        worker.error.connect(lambda *_: dialog.close())
         worker.finished_with_result.connect(self._on_fast_import_finished)
         worker.error.connect(self._on_import_error)
+        self._progress_dialog = dialog
         worker.start()
+        dialog.show()
         self._current_worker = worker
 
     def _on_fast_import_finished(self, result):

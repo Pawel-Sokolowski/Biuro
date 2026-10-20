@@ -4,13 +4,14 @@ import io
 import os
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import openpyxl
 import psycopg
 
 from app.db.dao_audit import record_import
 from app.db.dao_conn import get_conn
+from app.utils.import_enrichment import check_ceidg_status_for_company, check_vat_for_company, enrich_payload
 from app.utils.parsing import (
     to_float,
     normalize_identifier,
@@ -991,7 +992,16 @@ def save_imported_payload(
         conn.close()
 
 
-def import_companies_fast_from_excel_file(filepath: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+def import_companies_fast_from_excel_file(
+    filepath: str,
+    db_path: Optional[str] = None,
+    progress: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """progress(tekst) dostaje opis bieżącego etapu, np. "Firma 2 z 120\\nCEIDG/KRS/GUS: zrobione"."""
+    def report(text: str) -> None:
+        if progress:
+            progress(text)
+
     try:
         headers, rows = _load_rows_from_file(filepath)
     except Exception as exc:
@@ -1005,14 +1015,38 @@ def import_companies_fast_from_excel_file(filepath: str, db_path: Optional[str] 
     warnings: List[str] = []
 
     try:
-        for row_number, row in enumerate(rows, start=2):
-            if not any(value not in (None, "") for value in row):
-                continue
+        data_rows = [
+            (n, r) for n, r in enumerate(rows, start=2)
+            if any(value not in (None, "") for value in r)
+        ]
+        total = len(data_rows)
+        for index, (row_number, row) in enumerate(data_rows, start=1):
             payload = _build_payload_from_row(headers, header_index, row)
+            head = f"Firma {index} z {total}: {payload.get('nazwa') or ''}".rstrip(": ")
+            report(f"{head}\nCEIDG/KRS/GUS: pobieranie...")
+            problem = enrich_payload(payload)
+            if problem:
+                warnings.append(f"Wiersz {row_number}: nie pobrano danych z rejestrów ({problem}).")
+            registry = "CEIDG/KRS/GUS: błąd" if problem else "CEIDG/KRS/GUS: zrobione"
+            report(f"{head}\n{registry}\nZapisywanie...")
             if _apply_payload_to_db(cursor, payload, row_number, warnings):
                 created += 1
             else:
                 updated += 1
+            conn.commit()
+            nip = normalize_identifier(payload.get("nip"), {10})
+            vat_state = "pominięto"
+            ceidg_state = "pominięto"
+            if nip:
+                cursor.execute("SELECT id FROM firmy WHERE nip = %s", (nip,))
+                found = cursor.fetchone()
+                if found:
+                    report(f"{head}\n{registry}\nStatus w CEIDG: sprawdzanie...")
+                    ceidg_state = check_ceidg_status_for_company(int(found[0]), warnings, row_number)
+                    report(f"{head}\n{registry}\nStatus w CEIDG: {ceidg_state}\nVAT: sprawdzanie...")
+                    check_vat_for_company(nip, int(found[0]), warnings, row_number)
+                    vat_state = "zrobione"
+            report(f"{head}\n{registry}\nStatus w CEIDG: {ceidg_state}\nVAT: {vat_state}")
 
         conn.commit()
         result = {"created": created, "updated": updated, "warnings": warnings}

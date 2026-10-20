@@ -622,6 +622,12 @@ def sync_and_prefetch(
             on_headers()
     if on_progress:
         on_progress(total, total, "", fetched)
+    try:
+        from app.utils.saldeo_scanner import scan_saldeo_messages
+
+        scan_saldeo_messages(konto_id)
+    except Exception:
+        logger.warning("Nie udało się przeskanować maili Saldeo", exc_info=True)
     return fetched
 
 def _set_seen_remote(

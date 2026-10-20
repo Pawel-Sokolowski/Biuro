@@ -142,7 +142,7 @@ def check_company_ceidg(firma_id: int, fetch: Optional[Callable[[str], dict]] = 
         return {"state": None, "change": None, "error": msg}
     change = _process(firm, data)
     state = "zawieszona" if str(data["status"]).upper() in SUSPENDED_STATUSES else "aktywna"
-    return {"state": state, "change": change, "error": None}
+    return {"state": state, "change": change, "error": None, "raw": str(data["status"]).upper()}
 
 
 def check_suspensions(fetch: Optional[Callable[[str], dict]] = None) -> List[int]:

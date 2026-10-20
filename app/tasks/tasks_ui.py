@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_companies import list_companies
 from app.db.dao_employees import list_employees
-from app.db.dao_tasks import TASK_STATUSES, delete_task, list_tasks, save_task
+from app.db.dao_tasks import TASK_STATUSES, delete_tasks, list_tasks, save_task, set_tasks_status
 
 
 class TasksPage(QWidget):
@@ -62,7 +62,7 @@ class TasksPage(QWidget):
             ["Tytuł", "Firma", "Pracownik", "Status", "Termin", "Opis", "ID"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
@@ -77,6 +77,17 @@ class TasksPage(QWidget):
         actions.addWidget(btn_add)
         actions.addWidget(btn_edit)
         actions.addWidget(btn_delete)
+        actions.addSpacing(20)
+        actions.addWidget(QLabel("Zaznaczone:"))
+        self.bulk_status = QComboBox()
+        self.bulk_status.addItems(TASK_STATUSES)
+        btn_bulk_status = QPushButton("Zmień status")
+        btn_bulk_status.clicked.connect(self._bulk_set_status)
+        btn_select_all = QPushButton("Zaznacz wszystkie")
+        btn_select_all.clicked.connect(self.table.selectAll)
+        actions.addWidget(self.bulk_status)
+        actions.addWidget(btn_bulk_status)
+        actions.addWidget(btn_select_all)
         actions.addStretch()
         layout.addLayout(actions)
 
@@ -114,6 +125,32 @@ class TasksPage(QWidget):
         item = self.table.item(row, 6)
         return int(item.text()) if item else None
 
+    def _selected_ids(self) -> list:
+        rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
+        ids = []
+        for row in rows:
+            item = self.table.item(row, 6)
+            if item and item.text().isdigit():
+                ids.append(int(item.text()))
+        return ids
+
+    def _bulk_set_status(self):
+        ids = self._selected_ids()
+        if not ids:
+            QMessageBox.information(self, "Status", "Zaznacz zadania na liście.")
+            return
+        status = self.bulk_status.currentText()
+        try:
+            changed = set_tasks_status(ids, status, actor_id=self.pracownik_id)
+        except (PermissionError, ValueError) as exc:
+            QMessageBox.warning(self, "Błąd", str(exc))
+            return
+        self._refresh()
+        if changed < len(ids):
+            QMessageBox.warning(
+                self, "Status", f"Zmieniono {changed} z {len(ids)} zadań (reszta bez uprawnień)."
+            )
+
     def _new_task(self):
         TaskDialog(self, self.pracownik_id, self.companies, self.employees).exec()
         self._refresh()
@@ -137,14 +174,19 @@ class TasksPage(QWidget):
             self._refresh()
 
     def _delete_selected(self):
-        task_id = self._selected_id()
-        if not task_id:
+        ids = self._selected_ids()
+        if not ids:
             return
-        if QMessageBox.question(self, "Usuń zadanie", "Usunąć wybrane zadanie?") != QMessageBox.StandardButton.Yes:
+        question = "Usunąć wybrane zadanie?" if len(ids) == 1 else f"Usunąć zaznaczone zadania ({len(ids)})?"
+        if QMessageBox.question(self, "Usuń zadania", question) != QMessageBox.StandardButton.Yes:
             return
         try:
-            delete_task(task_id, actor_id=self.pracownik_id)
+            deleted = delete_tasks(ids, actor_id=self.pracownik_id)
             self._refresh()
+            if deleted < len(ids):
+                QMessageBox.warning(
+                    self, "Usuwanie", f"Usunięto {deleted} z {len(ids)} zadań (reszta bez uprawnień)."
+                )
         except PermissionError as exc:
             QMessageBox.warning(self, "Brak uprawnień", str(exc))
 

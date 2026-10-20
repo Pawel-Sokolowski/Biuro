@@ -64,7 +64,51 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 12 if self._mode == "ksiegowosc" else 13
+        return 16 if self._mode == "ksiegowosc" else 14
+
+    # kolumny z rozliczenia Saldeo (na końcu modelu, wizualnie przesuwane za „Ilość dokumentów”)
+    _RESULT_COLS = {
+        "ksiegowosc": {12: ("Przychód", "przychod"), 13: ("Koszty", "koszty"),
+                       14: ("VAT", "vat"), 15: ("CIT", "cit")},
+        "kadry": {13: ("PIT", "pit")},
+    }
+
+    def result_cols(self):
+        return sorted(self._RESULT_COLS[self._mode])
+
+    @staticmethod
+    def _money(value: Any) -> str:
+        if value is None:
+            return ""
+        return f"{float(value):,.2f}".replace(",", " ").replace(".", ",")
+
+    def _result_cell(self, row: Dict[str, Any], col: int, role: int) -> Any:
+        _, key = self._RESULT_COLS[self._mode][col]
+        if role == Qt.ItemDataRole.DisplayRole:
+            if key in ("vat", "cit", "pit"):
+                text = self._money(row.get(f"{key}_kwota"))
+                period = str(row.get(f"{key}_okres") or "")
+                if text and "kwarta" in period.lower():
+                    text += " (kw.)"
+                return text
+            return self._money(row.get(key))
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        if role == Qt.ItemDataRole.ToolTipRole:
+            parts = []
+            if key in ("vat", "cit", "pit"):
+                if row.get(f"{key}_okres"):
+                    parts.append(f"Okres deklaracji: {row[f'{key}_okres']}")
+                if row.get(f"{key}_termin"):
+                    parts.append(f"Termin: {row[f'{key}_termin']}")
+                if key == "vat" and row.get("vat_opis"):
+                    parts.append(f"Różnica VAT: {row['vat_opis']}")
+            elif key == "przychod" and row.get("dochod") is not None:
+                parts.append(f"Dochód / strata: {self._money(row['dochod'])}")
+            return "\n".join(parts) if parts else QVariant()
+        if role == Qt.ItemDataRole.BackgroundRole:
+            return self._row_background(row)
+        return QVariant()
 
     def _vat_cols(self):
         base = 10 if self._mode == "ksiegowosc" else 11
@@ -101,6 +145,8 @@ class MonthlyViewModel(QAbstractTableModel):
                 return self._row_background(row)
             return self._vat_cell(row, col, role)
 
+        if col in self._RESULT_COLS[self._mode]:
+            return self._result_cell(row, col, role)
         if role == Qt.ItemDataRole.DisplayRole:
             if col == self.COL_DOCS:
                 return self._delivered_text(row)
@@ -172,9 +218,9 @@ class MonthlyViewModel(QAbstractTableModel):
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
             if self._mode == "ksiegowosc":
-                headers = ["Firma", "Dostarczone", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
+                headers = ["Firma", "Dostarczone", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU", "Przychód", "Koszty", "VAT do zapłaty", "CIT"]
             else:
-                headers = ["Firma", "Dostarczone", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "VAT", "EU"]
+                headers = ["Firma", "Dostarczone", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "VAT", "EU", "PIT"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()

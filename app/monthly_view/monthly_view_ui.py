@@ -646,9 +646,12 @@ class MonthlyViewPage(QWidget):
                     if col in (0, note_col)
                     else QHeaderView.ResizeMode.ResizeToContents,
                 )
-            vat_col = table.model().columnCount() - 2
+            vat_col = table.model()._vat_cols()[0]
             header.moveSection(header.visualIndex(vat_col), 1)
             header.moveSection(header.visualIndex(vat_col + 1), 2)
+            after = 3 if table is self.table_ks else 5
+            for offset, col in enumerate(table.model().result_cols(), start=1):
+                header.moveSection(header.visualIndex(col), header.visualIndex(after) + offset)
 
     def _populate_months(self):
         now = datetime.datetime.now()

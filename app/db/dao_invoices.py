@@ -552,7 +552,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 
     try:
         cur.execute(
-            "SELECT id, nazwa, glowny_cennik, limit_dokumentow, zdrowotna, wliczac_zdrowotna, fakturowac, forma_dzialalnosci, vat_czynny FROM firmy"
+            "SELECT id, nazwa, glowny_cennik, limit_dokumentow, zdrowotna, cena_netto_ksiegowosc, wliczac_zdrowotna, fakturowac, forma_dzialalnosci, vat_czynny FROM firmy"
         )
         firms_rows = cur.fetchall()
         firms = [dict(r) for r in firms_rows]
@@ -587,7 +587,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                 continue
             crow = dict(crow_row)
 
-            cena_netto_ks = float(crow.get("cena_netto_ksiegowosc") or 0.0)
+            cena_netto_ks = float(firma.get("cena_netto_ksiegowosc") or 0.0) or float(crow.get("cena_netto_ksiegowosc") or 0.0)
             zdrowotna_val = float(crow.get("zdrowotna") or 0.0)
             netto_total = float(crow.get("netto") or 0.0)
 

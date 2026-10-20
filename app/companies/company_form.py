@@ -34,6 +34,9 @@ from app.companies.constants import (
     STATUS_PODATKOWY, MIESIACE_FAKTUROWANIE, FORMY_OSOBY_FIZYCZNEJ,
 )
 from app.companies.company_lookup import lookup_company_by_nip
+from app.companies.cennik_keys import (
+    filter_cennik_keys, parse_cennik_key, typ_from_forma, vat_flag_from_status,
+)
 from PyQt6.QtCore import QEvent, QObject
 from PyQt6.QtWidgets import QAbstractSpinBox, QApplication
 
@@ -212,6 +215,9 @@ class CompanyForm(QDialog):
             [analityka_fk, kody_pkd, status]
         )
 
+        uslugi_zawieszone = QCheckBox("Biuro wstrzymało wykonywanie usług (np. brak płatności)")
+        add_row(["Zawieszone usługi:"], [uslugi_zawieszone])
+
         konto_bankowe = QLineEdit()
         seria_fv = QLineEdit()
         seria_kfv = QLineEdit()
@@ -284,7 +290,7 @@ class CompanyForm(QDialog):
             "analityka_fk": analityka_fk,
             "kody_pkd": kody_pkd,
             "status": status,
-            "konto_bankowe": konto_bankowe,
+            "uslugi_zawieszone": uslugi_zawieszone,
             "seria_fv": seria_fv,
             "seria_kfv": seria_kfv,
             "sposob_zaplaty": sposob_zaplaty,
@@ -440,23 +446,31 @@ class CompanyForm(QDialog):
             _grid_row(cenniki_layout, labels, widgets)
 
         glowny_cennik = QComboBox()
-
-        ks_opts = get_ksiegowosc_options()
         glowny_cennik.addItem("", "")
-        for item in ks_opts:
-            glowny_cennik.addItem(item["klucz"], item["klucz"])
         make_searchable(glowny_cennik)
+
+        cena_netto_ksiegowosc = QDoubleSpinBox()
+        cena_netto_ksiegowosc.setRange(0, 1000000)
+        cena_netto_ksiegowosc.setDecimals(2)
 
         limit_dokumentow = QSpinBox()
         limit_dokumentow.setRange(0, 100000)
+
+        cena_ponad_limit = QDoubleSpinBox()
+        cena_ponad_limit.setRange(0, 100000)
+        cena_ponad_limit.setDecimals(2)
 
         zdrowotna = QDoubleSpinBox()
         zdrowotna.setRange(0, 100000)
         zdrowotna.setDecimals(2)
 
         add_cennik_row(
-            ["Główny cennik:", "Limit dokumentów:", "Zdrowotna:"],
-            [glowny_cennik, limit_dokumentow, zdrowotna]
+            ["Główny cennik:", "Cena netto:", "Zdrowotna:"],
+            [glowny_cennik, cena_netto_ksiegowosc, zdrowotna]
+        )
+        add_cennik_row(
+            ["Limit dokumentów:", "Cena ponad limit:"],
+            [limit_dokumentow, cena_ponad_limit]
         )
 
         wysylac_do_ksef = QCheckBox()
@@ -474,7 +488,9 @@ class CompanyForm(QDialog):
 
         self.inputs.update({
             "glowny_cennik": glowny_cennik,
+            "cena_netto_ksiegowosc": cena_netto_ksiegowosc,
             "limit_dokumentow": limit_dokumentow,
+            "cena_ponad_limit": cena_ponad_limit,
             "zdrowotna": zdrowotna,
             "wysylac_do_ksef": wysylac_do_ksef,
             "wysylac_do_kontrahenta": wysylac_do_kontrahenta,
@@ -511,22 +527,18 @@ class CompanyForm(QDialog):
             uop_cennik.addItem(item["klucz"], item["klucz"])
         make_searchable(uop_cennik)
 
+        add_kadry_row(["UoP ilość:", "UoP cennik:"], [uop_ilosc, uop_cennik])
+
         uz_ilosc = QSpinBox()
         uz_ilosc.setRange(0, 10000)
 
-        add_kadry_row(
-            ["UoP ilość:", "UoP cennik:", "UZ ilość:"],
-            [uop_ilosc, uop_cennik, uz_ilosc]
-        )
-
-        # -----------------------------
-        # RZĄD 2
-        # -----------------------------
         uz_cennik = QComboBox()
         uz_cennik.addItem("", "")
         for item in kadry_opts:
             uz_cennik.addItem(item["klucz"], item["klucz"])
         make_searchable(uz_cennik)
+
+        add_kadry_row(["UZ ilość:", "UZ cennik:"], [uz_ilosc, uz_cennik])
 
         uod_ilosc = QSpinBox()
         uod_ilosc.setRange(0, 10000)
@@ -537,10 +549,7 @@ class CompanyForm(QDialog):
             uod_cennik.addItem(item["klucz"], item["klucz"])
         make_searchable(uod_cennik)
 
-        add_kadry_row(
-            ["UZ cennik:", "UoD ilość:", "UoD cennik:"],
-            [uz_cennik, uod_ilosc, uod_cennik]
-        )
+        add_kadry_row(["UoD ilość:", "UoD cennik:"], [uod_ilosc, uod_cennik])
 
         self.inputs.update({
             "uop_ilosc": uop_ilosc,
@@ -811,6 +820,57 @@ class CompanyForm(QDialog):
             self._load_email_filters()
             self._load_partners()
             self._load_notes()
+        else:
+            self._refresh_cennik_options()
+
+        for name in ("forma_opodatkowania", "status_vat"):
+            self.inputs[name].currentTextChanged.connect(lambda _t: self._refresh_cennik_options())
+        self.inputs["glowny_cennik"].activated.connect(lambda _i: self._on_cennik_chosen())
+
+    # ============================================================
+    # CENNIK GŁÓWNY: filtr, sortowanie, autowypełnianie
+    # ============================================================
+    def _cennik_options(self) -> Dict[str, Dict[str, Any]]:
+        if not hasattr(self, "_cennik_cache"):
+            self._cennik_cache = {o["klucz"]: o for o in get_ksiegowosc_options()}
+        return self._cennik_cache
+
+    def _refresh_cennik_options(self):
+        combo = self.inputs["glowny_cennik"]
+        current = combo.currentText().strip()
+        typ = typ_from_forma(self.inputs["forma_opodatkowania"].currentText())
+        vat = vat_flag_from_status(self.inputs["status_vat"].currentText())
+        keys = filter_cennik_keys(self._cennik_options().keys(), typ, vat)
+        if current and current not in keys:
+            keys.insert(0, current)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("", "")
+        for key in keys:
+            combo.addItem(key, key)
+        combo.setCurrentIndex(max(combo.findText(current), 0))
+        combo.blockSignals(False)
+
+    def _fill_prices_from_cennik(self, only_missing: bool):
+        option = self._cennik_options().get(self.inputs["glowny_cennik"].currentText().strip())
+        if not option:
+            return
+        info = parse_cennik_key(option["klucz"])
+        values = {
+            "cena_netto_ksiegowosc": option["netto"],
+            "zdrowotna": option["zdrowotna"],
+            "cena_ponad_limit": option["ponad_limit"],
+        }
+        for name, value in values.items():
+            widget = self.inputs[name]
+            if not only_missing or not widget.value():
+                widget.setValue(float(value or 0))
+        limit_widget = self.inputs["limit_dokumentow"]
+        if info["limit"] is not None and (not only_missing or not limit_widget.value()):
+            limit_widget.setValue(info["limit"])
+
+    def _on_cennik_chosen(self):
+        self._fill_prices_from_cennik(only_missing=False)
 
     # ============================================================
     # CEIDG / GUS
@@ -1043,6 +1103,8 @@ class CompanyForm(QDialog):
                 self._set_combo_value(key, widget, val)
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(bool(val))
+        self._refresh_cennik_options()
+        self._fill_prices_from_cennik(only_missing=True)
 
     @staticmethod
     def _payload_to_form_keys(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1111,8 +1173,9 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(bool(val))
 
-    # ============================================================
-    # KONTAKTY
+        self._refresh_cennik_options()
+        self._fill_prices_from_cennik(only_missing=True)
+
     # ============================================================
     def _load_contacts(self):
         if not self.firma_id:

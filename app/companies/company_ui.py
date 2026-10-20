@@ -131,6 +131,12 @@ class CompanyUI(QWidget):
             self.table.setItem(row, 7, QTableWidgetItem(r.get("pel") or ""))
             self.table.setItem(row, 8, QTableWidgetItem(r.get("upl") or ""))
             self.table.setItem(row, 9, self._backup_item(backups.get(r.get("nazwa"))))
+            if r.get("uslugi_zawieszone"):
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item is not None:
+                        item.setBackground(QColor("#f4a6a6"))
+                        item.setForeground(QColor("#000000"))
 
     @staticmethod
     def _backup_item(info):

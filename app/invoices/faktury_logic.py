@@ -135,8 +135,9 @@ class FakturyLogic:
 
         # ---------------- Usługa księgowa ----------------
         if pricing and company.get("fakturowac", 0) == 1:
-            netto = self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
-            brutto = self._to_float(pricing.get("cena_brutto_ksiegowosc", round(netto * 1.23, 2)))
+            netto = self._to_float(company.get("cena_netto_ksiegowosc", 0.0)) or \
+                self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
+            brutto = round(netto * 1.23, 2)
             if wliczona and zdrowotna_val > 0:
                 netto = round(netto + zdrowotna_val, 2)
                 brutto = round(brutto + zdrowotna_val * 1.23, 2)
@@ -159,7 +160,8 @@ class FakturyLogic:
             limit = int(company.get("limit_dokumentow") or 0)
             if ilosc_dok > limit:
                 ponad = ilosc_dok - limit
-                cena = self._to_float(pricing.get("cena_za_dokument_ponad_limit", 0.0))
+                cena = self._to_float(company.get("cena_ponad_limit", 0.0)) or \
+                    self._to_float(pricing.get("cena_za_dokument_ponad_limit", 0.0))
                 netto = round(ponad * cena, 2)
                 brutto = round(netto * 1.23, 2)
                 pozycje.append({

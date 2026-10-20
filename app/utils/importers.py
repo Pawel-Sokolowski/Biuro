@@ -120,6 +120,12 @@ def parse_cennik_ksiegowy(text: str) -> Dict[str, Any]:
         rf"\bzdrowotna\b\D*?{PRICE_PATTERN}",
         normalized,
     )
+    if out["ryczalt_ksiegowy"] is None:
+        # Zapis typu „260 zł + zdrowotna 60”: cena bazowa to pierwsza kwota poza limitem i zdrowotną.
+        rest = re.sub(rf"\b(?:ponad\s+limit|powyżej\s+limitu)\b.*", " ", normalized, flags=flags)
+        rest = re.sub(rf"\bzdrowotna\b\D*?{PRICE_PATTERN}", " ", rest, flags=flags)
+        rest = re.sub(rf"(?<![\d.,])\d+\s*{_DOC_UNIT}(?!\w)", " ", rest, flags=flags)
+        out["ryczalt_ksiegowy"] = _find_price(rf"(?<![\d.,]){PRICE_PATTERN}\s*(?:zł|pln)", rest)
     return out
 
 def _find_service_price(text: str, service_pattern: str) -> Optional[float]:
@@ -451,6 +457,8 @@ def _build_payload_from_row(
     payload["cennik_ksiegowy"] = cennik_ksiegowy_text
     payload["cennik_ksiegowy_parsed"] = cks
     payload["limit_dokumentow"] = cks["limit_dokumentow"]
+    payload["cena_netto_ksiegowosc"] = cks["ryczalt_ksiegowy"]
+    payload["cena_ponad_limit"] = cks["cena_za_dokument"]
     payload["glowny_cennik"] = suggest_accounting_cennik_key(payload)
 
     # --------------------------------------------------
@@ -560,7 +568,7 @@ _VAT_ACTIVE_VALUES = {
 def _is_vat_active(value: Any) -> bool:
     if value in (1, True):
         return True
-    return _fold_pl(value) in _VAT_ACTIVE_VALUES
+    return _fold_pl(value).rstrip(".:;") in _VAT_ACTIVE_VALUES
 
 
 def _fold_pl(value: Any) -> str:

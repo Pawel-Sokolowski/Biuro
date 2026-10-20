@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant
+from PyQt6.QtGui import QColor
 import datetime
 import logging
 
@@ -63,7 +64,30 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 10 if self._mode == "ksiegowosc" else 11
+        return 12 if self._mode == "ksiegowosc" else 13
+
+    def _vat_cols(self):
+        base = 10 if self._mode == "ksiegowosc" else 11
+        return base, base + 1
+
+    _VAT_ICONS = {"czynny": ("✔", "#2e9b4f"), "zwolniony": ("▲", "#d93025"), "nieznany": ("?", "#e69500")}
+
+    def _vat_cell(self, row: Dict[str, Any], col: int, role: int) -> Any:
+        prefix = "vat" if col == self._vat_cols()[0] else "vat_ue"
+        status = row.get(f"{prefix}_status")
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self._VAT_ICONS.get(status, ("", ""))[0]
+        if role == Qt.ItemDataRole.ForegroundRole and status in self._VAT_ICONS:
+            return QColor(self._VAT_ICONS[status][1])
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            return Qt.AlignmentFlag.AlignCenter
+        if role == Qt.ItemDataRole.ToolTipRole:
+            from app.utils.vat_check import vat_tooltip
+            label = "VAT" if prefix == "vat" else "VAT UE"
+            return vat_tooltip(
+                label, status, row.get(f"{prefix}_sprawdzono"), row.get(f"{prefix}_sprawdzil")
+            )
+        return QVariant()
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
@@ -71,6 +95,11 @@ class MonthlyViewModel(QAbstractTableModel):
 
         row = self._rows[index.row()]
         col = index.column()
+
+        if col in self._vat_cols():
+            if role == Qt.ItemDataRole.BackgroundRole:
+                return self._row_background(row)
+            return self._vat_cell(row, col, role)
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == self.COL_DOCS:
@@ -116,19 +145,26 @@ class MonthlyViewModel(QAbstractTableModel):
             return row
 
         if role == Qt.ItemDataRole.BackgroundRole:
-            status = row.get("status", "Aktywne")
-            etap = row.get("etap", "Brak")
-            if status == "Zawieszone":
-                return Qt.GlobalColor.lightGray
-            if status == "Archiwalne":
-                return Qt.GlobalColor.gray
-            if etap == "Zatwierdzone":
-                return Qt.GlobalColor.yellow
-            if etap == "Zaksięgowane":
-                return Qt.GlobalColor.cyan
-            if etap == "Wysłane wyniki":
-                return Qt.GlobalColor.green
+            return self._row_background(row)
 
+        return QVariant()
+
+    @staticmethod
+    def _row_background(row: Dict[str, Any]) -> Any:
+        status = row.get("status", "Aktywne")
+        etap = row.get("etap", "Brak")
+        if row.get("uslugi_zawieszone"):
+            return QColor("#f4a6a6")
+        if status == "Zawieszone":
+            return Qt.GlobalColor.lightGray
+        if status == "Archiwalne":
+            return Qt.GlobalColor.gray
+        if etap == "Zatwierdzone":
+            return Qt.GlobalColor.yellow
+        if etap == "Zaksięgowane":
+            return Qt.GlobalColor.cyan
+        if etap == "Wysłane wyniki":
+            return Qt.GlobalColor.green
         return QVariant()
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -136,9 +172,9 @@ class MonthlyViewModel(QAbstractTableModel):
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
             if self._mode == "ksiegowosc":
-                headers = ["Firma", "Dostarczone", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯"]
+                headers = ["Firma", "Dostarczone", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
-                headers = ["Firma", "Dostarczone", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
+                headers = ["Firma", "Dostarczone", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "VAT", "EU"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()

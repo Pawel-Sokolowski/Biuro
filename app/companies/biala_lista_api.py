@@ -64,5 +64,5 @@ def get_biala_lista_by_nip(nip: str) -> Dict[str, Any]:
     except ValueError:
         return {"error": True, "message": "Nieprawidłowa odpowiedź Białej Listy MF."}
     if not subject:
-        return {"error": True, "message": "Nie znaleziono podmiotu na Białej Liście MF."}
+        return {"error": True, "not_found": True, "message": "Nie znaleziono podmiotu na Białej Liście MF."}
     return parse_subject(subject)

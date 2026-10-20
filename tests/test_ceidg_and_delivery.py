@@ -137,6 +137,13 @@ class CeidgSuspensionTests(DbTestCase):
         self.assertIsNone(res["vat"])
         self.assertEqual(len(res["errors"]), 1)
         self.assertEqual(get_company(a)["vat_status"], "czynny")
+        res = check_company_vat(
+            a, emp,
+            wl_fetch=lambda nip: {"error": True, "not_found": True, "message": "x"},
+            vies_fetch=lambda nip: {"valid": True},
+        )
+        self.assertEqual((res["vat"], res["errors"]), ("zwolniony", []))
+        self.assertEqual(get_company(a)["vat_status"], "zwolniony")
 
         out = cs.check_company_ceidg(a, lambda nip: {"status": "ZAWIESZONY"})
         self.assertEqual((out["state"], out["change"]), ("zawieszona", "suspended"))
@@ -155,7 +162,7 @@ class CeidgSuspensionTests(DbTestCase):
             "vat_sprawdzono": "2026-02-19 12:23:00", "vat_sprawdzil": "Paweł S",
             "vat_ue_status": "zwolniony",
         }], "ksiegowosc")
-        self.assertEqual(m.columnCount(), 12)
+        self.assertEqual(m.columnCount(), 16)
         self.assertEqual(m.data(m.index(0, 10), Qt.ItemDataRole.DisplayRole), "✔")
         self.assertEqual(m.data(m.index(0, 11), Qt.ItemDataRole.DisplayRole), "▲")
         tip = m.data(m.index(0, 10), Qt.ItemDataRole.ToolTipRole)

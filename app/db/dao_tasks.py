@@ -260,6 +260,66 @@ def notify_services_changed(firma_id: int, suspended: bool) -> List[int]:
     )
 
 
+def _allowed_task_ids(conn, task_ids: List[int], actor_id: int) -> List[int]:
+    ids = [int(i) for i in dict.fromkeys(task_ids)]
+    if not ids or is_administrator(actor_id):
+        return ids
+    rows = conn.execute(
+        """
+        SELECT z.id FROM zadania z
+        WHERE z.id = ANY(%s)
+          AND (
+            z.pracownik_id = %s OR z.created_by = %s
+            OR EXISTS (
+                SELECT 1 FROM pracownik_firma pf
+                WHERE pf.pracownik_id = %s AND pf.firma_id = z.firma_id
+            )
+          )
+        """,
+        (ids, actor_id, actor_id, actor_id),
+    ).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def delete_tasks(task_ids: List[int], actor_id: Optional[int] = None) -> int:
+    """Usuwa wiele zadań naraz; pomija te, do których brak uprawnień. Zwraca liczbę usuniętych."""
+    if not actor_id:
+        raise PermissionError("Identyfikator użytkownika jest wymagany.")
+    conn = get_conn()
+    try:
+        ids = _allowed_task_ids(conn, task_ids, actor_id)
+        if ids:
+            conn.execute("DELETE FROM zadania WHERE id = ANY(%s)", (ids,))
+            conn.commit()
+        return len(ids)
+    finally:
+        conn.close()
+
+
+def set_tasks_status(task_ids: List[int], status: str, actor_id: Optional[int] = None) -> int:
+    """Masowo zmienia status zadań; pomija te, do których brak uprawnień. Zwraca liczbę zmienionych."""
+    if not actor_id:
+        raise PermissionError("Identyfikator użytkownika jest wymagany.")
+    if status not in TASK_STATUSES:
+        raise ValueError(f"Nieznany status zadania: {status}")
+    conn = get_conn()
+    try:
+        ids = _allowed_task_ids(conn, task_ids, actor_id)
+        if ids:
+            conn.execute(
+                """
+                UPDATE zadania SET status = %s,
+                    updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                WHERE id = ANY(%s)
+                """,
+                (status, ids),
+            )
+            conn.commit()
+        return len(ids)
+    finally:
+        conn.close()
+
+
 def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
     if not actor_id:
         raise PermissionError("Identyfikator użytkownika jest wymagany.")

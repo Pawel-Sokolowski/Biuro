@@ -519,6 +519,29 @@ def init_db():
         );
     """)
     _safe_alter_add_column(cur, "wiadomosci_email", "email_done INTEGER NOT NULL DEFAULT 0")
+    _safe_alter_add_column(cur, "wiadomosci_email", "saldeo_przetworzona INTEGER NOT NULL DEFAULT 0")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rozliczenia_saldeo (
+            firma_id INTEGER NOT NULL REFERENCES firmy(id) ON DELETE CASCADE,
+            miesiac TEXT NOT NULL,
+            przychod DOUBLE PRECISION,
+            koszty DOUBLE PRECISION,
+            dochod DOUBLE PRECISION,
+            vat_kwota DOUBLE PRECISION,
+            vat_opis TEXT,
+            vat_okres TEXT,
+            vat_termin TEXT,
+            cit_kwota DOUBLE PRECISION,
+            cit_okres TEXT,
+            cit_termin TEXT,
+            pit_kwota DOUBLE PRECISION,
+            pit_okres TEXT,
+            pit_termin TEXT,
+            wiadomosc_id INTEGER,
+            updated_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+            PRIMARY KEY (firma_id, miesiac)
+        );
+    """)
     _safe_alter_add_column(cur, "firmy", "ceidg_zawieszona INTEGER NOT NULL DEFAULT 0")
     _safe_alter_add_column(cur, "firmy", "uslugi_zawieszone INTEGER NOT NULL DEFAULT 0")
     _safe_alter_add_column(cur, "firmy", "cena_netto_ksiegowosc DOUBLE PRECISION")

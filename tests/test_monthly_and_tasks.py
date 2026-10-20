@@ -2,7 +2,7 @@ from app.db.dao_companies import assign_employee_to_company
 import unittest
 
 from app.db.dao_monthly import get_month_status, save_month_status
-from app.db.dao_tasks import list_tasks_for_timer, save_task
+from app.db.dao_tasks import delete_tasks, list_tasks, list_tasks_for_timer, save_task, set_tasks_status
 from tests.base import DbTestCase
 
 
@@ -53,6 +53,19 @@ class TimerTaskFilterTests(DbTestCase):
         save_task("Otwarte", firma_id=firma, pracownik_id=emp, created_by=emp, actor_id=emp)
         titles = [t["tytul"] for t in list_tasks_for_timer(emp, firma)]
         self.assertEqual(titles, ["Otwarte"])
+
+
+class BulkTaskTests(DbTestCase):
+    def test_bulk_status_and_delete(self):
+        emp = self.make_employee()
+        other = self.make_employee(email="inny@example.com")
+        mine = [save_task(f"T{i}", pracownik_id=emp, created_by=emp, actor_id=emp) for i in range(3)]
+        foreign = save_task("Obce", pracownik_id=other, created_by=other, actor_id=other)
+        self.assertEqual(set_tasks_status(mine + [foreign], "Zakończone", actor_id=emp), 3)
+        by_id = {t["id"]: t["status"] for t in list_tasks(viewer_id=emp)}
+        self.assertTrue(all(by_id[i] == "Zakończone" for i in mine))
+        self.assertEqual(delete_tasks(mine + [foreign], actor_id=emp), 3)
+        self.assertFalse(any(t["id"] in mine for t in list_tasks(viewer_id=emp)))
 
 
 if __name__ == "__main__":

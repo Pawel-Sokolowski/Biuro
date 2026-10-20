@@ -88,10 +88,16 @@ class MonthlyViewLogic:
                    sm.data_dostarczenia AS data_dostarczenia,
                    COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
-                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
+                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
+                   rs.przychod, rs.koszty, rs.dochod,
+                   rs.vat_kwota, rs.vat_opis, rs.vat_okres, rs.vat_termin,
+                   rs.cit_kwota, rs.cit_okres, rs.cit_termin,
+                   rs.pit_kwota, rs.pit_okres, rs.pit_termin
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = %s
+            LEFT JOIN rozliczenia_saldeo rs
+                ON rs.firma_id = f.id AND rs.miesiac = %s
             LEFT JOIN (
                 SELECT firma_id, COUNT(*) AS ilosc_dok
                 FROM dokumenty
@@ -99,7 +105,7 @@ class MonthlyViewLogic:
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
         """
-        params: List[Any] = [selected_month, month_start, month_end]
+        params: List[Any] = [selected_month, selected_month, month_start, month_end]
         if not is_administrator(self.pracownik_id):
             company_ids = assigned_company_ids(self.pracownik_id)
             if not company_ids:

@@ -48,7 +48,9 @@ def check_company_vat(
         return result
 
     wl = wl_fetch(nip)
-    if wl.get("error"):
+    if wl.get("not_found"):
+        result["vat"] = "zwolniony"
+    elif wl.get("error"):
         result["errors"].append(f"VAT: {wl.get('message')}")
     else:
         result["vat"] = _WL_MAP.get(wl.get("status_vat"), "nieznany")

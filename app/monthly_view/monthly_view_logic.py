@@ -80,7 +80,9 @@ class MonthlyViewLogic:
 
         sql = """
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
-                   f.status,
+                   f.status, f.uslugi_zawieszone,
+                   f.vat_status, f.vat_sprawdzono, f.vat_sprawdzil,
+                   f.vat_ue_status, f.vat_ue_sprawdzono, f.vat_ue_sprawdzil,
                    COALESCE(sm.etap, 'Brak') AS etap,
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    sm.data_dostarczenia AS data_dostarczenia,
@@ -417,21 +419,21 @@ class MonthlyViewLogic:
         CompanyForm(firma_id, actor_id=self.pracownik_id).exec()
 
     def mark_company_suspended_manual(self, firma_id: int):
+        self.toggle_services_suspended(firma_id, True)
+
+    def toggle_services_suspended(self, firma_id: int, suspended: bool):
+        from app.db.dao_companies import set_services_suspended
+        set_services_suspended(firma_id, suspended, actor_id=self.pracownik_id)
+
+    def check_vat_status(self, firma_id: int):
+        from app.utils.vat_check import check_company_vat
         self._assert_company_access(firma_id)
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE firmy
-            SET status = 'Zawieszone',
-                zawieszenia_dzialalnosci = %s
-            WHERE id = %s
-        """,
-            (today, firma_id),
-        )
-        conn.commit()
-        conn.close()
+        return check_company_vat(firma_id, actor_id=self.pracownik_id)
+
+    def check_ceidg_suspension(self, firma_id: int):
+        from app.utils.ceidg_suspension import check_company_ceidg
+        self._assert_company_access(firma_id)
+        return check_company_ceidg(firma_id)
 
     def move_company_to_archive(self, firma_id: int):
         self._assert_company_access(firma_id)

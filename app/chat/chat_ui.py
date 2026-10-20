@@ -127,6 +127,20 @@ class ChatPage(QWidget):
     # ============================================================
     # CONVERSATIONS
     # ============================================================
+    def refresh(self):
+        current = self.current_konwersacja
+        self.refresh_chat_conversations()
+        if current is None:
+            return
+        for i in range(self.chat_conversations.count()):
+            item = self.chat_conversations.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == current:
+                self.chat_conversations.blockSignals(True)
+                self.chat_conversations.setCurrentItem(item)
+                self.chat_conversations.blockSignals(False)
+                self.load_messages()
+                break
+
     def refresh_chat_conversations(self, select_id: Optional[int] = None):
         self.chat_conversations.blockSignals(True)
         self.chat_conversations.clear()

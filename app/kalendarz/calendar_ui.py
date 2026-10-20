@@ -434,14 +434,26 @@ class CalendarPage(QWidget):
         else:
             end = last - timedelta(days=1)
             self.period_label.setText(f"{first.strftime('%d.%m')} – {end.strftime('%d.%m.%Y')}")
-        events = self._visible_events(first, last)
-        self._fill_tree(events)
+        self._events = self._visible_events(first, last)
+        self._fill_tree(self._day_events(self._events, a))
         self.grid_host.setVisible(weeks > 0)
         self.tree.setMaximumHeight(170 if weeks else 16777215)
         self._main.setStretchFactor(self.tree, 0 if weeks else 1)
         if weeks:
-            self._fill_grid(first, weeks, events)
+            self._fill_grid(first, weeks, self._events)
         self._mark_days()
+
+    @staticmethod
+    def _day_events(events: list, day: date) -> list:
+        out = []
+        for ev in events:
+            start = date.fromisoformat(ev["start"][:10])
+            end = date.fromisoformat(ev["koniec"][:10])
+            if not ev["caly_dzien"] and ev["koniec"][11:16] == "00:00" and end > start:
+                end -= timedelta(days=1)
+            if start <= day <= end:
+                out.append(ev)
+        return out
 
     def _fill_tree(self, events: list):
         self.tree.clear()
@@ -512,6 +524,7 @@ class CalendarPage(QWidget):
         self.calendar.blockSignals(True)
         self.calendar.setSelectedDate(QDate(d.year, d.month, d.day))
         self.calendar.blockSignals(False)
+        self._fill_tree(self._day_events(getattr(self, "_events", []), d))
 
     def _cell_double_clicked(self, d: date):
         self._cell_clicked(d)

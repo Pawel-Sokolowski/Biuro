@@ -546,6 +546,7 @@ class OfficeManagerApp(QMainWindow):
 
         self.sidebar.setCurrentRow(0)
         self.pages.setCurrentIndex(0)
+        self.pages.currentChanged.connect(self._refresh_current_page)
 
         # Timer aktualizujący nagłówek co sekundę
         self._header_timer = QTimer(self)
@@ -605,6 +606,18 @@ class OfficeManagerApp(QMainWindow):
                 self.lbl_live_task.setText("Brak aktywnego zadania")
                 self.lbl_live_context.setText("")
                 self.lbl_live_timer.setText("00:00:00")
+
+    def _refresh_current_page(self, index: int):
+        """Odświeża dane widoku po przełączeniu, żeby zmiany z innych widoków były widoczne."""
+        page = self.pages.widget(index)
+        for name in ("_reload_rows", "_refresh", "refresh", "_refresh_all"):
+            action = getattr(page, name, None)
+            if callable(action):
+                try:
+                    action()
+                except Exception:
+                    logger.warning("Nie udało się odświeżyć widoku", exc_info=True)
+                return
 
     def zmien_zakladke(self, index):
         if 0 <= index < self.pages.count():

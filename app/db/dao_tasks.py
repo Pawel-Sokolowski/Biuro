@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import psycopg
 from typing import Any, Dict, List, Optional
 
@@ -181,6 +182,82 @@ def save_task(
         return result
     finally:
         conn.close()
+
+
+def notify_company_event(
+    firma_id: int, tytul: str, opis: str, everyone: bool = False
+) -> List[int]:
+    """Tworzy zadanie-powiadomienie o firmie. Odbiorcy: wszyscy aktywni pracownicy
+    (everyone=True) albo opiekunowie firmy, a gdy ich brak - administratorzy.
+    Tytuł dostaje sufiks z nazwą firmy. Zwraca id utworzonych zadań."""
+    conn = get_conn()
+    try:
+        firma = conn.execute("SELECT nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
+        if not firma:
+            return []
+        if everyone:
+            rows = conn.execute(
+                "SELECT id FROM pracownicy WHERE COALESCE(aktywny, 1) = 1"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT p.id FROM pracownik_firma pf
+                JOIN pracownicy p ON p.id = pf.pracownik_id
+                WHERE pf.firma_id = %s AND COALESCE(p.aktywny, 1) = 1
+                """,
+                (firma_id,),
+            ).fetchall()
+        if not rows and not everyone:
+            rows = conn.execute(
+                """
+                SELECT p.id FROM pracownicy p
+                LEFT JOIN role r ON r.id = p.rola_id
+                WHERE COALESCE(p.aktywny, 1) = 1
+                  AND (COALESCE(p.is_admin, 0) = 1 OR LOWER(COALESCE(r.nazwa, '')) = 'admin')
+                """
+            ).fetchall()
+        today = datetime.date.today().isoformat()
+        created: List[int] = []
+        for row in rows:
+            cur = conn.execute(
+                """
+                INSERT INTO zadania (tytul, opis, status, termin, firma_id, pracownik_id)
+                VALUES (%s, %s, 'Nowe', %s, %s, %s) RETURNING id
+                """,
+                (f"{tytul}: {firma[0]}", f"{opis} ({today}).", today, firma_id, row[0]),
+            )
+            created.append(int(cur.fetchone()[0]))
+        conn.commit()
+        return created
+    finally:
+        conn.close()
+
+
+def notify_company_resumed(firma_id: int) -> List[int]:
+    return notify_company_event(
+        firma_id,
+        "Klient odwiesił działalność gospodarczą",
+        "CEIDG pokazuje, że działalność firmy została odwieszona",
+    )
+
+
+def notify_company_suspended(firma_id: int) -> List[int]:
+    return notify_company_event(
+        firma_id,
+        "Klient zawiesił działalność gospodarczą",
+        "CEIDG pokazuje, że działalność firmy została zawieszona",
+    )
+
+
+def notify_services_changed(firma_id: int, suspended: bool) -> List[int]:
+    if suspended:
+        return notify_company_event(
+            firma_id, "ZAWIESZONE USŁUGI", "Biuro zawiesiło wykonywanie usług dla firmy", everyone=True
+        )
+    return notify_company_event(
+        firma_id, "Wznowione usługi", "Biuro wznowiło wykonywanie usług dla firmy", everyone=True
+    )
 
 
 def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:

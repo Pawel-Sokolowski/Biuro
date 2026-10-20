@@ -46,12 +46,12 @@ FIRMA_FIELDS = [
     "uop_ilosc", "uz_ilosc", "uod_ilosc",
     "uop_cennik", "uz_cennik", "uod_cennik",
 
-    "typ_rozliczenia", "vat_czynny", "status",
+    "typ_rozliczenia", "vat_czynny", "status", "uslugi_zawieszone",
 
     "cennik_kpir_auto", "cena_ksiegowosc_auto",
     "cennik_kpir_manual", "manual_cennik_override",
 
-    "zdrowotna",
+    "zdrowotna", "cena_netto_ksiegowosc", "cena_ponad_limit",
 
     "wysylac_do_ksef",
     "wysylac_do_kontrahenta",
@@ -102,7 +102,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
     sql = """
-        SELECT id, nazwa, nip, miasto, status,
+        SELECT id, nazwa, nip, miasto, status, uslugi_zawieszone,
                glowny_cennik, limit_dokumentow,
                typ_rozliczenia, vat_czynny
         FROM firmy
@@ -133,7 +133,7 @@ def get_companies_filtered(
 
     base_select = """
         SELECT f.id, f.nazwa, f.nip, f.miasto,
-               COALESCE(f.status, 'Aktywne') AS status,
+               COALESCE(f.status, 'Aktywne') AS status, f.uslugi_zawieszone,
                f.glowny_cennik, f.limit_dokumentow
     """
     base_from = " FROM firmy f"
@@ -425,6 +425,7 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
 
     mapped = _apply_aliases(payload)
     data = {f: mapped.get(f) for f in FIRMA_FIELDS if mapped.get(f) is not None}
+    services_changed: Optional[bool] = None
 
     try:
         if actor_id and not can(actor_id, "can_edit_companies"):
@@ -437,6 +438,12 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
                 and firma_id not in assigned_company_ids(actor_id)
             ):
                 raise PermissionError("Brak dostępu do tej firmy.")
+            if "uslugi_zawieszone" in data:
+                data["uslugi_zawieszone"] = 1 if data["uslugi_zawieszone"] else 0
+                cur.execute("SELECT uslugi_zawieszone FROM firmy WHERE id = %s", (firma_id,))
+                prev = cur.fetchone()
+                if prev and int(prev[0] or 0) != data["uslugi_zawieszone"]:
+                    services_changed = bool(data["uslugi_zawieszone"])
             if data:
                 set_clause = ", ".join([f"{col} = %s" for col in data.keys()])
                 params = [data[col] for col in data.keys()] + [firma_id]
@@ -468,12 +475,40 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
     finally:
         conn.close()
 
+    if services_changed is not None:
+        from app.db.dao_tasks import notify_services_changed
+        notify_services_changed(firma_id, services_changed)
     return firma_id
+
+
+def set_services_suspended(firma_id: int, suspended: bool, actor_id: Optional[int] = None) -> bool:
+    """Włącza/wyłącza zawieszenie usług (niezależne od statusu i CEIDG).
+    Przy zmianie wysyła powiadomienie do wszystkich pracowników. Zwraca True, gdy był zmiana."""
+    if actor_id and not can(actor_id, "can_edit_companies"):
+        raise PermissionError("Brak uprawnień do edycji firm.")
+    if (
+        actor_id
+        and not is_administrator(actor_id)
+        and firma_id not in assigned_company_ids(actor_id)
+    ):
+        raise PermissionError("Brak dostępu do tej firmy.")
+    flag = 1 if suspended else 0
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT uslugi_zawieszone FROM firmy WHERE id = %s", (firma_id,)).fetchone()
+        if not row or int(row[0] or 0) == flag:
+            return False
+        conn.execute("UPDATE firmy SET uslugi_zawieszone = %s WHERE id = %s", (flag, firma_id))
+        conn.commit()
+    finally:
+        conn.close()
+    from app.db.dao_tasks import notify_services_changed
+    notify_services_changed(firma_id, bool(flag))
+    return True
 
 
 # ============================================================
 #  DELETE / STATUS
-# ============================================================
 
 def delete_company(firma_id: int, actor_id: Optional[int] = None) -> None:
     conn = get_conn()
@@ -581,17 +616,9 @@ def get_company_employees(firma_id: int) -> List[Dict[str, Any]]:
 # ============================================================
 
 def _sort_cenniki_rosnaco(rows: List[Row]) -> List[Dict[str, Any]]:
-    def extract(row):
-        klucz = row["klucz"]
-        parts = klucz.replace("-", "_").split("_")
+    from app.companies.cennik_keys import cennik_sort_key
 
-        typ = parts[0]
-        vat = parts[1] if len(parts) > 1 else ""
-        limit = _extract_limit_from_key(klucz) or 999999
-
-        return (typ, vat, limit, klucz)
-
-    return [dict(r) for r in sorted(rows, key=extract)]
+    return [dict(r) for r in sorted(rows, key=lambda r: cennik_sort_key(r["klucz"]))]
 
 
 def get_cennik_by_key(klucz: str) -> Optional[Dict[str, Any]]:
@@ -691,7 +718,8 @@ def get_ksiegowosc_options() -> List[Dict[str, Any]]:
         SELECT klucz,
                cena_netto_ksiegowosc AS netto,
                cena_brutto_ksiegowosc AS brutto,
-               cena_za_dokument_ponad_limit AS ponad_limit
+               cena_za_dokument_ponad_limit AS ponad_limit,
+               zdrowotna
         FROM cenniki
     """)
     rows = cur.fetchall()
@@ -705,6 +733,7 @@ def get_ksiegowosc_options() -> List[Dict[str, Any]]:
             "netto": float(r["netto"] or 0),
             "brutto": float(r["brutto"] or 0),
             "ponad_limit": float(r["ponad_limit"] or 0),
+            "zdrowotna": float(r["zdrowotna"] or 0),
         }
         for r in sorted_rows
     ]

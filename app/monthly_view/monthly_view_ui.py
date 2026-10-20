@@ -646,6 +646,9 @@ class MonthlyViewPage(QWidget):
                     if col in (0, note_col)
                     else QHeaderView.ResizeMode.ResizeToContents,
                 )
+            vat_col = table.model().columnCount() - 2
+            header.moveSection(header.visualIndex(vat_col), 1)
+            header.moveSection(header.visualIndex(vat_col + 1), 2)
 
     def _populate_months(self):
         now = datetime.datetime.now()
@@ -865,7 +868,10 @@ class MonthlyViewPage(QWidget):
     def _on_more_menu(self, firma_id: int):
         menu = QMenu(self)
 
-        act_suspend = QAction("Oznacz jako zawieszoną", self)
+        from app.db.dao_companies import get_company
+        firma = get_company(firma_id) or {}
+        services_off = bool(firma.get("uslugi_zawieszone"))
+        act_suspend = QAction("Wznów wykonywanie usług" if services_off else "Zawieś wykonywanie usług", self)
         act_archive = QAction("Przenieś do archiwum", self)
         act_activity = QAction("Pokaż aktywności", self)
 
@@ -875,21 +881,63 @@ class MonthlyViewPage(QWidget):
         menu.addAction(act_restore)
         act_restore.triggered.connect(lambda: self._on_restore_active(firma_id))
         menu.addSeparator()
+        act_vat = QAction("Sprawdź status VAT", self)
+        act_ceidg = QAction("Zawieszenie firmy", self)
+        menu.addAction(act_vat)
+        menu.addAction(act_ceidg)
+        act_vat.triggered.connect(lambda: self._on_check_vat(firma_id))
+        act_ceidg.triggered.connect(lambda: self._on_check_ceidg(firma_id))
+        menu.addSeparator()
         menu.addAction(act_activity)
 
-        act_suspend.triggered.connect(lambda: self._on_mark_suspended(firma_id))
+        act_suspend.triggered.connect(lambda: self._on_toggle_services(firma_id, not services_off))
         act_archive.triggered.connect(lambda: self._on_move_archive(firma_id))
         act_activity.triggered.connect(lambda: self._on_show_activity(firma_id))
 
         menu.exec(QCursor.pos())
 
-    def _on_mark_suspended(self, firma_id: int):
+    def _on_check_vat(self, firma_id: int):
         try:
-            self.logic.mark_company_suspended_manual(firma_id)
+            res = self.logic.check_vat_status(firma_id)
         except PermissionError as exc:
             QMessageBox.warning(self, "Brak uprawnień", str(exc))
             return
-        QMessageBox.information(self, "Zawieszenie", "Firma oznaczona jako zawieszona.")
+        names = {"czynny": "czynny", "zwolniony": "nieaktywny", "nieznany": "nieznany status", None: "bez zmian"}
+        text = f"VAT (Biała Lista): {names[res['vat']]}\nVAT UE (VIES): {names[res['vat_ue']]}"
+        if res["errors"]:
+            text += "\n\n" + "\n".join(res["errors"])
+        QMessageBox.information(self, "Status VAT", text)
+        self._reload_rows()
+
+    def _on_check_ceidg(self, firma_id: int):
+        try:
+            res = self.logic.check_ceidg_suspension(firma_id)
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
+            return
+        if res["error"]:
+            QMessageBox.warning(self, "Zawieszenie firmy", res["error"])
+            return
+        text = "CEIDG: działalność " + res["state"] + "."
+        if res["change"] == "suspended":
+            text += "\nFirma przeniesiona do zawieszonych, pracownicy dostali powiadomienie."
+        elif res["change"] == "resumed":
+            text += "\nFirma przywrócona do aktywnych, pracownicy dostali powiadomienie."
+        QMessageBox.information(self, "Zawieszenie firmy", text)
+        self._reload_rows()
+
+    def _on_toggle_services(self, firma_id: int, suspended: bool):
+        try:
+            self.logic.toggle_services_suspended(firma_id, suspended)
+        except PermissionError as exc:
+            QMessageBox.warning(self, "Brak uprawnień", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Usługi",
+            "Usługi zawieszone. Pracownicy dostali powiadomienie." if suspended
+            else "Usługi wznowione. Pracownicy dostali powiadomienie.",
+        )
         self._reload_rows()
 
     def _on_move_archive(self, firma_id: int):

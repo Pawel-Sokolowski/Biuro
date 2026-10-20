@@ -523,6 +523,19 @@ def init_db():
     _safe_alter_add_column(cur, "firmy", "uslugi_zawieszone INTEGER NOT NULL DEFAULT 0")
     _safe_alter_add_column(cur, "firmy", "cena_netto_ksiegowosc DOUBLE PRECISION")
     _safe_alter_add_column(cur, "firmy", "cena_ponad_limit DOUBLE PRECISION")
+    cur.execute("ALTER TABLE firmy ALTER COLUMN fakturowac SET DEFAULT 1")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            klucz TEXT PRIMARY KEY,
+            wartosc TEXT
+        );
+    """)
+    cur.execute("SELECT 1 FROM app_settings WHERE klucz = 'migracja_fakturowac_domyslnie'")
+    if not cur.fetchone():
+        cur.execute("UPDATE firmy SET fakturowac = 1")
+        cur.execute(
+            "INSERT INTO app_settings (klucz, wartosc) VALUES ('migracja_fakturowac_domyslnie', '1')"
+        )
     for _col in ("vat", "vat_ue"):
         _safe_alter_add_column(cur, "firmy", f"{_col}_status TEXT")
         _safe_alter_add_column(cur, "firmy", f"{_col}_sprawdzono TEXT")

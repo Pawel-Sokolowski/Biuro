@@ -129,6 +129,8 @@ class FakturyLogic:
 
         zdrowotna_val = 0.0
         wliczona = bool(company.get("wliczac_zdrowotna", 0))
+        from app.db.dao_companies import count_zdrowotna_units
+        zdrowotna_sztuk = count_zdrowotna_units(firma_id)
         if pricing:
             zdrowotna_val = self._to_float(company.get("zdrowotna", 0.0)) or \
                 self._to_float(pricing.get("zdrowotna", 0.0))
@@ -139,8 +141,8 @@ class FakturyLogic:
                 self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
             brutto = round(netto * 1.23, 2)
             if wliczona and zdrowotna_val > 0:
-                netto = round(netto + zdrowotna_val, 2)
-                brutto = round(brutto + zdrowotna_val * 1.23, 2)
+                netto = round(netto + zdrowotna_val * zdrowotna_sztuk, 2)
+                brutto = round(brutto + zdrowotna_val * zdrowotna_sztuk * 1.23, 2)
             pozycje.append({
                 "nazwa": "Usługa księgowa",
                 "ilosc": 1,
@@ -178,13 +180,14 @@ class FakturyLogic:
         # ---------------- Zdrowotna ----------------
         if pricing and company.get("fakturowac", 0) == 1 and not wliczona:
             if zdrowotna_val > 0:
+                sztuk = zdrowotna_sztuk
                 pozycje.append({
                     "nazwa": "Zdrowotna",
-                    "ilosc": 1,
-                    "jednostka": "mc",
-                    "netto": zdrowotna_val,
+                    "ilosc": sztuk,
+                    "jednostka": "szt.",
+                    "netto": round(zdrowotna_val * sztuk, 2),
                     "vat": 0,
-                    "brutto": zdrowotna_val,
+                    "brutto": round(zdrowotna_val * sztuk, 2),
                     "kategoria": "księgowość",
                     "generated": True
                 })

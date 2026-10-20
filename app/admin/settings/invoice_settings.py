@@ -2,11 +2,15 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QCheckBox, QComboBox,
-    QPushButton, QMessageBox, QHBoxLayout, QLineEdit
+    QPushButton, QMessageBox, QHBoxLayout, QLineEdit, QSpinBox, QDateEdit
 )
+from PyQt6.QtCore import QDate
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
+from app.utils.payment_terms import (
+    DAY_OF_MONTH_KEY, DAYS_KEY, MODE_DAY_OF_MONTH, MODE_DAYS, MODE_KEY,
+)
 from app.invoices.ksef import DEFAULT_URL_TEMPLATE, URL_TEMPLATE_KEY
 
 
@@ -94,6 +98,40 @@ class InvoiceSettings(QWidget):
         layout.addWidget(self.vat_combo)
 
         # -------------------------
+        # Domyślny termin płatności
+        # -------------------------
+        layout.addWidget(QLabel("Domyślny termin płatności faktur:"))
+        self.term_mode = QComboBox()
+        self.term_mode.addItem("Liczba dni od wystawienia", MODE_DAYS)
+        self.term_mode.addItem("Konkretny dzień miesiąca (z kalendarza)", MODE_DAY_OF_MONTH)
+        self.term_days = QSpinBox()
+        self.term_days.setRange(0, 365)
+        self.term_days.setSuffix(" dni")
+        self.term_date = QDateEdit()
+        self.term_date.setCalendarPopup(True)
+        self.term_date.setDisplayFormat("dd.MM.yyyy")
+        today = QDate.currentDate()
+        try:
+            days = int(self.logic.get_setting(DAYS_KEY) or self.logic.get_setting("faktury_termin_dni") or 7)
+        except ValueError:
+            days = 7
+        try:
+            day = int(self.logic.get_setting(DAY_OF_MONTH_KEY) or today.day())
+        except ValueError:
+            day = today.day()
+        self.term_days.setValue(days)
+        self.term_date.setDate(QDate(today.year(), today.month(), min(max(day, 1), today.daysInMonth())))
+        mode = self.logic.get_setting(MODE_KEY) or MODE_DAYS
+        self.term_mode.setCurrentIndex(max(self.term_mode.findData(mode), 0))
+        self.term_mode.currentIndexChanged.connect(self._sync_term_widgets)
+        row = QHBoxLayout()
+        row.addWidget(self.term_mode)
+        row.addWidget(self.term_days)
+        row.addWidget(self.term_date)
+        row.addStretch()
+        layout.addLayout(row)
+        self._sync_term_widgets()
+        # -------------------------
         # KSeF - odnośnik do podglądu faktury
         # -------------------------
         layout.addWidget(QLabel("Adres otwierany po kliknięciu numeru KSeF (można użyć {numer}):"))
@@ -111,6 +149,11 @@ class InvoiceSettings(QWidget):
         btn_row.addWidget(btn_save)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+    def _sync_term_widgets(self):
+        by_day = self.term_mode.currentData() == MODE_DAY_OF_MONTH
+        self.term_days.setVisible(not by_day)
+        self.term_date.setVisible(by_day)
 
     def _get_flag_value(self, *keys: str) -> str:
         for key in keys:
@@ -164,6 +207,10 @@ class InvoiceSettings(QWidget):
             "faktury_domyslny_vat",
             self.vat_combo.currentText()
         )
+
+        self.logic.set_setting(MODE_KEY, self.term_mode.currentData())
+        self.logic.set_setting(DAYS_KEY, str(self.term_days.value()))
+        self.logic.set_setting(DAY_OF_MONTH_KEY, str(self.term_date.date().day()))
 
         self.logic.set_setting(URL_TEMPLATE_KEY, self.ksef_url.text().strip() or DEFAULT_URL_TEMPLATE)
 

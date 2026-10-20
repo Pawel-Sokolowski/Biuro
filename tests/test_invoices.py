@@ -2,6 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.db.dao_invoices import (
@@ -116,6 +117,31 @@ class InvoiceUiTests(DbTestCase):
         page.refresh()
         self.assertEqual(page.issued_table.rowCount(), 1)
         self.assertTrue(InvoiceEditorDialog(get_invoice_by_id(invoice_id)).read_only)
+
+    def test_quantity_can_be_edited_directly_in_draft_positions(self):
+        from PyQt6.QtWidgets import QLineEdit
+        from app.invoices.faktury_ui import FakturyPage
+
+        firma = self.make_company("Klient SA")
+        invoice_id = create_or_update_invoice(firma, "2026-10", POSITIONS, 520.0, 639.6)
+        page = FakturyPage(1)
+        page.month_button.setText("10-2026")
+        page.refresh()
+        page.draft_table.selectRow(0)
+        self.assertEqual(page.positions_table.rowCount(), 2)
+        quantity = page.positions_table.item(1, 1)
+        self.assertTrue(quantity.flags() & Qt.ItemFlag.ItemIsEditable)
+
+        delegate = page.positions_table.itemDelegateForColumn(1)
+        editor = QLineEdit()
+        editor.setText("7")
+        delegate.setModelData(
+            editor, page.positions_table.model(), page.positions_table.model().index(1, 1)
+        )
+
+        self.assertEqual(get_invoice_positions(invoice_id)[1]["ilosc"], 7.0)
+        self.assertEqual(get_invoice_by_id(invoice_id)["kwota_netto"], 535.0)
+        page.close()
 
 
 if __name__ == "__main__":

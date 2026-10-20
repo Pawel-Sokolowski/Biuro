@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, List
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
 from app.companies.ceidg_api import get_ceidg_firma_by_nip
+from app.companies.company_names import clean_company_name, sole_proprietor_short_name
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import FIRMA_FIELDS
 from app.db.dao_cenniki_kadry import get_kadry_price, get_kadry_description
@@ -71,9 +72,16 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
 
     # nazwa
     if form.inputs.get("nazwa"):
-        _safe_set(form.inputs.get("nazwa"), raw.get("nazwa"))
+        _safe_set(form.inputs.get("nazwa"), clean_company_name(raw.get("nazwa")))
 
     wl = raw.get("wlasciciel") or {}
+    short_name = sole_proprietor_short_name(
+        raw.get("imie") or wl.get("imie") or wl.get("imiona"),
+        raw.get("nazwisko") or wl.get("nazwisko"),
+    )
+    short_widget = form.inputs.get("nazwa_skrocona")
+    if short_name and short_widget is not None:
+        _safe_set(short_widget, short_name)
 
     # NIP / REGON
     if form.inputs.get("nip"):
@@ -181,9 +189,15 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
 
     # kontakt
     if form.inputs.get("kont_imie"):
-        _safe_set(form.inputs.get("kont_imie"), wl.get("imie"))
-    if form.inputs.get("kont_nazw"):
-        _safe_set(form.inputs.get("kont_nazw"), wl.get("nazwisko"))
+        _safe_set(
+            form.inputs.get("kont_imie"),
+            raw.get("imie") or raw.get("imiona") or wl.get("imie") or wl.get("imiona"),
+        )
+    if form.inputs.get("kont_nazwisko"):
+        _safe_set(
+            form.inputs.get("kont_nazwisko"),
+            raw.get("nazwisko") or wl.get("nazwisko"),
+        )
     if form.inputs.get("kont_email"):
         _safe_set(form.inputs.get("kont_email"), raw.get("email") or raw.get("kontaktEmail"))
     if form.inputs.get("kont_tel"):
@@ -413,12 +427,14 @@ class CompanyLogic:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("SELECT * FROM firmy ORDER BY nazwa")
+        cur.execute("SELECT * FROM firmy")
 
         rows = cur.fetchall()
         conn.close()
 
-        return [dict(r) for r in rows]
+        from app.utils.polish_sort import polish_sort_key
+
+        return sorted((dict(r) for r in rows), key=lambda row: polish_sort_key(row.get("nazwa")))
 
     # ---------------------------------------------------------
     # Tworzenie nowej firmy

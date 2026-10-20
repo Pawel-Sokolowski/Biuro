@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 from app.db.dao_app_settings import get_setting, set_setting
 
 LABEL_COUNT = 7
+EMPLOYEE_LABEL_NUMBERS = (1, 2, 4, 5, 6, 7)
+COMPLETED_LABEL_NUMBER = 3
 SETTING_KEY = "email_etykiety_pracownikow"
 # kolory kolejnych etykiet z Thunderbirda: czerwony, zielony, niebieski, morski, różowy, pomarańczowy, bordowy
 LABEL_COLORS = {
@@ -32,13 +34,23 @@ def load_label_map() -> Optional[Dict[int, int]]:
         return None
     try:
         data = json.loads(raw)
-        return {int(k): int(v) for k, v in data.items() if 1 <= int(v) <= LABEL_COUNT}
+        return {
+            int(k): int(v)
+            for k, v in data.items()
+            if int(v) in EMPLOYEE_LABEL_NUMBERS
+        }
     except (ValueError, TypeError):
         return None
 
 
 def save_label_map(mapping: Dict[int, int]) -> None:
-    clean = {str(int(k)): int(v) for k, v in mapping.items() if v and 1 <= int(v) <= LABEL_COUNT}
+    if any(v and int(v) not in EMPLOYEE_LABEL_NUMBERS for v in mapping.values()):
+        raise ValueError("Klawisz 3 jest zarezerwowany dla etykiety „Zrobione”.")
+    clean = {
+        str(int(k)): int(v)
+        for k, v in mapping.items()
+        if v and int(v) in EMPLOYEE_LABEL_NUMBERS
+    }
     numbers = list(clean.values())
     if len(numbers) != len(set(numbers)):
         raise ValueError("Dwóch pracowników nie może mieć tego samego numeru etykiety.")
@@ -46,9 +58,12 @@ def save_label_map(mapping: Dict[int, int]) -> None:
 
 
 def resolve_label_numbers(employees: List[Dict[str, Any]]) -> Dict[int, int]:
-    """Numery etykiet pracowników; bez ustawień numerujemy ich po kolei (pierwsi 7)."""
+    """Numery etykiet pracowników; klawisz 3 jest zarezerwowany dla statusu „Zrobione”."""
     saved = load_label_map()
     if saved is None:
-        return {e["id"]: i for i, e in enumerate(employees[:LABEL_COUNT], 1)}
+        return {
+            e["id"]: number
+            for e, number in zip(employees, EMPLOYEE_LABEL_NUMBERS)
+        }
     ids = {e["id"] for e in employees}
     return {emp_id: n for emp_id, n in saved.items() if emp_id in ids}

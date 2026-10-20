@@ -9,8 +9,7 @@ import email
 import tempfile
 import threading
 import unicodedata
-import urllib.request
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from datetime import datetime
 from collections import Counter
 from email.utils import getaddresses, parseaddr
@@ -21,12 +20,15 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QSplitter, QPushButton,
     QLabel, QFrame, QSizePolicy, QDialog, QDialogButtonBox, QTextEdit,
-    QToolButton, QStyle, QLineEdit, QApplication, QTextBrowser, QMenu,
+    QToolButton, QStyle, QLineEdit, QApplication, QMenu,
     QHeaderView, QAbstractItemView, QFileDialog, QProgressBar, QScrollArea,
     QButtonGroup, QInputDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QFont, QImage, QKeySequence, QShortcut, QTextDocument, QDesktopServices
+from PyQt6.QtCore import QCoreApplication, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QFont, QKeySequence, QShortcut, QDesktopServices
+QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_employees import list_employees
@@ -98,7 +100,6 @@ MAX_NUMBER_KEYS = 7
 ROLE_MSGID = Qt.ItemDataRole.UserRole + 20
 ROLE_REFS = Qt.ItemDataRole.UserRole + 21
 DEFAULT_COLUMN_WIDTHS = [430, 220, 180]
-MAX_REMOTE_IMAGE_BYTES = 8_000_000
 PREFETCH_COUNT = 20
 _SUBJECT_PREFIX = re.compile(r"^\s*(re|odp|fw|fwd|pd|wg|aw|przekaż)\s*:\s*", re.IGNORECASE)
 
@@ -243,98 +244,93 @@ def build_folder_tree(folders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return roots
 
 
-class MailBrowser(QTextBrowser):
-    """Podgląd wiadomości: obrazki wbudowane (cid:), data: oraz zdalne (http/https, pobierane w tle)."""
+class _MailWebPage(QWebEnginePage):
+    def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+        if navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+            if url.scheme().lower() in ("http", "https", "mailto"):
+                QDesktopServices.openUrl(url)
+            return False
+        return url.scheme().lower() in ("about", "data", "http", "https")
 
-    remote_ready = pyqtSignal()
+
+class MailBrowser(QWebEngineView):
+    """Podgląd HTML wiadomości w Chromium; JavaScript i dostęp do plików są wyłączone."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.resources: Dict[str, Any] = {}
-        self._html = ""
-        self._remote: Dict[str, bytes] = {}
-        self._requested: set = set()
-        self._reload_timer = QTimer(self)
-        self._reload_timer.setSingleShot(True)
-        self._reload_timer.setInterval(200)
-        self._reload_timer.timeout.connect(self._reload)
-        self.remote_ready.connect(self._reload_timer.start)
+        self.setPage(_MailWebPage(self))
+        settings = self.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
 
-    def show_html(self, html: str) -> None:
-        self._html = html
-        self.setHtml(html)
+    def show_html(self, html: str, header: str = "") -> None:
+        self.setHtml(self.prepare_html(html, self.resources, header))
 
     def setPlainText(self, text: str) -> None:
-        self._html = ""
-        super().setPlainText(text)
+        self.setHtml(
+            "<!doctype html><html><head><meta charset='utf-8'></head>"
+            "<body><pre style='white-space:pre-wrap'>"
+            + html_escape(text)
+            + "</pre></body></html>"
+        )
 
     def clear(self) -> None:
-        self._html = ""
-        super().clear()
+        self.setHtml("")
 
-    def _reload(self) -> None:
-        if not self._html:
-            return
-        bar = self.verticalScrollBar()
-        position = bar.value()
-        self.setHtml(self._html)
-        bar.setValue(position)
+    @staticmethod
+    def prepare_html(html: str, resources: Dict[str, Any], header: str = "") -> str:
+        resource_map = {key.strip("<> ").casefold(): value for key, value in resources.items()}
 
-    def _image(self, data: bytes):
-        image = QImage.fromData(data)
-        if image.isNull():
-            return None
-        limit = max(200, self.viewport().width() - 40)
-        if image.width() > limit:
-            image = image.scaledToWidth(limit, Qt.TransformationMode.SmoothTransformation)
-        return image
+        def replace_cid(match):
+            key = unquote(match.group(1)).strip("<> ").casefold()
+            entry = resource_map.get(key)
+            if not entry:
+                return match.group(0)
+            payload, mime_type = entry
+            encoded = base64.b64encode(payload).decode("ascii")
+            return f"data:{mime_type};base64,{encoded}"
 
-    def _fetch_remote(self, url: str) -> None:
-        data = b""
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(request, timeout=8) as response:
-                if response.headers.get_content_type().startswith("image/"):
-                    data = response.read(MAX_REMOTE_IMAGE_BYTES + 1)
-                    if len(data) > MAX_REMOTE_IMAGE_BYTES:
-                        data = b""
-        except Exception:
-            logger.debug("Nie udało się pobrać obrazka %s", url, exc_info=True)
-        self._remote[url] = data
-        try:
-            self.remote_ready.emit()
-        except RuntimeError:
-            pass  # widżet został już zamknięty
-
-    def loadResource(self, rtype, url):
-        if rtype != QTextDocument.ResourceType.ImageResource.value:
-            return super().loadResource(rtype, url)
-        scheme = url.scheme().lower()
-        if scheme == "cid":
-            key = unquote(url.path() or url.toString()[4:]).strip("<> ")
-            entry = self.resources.get(key)
-            if entry is None:
-                entry = next((v for k, v in self.resources.items() if k.lower() == key.lower()), None)
-            return self._image(entry[0]) if entry else None
-        if scheme == "data":
-            header, _, payload = url.toString().partition(",")
-            try:
-                raw = base64.b64decode(unquote(payload)) if ";base64" in header else unquote(payload).encode("latin-1")
-            except Exception:
-                return None
-            return self._image(raw)
-        if scheme in ("http", "https"):
-            key = url.toString()
-            if key in self._remote:
-                return self._image(self._remote[key]) if self._remote[key] else None
-            if key not in self._requested:
-                if len(self._requested) > 500:
-                    self._requested.clear()
-                    self._remote.clear()
-                self._requested.add(key)
-                threading.Thread(target=self._fetch_remote, args=(key,), daemon=True).start()
-            return None
-        return super().loadResource(rtype, url)
+        html = re.sub(r"(?i)cid:([^\"'\s)>]+)", replace_cid, html)
+        header_html = (
+            "<div style='font:12px Arial,sans-serif;color:#444;padding:8px;"
+            "border-bottom:1px solid #bbb;margin-bottom:8px'>"
+            + header
+            + "</div>"
+            if header
+            else (
+                "<div style='font:12px Arial,sans-serif;color:#444;padding:8px;"
+                "border-bottom:1px solid #bbb;margin-bottom:8px'></div>"
+            )
+        )
+        # Keep complete email documents intact and place the app's message header in their body.
+        body_open = re.search(r"<body\b[^>]*>", html, re.IGNORECASE)
+        if body_open:
+            html = html[:body_open.end()] + header_html + html[body_open.end():]
+            return html
+        elif re.search(r"<html\b", html, re.IGNORECASE):
+            head_end = re.search(r"</head\s*>", html, re.IGNORECASE)
+            if head_end:
+                html = html[:head_end.end()] + "<body>" + header_html + html[head_end.end():]
+            else:
+                html_open = re.search(r"<html\b[^>]*>", html, re.IGNORECASE)
+                html = html[:html_open.end()] + "<body>" + header_html + html[html_open.end():]
+            if not re.search(r"</body\s*>", html, re.IGNORECASE):
+                close_html = re.search(r"</html\s*>", html, re.IGNORECASE)
+                if close_html:
+                    return html[:close_html.start()] + "</body>" + html[close_html.start():]
+                return html + "</body>"
+            return html
+        else:
+            return (
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                "</head><body>" + header_html + html + "</body></html>"
+            )
 
 
 class FolderTree(QTreeWidget):
@@ -411,7 +407,10 @@ class EmailPage(QWidget):
         self._chips_signature = None
         self._load_token = 0
         self.label_numbers: Dict[int, int] = {}
+        self.hidden_folders: Dict[str, set[str]] = self._load_hidden_folders()
+        self.show_hidden_folders = False
         self._reload_employees()
+        self._chips_signature = None
 
         self._select_timer = QTimer(self)
         self._select_timer.setSingleShot(True)
@@ -419,6 +418,7 @@ class EmailPage(QWidget):
         self._select_timer.timeout.connect(self._open_selected_now)
 
         self._build_ui()
+        self._refresh_chips()
         self.async_result.connect(self._on_async_result)
         self.sync_finished.connect(self._on_sync_finished)
         self.headers_ready.connect(self._on_headers_ready)
@@ -653,6 +653,10 @@ class EmailPage(QWidget):
         self.chips_group = QButtonGroup(self)
         self.chips_group.setExclusive(True)
         left_layout.addWidget(self.chips_frame)
+        self.show_hidden_button = QPushButton("Pokaż ukryte foldery")
+        self.show_hidden_button.setCheckable(True)
+        self.show_hidden_button.toggled.connect(self._toggle_show_hidden_folders)
+        left_layout.addWidget(self.show_hidden_button)
         left_layout.addWidget(self.folder_tree, 1)
         splitter.addWidget(left_container)
 
@@ -710,8 +714,7 @@ class EmailPage(QWidget):
         message_layout.addLayout(mail_toolbar)
 
         self.mail_view = MailBrowser()
-        self.mail_view.setOpenExternalLinks(True)
-        self.mail_view.setPlaceholderText("Wybierz wiadomość z listy.")
+        self.mail_view.setPlainText("Wybierz wiadomość z listy.")
         message_layout.addWidget(self.mail_view, 1)
 
         self.att_list = QListWidget()
@@ -791,6 +794,11 @@ class EmailPage(QWidget):
         signature = (
             current_id,
             self.current_folder_local,
+            self.show_hidden_folders,
+            tuple(
+                (account["id"], tuple(sorted(self.hidden_folders.get(str(account["id"]), set()))))
+                for account in self.accounts
+            ),
             tuple(
                 (acc["id"],
                  tuple((f.get("id"), f["server_name"], f.get("attributes")) for f in folders),
@@ -817,6 +825,9 @@ class EmailPage(QWidget):
                 parent: QTreeWidgetItem, flatten: bool = False,
                 under_staff: bool = False) -> QTreeWidgetItem:
             nonlocal selected_item
+            hidden = node["path"] in self.hidden_folders.get(str(account_id), set())
+            if hidden and not self.show_hidden_folders:
+                return None
             role = node["role"]
             label = SPECIAL_FOLDER_LABELS.get(role) if role else None
             if label is None:
@@ -825,7 +836,10 @@ class EmailPage(QWidget):
                     label = employee_label(label, employees)
             folder = node["folder"]
             count = unread.get(folder["id"], 0) if folder and folder.get("id") else 0
-            item = QTreeWidgetItem([f"{label} ({count})" if count else label])
+            item_label = f"{label} ({count})" if count else label
+            if hidden:
+                item_label += " (ukryty)"
+            item = QTreeWidgetItem([item_label])
             selectable = folder is not None and "\\noselect" not in (folder.get("attributes") or "").lower()
             if selectable:
                 item.setData(0, ROLE_DATA, node["path"])
@@ -837,6 +851,11 @@ class EmailPage(QWidget):
                 font = item.font(0)
                 font.setBold(True)
                 item.setFont(0, font)
+            if hidden:
+                font = item.font(0)
+                font.setItalic(True)
+                item.setFont(0, font)
+                item.setForeground(0, QColor("#888888"))
             item.setData(0, ROLE_FOLDER, node["path"])
             item.setData(0, ROLE_ACCOUNT, account_id)
             parent.addChild(item)
@@ -860,9 +879,11 @@ class EmailPage(QWidget):
             for root in build_folder_tree(folders):
                 if root["role"] == "inbox":
                     # "Odebrane" i podfoldery INBOX na jednym poziomie pod kontem
+                    inbox_hidden = root["path"] in self.hidden_folders.get(str(account["id"]), set())
                     add(account["id"], unread, root, account_item, flatten=True)
-                    for child in root["children"]:
-                        add(account["id"], unread, child, account_item)
+                    if not inbox_hidden or self.show_hidden_folders:
+                        for child in root["children"]:
+                            add(account["id"], unread, child, account_item)
                 else:
                     add(account["id"], unread, root, account_item)
 
@@ -1436,11 +1457,12 @@ class EmailPage(QWidget):
         self.mail_view.resources = inline_resources(msg)
 
         if html:
-            self.mail_view.show_html(header + html)
+            self.mail_view.show_html(html, header)
         else:
             self.mail_view.show_html(
-                header + "<pre style='white-space: pre-wrap;'>"
-                + html_escape(extract_text(msg)) + "</pre>"
+                "<pre style='white-space: pre-wrap;'>"
+                + html_escape(extract_text(msg)) + "</pre>",
+                header,
             )
 
         html_lower = (html or "").lower()
@@ -1932,11 +1954,125 @@ class EmailPage(QWidget):
         menu = QMenu(self)
         menu.addAction("Nowy folder…").triggered.connect(lambda: self._new_folder(account_id, path))
         if path:
+            hidden = path in self.hidden_folders.get(str(account_id), set())
+            visibility_action = menu.addAction("Pokaż folder" if hidden else "Ukryj folder")
+            visibility_action.triggered.connect(
+                lambda _=False, aid=account_id, folder=path, hide=not hidden:
+                self._set_folder_hidden(aid, folder, hide)
+            )
             role = folder_role(path, None, self._folder_delimiter(account_id, path))
             rename = menu.addAction("Zmień nazwę…")
             rename.setEnabled(role is None and path.upper() != "INBOX")
             rename.triggered.connect(lambda: self._rename_folder(account_id, path))
         menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+
+    def _hidden_folders_setting_key(self) -> str:
+        return f"email_ukryte_foldery_{self.pracownik_id}"
+
+    def _load_hidden_folders(self) -> Dict[str, set[str]]:
+        try:
+            raw = get_setting(f"email_ukryte_foldery_{self.pracownik_id}") or "{}"
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("Nieprawidłowy format ustawienia ukrytych folderów.")
+            return {
+                str(account_id): {str(path) for path in paths if isinstance(path, str)}
+                for account_id, paths in data.items()
+                if isinstance(paths, list)
+            }
+        except (TypeError, ValueError):
+            logger.warning("Nie można odczytać ustawienia ukrytych folderów", exc_info=True)
+            return {}
+
+    def _toggle_show_hidden_folders(self, show: bool) -> None:
+        self.show_hidden_folders = show
+        self.show_hidden_button.setText(
+            "Ukryj ukryte foldery" if show else "Pokaż ukryte foldery"
+        )
+        if not show and self._current_folder_is_hidden():
+            self.current_folder_local = None
+            self.current_uid = None
+            self._clear_view()
+        self._tree_signature = None
+        self.load_folders_from_db()
+        if self.current_folder_local is None:
+            self._select_first_visible_folder()
+
+    def _current_folder_is_hidden(self) -> bool:
+        if not self.current_account or not self.current_folder_local:
+            return False
+        paths = self.hidden_folders.get(str(self.current_account["id"]), set())
+        delimiter = self._folder_delimiter(
+            self.current_account["id"], self.current_folder_local
+        )
+        return any(
+            self.current_folder_local == path
+            or self.current_folder_local.startswith(path + delimiter)
+            for path in paths
+        )
+
+    def _select_first_visible_folder(self) -> None:
+        account_id = self.current_account["id"] if self.current_account else None
+
+        def find(item: QTreeWidgetItem) -> Optional[QTreeWidgetItem]:
+            if item.data(0, ROLE_ACCOUNT) == account_id and item.data(0, ROLE_DATA):
+                return item
+            for index in range(item.childCount()):
+                found = find(item.child(index))
+                if found is not None:
+                    return found
+            return None
+
+        for index in range(self.folder_tree.topLevelItemCount()):
+            found = find(self.folder_tree.topLevelItem(index))
+            if found is not None:
+                self.folder_tree.setCurrentItem(found)
+                return
+
+    def _set_folder_hidden(self, account_id: int, path: str, hidden: bool) -> None:
+        key = str(account_id)
+        paths = self.hidden_folders.setdefault(key, set())
+        was_hidden = path in paths
+        if hidden:
+            paths.add(path)
+        else:
+            paths.discard(path)
+        try:
+            stored = {
+                account: sorted(folders)
+                for account, folders in self.hidden_folders.items()
+                if folders
+            }
+            set_setting(self._hidden_folders_setting_key(), json.dumps(stored, ensure_ascii=False))
+        except Exception:
+            if was_hidden:
+                paths.add(path)
+            else:
+                paths.discard(path)
+            logger.exception("Nie udało się zapisać ustawienia ukrytych folderów")
+            QMessageBox.warning(self, "Foldery", "Nie udało się zapisać ustawienia widoczności folderu.")
+            return
+
+        current_will_be_hidden = (
+            hidden
+            and self.current_account
+            and self.current_account["id"] == account_id
+            and self.current_folder_local
+            and (
+                self.current_folder_local == path
+                or self.current_folder_local.startswith(
+                    path + self._folder_delimiter(account_id, path)
+                )
+            )
+        )
+        if current_will_be_hidden:
+            self.current_folder_local = None
+            self.current_uid = None
+            self._clear_view()
+        self._tree_signature = None
+        self.load_folders_from_db()
+        if current_will_be_hidden:
+            self._select_first_visible_folder()
 
     def _folder_name_dialog(self, title: str, text: str = "") -> Optional[str]:
         name, ok = QInputDialog.getText(self, title, "Nazwa folderu:", text=text)

@@ -1,5 +1,6 @@
 import unittest
 from tests.base import DbTestCase
+from app.email import email_ui
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QImage
@@ -66,19 +67,32 @@ class LabelsAndImagesTests(DbTestCase):
     def test_browser_resolves_cid_and_data(self):
         import base64
         from PyQt6.QtCore import QBuffer, QIODevice
-        from app.email.email_ui import MailBrowser
+        MailBrowser = email_ui.MailBrowser
         img = QImage(4, 4, QImage.Format.Format_RGB32)
         img.fill(0xff0000)
         buf = QBuffer()
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
         img.save(buf, "PNG")
         raw = bytes(buf.data())
-        b = MailBrowser()
-        b.resources = {"Logo@x": (raw, "image/png")}
-        self.assertIsNotNone(b.loadResource(2, QUrl("cid:logo@x")))
+        resources = {"Logo@x": (raw, "image/png")}
         data = "data:image/png;base64," + base64.b64encode(raw).decode()
-        self.assertIsNotNone(b.loadResource(2, QUrl(data)))
-        self.assertIsNone(b.loadResource(2, QUrl("cid:missing")))
+        html = MailBrowser.prepare_html(
+            '<html><head><title>Test</title></head><body><img src="cid:logo@x">'
+            f'<img src="{data}"></body></html>',
+            resources,
+            "<b>Temat</b>",
+        )
+        self.assertIn(data, html)
+        self.assertNotIn("cid:logo@x", html)
+        self.assertIn("<title>Test</title>", html)
+        self.assertIn("<b>Temat</b>", html)
+
+    def test_browser_wraps_html_fragment(self):
+        MailBrowser = email_ui.MailBrowser
+        html = MailBrowser.prepare_html("<p>Treść newslettera</p>", {})
+        self.assertIn("<!doctype html>", html)
+        self.assertIn("<meta name='viewport'", html)
+        self.assertIn("<p>Treść newslettera</p>", html)
 
 class ThreadGroupingTests(unittest.TestCase):
     def test_threads_only_for_real_replies(self):

@@ -1023,8 +1023,15 @@ def init_db():
         )
     """)
 
-    # Konto administratora powstaje przy pierwszym uruchomieniu (app.security.bootstrap).
-    cur.execute("INSERT INTO firmy (id, nazwa) VALUES (1, 'Domyślna firma') ON CONFLICT DO NOTHING")
+    # Firma demonstracyjna tylko przy inicjalizacji pustej bazy, nie po jej usunięciu.
+    cur.execute("SELECT 1 FROM app_settings WHERE klucz = 'seed_demo_company_v1'")
+    if not cur.fetchone():
+        cur.execute("SELECT 1 FROM firmy LIMIT 1")
+        if not cur.fetchone():
+            cur.execute("INSERT INTO firmy (nazwa) VALUES ('Domyślna firma')")
+        cur.execute(
+            "INSERT INTO app_settings (klucz, wartosc) VALUES ('seed_demo_company_v1', '1')"
+        )
     cur.execute("SELECT setval(pg_get_serial_sequence('firmy', 'id'), (SELECT MAX(id) FROM firmy));")
 
     conn.commit()

@@ -95,7 +95,7 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
                 "FROM firmy f LEFT JOIN statusy_miesieczne s "
                 "ON s.firma_id = f.id AND s.miesiac = %s "
                 f"WHERE {ACTIVE_COMPANY_SQL.replace('status', 'f.status')} "
-                "AND COALESCE(s.dokumenty_dostarczone, 0) = 0 ORDER BY nazwa LIMIT 10",
+                "AND COALESCE(s.dokumenty_dostarczone, 0) = 0 ORDER BY nazwa",
                 (month,),
             )
         ]

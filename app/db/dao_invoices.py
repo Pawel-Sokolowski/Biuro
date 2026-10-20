@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
 from app.db.dao_conn import get_conn, Row
+from app.utils.payment_terms import default_due_date
 from app.invoices.positions import normalize_position, reverse_positions, totals
 from app.security.authorization import assigned_company_ids, can, is_administrator
 
@@ -131,7 +132,7 @@ def _get_or_create_draft_invoice_for_company(
             return dict(row)["id"]
 
         today = _now_date()
-        termin = (datetime.now() + timedelta(days=7)).strftime(DATE_FMT)
+        termin = default_due_date().strftime(DATE_FMT)
         cur.execute(
             """
             INSERT INTO faktury (
@@ -390,7 +391,7 @@ def create_or_update_invoice(
 
     pozycje_json = json.dumps(pozycje, ensure_ascii=False)
     today = _now_date()
-    termin = (datetime.now() + timedelta(days=7)).strftime(DATE_FMT)
+    termin = default_due_date().strftime(DATE_FMT)
 
     try:
         if existing_invoice_id:
@@ -594,9 +595,11 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
             pozycje: List[Dict[str, Any]] = []
             wliczaj_zdrowotna = bool(firma.get("wliczac_zdrowotna", 0))
             zdrowotna_val = float(firma.get("zdrowotna") or 0.0) or zdrowotna_val
+            from app.db.dao_companies import count_zdrowotna_units
+            zdrowotna_sztuk = count_zdrowotna_units(fid)
 
             if wliczaj_zdrowotna and zdrowotna_val > 0:
-                podstawa = round(cena_netto_ks + zdrowotna_val, 2)
+                podstawa = round(cena_netto_ks + zdrowotna_val * zdrowotna_sztuk, 2)
                 pozycje.append(
                     {
                         "opis": "Księgowość (miesięczna) - podstawowa opłata",
@@ -619,14 +622,15 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                     }
                 )
                 if zdrowotna_val > 0:
+                    zdr_netto = round(zdrowotna_val * zdrowotna_sztuk, 2)
                     pozycje.append(
                         {
                             "opis": "Składka zdrowotna (miesięczna)",
-                            "ilosc": 1,
+                            "ilosc": zdrowotna_sztuk,
                             "cena_netto": round(zdrowotna_val, 2),
                             "stawka_vat": "0",
-                            "wartosc_netto": round(zdrowotna_val, 2),
-                            "wartosc_brutto": round(zdrowotna_val * 1.23, 2),
+                            "wartosc_netto": zdr_netto,
+                            "wartosc_brutto": round(zdr_netto * 1.23, 2),
                         }
                     )
 

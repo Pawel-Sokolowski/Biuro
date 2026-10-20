@@ -1079,6 +1079,18 @@ PARTNER_FIELDS = [
 ]
 
 
+def count_zdrowotna_units(firma_id: int) -> int:
+    """Liczba sztuk zdrowotnej do faktury: tylu, ilu wspólników; jednoosobowa = 1."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM udzialowcy WHERE firma_id = %s", (firma_id,)
+        ).fetchone()
+        return max(1, int(row[0] or 0))
+    finally:
+        conn.close()
+
+
 def get_partners(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()

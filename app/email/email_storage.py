@@ -103,7 +103,7 @@ def add_email_filter(
         row = conn.execute(
             "SELECT pracownik_id FROM konta_email WHERE id = %s", (konto_id,)
         ).fetchone()
-        pracownik_id = row[0] if row and row[0] is not None else 0
+        pracownik_id = row[0] if row and row[0] is not None else None
         cur = conn.execute(
             """
             INSERT INTO reguly_filtrow (

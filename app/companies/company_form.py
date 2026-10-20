@@ -247,6 +247,7 @@ class CompanyForm(QDialog):
 
         dzien_dostarczania_dokumentow = QSpinBox()
         dzien_dostarczania_dokumentow.setRange(1, 31)
+        dzien_dostarczania_dokumentow.setValue(7)
 
         add_row(
             ["Miesiąc dok. fakturowanie:", "Miesiąc prac. fakturowanie:", "Dzień dostarczania dokumentów:"],
@@ -484,6 +485,7 @@ class CompanyForm(QDialog):
         )
 
         fakturowac = QCheckBox()
+        fakturowac.setChecked(True)
         add_cennik_row(["Fakturować:", "", ""], [fakturowac, QWidget(), QWidget()])
 
         self.inputs.update({
@@ -671,8 +673,16 @@ class CompanyForm(QDialog):
         self.filter_sender.setCompleter(sender_completer)
         self.filter_account.currentIndexChanged.connect(self._reload_filter_senders)
         self._reload_filter_senders()
-        self.filter_folder = QLineEdit()
-        self.filter_folder.setPlaceholderText("Folder, np. nazwa skrócona firmy")
+        self.filter_folder = QComboBox()
+        self.filter_folder.setEditable(True)
+        self.filter_folder.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.filter_folder.lineEdit().setPlaceholderText("Wybierz folder lub wpisz nowy")
+        folder_completer = QCompleter(self.filter_folder.model(), self.filter_folder)
+        folder_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        folder_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.filter_folder.setCompleter(folder_completer)
+        self.filter_account.currentIndexChanged.connect(self._reload_filter_folders)
+        self._reload_filter_folders()
         btn_add_filter = QPushButton("Dodaj filtr")
         btn_delete_filter = QPushButton("Usuń zaznaczony")
         btn_add_filter.clicked.connect(self._add_company_email_filter)
@@ -951,6 +961,15 @@ class CompanyForm(QDialog):
             self.email_filters_table.setItem(row, 2, QTableWidgetItem(rule.get("folder_docelowy", "")))
             self.email_filters_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, rule["id"])
 
+    def _reload_filter_folders(self):
+        from app.email.email_sync import selectable_folder_names
+        account_id = self.filter_account.currentData()
+        names = sorted(selectable_folder_names(int(account_id)), key=str.lower) if account_id is not None else []
+        self.filter_folder.clear()
+        self.filter_folder.addItems(names)
+        self.filter_folder.setCurrentIndex(-1)
+        self.filter_folder.setEditText("")
+
     def _reload_filter_senders(self):
         current = self.filter_sender.currentText()
         addresses = set(get_known_sender_addresses(self.filter_account.currentData()))
@@ -986,7 +1005,7 @@ class CompanyForm(QDialog):
         if not self._ensure_company_saved():
             return
         sender = self.filter_sender.currentText().strip()
-        folder = self.filter_folder.text().strip()
+        folder = self.filter_folder.currentText().strip()
         if not folder and "@" in sender:
             folder = sender.rsplit("@", 1)[1].strip().lower()
         if not folder:
@@ -1002,8 +1021,8 @@ class CompanyForm(QDialog):
             folder, 0, 0, 1,
         )
         self.filter_sender.setEditText("")
-        self.filter_folder.clear()
-        self._load_email_filters()
+        self.filter_folder.setCurrentIndex(-1)
+        self.filter_folder.setEditText("")
 
     def _delete_company_email_filter(self):
         row = self.email_filters_table.currentRow()
@@ -1096,7 +1115,7 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QTextEdit):
                 widget.setPlainText(str(val or ""))
             elif isinstance(widget, QSpinBox):
-                widget.setValue(int(val or 0))
+                widget.setValue(int(val or (7 if key == "dzien_dostarczania_dokumentow" else 0)))
             elif isinstance(widget, QDoubleSpinBox):
                 widget.setValue(float(val or 0))
             elif isinstance(widget, QComboBox):
@@ -1156,9 +1175,9 @@ class CompanyForm(QDialog):
 
             elif isinstance(widget, QSpinBox):
                 try:
-                    widget.setValue(int(val or 0))
+                    widget.setValue(int(val or (7 if key == "dzien_dostarczania_dokumentow" else 0)))
                 except Exception:
-                    widget.setValue(0)
+                    widget.setValue(7 if key == "dzien_dostarczania_dokumentow" else 0)
 
             elif isinstance(widget, QDoubleSpinBox):
                 try:
@@ -1171,7 +1190,7 @@ class CompanyForm(QDialog):
 
 
             elif isinstance(widget, QCheckBox):
-                widget.setChecked(bool(val))
+                widget.setChecked(bool(val) if val is not None or key != "fakturowac" else True)
 
         self._refresh_cennik_options()
         self._fill_prices_from_cennik(only_missing=True)

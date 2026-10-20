@@ -71,7 +71,9 @@ def format_amount_pl(amount: float) -> str:
 
 def _default_due_date(issue_date: Any, days_raw: Any) -> str:
     try:
-        return (datetime.strptime(str(issue_date)[:10], "%Y-%m-%d") + timedelta(days=int(days_raw))).strftime("%Y-%m-%d")
+        from app.utils.payment_terms import default_due_date
+        issue = datetime.strptime(str(issue_date)[:10], "%Y-%m-%d").date()
+        return default_due_date(issue, int(days_raw)).strftime("%Y-%m-%d")
     except Exception:
         return ""
 

@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-21.2"
+SCHEMA_VERSION = "2026-10-21.3"
 
 
 def _schema_hash() -> str:
@@ -995,6 +995,7 @@ def init_db():
             pracownik_id INTEGER NOT NULL,
             firma_id INTEGER,
             google_event_id TEXT,
+            google_calendar_id TEXT,
             caldav_uid TEXT,
             zrodlo TEXT NOT NULL DEFAULT 'lokalne',
             created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
@@ -1003,6 +1004,7 @@ def init_db():
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE SET NULL
         );
     """)
+    _safe_alter_add_column(cur, "wydarzenia", "google_calendar_id TEXT")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS wydarzenia_dostep (
             wydarzenie_id INTEGER NOT NULL,

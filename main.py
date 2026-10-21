@@ -43,7 +43,7 @@ if __name__ == "__main__":
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id
         window = OfficeManagerApp(pracownik_id)
-        window.show()
+        window.restore_window_state()
         sys.exit(app.exec())
     else:
         sys.exit()

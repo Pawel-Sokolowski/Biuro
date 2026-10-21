@@ -1,7 +1,8 @@
 import unittest
 
 from app.db.dao_calendar import (
-    delete_event, get_event_access, list_events, save_event, set_event_access,
+    delete_event, get_event, get_event_access, list_events, list_unsynced_events,
+    save_event, set_event_access, set_google_event_id, remove_local_duplicates,
 )
 from app.kalendarz.google_sync import _from_google
 from tests.base import DbTestCase
@@ -81,6 +82,46 @@ class CalendarTests(DbTestCase):
         })
         self.assertEqual(parsed["caly_dzien"], 1)
         self.assertEqual(parsed["google_event_id"], "g1")
+        self.assertEqual(parsed["zrodlo"], "google")
+
+    def test_google_linked_event_is_not_queued_as_new(self):
+        emp = self.make_employee()
+        event_id = save_event(emp, event())
+        set_google_event_id(event_id, "google-1")
+
+        self.assertEqual(get_event(event_id)["zrodlo"], "google")
+        self.assertEqual(list_unsynced_events(emp), [])
+
+    def test_caldav_event_is_not_queued_for_google(self):
+        emp = self.make_employee()
+        save_event(emp, event(caldav_uid="caldav-1", zrodlo="caldav"))
+
+        self.assertEqual(list_unsynced_events(emp), [])
+    def test_only_events_with_google_calendar_are_queued(self):
+        emp = self.make_employee()
+        save_event(emp, event())
+        with_cal = save_event(emp, event(google_calendar_id="cal-1"))
+
+        self.assertEqual([e["id"] for e in list_unsynced_events(emp)], [with_cal])
+        set_google_event_id(with_cal, "g-1", "cal-1")
+        self.assertEqual(list_unsynced_events(emp), [])
+        self.assertEqual(get_event(with_cal)["google_calendar_id"], "cal-1")
+    def test_local_duplicate_of_google_event_is_removed(self):
+        emp = self.make_employee()
+        local = save_event(emp, event(tytul="Rajch"))
+        keep = save_event(emp, event(tytul="Inne"))
+        google = save_event(emp, event(tytul="rajch"))
+        set_google_event_id(google, "g-1", "cal-1")
+
+        self.assertEqual(remove_local_duplicates(emp), 1)
+        self.assertIsNone(get_event(local))
+        self.assertIsNotNone(get_event(keep))
+        self.assertIsNotNone(get_event(google))
+    def test_google_body_has_seconds_in_datetime(self):
+        from app.kalendarz.google_sync import _to_google_body
+        body = _to_google_body(event(start="2026-10-22T09:00", koniec="2026-10-22T10:00"))
+        self.assertEqual(body["start"]["dateTime"], "2026-10-22T09:00:00")
+        self.assertEqual(body["end"]["dateTime"], "2026-10-22T10:00:00")
 
 
 if __name__ == "__main__":

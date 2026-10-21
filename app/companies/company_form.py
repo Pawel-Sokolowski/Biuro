@@ -104,6 +104,8 @@ logger = logging.getLogger(__name__)
 
 
 class CompanyForm(QDialog):
+    _DEFAULT_CHECKED = {"fakturowac", "fakturowac_ksiegowosc", "fakturowac_kadry"}
+
     def __init__(
         self,
         firma_id: Optional[int] = None,
@@ -157,6 +159,14 @@ class CompanyForm(QDialog):
             ["Nazwa:", "Nazwa skrócona:", "Numer klienta:"],
             [nazwa, nazwa_skrocona, numer_klienta]
         )
+
+        from app.security.authorization import is_administrator
+
+        if is_administrator(self.actor_id):
+            nazwa_saldeo = QLineEdit()
+            nazwa_saldeo.setPlaceholderText("Nazwa skrócona z Saldeo (do rozpoznawania maili)")
+            add_row(["Nazwa skrócona w Saldeo:"], [nazwa_saldeo])
+            self.inputs["nazwa_saldeo"] = nazwa_saldeo
 
         numer_umowy = QLineEdit()
 
@@ -486,7 +496,34 @@ class CompanyForm(QDialog):
 
         fakturowac = QCheckBox()
         fakturowac.setChecked(True)
-        add_cennik_row(["Fakturować:", "", ""], [fakturowac, QWidget(), QWidget()])
+        fakturowac_ksiegowosc = QCheckBox()
+        fakturowac_ksiegowosc.setChecked(True)
+        fakturowac_kadry = QCheckBox()
+        fakturowac_kadry.setChecked(True)
+        add_cennik_row(
+            ["Fakturować:", "Fakturować księgowość:", "Fakturować kadry:"],
+            [fakturowac, fakturowac_ksiegowosc, fakturowac_kadry],
+        )
+
+        stala_kwota_ksiegowosc = QDoubleSpinBox()
+        stala_kwota_ksiegowosc.setRange(0, 1000000)
+        stala_kwota_ksiegowosc.setDecimals(2)
+        stala_kwota_ksiegowosc.setSpecialValueText("brak")
+        stala_kwota_kadry = QDoubleSpinBox()
+        stala_kwota_kadry.setRange(0, 1000000)
+        stala_kwota_kadry.setDecimals(2)
+        stala_kwota_kadry.setSpecialValueText("brak")
+        add_cennik_row(
+            ["Stała kwota netto - księgowość:", "Stała kwota netto - kadry:"],
+            [stala_kwota_ksiegowosc, stala_kwota_kadry],
+        )
+
+        self.inputs.update({
+            "fakturowac_ksiegowosc": fakturowac_ksiegowosc,
+            "fakturowac_kadry": fakturowac_kadry,
+            "stala_kwota_ksiegowosc": stala_kwota_ksiegowosc,
+            "stala_kwota_kadry": stala_kwota_kadry,
+        })
 
         self.inputs.update({
             "glowny_cennik": glowny_cennik,
@@ -958,13 +995,18 @@ class CompanyForm(QDialog):
             self.email_filters_table.insertRow(row)
             self.email_filters_table.setItem(row, 0, QTableWidgetItem(rule.get("od") or rule.get("nadawca_zawiera") or ""))
             self.email_filters_table.setItem(row, 1, QTableWidgetItem(rule.get("konto_email", "")))
-            self.email_filters_table.setItem(row, 2, QTableWidgetItem(rule.get("folder_docelowy", "")))
+            from app.email.email_helpers import friendly_folder_name
+            self.email_filters_table.setItem(row, 2, QTableWidgetItem(friendly_folder_name(rule.get("folder_docelowy", ""))))
             self.email_filters_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, rule["id"])
 
     def _reload_filter_folders(self):
+        from app.email.email_helpers import friendly_folder_name
         from app.email.email_sync import selectable_folder_names
         account_id = self.filter_account.currentData()
-        names = sorted(selectable_folder_names(int(account_id)), key=str.lower) if account_id is not None else []
+        names = (
+            sorted({friendly_folder_name(n) for n in selectable_folder_names(int(account_id))} - {""}, key=str.casefold)
+            if account_id is not None else []
+        )
         self.filter_folder.clear()
         self.filter_folder.addItems(names)
         self.filter_folder.setCurrentIndex(-1)
@@ -1121,7 +1163,9 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QComboBox):
                 self._set_combo_value(key, widget, val)
             elif isinstance(widget, QCheckBox):
-                widget.setChecked(bool(val))
+                widget.setChecked(
+                    bool(val) if val is not None or key not in self._DEFAULT_CHECKED else True
+                )
         self._refresh_cennik_options()
         self._fill_prices_from_cennik(only_missing=True)
 
@@ -1190,7 +1234,9 @@ class CompanyForm(QDialog):
 
 
             elif isinstance(widget, QCheckBox):
-                widget.setChecked(bool(val) if val is not None or key != "fakturowac" else True)
+                widget.setChecked(
+                    bool(val) if val is not None or key not in self._DEFAULT_CHECKED else True
+                )
 
         self._refresh_cennik_options()
         self._fill_prices_from_cennik(only_missing=True)

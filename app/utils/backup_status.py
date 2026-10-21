@@ -39,10 +39,16 @@ def match_company(name: str, companies: list) -> Optional[str]:
     if not tokens:
         return None
     for company in companies:
-        for field in ("nazwa", "nazwa_skrocona"):
+        for field in ("nazwa", "nazwa_skrocona", "nazwa_saldeo"):
             haystack = _fold(company.get(field) or "")
             if haystack and all(token in haystack.split() for token in tokens):
                 return company.get("nazwa") or company.get(field)
+    for company in companies:
+        for field in ("nazwa", "nazwa_skrocona", "nazwa_saldeo"):
+            words = _fold(company.get(field) or "").split()
+            if words and all(any(w.startswith(t) for w in words) for t in tokens if len(t) >= 3):
+                if any(len(t) >= 3 for t in tokens):
+                    return company.get("nazwa") or company.get(field)
     return None
 
 
@@ -121,7 +127,7 @@ def _company_rows() -> list:
     from app.db.dao_conn import get_conn
     conn = get_conn()
     try:
-        return [dict(r) for r in conn.execute("SELECT nazwa, nazwa_skrocona FROM firmy")]
+        return [dict(r) for r in conn.execute("SELECT nazwa, nazwa_skrocona, nazwa_saldeo FROM firmy")]
     finally:
         conn.close()
 

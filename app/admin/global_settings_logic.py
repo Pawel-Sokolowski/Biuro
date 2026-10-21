@@ -397,6 +397,18 @@ class GlobalSettingsLogic:
             brutto=brutto,
         )
 
+    def add_global_pricing_item(self, **kwargs) -> None:
+        dao_global_settings.add_global_pricing_item(**kwargs)
+
+    def add_pricing_kadry_item(self, **kwargs) -> None:
+        dao_global_settings.add_pricing_kadry_item(**kwargs)
+
+    def get_role_tabs(self, rid: int):
+        return dao_global_settings.get_role_tabs(rid)
+
+    def set_role_tabs(self, rid: int, tabs) -> None:
+        dao_global_settings.set_role_tabs(rid, list(tabs))
+
     def import_global_pricing_from_csv(self, csv_path: str):
         path = Path(csv_path)
         if not path.exists():

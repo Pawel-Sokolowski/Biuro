@@ -118,7 +118,7 @@ class CompanyBatchTests(DbTestCase):
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{"id": 1, "nazwa": "A", "etap": "Brak", "ilosc_dok": 4}], "ksiegowosc")
         heads = [m.headerData(i, m.headerData.__self__ and __import__("PyQt6.QtCore", fromlist=["Qt"]).Qt.Orientation.Horizontal) for i in range(4)]
-        self.assertEqual(heads, ["Firma", "Dostarczone", "Etap", "Ilość dokumentów"])
+        self.assertEqual(heads, ["Firma", "Komplet", "Etap", "Ilość dokumentów"])
 
 
 if __name__ == "__main__":

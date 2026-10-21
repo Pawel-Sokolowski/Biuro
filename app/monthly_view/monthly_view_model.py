@@ -64,51 +64,7 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 16 if self._mode == "ksiegowosc" else 14
-
-    # kolumny z rozliczenia Saldeo (na końcu modelu, wizualnie przesuwane za „Ilość dokumentów”)
-    _RESULT_COLS = {
-        "ksiegowosc": {12: ("Przychód", "przychod"), 13: ("Koszty", "koszty"),
-                       14: ("VAT", "vat"), 15: ("CIT", "cit")},
-        "kadry": {13: ("PIT", "pit")},
-    }
-
-    def result_cols(self):
-        return sorted(self._RESULT_COLS[self._mode])
-
-    @staticmethod
-    def _money(value: Any) -> str:
-        if value is None:
-            return ""
-        return f"{float(value):,.2f}".replace(",", " ").replace(".", ",")
-
-    def _result_cell(self, row: Dict[str, Any], col: int, role: int) -> Any:
-        _, key = self._RESULT_COLS[self._mode][col]
-        if role == Qt.ItemDataRole.DisplayRole:
-            if key in ("vat", "cit", "pit"):
-                text = self._money(row.get(f"{key}_kwota"))
-                period = str(row.get(f"{key}_okres") or "")
-                if text and "kwarta" in period.lower():
-                    text += " (kw.)"
-                return text
-            return self._money(row.get(key))
-        if role == Qt.ItemDataRole.TextAlignmentRole:
-            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        if role == Qt.ItemDataRole.ToolTipRole:
-            parts = []
-            if key in ("vat", "cit", "pit"):
-                if row.get(f"{key}_okres"):
-                    parts.append(f"Okres deklaracji: {row[f'{key}_okres']}")
-                if row.get(f"{key}_termin"):
-                    parts.append(f"Termin: {row[f'{key}_termin']}")
-                if key == "vat" and row.get("vat_opis"):
-                    parts.append(f"Różnica VAT: {row['vat_opis']}")
-            elif key == "przychod" and row.get("dochod") is not None:
-                parts.append(f"Dochód / strata: {self._money(row['dochod'])}")
-            return "\n".join(parts) if parts else QVariant()
-        if role == Qt.ItemDataRole.BackgroundRole:
-            return self._row_background(row)
-        return QVariant()
+        return 12 if self._mode == "ksiegowosc" else 13
 
     def _vat_cols(self):
         base = 10 if self._mode == "ksiegowosc" else 11
@@ -145,8 +101,6 @@ class MonthlyViewModel(QAbstractTableModel):
                 return self._row_background(row)
             return self._vat_cell(row, col, role)
 
-        if col in self._RESULT_COLS[self._mode]:
-            return self._result_cell(row, col, role)
         if role == Qt.ItemDataRole.DisplayRole:
             if col == self.COL_DOCS:
                 return self._delivered_text(row)
@@ -165,7 +119,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 return mapping.get(col, "")
             mapping = {
                 0: row.get("nazwa", ""),
-                2: row.get("etap", "Brak"),
+                2: row.get("etap_kadry", "Brak"),
                 3: str(row.get("uop", 0)),
                 4: str(row.get("uz", 0)),
                 5: str(row.get("uod", 0)),
@@ -185,7 +139,7 @@ class MonthlyViewModel(QAbstractTableModel):
             )
 
         if role == Qt.ItemDataRole.EditRole and col == self.COL_ETAP:
-            return row.get("etap", "Brak")
+            return row.get(self._etap_key(), "Brak")
 
         if role == Qt.ItemDataRole.UserRole:
             return row
@@ -195,10 +149,12 @@ class MonthlyViewModel(QAbstractTableModel):
 
         return QVariant()
 
-    @staticmethod
-    def _row_background(row: Dict[str, Any]) -> Any:
+    def _etap_key(self) -> str:
+        return "etap_kadry" if self._mode == "kadry" else "etap"
+
+    def _row_background(self, row: Dict[str, Any]) -> Any:
         status = row.get("status", "Aktywne")
-        etap = row.get("etap", "Brak")
+        etap = row.get(self._etap_key(), "Brak")
         if row.get("uslugi_zawieszone"):
             return QColor("#f4a6a6")
         if status == "Zawieszone":
@@ -218,9 +174,9 @@ class MonthlyViewModel(QAbstractTableModel):
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
             if self._mode == "ksiegowosc":
-                headers = ["Firma", "Dostarczone", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU", "Przychód", "Koszty", "VAT do zapłaty", "CIT"]
+                headers = ["Firma", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
-                headers = ["Firma", "Dostarczone", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "VAT", "EU", "PIT"]
+                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "VAT", "EU"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()
@@ -276,11 +232,12 @@ class MonthlyViewModel(QAbstractTableModel):
             return False
 
         if col == self.COL_ETAP:
-            row["etap"] = str(value)
+            key = self._etap_key()
+            row[key] = str(value)
             top = self.index(index.row(), 0)
             bottom = self.index(index.row(), self.columnCount() - 1)
             self.dataChanged.emit(top, bottom)
-            self._persist(row, etap=row["etap"])
+            self._persist(row, **{key: row[key]})
             return True
 
         try:

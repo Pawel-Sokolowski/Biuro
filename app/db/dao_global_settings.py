@@ -28,6 +28,34 @@ def get_roles() -> List[Row]:
         conn.close()
 
 
+def get_role_tabs(rid: int) -> List[str]:
+    from app.security.authorization import parse_tabs
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT zakladki, COALESCE(can_access_admin_settings, 0) AS adm FROM role WHERE id = %s",
+            (rid,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return []
+    return parse_tabs(row["zakladki"], bool(row["adm"]))
+
+
+def set_role_tabs(rid: int, tabs: List[str]) -> None:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE role SET zakladki = %s WHERE id = %s", ("|".join(tabs), rid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_role(rid: int) -> Optional[Row]:
     conn = get_conn()
     try:
@@ -497,6 +525,51 @@ def update_global_pricing_item(
             WHERE klucz = %s
             """,
             (cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, zdrowotna, netto, brutto, klucz),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_global_pricing_item(
+    klucz: str,
+    cena_netto_ksiegowosc: float,
+    cena_za_dokument_ponad_limit: float,
+    zdrowotna: float,
+    netto: float,
+    brutto: float,
+) -> None:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO cenniki (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit,
+                                 zdrowotna, netto, brutto)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, zdrowotna, netto, brutto),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_pricing_kadry_item(
+    klucz: str,
+    cena_netto_kadry: float,
+    cena_brutto_kadry: float,
+    opis: str,
+) -> None:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, cena_brutto_kadry, cena, opis)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (klucz, cena_netto_kadry, cena_brutto_kadry, cena_netto_kadry, opis),
         )
         conn.commit()
     finally:

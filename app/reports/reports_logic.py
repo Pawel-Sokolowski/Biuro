@@ -63,6 +63,33 @@ def get_months_range(start: str, end: str) -> List[str]:
 # ============================================================
 # GODZINY DLA FIRMY I MIESIĄCA
 # ============================================================
+def get_imported_seconds(firma_ids: List[int], months: List[str]) -> Dict[tuple, Dict[str, float]]:
+    """Zaimportowany czas pracy: (firma_id, miesiąc) -> {'ksiegowosc': s, 'kadry': s}."""
+    if not firma_ids or not months:
+        return {}
+    ph_f = ",".join("%s" for _ in firma_ids)
+    ph_m = ",".join("%s" for _ in months)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT firma_id, miesiac, dzial, SUM(sekundy) AS sek
+            FROM import_czas_pracy
+            WHERE firma_id IN ({ph_f}) AND miesiac IN ({ph_m})
+            GROUP BY firma_id, miesiac, dzial
+            """,
+            [*firma_ids, *months],
+        ).fetchall()
+    finally:
+        conn.close()
+    out: Dict[tuple, Dict[str, float]] = {}
+    for r in rows:
+        slot = out.setdefault((r["firma_id"], r["miesiac"]), {"ksiegowosc": 0.0, "kadry": 0.0})
+        key = "kadry" if r["dzial"] in ("kadry", "inne_kadry") else "ksiegowosc"
+        slot[key] += float(r["sek"] or 0)
+    return out
+
+
 def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]:
     conn = get_conn()
     cur = conn.cursor()
@@ -76,12 +103,10 @@ def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]
     row = cur.fetchone()
     conn.close()
 
-    if not row:
-        return {"ksiegowosc": 0.0, "kadry": 0.0}
-
+    imported = get_imported_seconds([firma_id], [miesiac]).get((firma_id, miesiac), {})
     return {
-        "ksiegowosc": float(row["sekundy_ksiegowosc"] or 0),
-        "kadry": float(row["sekundy_kadry"] or 0)
+        "ksiegowosc": float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imported.get("ksiegowosc", 0.0),
+        "kadry": float((row["sekundy_kadry"] if row else 0) or 0) + imported.get("kadry", 0.0),
     }
 
 
@@ -234,6 +259,7 @@ def build_report(
     finally:
         conn.close()
 
+    imported = get_imported_seconds(firma_ids, months)
     out = {firma_id: {} for firma_id in firma_ids}
     for row in rows:
         docs = int(row["dokumenty"] or 0)
@@ -243,8 +269,9 @@ def build_report(
         extra = float(row["extra"] or 0)
         koszt_ksieg = netto + extra
         koszt_kadry = float(row["zdrowotna"] or 0)
-        godz_ksieg = float(row["sekundy_ksiegowosc"] or 0)
-        godz_kadry = float(row["sekundy_kadry"] or 0)
+        imp = imported.get((row["firma_id"], row["miesiac"]), {})
+        godz_ksieg = float(row["sekundy_ksiegowosc"] or 0) + imp.get("ksiegowosc", 0.0)
+        godz_kadry = float(row["sekundy_kadry"] or 0) + imp.get("kadry", 0.0)
         out[row["firma_id"]][row["miesiac"]] = {
             "koszt_ksiegowosc": round(koszt_ksieg, 2),
             "koszt_kadry": round(koszt_kadry, 2),
@@ -306,6 +333,7 @@ def build_profit_report(
     pracownik_id: int | None = None,
 ) -> Dict[str, Any]:
     firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
+    imported = get_imported_seconds(firma_ids, months)
     conn = get_conn()
     cur = conn.cursor()
 
@@ -322,17 +350,18 @@ def build_profit_report(
             """, (fid, miesiac))
 
             row = cur.fetchone()
+            imp = imported.get((fid, miesiac), {})
 
-            if not row:
+            if not row and not imp:
                 out[fid][miesiac] = {
                     "profit_kadry": 0,
                     "profit_ksiegowosc": 0
                 }
                 continue
 
-            sek_ks = float(row["sekundy_ksiegowosc"] or 0)
-            sek_kad = float(row["sekundy_kadry"] or 0)
-            wartosc = float(row["wartosc_uslug"] or 0)
+            sek_ks = float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imp.get("ksiegowosc", 0.0)
+            sek_kad = float((row["sekundy_kadry"] if row else 0) or 0) + imp.get("kadry", 0.0)
+            wartosc = float((row["wartosc_uslug"] if row else 0) or 0)
 
             extra = get_extra_services_value(fid, miesiac)
             wartosc += extra

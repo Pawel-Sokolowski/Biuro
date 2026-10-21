@@ -488,9 +488,7 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
             is_administrator(pracownik_id) or can(pracownik_id, "can_export_data")
         ):
             sql += (
-                " AND EXISTS ("
-                "SELECT 1 FROM pracownik_firma pf "
-                "WHERE pf.firma_id = faktury.firma_id AND pf.pracownik_id = %s)"
+                " AND EXISTS (SELECT 1 FROM pracownicy p WHERE p.id = %s)"
             )
             params.append(pracownik_id)
         cur.execute(sql, params)
@@ -553,7 +551,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 
     try:
         cur.execute(
-            "SELECT id, nazwa, glowny_cennik, limit_dokumentow, zdrowotna, cena_netto_ksiegowosc, wliczac_zdrowotna, fakturowac, forma_dzialalnosci, vat_czynny FROM firmy"
+            "SELECT id, nazwa, glowny_cennik, limit_dokumentow, zdrowotna, cena_netto_ksiegowosc, wliczac_zdrowotna, fakturowac, fakturowac_ksiegowosc, stala_kwota_ksiegowosc, forma_dzialalnosci, vat_czynny FROM firmy"
         )
         firms_rows = cur.fetchall()
         firms = [dict(r) for r in firms_rows]
@@ -576,6 +574,11 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                 report["skipped"].append((fid, "fakturowac=0"))
                 continue
 
+            if firma.get("fakturowac_ksiegowosc") == 0:
+                report["skipped"].append((fid, "Księgowość wyłączona z fakturowania"))
+                continue
+
+            stala_ks = float(firma.get("stala_kwota_ksiegowosc") or 0.0)
             klucz = firma.get("glowny_cennik")
             ccur = conn.cursor()
             ccur.execute(
@@ -583,20 +586,29 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                 (klucz,),
             )
             crow_row = ccur.fetchone()
-            if not crow_row:
-                report["errors"].append((fid, f"Brak cennika dla klucza '{klucz}'"))
+            if not crow_row and stala_ks <= 0:
+                report["skipped"].append((fid, "Brak cennika - pominięto"))
                 continue
-            crow = dict(crow_row)
+            crow = dict(crow_row) if crow_row else {}
 
-            cena_netto_ks = float(firma.get("cena_netto_ksiegowosc") or 0.0) or float(crow.get("cena_netto_ksiegowosc") or 0.0)
+            cena_netto_ks = stala_ks or float(firma.get("cena_netto_ksiegowosc") or 0.0) or float(crow.get("cena_netto_ksiegowosc") or 0.0)
             zdrowotna_val = float(crow.get("zdrowotna") or 0.0)
             netto_total = float(crow.get("netto") or 0.0)
 
             pozycje: List[Dict[str, Any]] = []
-            wliczaj_zdrowotna = bool(firma.get("wliczac_zdrowotna", 0))
-            zdrowotna_val = float(firma.get("zdrowotna") or 0.0) or zdrowotna_val
+            wliczaj_zdrowotna = bool(firma.get("wliczac_zdrowotna", 0)) and stala_ks <= 0
+            zdrowotna_val = 0.0 if stala_ks > 0 else (float(firma.get("zdrowotna") or 0.0) or zdrowotna_val)
             from app.db.dao_companies import count_zdrowotna_units
             zdrowotna_sztuk = count_zdrowotna_units(fid)
+
+            from app.db.dao_app_settings import get_setting
+            vat_txt = str(get_setting("ksiegowosc_domyslny_vat") or "23").replace("%", "").strip()
+            try:
+                vat_rate = float(vat_txt)
+            except ValueError:
+                vat_rate = 23.0
+            vat_mult = 1 + vat_rate / 100
+            vat_str = f"{vat_rate:g}"
 
             if wliczaj_zdrowotna and zdrowotna_val > 0:
                 podstawa = round(cena_netto_ks + zdrowotna_val * zdrowotna_sztuk, 2)
@@ -605,9 +617,9 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                         "opis": "Księgowość (miesięczna) - podstawowa opłata",
                         "ilosc": 1,
                         "cena_netto": podstawa,
-                        "stawka_vat": "0",
+                        "stawka_vat": vat_str,
                         "wartosc_netto": podstawa,
-                        "wartosc_brutto": round(podstawa * 1.23, 2),
+                        "wartosc_brutto": round(podstawa * vat_mult, 2),
                     }
                 )
             else:
@@ -616,9 +628,9 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                         "opis": "Księgowość (miesięczna) - podstawa",
                         "ilosc": 1,
                         "cena_netto": round(cena_netto_ks, 2),
-                        "stawka_vat": "0",
+                        "stawka_vat": vat_str,
                         "wartosc_netto": round(cena_netto_ks, 2),
-                        "wartosc_brutto": round(cena_netto_ks * 1.23, 2),
+                        "wartosc_brutto": round(cena_netto_ks * vat_mult, 2),
                     }
                 )
                 if zdrowotna_val > 0:
@@ -628,9 +640,9 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                             "opis": "Składka zdrowotna (miesięczna)",
                             "ilosc": zdrowotna_sztuk,
                             "cena_netto": round(zdrowotna_val, 2),
-                            "stawka_vat": "0",
+                            "stawka_vat": vat_str,
                             "wartosc_netto": zdr_netto,
-                            "wartosc_brutto": round(zdr_netto * 1.23, 2),
+                            "wartosc_brutto": round(zdr_netto * vat_mult, 2),
                         }
                     )
 

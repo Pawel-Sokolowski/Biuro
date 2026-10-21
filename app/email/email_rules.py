@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
 from app.db.dao_conn import get_conn
-from app.email.email_helpers import decode_mailbox_utf7
+from app.email.email_helpers import decode_mailbox_utf7, friendly_folder_name
 
 logger = logging.getLogger(__name__)
 
@@ -182,11 +182,16 @@ def _active_rules(konto_id: int) -> List[Dict[str, Any]]:
         conn.close()
     by_name = {r["server_name"].casefold(): r["server_name"] for r in folders}
     by_display = {(r["display_name"] or "").casefold(): r["server_name"] for r in folders}
+    by_friendly = {friendly_folder_name(r["server_name"]).casefold(): r["server_name"] for r in folders}
     rules = []
     for row in rows:
         rule = dict(row)
         wanted = rule["folder_docelowy"].casefold()
-        target = by_name.get(wanted) or by_display.get(decode_mailbox_utf7(rule["folder_docelowy"]).casefold())
+        target = (
+            by_name.get(wanted)
+            or by_display.get(decode_mailbox_utf7(rule["folder_docelowy"]).casefold())
+            or by_friendly.get(friendly_folder_name(rule["folder_docelowy"]).casefold())
+        )
         if target:
             rule["target"] = target
             rules.append(rule)

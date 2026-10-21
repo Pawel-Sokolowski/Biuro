@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Biuro"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
 
@@ -29,6 +29,7 @@ Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.exam
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autoprograms}\{#MyAppName} - aktualizacja bazy"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--migrate"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Tasks]

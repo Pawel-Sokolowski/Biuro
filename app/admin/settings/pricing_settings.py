@@ -39,6 +39,10 @@ class PricingSettings(QWidget):
         btn_refresh.clicked.connect(self._refresh)
         btn_row.addWidget(btn_refresh)
 
+        btn_add = QPushButton("Dodaj pozycję")
+        btn_add.clicked.connect(self._add_item)
+        btn_row.addWidget(btn_add)
+
         btn_edit = QPushButton("Edytuj wybrany")
         btn_edit.clicked.connect(self._edit_selected)
         btn_row.addWidget(btn_edit)
@@ -95,6 +99,51 @@ class PricingSettings(QWidget):
             self.table.setItem(row, 5, QTableWidgetItem(f"{brutto:.2f}"))
             self.table.setItem(row, 6, QTableWidgetItem(vat_default))
             self.table.setItem(row, 7, QTableWidgetItem(gtu_default))
+
+    def _add_item(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Nowa pozycja cennika")
+        form = QFormLayout(dlg)
+        e_klucz = QLineEdit()
+        e_netto = QLineEdit("0")
+        e_ponad = QLineEdit("0")
+        e_zdrow = QLineEdit("0")
+        form.addRow("Klucz:", e_klucz)
+        form.addRow("Cena netto:", e_netto)
+        form.addRow("Dok. ponad limit:", e_ponad)
+        form.addRow("Zdrowotna:", e_zdrow)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        klucz = e_klucz.text().strip()
+        if not klucz:
+            QMessageBox.warning(self, "Cennik", "Podaj klucz.")
+            return
+        try:
+            netto = float(e_netto.text().replace(",", ".") or 0)
+            ponad = float(e_ponad.text().replace(",", ".") or 0)
+            zdrow = float(e_zdrow.text().replace(",", ".") or 0)
+            vat_txt = (self.logic.get_setting("ksiegowosc_domyslny_vat") or "23").replace("%", "")
+            try:
+                mult = 1 + float(vat_txt) / 100
+            except ValueError:
+                mult = 1.23
+            suma = round(netto + zdrow, 2)
+            self.logic.add_global_pricing_item(
+                klucz=klucz,
+                cena_netto_ksiegowosc=netto,
+                cena_za_dokument_ponad_limit=ponad,
+                zdrowotna=zdrow,
+                netto=suma,
+                brutto=round(suma * mult, 2),
+            )
+            self._refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się dodać (czy klucz już istnieje?): {e}")
 
     def _edit_selected(self):
         row = self.table.currentRow()

@@ -45,6 +45,10 @@ class PricingKadrySettings(QWidget):
         btn_refresh.clicked.connect(self._refresh)
         btn_row.addWidget(btn_refresh)
 
+        btn_add = QPushButton("Dodaj pozycję")
+        btn_add.clicked.connect(self._add_item)
+        btn_row.addWidget(btn_add)
+
         btn_edit = QPushButton("Edytuj wybrany")
         btn_edit.clicked.connect(self._edit_selected)
         btn_row.addWidget(btn_edit)
@@ -57,6 +61,44 @@ class PricingKadrySettings(QWidget):
         layout.addLayout(btn_row)
 
         self._refresh()
+
+    def _add_item(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Nowa pozycja cennika kadr")
+        form = QFormLayout(dlg)
+        e_klucz = QLineEdit()
+        e_netto = QLineEdit("0")
+        e_opis = QLineEdit()
+        form.addRow("Klucz:", e_klucz)
+        form.addRow("Cena netto:", e_netto)
+        form.addRow("Opis:", e_opis)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        klucz = e_klucz.text().strip()
+        if not klucz:
+            QMessageBox.warning(self, "Cennik", "Podaj klucz.")
+            return
+        try:
+            netto = float(e_netto.text().replace(",", ".") or 0)
+            vat_txt = (self.logic.get_setting("kadry_domyslny_vat") or "23").replace("%", "")
+            try:
+                mult = 1 + float(vat_txt) / 100
+            except ValueError:
+                mult = 1.23
+            self.logic.add_pricing_kadry_item(
+                klucz=klucz,
+                cena_netto_kadry=netto,
+                cena_brutto_kadry=round(netto * mult, 2),
+                opis=e_opis.text().strip(),
+            )
+            self._refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się dodać (czy klucz już istnieje?): {e}")
 
     # ---------------------------------------------------------
     # REFRESH

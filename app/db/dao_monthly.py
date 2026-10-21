@@ -30,9 +30,9 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
             firma_id, miesiac,
             etap, ilosc_dok,
             sekundy_ksiegowosc, sekundy_kadry,
-            wartosc_uslug, dokumenty_dostarczone, data_dostarczenia
+            wartosc_uslug, dokumenty_dostarczone, data_dostarczenia, etap_kadry
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, 'Brak'))
         ON CONFLICT(firma_id, miesiac)
         DO UPDATE SET
             etap = excluded.etap,
@@ -41,7 +41,8 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
             sekundy_kadry = excluded.sekundy_kadry,
             wartosc_uslug = excluded.wartosc_uslug,
             dokumenty_dostarczone = excluded.dokumenty_dostarczone,
-            data_dostarczenia = excluded.data_dostarczenia
+            data_dostarczenia = excluded.data_dostarczenia,
+            etap_kadry = COALESCE(%s, statusy_miesieczne.etap_kadry)
     """, (
         firma_id,
         miesiac,
@@ -52,6 +53,8 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         payload.get("wartosc_uslug", 0.0),
         1 if payload.get("dokumenty_dostarczone") else 0,
         payload.get("data_dostarczenia") if payload.get("dokumenty_dostarczone") else None,
+        payload.get("etap_kadry"),
+        payload.get("etap_kadry"),
     ))
 
     conn.commit()

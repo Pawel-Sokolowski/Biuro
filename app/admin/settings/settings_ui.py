@@ -12,6 +12,7 @@ from app.admin.settings.audit_settings import AuditSettings
 from app.admin.settings.companies_settings import CompaniesSettings
 from app.admin.settings.database_settings import DatabaseSettings
 from app.admin.settings.email_settings import EmailSettings
+from app.admin.settings.import_all_settings import ImportAllSettings
 from app.admin.settings.extra_services_settings import ExtraServicesSettings
 from app.admin.settings.invoice_settings import InvoiceSettings
 from app.admin.settings.ksef_settings import KsefSettings
@@ -80,6 +81,7 @@ class GlobalSettingsPage(QWidget):
                 ("KSeF – dostęp i certyfikat", KsefSettings, bool(perms.get("can_view_invoices"))),
             ]),
             ("System", [
+                ("Import danych", ImportAllSettings, True),
                 ("Baza danych i kopie", DatabaseSettings, True),
                 ("System", SystemSettings, True),
                 ("Logi", LogsSettings, True),

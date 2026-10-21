@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-21.1"
+SCHEMA_VERSION = "2026-10-21.2"
 
 
 def _schema_hash() -> str:
@@ -221,6 +221,18 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_statusy_miesieczne_miesiac "
         "ON statusy_miesieczne(miesiac, firma_id)"
     )
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS kadry_umowy_miesieczne (
+            firma_id INTEGER NOT NULL,
+            miesiac TEXT NOT NULL,
+            uop_ilosc INTEGER NOT NULL DEFAULT 0,
+            uz_ilosc INTEGER NOT NULL DEFAULT 0,
+            uod_ilosc INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(firma_id, miesiac),
+            FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE
+        );
+    """)
 
     # -------------------------
     # dokumenty

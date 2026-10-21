@@ -3,6 +3,7 @@ import psycopg
 from typing import List, Dict, Any
 from app.services.calculator import oblicz_miesieczny_koszt
 from app.db.dao_conn import get_conn
+from app.db.dao_monthly import contracts_by_month
 from app.utils.months import month_bounds
 from app.security.authorization import assigned_company_ids, can, is_administrator
 
@@ -239,6 +240,7 @@ def build_report(
                    COALESCE(c.brutto, c.cena_brutto_ksiegowosc, 0) AS brutto,
                    COALESCE(c.zdrowotna, 0) AS zdrowotna,
                    COALESCE(f.limit_dokumentow, 0) AS limit_dokumentow,
+                   COALESCE(f.uop_ilosc, 0) + COALESCE(f.uz_ilosc, 0) + COALESCE(f.uod_ilosc, 0) AS umowy,
                    COALESCE(c.cena_za_dokument_ponad_limit, 0) AS cena_za_dokument
             FROM firmy f
             CROSS JOIN selected_months m
@@ -260,6 +262,11 @@ def build_report(
         conn.close()
 
     imported = get_imported_seconds(firma_ids, months)
+    conn = get_conn()
+    try:
+        contracts = contracts_by_month(conn, firma_ids, months)
+    finally:
+        conn.close()
     out = {firma_id: {} for firma_id in firma_ids}
     for row in rows:
         docs = int(row["dokumenty"] or 0)
@@ -280,12 +287,14 @@ def build_report(
             "koszt_na_godzine_ksiegowosc": koszt_ksieg / godz_ksieg if godz_ksieg else 0,
             "koszt_na_godzine_kadry": koszt_kadry / godz_kadry if godz_kadry else 0,
             "extra": extra,
+            "dokumenty": docs,
+            "umowy": contracts.get((row["firma_id"], row["miesiac"]), int(row["umowy"] or 0)),
         }
     return out
 
 
 # ============================================================
-# RAPORT ROCZNY — POPRAWIONY
+# RAPORT ROCZNY — wszystkie 12 miesięcy
 # ============================================================
 def build_yearly_report(firma_id: int, year: int) -> Dict[str, Any]:
     months = [f"{year}-{m:02d}" for m in range(1, 12 + 1)]

@@ -128,6 +128,15 @@ def classify_invoice_item(pozycja: Any) -> str:
     return "inne"
 
 
+def kadry_contract_type(pozycja: Any) -> Optional[str]:
+    """'uop' / 'uz' / 'uod' dla pozycji typu 'Us?uga kadrowo-p?acowa - UZ'; None dla sta?ej stawki bez typu."""
+    t = fold(pozycja)
+    if not ("kadrow" in t or "place" in t):
+        return None
+    found = re.findall(r"\b(uop|uz|uod)\b", t)
+    return found[-1] if found else None
+
+
 def invoice_item_dzial(rodzaj: str) -> str:
     """Do którego działu liczymy przychód z pozycji faktury."""
     if rodzaj in ("kadry", "zdrowotna"):
@@ -323,22 +332,70 @@ def dzial_sekcja(dzial: str) -> str:
     return "kadry" if dzial in ("kadry", "inne_kadry") else "ksiegowosc"
 
 
+def _year_months(year: str) -> List[str]:
+    return [f"{year}-{m:02d}" for m in range(1, 13)]
+
+
+def spread_annual_fees(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Jedna duża opłata księgowa w roku (np. w styczniu), a w pozostałych miesiącach
+    tylko inne pozycje -> kwota jest rozbijana równo na 12 miesięcy roku."""
+    by_firm_year: Dict[tuple, List[Dict[str, Any]]] = {}
+    for inv in invoices:
+        if inv.get("firma_id"):
+            by_firm_year.setdefault((inv["firma_id"], inv["miesiac"][:4]), []).append(inv)
+
+    result = []
+    for (firma_id, year), items in by_firm_year.items():
+        all_months = {i["miesiac"] for i in items}
+        spread = []
+        for rodzaj in ("ksiegowosc", "kadry"):
+            fee_items = [i for i in items if i["rodzaj"] == rodzaj and float(i.get("wartosc_netto") or 0) > 0]
+            fee_months = {i["miesiac"] for i in fee_items}
+            if len(fee_months) != 1 or not (all_months - fee_months):
+                continue
+            fee_month = next(iter(fee_months))
+            fee_items = [i for i in items if i["rodzaj"] == rodzaj and i["miesiac"] == fee_month]
+            if rodzaj == "ksiegowosc":
+                fee_items += [i for i in items if i["rodzaj"] == "rabat" and i["miesiac"] == fee_month]
+            total = sum(float(i.get("wartosc_netto") or 0) for i in fee_items)
+            for month in _year_months(year):
+                result.append({**fee_items[0], "rodzaj": rodzaj, "miesiac": month, "wartosc_netto": total / 12})
+            spread.extend(id(i) for i in fee_items)
+        result.extend(i for i in items if id(i) not in spread)
+    return result
+
+
+def _shares(per_emp: Dict[str, Dict[str, int]], kind: str) -> Dict[str, float]:
+    """Udziały pracowników: wg czasu danego rodzaju, potem wg całego czasu, na końcu po równo."""
+    for weights in (
+        {e: v[kind] for e, v in per_emp.items()},
+        {e: v["glowny"] + v["dodatkowy"] for e, v in per_emp.items()},
+    ):
+        total = sum(weights.values())
+        if total:
+            return {e: w / total for e, w in weights.items()}
+    return {e: 1.0 / len(per_emp) for e in per_emp}
+
+
 def compute_employee_report(
     work: List[Dict[str, Any]],
     invoices: List[Dict[str, Any]],
     rates: Dict[str, float],
-    docs: Optional[Dict[tuple, int]] = None,
+    counts: Optional[Dict[tuple, int]] = None,
+    months: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Wiersze (sekcja, firma, miesiąc, pracownik).
 
-    Cena netto z faktur danej sekcji jest dzielona między pracowników proporcjonalnie
-    do ich czasu pracy; koszt = stawka pracownika × czas; zysk = cena − koszt.
-    docs: (firma_id, miesiąc) -> liczba dokumentów (tylko sekcja księgowości).
+    Każda sekcja (księgowość/kadry) ma: czas główny + cena główna oraz czas i cenę usług
+    dodatkowych. Ceny z faktur dzielone są między pracowników proporcjonalnie do czasu,
+    koszt = stawka × czas, zysk = cena główna + cena dodatkowa − koszt.
+    counts: (sekcja, firma_id, miesiąc) -> liczba dokumentów (księgowość) lub umów (kadry).
+    months: ogranicza wynik do podanych miesięcy.
     """
-    docs = docs or {}
+    counts = counts or {}
     names: Dict[Any, str] = {}
-    hours: Dict[tuple, Dict[str, int]] = {}
-    price: Dict[tuple, float] = {}
+    hours: Dict[tuple, Dict[str, Dict[str, int]]] = {}
+    price: Dict[tuple, Dict[str, float]] = {}
 
     for w in work:
         if not w.get("firma_id"):
@@ -346,41 +403,53 @@ def compute_employee_report(
         names.setdefault(w["firma_id"], w.get("firma_nazwa"))
         key = (dzial_sekcja(w["dzial"]), w["firma_id"], w["miesiac"])
         emp = (w.get("pracownik_nazwa") or "").strip() or NO_EMPLOYEE
-        per_emp = hours.setdefault(key, {})
-        per_emp[emp] = per_emp.get(emp, 0) + int(w.get("sekundy") or 0)
+        slot = hours.setdefault(key, {}).setdefault(emp, {"glowny": 0, "dodatkowy": 0})
+        kind = "dodatkowy" if w["dzial"] in ("inne_ksiegowosc", "inne_kadry") else "glowny"
+        slot[kind] += int(w.get("sekundy") or 0)
 
-    for inv in invoices:
-        if not inv.get("firma_id"):
-            continue
+    def has_time(sekcja, firma_id, miesiac):
+        return any(v["glowny"] + v["dodatkowy"] for v in hours.get((sekcja, firma_id, miesiac), {}).values())
+
+    for inv in spread_annual_fees(invoices):
         names.setdefault(inv["firma_id"], inv.get("kontrahent"))
         rodzaj = inv["rodzaj"]
-        sekcja = dzial_sekcja(invoice_item_dzial(rodzaj))
-        if rodzaj == "zdrowotna" and not any(hours.get(("kadry", inv["firma_id"], inv["miesiac"]), {}).values()):
-            sekcja = "ksiegowosc"
-        key = (sekcja, inv["firma_id"], inv["miesiac"])
-        price[key] = price.get(key, 0.0) + float(inv.get("wartosc_netto") or 0)
+        dzial = invoice_item_dzial(rodzaj)
+        sekcja = dzial_sekcja(dzial)
+        if rodzaj == "zdrowotna" and not has_time("kadry", inv["firma_id"], inv["miesiac"]):
+            sekcja, dzial = "ksiegowosc", "ksiegowosc"
+        kind = "dodatkowy" if dzial in ("inne_ksiegowosc", "inne_kadry") else "glowny"
+        slot = price.setdefault((sekcja, inv["firma_id"], inv["miesiac"]), {"glowny": 0.0, "dodatkowy": 0.0})
+        slot[kind] += float(inv.get("wartosc_netto") or 0)
 
     result = []
     for key in set(hours) | set(price):
         sekcja, firma_id, miesiac = key
-        per_emp = hours.get(key) or {NO_EMPLOYEE: 0}
-        total = sum(per_emp.values())
-        cena = price.get(key, 0.0)
+        if months is not None and miesiac not in months:
+            continue
+        per_emp = hours.get(key) or {NO_EMPLOYEE: {"glowny": 0, "dodatkowy": 0}}
+        cena = price.get(key, {"glowny": 0.0, "dodatkowy": 0.0})
+        share_main = _shares(per_emp, "glowny")
+        share_extra = _shares(per_emp, "dodatkowy")
         for emp, sek in per_emp.items():
-            share = (sek / total) if total else 1.0 / len(per_emp)
-            koszt = sek / 3600 * float(rates.get(fold(emp), 0) or 0)
-            cena_emp = cena * share
+            total_sek = sek["glowny"] + sek["dodatkowy"]
+            koszt = total_sek / 3600 * float(rates.get(fold(emp), 0) or 0)
+            cena_glowna = cena["glowny"] * share_main[emp]
+            cena_dod = cena["dodatkowy"] * share_extra[emp]
             result.append({
                 "sekcja": sekcja,
                 "firma_id": firma_id,
                 "klient": names.get(firma_id) or "",
                 "miesiac": miesiac,
-                "dokumenty": int(docs.get((firma_id, miesiac), 0)) if sekcja == "ksiegowosc" else None,
+                "ilosc": int(counts.get(key, 0)),
                 "pracownik": emp,
-                "sekundy": sek,
-                "cena": round(cena_emp, 2),
+                "sek_glowny": sek["glowny"],
+                "cena_glowna": round(cena_glowna, 2),
+                "sek_dodatkowy": sek["dodatkowy"],
+                "cena_dodatkowa": round(cena_dod, 2),
+                "sekundy": total_sek,
+                "cena": round(cena_glowna + cena_dod, 2),
                 "koszt": round(koszt, 2),
-                "zysk": round(cena_emp - koszt, 2),
+                "zysk": round(cena_glowna + cena_dod - koszt, 2),
             })
     result.sort(key=lambda r: (r["sekcja"], fold(r["klient"]), r["miesiac"], fold(r["pracownik"])))
     return result

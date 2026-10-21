@@ -1,6 +1,7 @@
 # app/reports/reports_ui.py
 from app.utils.ui_imports import *
 from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QCheckBox
 from PyQt6.QtCharts import (
     QChart, QChartView,
     QBarSeries, QBarSet,
@@ -22,9 +23,14 @@ from app.reports.reports_logic import (
 )
 from app.reports.import_parse import SEKCJE, SEKCJA_LABELS
 
-PROFIT_MODE = "Rentowność (import)"
-PROFIT_HEADERS = ["Firma", "Miesiąc", "Ilość dokumentów", "Pracownik", "Czas pracy",
-                  "Cena netto", "Koszt (stawka × czas)", "Zysk / strata"]
+PROFIT_MODE = "Rentowność"
+PROFIT_HEADERS = {
+    "ksiegowosc": ["Firma", "Miesiąc", "Pracownik", "Ilość dokumentów", "Czas pracy księgowość",
+                   "Księgowość", "Czas pracy usługi dodatkowe", "Usługi dodatkowe", "Koszt pracownika", "Zysk / strata"],
+    "kadry": ["Firma", "Miesiąc", "Pracownik", "Ilość umów", "Czas pracy kadry",
+              "Kadry", "Czas pracy usługi dodatkowe", "Usługi dodatkowe", "Koszt pracownika", "Zysk / strata"],
+}
+REPORT_HEADERS = ["Klient", "Miesiąc", "Ilość dokumentów", "Czas księgowości", "Ilość umów", "Czas kadr"]
 
 
 def format_hours(seconds: float) -> str:
@@ -32,6 +38,15 @@ def format_hours(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     return f"{h}:{m:02d}"
+
+
+def fit_table_height(table) -> None:
+    """Tabela dostaje wysokość dokładnie na wszystkie wiersze (bez własnego przewijania)."""
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    height = table.horizontalHeader().height() + 2 * table.frameWidth() + 4
+    for row in range(table.rowCount()):
+        height += table.rowHeight(row)
+    table.setFixedHeight(max(height, table.horizontalHeader().height() + 40))
 
 
 class ReportsPage(QWidget):
@@ -44,15 +59,9 @@ class ReportsPage(QWidget):
         from PyQt6.QtWidgets import QScrollArea
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        content = QWidget()
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(12, 12, 12, 12)
+        outer.setContentsMargins(12, 12, 12, 12)
+        # sterowanie (rodzaj raportu, firmy, zakres, przyciski) jest stałe - przewijają się tylko wyniki
+        layout = outer
 
         title = QLabel("<b>Raporty</b>")
         title.setFont(QFont("Arial", 18))
@@ -63,9 +72,6 @@ class ReportsPage(QWidget):
         self.mode_combo.addItems([
             "Raport miesięczny",
             "Raport roczny",
-            "Porównanie firm",
-            "Zarobek na godzinę",
-            "Zestawienie",
             PROFIT_MODE,
         ])
         mode_box.addWidget(QLabel("Tryb:"))
@@ -132,13 +138,25 @@ class ReportsPage(QWidget):
             import_box.addWidget(b)
         layout.addLayout(import_box)
 
+        self.chk_overwrite = QCheckBox("Nadpisz istniejące dane (ilość dokumentów w widoku miesięcznym)")
+        layout.addWidget(self.chk_overwrite)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         self.import_label = QLabel("<b>Księgowość</b>")
         layout.addWidget(self.import_label)
-        self.import_table = self._make_profit_table()
+        self.import_table = self._make_profit_table("ksiegowosc")
         layout.addWidget(self.import_table)
         self.import_label_kadry = QLabel("<b>Kadry</b>")
         layout.addWidget(self.import_label_kadry)
-        self.import_table_kadry = self._make_profit_table()
+        self.import_table_kadry = self._make_profit_table("kadry")
         layout.addWidget(self.import_table_kadry)
         self.chart_top = QChartView()
         self.chart_top.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -150,7 +168,8 @@ class ReportsPage(QWidget):
         layout.addWidget(self.chart_bottom)
         for chart_view in (self.chart_top, self.chart_bottom):
             chart_view.setMinimumHeight(320)
-        self.firm_list.setMinimumHeight(140)
+        self.firm_list.setMinimumHeight(110)
+        self.firm_list.setMaximumHeight(160)
 
         self.summary_table = QTableWidget(0, 6)
         self.summary_table.setHorizontalHeaderLabels(
@@ -167,24 +186,24 @@ class ReportsPage(QWidget):
         )
         layout.addWidget(self.report_status)
 
-        self.report_table = QTableWidget(0, 6)
-        self.report_table.setHorizontalHeaderLabels(
-            ["Klient", "Miesiąc", "Księgowość", "Kadry", "Czas księgowości", "Czas kadr"]
-        )
+        self.report_table = QTableWidget(0, len(REPORT_HEADERS))
+        self.report_table.setHorizontalHeaderLabels(REPORT_HEADERS)
         self.report_table.setAlternatingRowColors(True)
         self.report_table.setSortingEnabled(True)
         self.report_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.report_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.report_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.report_table)
 
         self._update_mode_ui(self.mode_combo.currentText())
         for table in (self.summary_table, self.report_table, self.import_table, self.import_table_kadry):
-            table.setMinimumHeight(300)
+            table.setMinimumHeight(80)
 
     @staticmethod
-    def _make_profit_table():
-        table = QTableWidget(0, len(PROFIT_HEADERS))
-        table.setHorizontalHeaderLabels(PROFIT_HEADERS)
+    def _make_profit_table(sekcja):
+        headers = PROFIT_HEADERS[sekcja]
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
@@ -194,10 +213,8 @@ class ReportsPage(QWidget):
 
     def _update_mode_ui(self, mode):
         profit = mode == PROFIT_MODE
-        summary = mode == "Zestawienie"
-        self.month_box_container.setVisible(
-            mode in ["Raport miesięczny", "Porównanie firm", "Zarobek na godzinę", "Zestawienie", PROFIT_MODE]
-        )
+        summary = False
+        self.month_box_container.setVisible(mode in ["Raport miesięczny", PROFIT_MODE])
         self.year_box_container.setVisible(mode == "Raport roczny")
         self.summary_table.setVisible(summary)
         self.import_table.setVisible(profit)
@@ -230,31 +247,9 @@ class ReportsPage(QWidget):
 
         elif mode == "Raport roczny":
             year = int(self.year_combo.currentText())
-            if len(selected) != 1:
-                QMessageBox.warning(self, "Błąd", "Raport roczny wymaga jednej firmy.")
-                return
-            firma_id = selected[0]
             months = [f"{year}-{m:02d}" for m in range(1, 13)]
-            data = build_yearly_report(firma_id, year)
-            self._render_mixed({firma_id: data}, [firma_id], months)
-
-        elif mode == "Porównanie firm":
-            miesiac = self.month_start.currentText()
-            data = compare_companies(selected, miesiac, self.pracownik_id)
-            self._render_compare(data, selected, miesiac)
-
-        elif mode == "Zarobek na godzinę":
-            start = self.month_start.currentText()
-            end = self.month_end.currentText()
-            months = get_months_range(start, end)
-            data = build_profit_report(selected, months, self.pracownik_id)
-            self._render_profit(data, selected, months)
-
-        elif mode == "Zestawienie":
-            start = self.month_start.currentText()
-            end = self.month_end.currentText()
-            months = get_months_range(start, end)
-            self._render_summary(build_summary_report(selected, months, self.pracownik_id))
+            data = build_report(selected, months, self.pracownik_id)
+            self._render_mixed(data, selected, months)
 
         elif mode == PROFIT_MODE:
             months = get_months_range(self.month_start.currentText(), self.month_end.currentText())
@@ -267,12 +262,13 @@ class ReportsPage(QWidget):
 
     @staticmethod
     def _profit_values(item, raw=False):
-        docs = "" if item["dokumenty"] is None else item["dokumenty"]
         if raw:
-            return [item["klient"], item["miesiac"], docs, item["pracownik"],
-                    format_hours(item["sekundy"]), item["cena"], item["koszt"], item["zysk"]]
-        return [item["klient"], item["miesiac"], docs, item["pracownik"],
-                format_hours(item["sekundy"]), f"{item['cena']:.2f} zł",
+            return [item["klient"], item["miesiac"], item["pracownik"], item["ilosc"],
+                    format_hours(item["sek_glowny"]), item["cena_glowna"],
+                    format_hours(item["sek_dodatkowy"]), item["cena_dodatkowa"], item["koszt"], item["zysk"]]
+        return [item["klient"], item["miesiac"], item["pracownik"], item["ilosc"],
+                format_hours(item["sek_glowny"]), f"{item['cena_glowna']:.2f} zł",
+                format_hours(item["sek_dodatkowy"]), f"{item['cena_dodatkowa']:.2f} zł",
                 f"{item['koszt']:.2f} zł", f"{item['zysk']:.2f} zł"]
 
     def _render_import_report(self, rows):
@@ -288,15 +284,17 @@ class ReportsPage(QWidget):
                 table.insertRow(row)
                 for col, value in enumerate(self._profit_values(item)):
                     cell = QTableWidgetItem(str(value))
-                    if col >= 4:
+                    if col >= 3:
                         cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    if col == 7 and item["zysk"] < 0:
+                    if col == 9 and item["zysk"] < 0:
                         cell.setForeground(QColor("#c62828"))
                     table.setItem(row, col, cell)
                 sek += item["sekundy"]
                 cena += item["cena"]
                 koszt += item["koszt"]
             totals[sekcja] = (sek, cena, koszt)
+            table.resizeColumnsToContents()
+            fit_table_height(table)
         if not rows:
             self.report_status.setText("Brak zaimportowanych danych dla wybranych firm i zakresu.")
             return
@@ -334,7 +332,7 @@ class ReportsPage(QWidget):
                 )
                 if not ok:
                     return
-                result = import_dao.import_invoices_file(path, month)
+                result = import_dao.import_invoices_file(path, month, self.chk_overwrite.isChecked())
             else:
                 result = import_dao.import_work_file(path)
         except Exception as exc:
@@ -346,7 +344,11 @@ class ReportsPage(QWidget):
             f"Wczytano wierszy (od 2026): {result['wiersze']}\n"
             f"Dodano: {result['dodane']}\n"
             f"Pominięto (już zaimportowane): {result['pominiete']}\n"
-            f"Bez dopasowanej firmy: {result['bez_firmy']}",
+            f"Bez dopasowanej firmy: {result['bez_firmy']}"
+            + (f"\nZaktualizowano cenniki kadr (UoP/UZ/UoD) w firmach: {result['ceny_kadry']}"
+               if result.get("ceny_kadry") else "")
+            + (f"\nUzupełniono ilość dokumentów w widoku miesięcznym: {result['ilosc_dok']}"
+               if result.get("ilosc_dok") else ""),
         )
 
     def _delete_imported(self):
@@ -448,101 +450,80 @@ class ReportsPage(QWidget):
     # ============================================================
 
     def _render_mixed(self, data, selected, months):
+        selected = [fid for fid in selected if fid in data]
         self._render_report_table(data, selected, months)
-        categories = months
+        self.chart_top.setChart(self._count_time_chart(
+            "Kadry — ilość umów vs czas", "Ilość umów", data, selected, months, "umowy", "godziny_kadry"))
+        self.chart_bottom.setChart(self._count_time_chart(
+            "Księgowość — ilość dokumentów vs czas", "Ilość dokumentów", data, selected, months,
+            "dokumenty", "godziny_ksiegowosc"))
 
-        # --- Kadry ---
-        chart_kadry = QChart()
-        chart_kadry.setTitle("Kadry — kwota vs czas")
+    def _count_time_chart(self, title, count_title, data, selected, months, count_key, seconds_key):
+        """Słupki = liczba (dokumentów/umów), linia = czas pracy; etykiety czasu w formacie H:MM."""
+        from PyQt6.QtCharts import QScatterSeries
 
-        bar_series = QBarSeries()
-        line_series = QLineSeries()
-        line_series.setName("Czas (godziny)")
+        chart = QChart()
+        chart.setTitle(title)
 
-        # słupki
+        bars = QBarSeries()
         for fid in selected:
-            bar = QBarSet(f"Firma {fid}")
+            bar = QBarSet(self.company_names.get(fid, f"Firma {fid}"))
             for m in months:
-                bar.append(data[fid][m]["koszt_kadry"])
-            bar_series.append(bar)
-
-        # linia — poprawione indeksowanie
-        for fid in selected:
-            for idx, m in enumerate(months):
-                seconds = data[fid][m]["godziny_kadry"]
-                hours_float = seconds / 3600
-                line_series.append(idx, hours_float)
-                line_series.setPointLabelsVisible(True)
-                line_series.setPointLabelsFormat(format_hours(seconds))
-
-        chart_kadry.addSeries(bar_series)
-        chart_kadry.addSeries(line_series)
+                bar.append(float(data[fid][m].get(count_key, 0) or 0))
+            bars.append(bar)
+        chart.addSeries(bars)
 
         axis_x = QBarCategoryAxis()
-        axis_x.append(categories)
-        chart_kadry.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
-        bar_series.attachAxis(axis_x)
-        line_series.attachAxis(axis_x)
+        axis_x.append(months)
+        chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+        bars.attachAxis(axis_x)
 
         axis_y = QValueAxis()
-        axis_y.setTitleText("Kwota (zł)")
-        chart_kadry.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
-        bar_series.attachAxis(axis_y)
+        axis_y.setTitleText(count_title)
+        axis_y.setLabelFormat("%d")
+        axis_y.setMin(0)
+        chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+        bars.attachAxis(axis_y)
 
         axis_y2 = QValueAxis()
         axis_y2.setTitleText("Czas (godziny)")
-        chart_kadry.addAxis(axis_y2, Qt.AlignmentFlag.AlignRight)
-        line_series.attachAxis(axis_y2)
+        axis_y2.setMin(0)
+        chart.addAxis(axis_y2, Qt.AlignmentFlag.AlignRight)
 
-        self.chart_top.setChart(chart_kadry)
-
-        # --- Księgowość ---
-        chart_ks = QChart()
-        chart_ks.setTitle("Księgowość — kwota vs czas")
-
-        bar_series2 = QBarSeries()
-        line_series2 = QLineSeries()
-        line_series2.setName("Czas (godziny)")
-
+        max_hours = 0.0
         for fid in selected:
-            bar = QBarSet(f"Firma {fid}")
-            for m in months:
-                bar.append(data[fid][m]["koszt_ksiegowosc"])
-            bar_series2.append(bar)
-
-        for fid in selected:
+            line = QLineSeries()
+            line.setName(f"Czas — {self.company_names.get(fid, fid)}" if len(selected) > 1 else "Czas (godziny)")
+            seconds_by_month = []
             for idx, m in enumerate(months):
-                seconds = data[fid][m]["godziny_ksiegowosc"]
-                hours_float = seconds / 3600
-                line_series2.append(idx, hours_float)
-                line_series2.setPointLabelsVisible(True)
-                line_series2.setPointLabelsFormat(format_hours(seconds))
-
-        chart_ks.addSeries(bar_series2)
-        chart_ks.addSeries(line_series2)
-
-        axis_x2 = QBarCategoryAxis()
-        axis_x2.append(categories)
-        chart_ks.addAxis(axis_x2, Qt.AlignmentFlag.AlignBottom)
-        bar_series2.attachAxis(axis_x2)
-        line_series2.attachAxis(axis_x2)
-
-        axis_y3 = QValueAxis()
-        axis_y3.setTitleText("Kwota (zł)")
-        chart_ks.addAxis(axis_y3, Qt.AlignmentFlag.AlignLeft)
-        bar_series2.attachAxis(axis_y3)
-
-        axis_y4 = QValueAxis()
-        axis_y4.setTitleText("Czas (godziny)")
-        chart_ks.addAxis(axis_y4, Qt.AlignmentFlag.AlignRight)
-        line_series2.attachAxis(axis_y4)
-
-        self.chart_bottom.setChart(chart_ks)
+                seconds = float(data[fid][m].get(seconds_key, 0) or 0)
+                seconds_by_month.append(seconds)
+                line.append(idx, seconds / 3600)
+            chart.addSeries(line)
+            line.attachAxis(axis_x)
+            line.attachAxis(axis_y2)
+            max_hours = max(max_hours, max(seconds_by_month, default=0) / 3600)
+            # jedna seria na punkt, bo format etykiety (H:MM) jest stały dla całej serii
+            for idx, seconds in enumerate(seconds_by_month):
+                point = QScatterSeries()
+                point.setMarkerSize(7)
+                point.append(idx, seconds / 3600)
+                point.setPointLabelsVisible(True)
+                point.setPointLabelsFormat(format_hours(seconds))
+                point.setPointLabelsClipping(False)
+                chart.addSeries(point)
+                point.attachAxis(axis_x)
+                point.attachAxis(axis_y2)
+                for marker in chart.legend().markers(point):
+                    marker.setVisible(False)
+        axis_y2.setMax(max(max_hours * 1.15, 1.0))
+        return chart
 
     def _render_report_table(self, data, selected, months):
         self.report_table.setSortingEnabled(False)
         self.report_table.setRowCount(0)
-        total_ks = total_kadry = total_ks_time = total_kadry_time = 0.0
+        total_docs = total_contracts = 0
+        total_ks_time = total_kadry_time = 0.0
         for fid in selected:
             for month in months:
                 row_data = data[fid][month]
@@ -551,21 +532,22 @@ class ReportsPage(QWidget):
                 values = [
                     self.company_names.get(fid, f"Firma {fid}"),
                     month,
-                    f"{row_data.get('koszt_ksiegowosc', 0):.2f} zł",
-                    f"{row_data.get('koszt_kadry', 0):.2f} zł",
+                    int(row_data.get("dokumenty", 0) or 0),
                     format_hours(row_data.get("godziny_ksiegowosc", 0)),
+                    int(row_data.get("umowy", 0) or 0),
                     format_hours(row_data.get("godziny_kadry", 0)),
                 ]
                 for column, value in enumerate(values):
                     self.report_table.setItem(row, column, QTableWidgetItem(str(value)))
-                total_ks += float(row_data.get("koszt_ksiegowosc", 0) or 0)
-                total_kadry += float(row_data.get("koszt_kadry", 0) or 0)
+                total_docs += int(row_data.get("dokumenty", 0) or 0)
+                total_contracts += int(row_data.get("umowy", 0) or 0)
                 total_ks_time += float(row_data.get("godziny_ksiegowosc", 0) or 0)
                 total_kadry_time += float(row_data.get("godziny_kadry", 0) or 0)
         self.report_table.setSortingEnabled(True)
+        fit_table_height(self.report_table)
         self.report_status.setText(
-            f"Podsumowanie: księgowość {total_ks:.2f} zł / {format_hours(total_ks_time)}, "
-            f"kadry {total_kadry:.2f} zł / {format_hours(total_kadry_time)}"
+            f"Podsumowanie: księgowość {total_docs} dokumentów / {format_hours(total_ks_time)}, "
+            f"kadry {total_contracts} umów (suma miesięcy) / {format_hours(total_kadry_time)}"
         )
 
     # ============================================================
@@ -679,8 +661,7 @@ class ReportsPage(QWidget):
         if mode == "Raport roczny":
             year = int(self.year_combo.currentText())
             months = [f"{year}-{m:02d}" for m in range(1, 13)]
-            data = build_yearly_report(selected[0], year)
-            data = {selected[0]: data}
+            data = build_report(selected, months, self.pracownik_id)
         else:
             start = self.month_start.currentText()
             end = self.month_end.currentText()
@@ -688,26 +669,6 @@ class ReportsPage(QWidget):
 
             if mode == "Raport miesięczny":
                 data = build_report(selected, months, self.pracownik_id)
-            elif mode == "Zestawienie":
-                rows = build_summary_report(selected, months, self.pracownik_id)
-                filepath, _ = QFileDialog.getSaveFileName(
-                    self, "Zapisz zestawienie Excel", "", "Pliki Excel (*.xlsx)"
-                )
-                if not filepath:
-                    return
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "Zestawienie"
-                ws.append(["Klient", "Księgowa", "Miesiąc", "Typ", "Czas pracy", "Cena za usługę"])
-                for row in rows:
-                    ws.append(safe_row([
-                        row["klient"], row["ksiegowa"], row["miesiac"],
-                        row["typ"], format_hours(row["sekundy"]),
-                        row["cena_za_usluge"],
-                    ]))
-                wb.save(filepath)
-                QMessageBox.information(self, "Sukces", f"Zestawienie zapisane:\n{filepath}")
-                return
             elif mode == PROFIT_MODE:
                 rows = self._profit_rows(selected, months)
                 filepath, _ = QFileDialog.getSaveFileName(
@@ -719,7 +680,7 @@ class ReportsPage(QWidget):
                 wb.remove(wb.active)
                 for sekcja in SEKCJE:
                     ws = wb.create_sheet(SEKCJA_LABELS[sekcja])
-                    ws.append(PROFIT_HEADERS)
+                    ws.append(PROFIT_HEADERS[sekcja])
                     for item in rows:
                         if item["sekcja"] != sekcja:
                             continue
@@ -727,15 +688,6 @@ class ReportsPage(QWidget):
                 wb.save(filepath)
                 QMessageBox.information(self, "Sukces", f"Raport zapisany:\n{filepath}")
                 return
-            elif mode == "Zarobek na godzinę":
-                data = build_profit_report(selected, months, self.pracownik_id)
-            elif mode == "Porównanie firm":
-                data = compare_companies(
-                    selected,
-                    self.month_start.currentText(),
-                    self.pracownik_id,
-                )
-                months = [self.month_start.currentText()]
 
         filepath, _ = QFileDialog.getSaveFileName(
             self,
@@ -753,6 +705,8 @@ class ReportsPage(QWidget):
         headers = [
             "Firma ID",
             "Miesiąc",
+            "Ilość dokumentów",
+            "Ilość umów",
             "Kwota Kadry",
             "Kwota Księgowość",
             "Czas Kadry (H:MM)",
@@ -775,6 +729,8 @@ class ReportsPage(QWidget):
                 ws.append([
                     fid,
                     m,
+                    row.get("dokumenty", ""),
+                    row.get("umowy", ""),
                     row.get("koszt_kadry", row.get("profit_kadry", 0)),
                     row.get("koszt_ksiegowosc", row.get("profit_ksiegowosc", 0)),
                     godz_kadry,

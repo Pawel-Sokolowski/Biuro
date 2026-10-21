@@ -1,13 +1,16 @@
 # app/reports/import_dao.py
 """Import czasu pracy i faktur z Excela oraz raport rentowności (czas × stawka vs cena usługi)."""
 from typing import Any, Dict, List, Optional, Tuple
+import re
 
 from app.db.dao_conn import get_conn
+from app.db.dao_monthly import contracts_by_month
 from app.reports.import_parse import (
     MIN_YEAR,
     compute_employee_report,
     digits,
     fold,
+    kadry_contract_type,
     parse_invoice_rows,
     parse_work_rows,
 )
@@ -90,10 +93,14 @@ def import_work_file(path: str) -> Dict[str, int]:
             "bez_firmy": unmatched}
 
 
-def import_invoices_file(path: str, default_month: Optional[str]) -> Dict[str, int]:
+def import_invoices_file(path: str, default_month: Optional[str], overwrite: bool = False) -> Dict[str, int]:
     rows = parse_invoice_rows(read_sheet_rows(path), default_month)
     conn = get_conn()
     inserted = unmatched = 0
+    kadry_totals: Dict[Tuple[int, str, str], float] = {}
+    over_limit: Dict[Tuple[int, str], Tuple[float, Optional[int]]] = {}
+    seen_firms = set()
+    last_month = ""
     try:
         index = _company_index(conn)
         for r in rows:
@@ -116,11 +123,181 @@ def import_invoices_file(path: str, default_month: Optional[str]) -> Dict[str, i
                 ),
             )
             inserted += cur.rowcount
+            if firma_id is not None and r["miesiac"]:
+                seen_firms.add(firma_id)
+                last_month = max(last_month, r["miesiac"])
+            typ = kadry_contract_type(r["pozycja"])
+            if r["rodzaj"] == "ponad_limit" and firma_id is not None and r["miesiac"] and r["wartosc_netto"] > 0:
+                key = (firma_id, r["miesiac"])
+                limit_match = re.search(r"(\d+)\s*szt", str(r["pozycja"]), re.IGNORECASE)
+                prev = over_limit.get(key, (0.0, None))
+                over_limit[key] = (prev[0] + float(r["wartosc_netto"]),
+                                   int(limit_match.group(1)) if limit_match else prev[1])
+            if firma_id is not None and typ and r["miesiac"] and r["wartosc_netto"] > 0:
+                key = (firma_id, typ, r["miesiac"])
+                kadry_totals[key] = kadry_totals.get(key, 0.0) + float(r["wartosc_netto"])
+        updated = _apply_kadry_contracts(conn, kadry_totals)
+        backfill = {
+            (fid, m) for fid in seen_firms
+            for m in _all_months(f"{MIN_YEAR}-01", last_month)
+        } if last_month else set()
+        docs_set = _apply_document_counts(conn, over_limit, backfill, overwrite)
         conn.commit()
     finally:
         conn.close()
     return {"wiersze": len(rows), "dodane": inserted, "pominiete": len(rows) - inserted,
-            "bez_firmy": unmatched}
+            "bez_firmy": unmatched, "ceny_kadry": updated, "ilosc_dok": docs_set}
+
+
+def _apply_document_counts(conn, over_limit: Dict[Tuple[int, str], Tuple[float, Optional[int]]],
+                           firms_months, overwrite: bool = False) -> int:
+    """Ilo?? dokument?w w miesi?cu = limit + (kwota ponad limit / cena za dokument); bez pozycji ponad limit = limit.
+
+    firms_months: (firma_id, miesi?c) do uzupe?nienia (wszystkie miesi?ce firm z faktur).
+    Bez overwrite nie nadpisuje ju? wpisanej (r??nej od 0) ilo?ci dokument?w.
+    """
+    sql = """
+        INSERT INTO statusy_miesieczne (firma_id, miesiac, ilosc_dok) VALUES (%s, %s, %s)
+        ON CONFLICT (firma_id, miesiac) DO UPDATE SET ilosc_dok = EXCLUDED.ilosc_dok
+    """
+    if not overwrite:
+        sql += " WHERE COALESCE(statusy_miesieczne.ilosc_dok, 0) = 0"
+    firms: Dict[int, Dict[str, Any]] = {}
+    done = 0
+    for firma_id, month in sorted(set(firms_months) | set(over_limit)):
+        if firma_id not in firms:
+            firms[firma_id] = conn.execute(
+                """
+                SELECT COALESCE(f.limit_dokumentow, 0) AS limit_dok,
+                       COALESCE(c.cena_za_dokument_ponad_limit, 0) AS cena
+                FROM firmy f LEFT JOIN cenniki c ON c.klucz = f.glowny_cennik
+                WHERE f.id = %s
+                """,
+                (firma_id,),
+            ).fetchone()
+        firma = firms[firma_id]
+        if firma is None:
+            continue
+        limit = int(firma["limit_dok"] or 0)
+        if (firma_id, month) in over_limit:
+            value, limit_in_name = over_limit[(firma_id, month)]
+            if not float(firma["cena"] or 0):
+                continue
+            total = (limit_in_name if limit_in_name is not None else limit) + round(value / float(firma["cena"]))
+        else:
+            if limit <= 0:
+                continue
+            total = limit
+        done += conn.execute(sql, (firma_id, month, total)).rowcount
+    return done
+
+
+def _all_months(first: str, last: str) -> List[str]:
+    y, m = int(first[:4]), int(first[5:7])
+    out = []
+    while f"{y}-{m:02d}" <= last:
+        out.append(f"{y}-{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def _apply_kadry_contracts(conn, totals: Dict[Tuple[int, str, str], float]) -> int:
+    """Ilo?? um?w UoP/UZ/UoD w miesi?cu = kwota z faktury / cena z cennika firmy.
+
+    Gdy firma nie ma cennika danego typu, ustawia cennik z kwoty faktury (jak w _apply_kadry_prices).
+    """
+    no_price: Dict[Tuple[int, str, str], float] = {}
+    by_firm: Dict[int, Dict[str, Dict[str, int]]] = {}
+    for (firma_id, typ, month), value in sorted(totals.items()):
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(c.cena_netto_kadry, c.cena, 0) AS cena
+            FROM firmy f LEFT JOIN cenniki_kadry c ON c.klucz = f.{typ}_cennik
+            WHERE f.id = %s
+            """,
+            (firma_id,),
+        ).fetchone()
+        price = float(row["cena"] or 0) if row else 0.0
+        if price <= 0:
+            no_price[(firma_id, typ, month)] = value
+            continue
+        by_firm.setdefault(firma_id, {}).setdefault(month, {})[f"{typ}_ilosc"] = max(0, round(value / price))
+    changed = 0
+    for firma_id, months in by_firm.items():
+        for month in sorted(months):
+            current = get_month_contracts_conn(conn, firma_id, month)
+            current.update(months[month])
+            conn.execute(
+                """
+                INSERT INTO kadry_umowy_miesieczne (firma_id, miesiac, uop_ilosc, uz_ilosc, uod_ilosc)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (firma_id, miesiac) DO UPDATE SET
+                    uop_ilosc = EXCLUDED.uop_ilosc, uz_ilosc = EXCLUDED.uz_ilosc, uod_ilosc = EXCLUDED.uod_ilosc
+                """,
+                (firma_id, month, current["uop_ilosc"], current["uz_ilosc"], current["uod_ilosc"]),
+            )
+        last = conn.execute(
+            "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM kadry_umowy_miesieczne "
+            "WHERE firma_id = %s ORDER BY miesiac DESC LIMIT 1",
+            (firma_id,),
+        ).fetchone()
+        conn.execute(
+            "UPDATE firmy SET uop_ilosc = %s, uz_ilosc = %s, uod_ilosc = %s WHERE id = %s",
+            (last["uop_ilosc"], last["uz_ilosc"], last["uod_ilosc"], firma_id),
+        )
+        changed += 1
+    return changed + (_apply_kadry_prices(conn, no_price) if no_price else 0)
+
+
+def get_month_contracts_conn(conn, firma_id: int, month: str) -> Dict[str, int]:
+    row = conn.execute(
+        "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM kadry_umowy_miesieczne "
+        "WHERE firma_id = %s AND miesiac <= %s ORDER BY miesiac DESC LIMIT 1",
+        (firma_id, month),
+    ).fetchone() or conn.execute(
+        "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM firmy WHERE id = %s", (firma_id,)
+    ).fetchone()
+    return {k: int((row[k] if row else 0) or 0) for k in ("uop_ilosc", "uz_ilosc", "uod_ilosc")}
+
+
+def _apply_kadry_prices(conn, totals: Dict[Tuple[int, str, str], float]) -> int:
+    """Ustawia w karcie firmy cennik UZ/UoP/UoD wg ostatniej zaimportowanej faktury (cena za umowę)."""
+    latest: Dict[Tuple[int, str], Tuple[str, float]] = {}
+    for (firma_id, typ, month), value in totals.items():
+        if (firma_id, typ) not in latest or month > latest[(firma_id, typ)][0]:
+            latest[(firma_id, typ)] = (month, value)
+    changed = 0
+    for (firma_id, typ), (_month, value) in latest.items():
+        firma = conn.execute(
+            f"SELECT {typ}_ilosc AS ilosc FROM firmy WHERE id = %s", (firma_id,)
+        ).fetchone()
+        if firma is None:
+            continue
+        price = round(value / max(int(firma["ilosc"] or 0), 1), 2)
+        label = {"uop": "UoP", "uz": "UZ", "uod": "UoD"}[typ]
+        found = conn.execute(
+            """
+            SELECT klucz FROM cenniki_kadry
+            WHERE ABS(COALESCE(cena_netto_kadry, cena, 0) - %s) < 0.005
+              AND klucz ILIKE %s
+            ORDER BY klucz LIMIT 1
+            """,
+            (price, f"%{label}%"),
+        ).fetchone()
+        if found:
+            klucz = found["klucz"]
+        else:
+            klucz = f"Kadry {label} {price:.2f} zł"
+            conn.execute(
+                """
+                INSERT INTO cenniki_kadry (klucz, cena_netto_kadry, cena_brutto_kadry, opis)
+                VALUES (%s, %s, %s, %s) ON CONFLICT (klucz) DO NOTHING
+                """,
+                (klucz, price, round(price * 1.23, 2), "Z importu faktur"),
+            )
+        conn.execute(f"UPDATE firmy SET {typ}_cennik = %s WHERE id = %s", (klucz, firma_id))
+        changed += 1
+    return changed
 
 
 def list_employee_rates() -> List[Dict[str, Any]]:
@@ -196,16 +373,18 @@ def build_profitability_report(
             """,
             [*firma_ids, *months],
         ).fetchall()]
+        years = sorted({m[:4] for m in months})
+        ph_y = ",".join("%s" for _ in years)
         invoices = [dict(r) for r in conn.execute(
             f"""
             SELECT i.firma_id, f.nazwa AS kontrahent, i.miesiac, i.rodzaj, i.wartosc_netto
             FROM import_faktury_pozycje i JOIN firmy f ON f.id = i.firma_id
-            WHERE i.firma_id IN ({ph_f}) AND i.miesiac IN ({ph_m})
+            WHERE i.firma_id IN ({ph_f}) AND substr(i.miesiac, 1, 4) IN ({ph_y})
             """,
-            [*firma_ids, *months],
+            [*firma_ids, *years],
         ).fetchall()]
-        docs = {
-            (r["firma_id"], r["miesiac"]): int(r["ile"])
+        counts: Dict[tuple, int] = {
+            ("ksiegowosc", r["firma_id"], r["miesiac"]): int(r["ile"])
             for r in conn.execute(
                 f"""
                 SELECT firma_id, substr(data_wyst, 1, 7) AS miesiac, COUNT(*) AS ile
@@ -216,6 +395,17 @@ def build_profitability_report(
                 [*firma_ids, *months],
             ).fetchall()
         }
+        for r in conn.execute(
+            f"""
+            SELECT firma_id, miesiac, ilosc_dok FROM statusy_miesieczne
+            WHERE firma_id IN ({ph_f}) AND miesiac IN ({ph_m}) AND COALESCE(ilosc_dok, 0) > 0
+            """,
+            [*firma_ids, *months],
+        ).fetchall():
+            counts[("ksiegowosc", r["firma_id"], r["miesiac"])] = int(r["ilosc_dok"])
+        all_months = sorted({m for y in years for m in (f"{y}-{n:02d}" for n in range(1, 13))} | set(months))
+        for (fid, month), total in contracts_by_month(conn, firma_ids, all_months).items():
+            counts[("kadry", fid, month)] = total
         rates = {
             fold(f"{r['imie']} {r['nazwisko']}"): float(r["stawka_godzinowa"] or 0)
             for r in conn.execute(
@@ -224,4 +414,4 @@ def build_profitability_report(
         }
     finally:
         conn.close()
-    return compute_employee_report(work, invoices, rates, docs)
+    return compute_employee_report(work, invoices, rates, counts, months)

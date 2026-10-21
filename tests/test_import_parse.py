@@ -91,16 +91,39 @@ class ImportParseTests(unittest.TestCase):
             {"firma_id": 1, "kontrahent": "B", "miesiac": "2026-01", "rodzaj": "kadry", "wartosc_netto": 200},
         ]
         rates = {"jan kowalski": 40, "ewa nowak": 60, "katarzyna czajkowska": 80}
-        res = compute_employee_report(work, inv, rates, {(1, "2026-01"): 12})
+        res = compute_employee_report(work, inv, rates, {("ksiegowosc", 1, "2026-01"): 12, ("kadry", 1, "2026-01"): 3})
         ks = [r for r in res if r["sekcja"] == "ksiegowosc"]
         kad = [r for r in res if r["sekcja"] == "kadry"]
         self.assertEqual(len(ks), 2)
         self.assertEqual(sum(r["cena"] for r in ks), 400)
         self.assertEqual({r["pracownik"]: r["koszt"] for r in ks}, {"Jan Kowalski": 40, "Ewa Nowak": 60})
-        self.assertEqual(ks[0]["dokumenty"], 12)
+        by = {r["pracownik"]: r for r in ks}
+        self.assertEqual(by["Jan Kowalski"]["cena_glowna"], 400)
+        self.assertEqual(by["Jan Kowalski"]["sek_glowny"], 3600)
+        self.assertEqual(by["Ewa Nowak"]["sek_dodatkowy"], 3600)
+        self.assertEqual(ks[0]["ilosc"], 12)
         self.assertEqual(len(kad), 1)
         self.assertEqual((kad[0]["cena"], kad[0]["koszt"], kad[0]["zysk"]), (200, 40, 160))
-        self.assertIsNone(kad[0]["dokumenty"])
+        self.assertEqual(kad[0]["ilosc"], 3)
+
+    def test_annual_fee_spread_over_12_months(self):
+        inv = [
+            {"firma_id": 5, "kontrahent": "E", "miesiac": "2026-01", "rodzaj": "ksiegowosc", "wartosc_netto": 12000},
+            {"firma_id": 5, "kontrahent": "E", "miesiac": "2026-03", "rodzaj": "inne", "wartosc_netto": 50},
+        ]
+        res = compute_employee_report([], inv, {}, months=["2026-02", "2026-03"])
+        by = {r["miesiac"]: r for r in res}
+        self.assertEqual(by["2026-02"]["cena_glowna"], 1000)
+        self.assertEqual(by["2026-03"]["cena_glowna"], 1000)
+        self.assertEqual(by["2026-03"]["cena_dodatkowa"], 50)
+
+    def test_monthly_fees_not_spread(self):
+        inv = [
+            {"firma_id": 6, "kontrahent": "F", "miesiac": "2026-01", "rodzaj": "ksiegowosc", "wartosc_netto": 300},
+            {"firma_id": 6, "kontrahent": "F", "miesiac": "2026-02", "rodzaj": "ksiegowosc", "wartosc_netto": 300},
+        ]
+        res = compute_employee_report([], inv, {})
+        self.assertEqual([r["cena_glowna"] for r in res], [300, 300])
 
     def test_zdrowotna_without_kadry_time_goes_to_accounting(self):
         inv = [

@@ -33,6 +33,20 @@ class DatabaseSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        danger_title = QLabel("Usuwanie danych firm")
+        danger_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        layout.addWidget(danger_title)
+        layout.addWidget(QLabel(
+            "Usuwa firmy, cenniki, faktury, dokumenty, statusy miesięczne i importy raportów. "
+            "Zostają pracownicy, maile, ustawienia, zadania i kalendarz."
+        ))
+        btn_wipe = QPushButton("Usuń dane firm...")
+        btn_wipe.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold;")
+        btn_wipe.clicked.connect(self._wipe_company_data)
+        wipe_row = QHBoxLayout()
+        wipe_row.addWidget(btn_wipe)
+        wipe_row.addStretch()
+        layout.addLayout(wipe_row)
         backup_title = QLabel("Kopia zapasowa — log z maila lub z pliku")
         backup_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(backup_title)
@@ -68,6 +82,29 @@ class DatabaseSettings(QWidget):
         layout.addWidget(self.backup_status)
         layout.addStretch()
         self._show_backup_status()
+
+    def _wipe_company_data(self):
+        from PyQt6.QtWidgets import QInputDialog
+        from app.db.reset_data import count_company_data, delete_company_data
+        from app.security.authorization import is_administrator
+
+        if not is_administrator(getattr(self, "pracownik_id", None)):
+            QMessageBox.warning(self, "Brak uprawnień", "Tylko administrator może usunąć dane firm.")
+            return
+        counts = {t: n for t, n in count_company_data().items() if n}
+        summary = "\n".join(f"{t}: {n}" for t, n in counts.items()) or "(brak danych)"
+        text, ok = QInputDialog.getText(
+            self, "Usuń dane firm",
+            f"Zostanie trwale usunięte:\n{summary}\n\nZrób najpierw kopię bazy.\nWpisz USUN, aby potwierdzić:",
+        )
+        if not ok or text.strip() != "USUN":
+            return
+        try:
+            delete_company_data()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć danych: {e}")
+            return
+        QMessageBox.information(self, "OK", "Dane firm zostały usunięte. Uruchom aplikację ponownie.")
 
     def _choose_backup_log(self):
         path, _ = QFileDialog.getOpenFileName(self, "Wybierz plik logu", "", "Logi (*.log *.txt);;Wszystkie pliki (*)")

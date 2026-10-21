@@ -89,10 +89,19 @@ class MonthlyViewLogic:
                    sm.data_dostarczenia AS data_dostarczenia,
                    COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
-                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
+                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
+                   COALESCE(k.uop_ilosc, f.uop_ilosc, 0) AS uop,
+                   COALESCE(k.uz_ilosc, f.uz_ilosc, 0) AS uz,
+                   COALESCE(k.uod_ilosc, f.uod_ilosc, 0) AS uod
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = %s
+            LEFT JOIN LATERAL (
+                SELECT uop_ilosc, uz_ilosc, uod_ilosc
+                FROM kadry_umowy_miesieczne
+                WHERE firma_id = f.id AND miesiac <= %s
+                ORDER BY miesiac DESC LIMIT 1
+            ) k ON TRUE
             LEFT JOIN (
                 SELECT firma_id, COUNT(*) AS ilosc_dok
                 FROM dokumenty
@@ -100,7 +109,7 @@ class MonthlyViewLogic:
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
         """
-        params: List[Any] = [selected_month, month_start, month_end]
+        params: List[Any] = [selected_month, selected_month, month_start, month_end]
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
@@ -251,6 +260,16 @@ class MonthlyViewLogic:
             payload["etap_kadry"] = etap_kadry
 
         save_month_status(firma_id, self.aktualny_miesiac, payload)
+
+        if uop is not None or uz is not None or uod is not None:
+            from app.db.dao_monthly import get_month_contracts, save_month_contracts
+            current = get_month_contracts(firma_id, self.aktualny_miesiac)
+            save_month_contracts(
+                firma_id, self.aktualny_miesiac,
+                int(uop if uop is not None else current["uop_ilosc"]),
+                int(uz if uz is not None else current["uz_ilosc"]),
+                int(uod if uod is not None else current["uod_ilosc"]),
+            )
 
     def _ensure_month_status(self, firma_id: int):
         row = get_month_status(firma_id, self.aktualny_miesiac)

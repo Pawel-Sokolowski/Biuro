@@ -88,7 +88,6 @@ def _calendars(client, cfg: Dict[str, str]) -> list:
     except Exception:
         cals = []
     if not cals:
-        # adres wskazujący bezpośrednio kalendarz (np. Google .../events)
         cals = [client.calendar(url=cfg["url"])]
     return cals
 

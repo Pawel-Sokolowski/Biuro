@@ -5,18 +5,18 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
-from PyQt6.QtCore import QDate, QDateTime, QLocale, QTime, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QDate, QDateTime, QLocale, QTime, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QTextCharFormat, QFont
 from PyQt6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QFileDialog, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTextEdit,
+    QFileDialog, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QTextEdit,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.db import dao_calendar
 from app.db.dao_companies import get_employees_list, list_companies
-from app.kalendarz import caldav_sync, ics_import
+from app.kalendarz import caldav_sync, google_sync, ics_import
 
 DT_FORMAT = "yyyy-MM-ddTHH:mm"
 
@@ -66,6 +66,18 @@ class EventDialog(QDialog):
         idx = self.company.findData(self.event.get("firma_id"))
         self.company.setCurrentIndex(max(idx, 0))
 
+        self.gcal = QComboBox()
+        for cal in google_sync.calendars_for(pracownik_id):
+            self.gcal.addItem(cal["nazwa"], cal["id"])
+        if self.gcal.count() == 0:
+            self.gcal.addItem("— brak kalendarza Google —", None)
+        current_cal = self.event.get("google_calendar_id")
+        if current_cal and self.gcal.findData(current_cal) < 0:
+            self.gcal.addItem(current_cal, current_cal)
+        self.gcal.setCurrentIndex(max(self.gcal.findData(current_cal), 0))
+        if self.event.get("google_event_id"):
+            self.gcal.setEnabled(False)
+
         self.access = QListWidget()
         self.access.setMaximumHeight(110)
         granted = set(dao_calendar.get_event_access(self.event['id'])) if self.event.get('id') else set()
@@ -91,6 +103,7 @@ class EventDialog(QDialog):
         form.addRow("Początek:", self.start)
         form.addRow("Koniec:", self.end)
         form.addRow("Firma:", self.company)
+        form.addRow("Kalendarz Google:", self.gcal)
         form.addRow("Miejsce:", self.location)
         form.addRow("Opis:", self.description)
         form.addRow("Dostęp dla pracowników:", self.access)
@@ -139,6 +152,7 @@ class EventDialog(QDialog):
             "caly_dzien": 1 if all_day else 0,
             "firma_id": self.company.currentData(),
             "google_event_id": self.event.get("google_event_id"),
+            "google_calendar_id": self.gcal.currentData(),
             "caldav_uid": self.event.get("caldav_uid"),
             "zrodlo": self.event.get("zrodlo") or "lokalne",
         }
@@ -151,8 +165,9 @@ MONTHS_PL = (
 )
 WEEKDAYS_PL = ("pon.", "wt.", "śr.", "czw.", "pt.", "sob.", "niedz.")
 VIEWS = ("Dzień", "Tydzień", "Wiele tygodni", "Miesiąc")
-SOURCE_COLORS = {"lokalne": "#1976d2", "caldav": "#2e7d32"}
+SOURCE_COLORS = {"lokalne": "#1976d2", "caldav": "#2e7d32", "google": "#d84315"}
 MAX_CHIPS = 3
+AUTO_SYNC_MS = 120_000
 
 
 def _monday(d: date) -> date:
@@ -166,14 +181,22 @@ class _Chip(QLabel):
     def __init__(self, ev: Dict[str, Any], parent=None):
         when = "" if ev["caly_dzien"] else ev["start"][11:16] + " "
         super().__init__(f"{when}{ev['tytul']}", parent)
+        self.setWordWrap(True)
+        self.setMinimumWidth(10)
         self.ev = ev
-        color = SOURCE_COLORS.get(ev.get("zrodlo") or "lokalne", SOURCE_COLORS["lokalne"])
+        self._color = SOURCE_COLORS.get(ev.get("zrodlo") or "lokalne", SOURCE_COLORS["lokalne"])
         if ev.get("udostepnione"):
-            color = "#8e24aa"
-        self.setStyleSheet(
-            f"background:{color}; color:white; border-radius:3px; padding:1px 4px; font-size:11px;"
-        )
+            self._color = "#8e24aa"
+        self.set_selected(False)
         self.setToolTip(f"{ev['tytul']}\n{ev['start'].replace('T', ' ')} – {ev['koniec'].replace('T', ' ')}")
+
+    def set_selected(self, selected: bool):
+        border = "3px solid #111" if selected else "3px solid transparent"
+        weight = "bold" if selected else "normal"
+        self.setStyleSheet(
+            f"background:{self._color}; color:white; border-radius:4px; border:{border}; "
+            f"padding:1px 4px; font-size:14px; font-weight:{weight};"
+        )
 
     def mousePressEvent(self, e):
         self.clicked.emit(self.ev)
@@ -188,29 +211,57 @@ class _DayCell(QFrame):
     event_clicked = pyqtSignal(object)
     event_double_clicked = pyqtSignal(object)
 
-    def __init__(self, day: date, events: list, dimmed: bool, today: bool, parent=None):
+    def __init__(self, day: date, events: list, dimmed: bool, today: bool, selected: bool = False,
+                 parent=None):
         super().__init__(parent)
         self.day = day
+        self._dimmed, self._today = dimmed, today
+        self.chips: list[_Chip] = []
+        self.setMinimumHeight(100)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        bg = "#fff4c2" if today else ("#f3f3f3" if dimmed else "white")
-        self.setStyleSheet(f"_DayCell {{ background:{bg}; border:1px solid #d0d0d0; }}")
+        self._apply_style(selected)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
-        lay.setSpacing(1)
+        lay.setSpacing(2)
         num = QLabel(str(day.day) if day.day != 1 else f"1 {MONTHS_PL[day.month - 1][:3]}")
         num.setStyleSheet(
-            f"font-weight:{'bold' if today else 'normal'}; color:{'#999' if dimmed else '#222'};"
+            f"font-size:15px; font-weight:{'bold' if today else 'normal'}; "
+            f"color:{'#999' if dimmed else '#222'};"
         )
         num.setAlignment(Qt.AlignmentFlag.AlignRight)
         lay.addWidget(num)
         for ev in events[:MAX_CHIPS]:
             chip = _Chip(ev)
-            chip.clicked.connect(self.event_clicked)
+            chip.clicked.connect(self._chip_clicked)
             chip.double_clicked.connect(self.event_double_clicked)
+            self.chips.append(chip)
             lay.addWidget(chip)
         if len(events) > MAX_CHIPS:
-            lay.addWidget(QLabel(f"+{len(events) - MAX_CHIPS} więcej"))
+            more = QLabel(f"+{len(events) - MAX_CHIPS} więcej")
+            more.setStyleSheet("font-size:13px;")
+            lay.addWidget(more)
         lay.addStretch()
+
+    def _apply_style(self, selected: bool):
+        bg = "#fff4c2" if self._today else ("#f3f3f3" if self._dimmed else "white")
+        if selected:
+            border = "3px solid #1565c0"
+            if not self._today:
+                bg = "#e3f2fd"
+        else:
+            border = "1px solid #d0d0d0"
+        self.setStyleSheet(f"_DayCell {{ background:{bg}; border:{border}; }}")
+
+    def set_selected_day(self, selected: bool):
+        self._apply_style(selected)
+
+    def _chip_clicked(self, ev):
+        self.day_clicked.emit(self.day)
+        self.event_clicked.emit(ev)
+
+    def set_selected_event(self, event_id):
+        for chip in self.chips:
+            chip.set_selected(event_id is not None and chip.ev["id"] == event_id)
 
     def mousePressEvent(self, e):
         self.day_clicked.emit(self.day)
@@ -225,28 +276,28 @@ class CalendarPage(QWidget):
         self.pracownik_id = pracownik_id
         self._workers: list[_Worker] = []
         self.anchor = date.today()
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self._auto_sync)
+        self._auto_timer.start(AUTO_SYNC_MS)
+        QTimer.singleShot(1500, self._auto_sync)
 
         # --- pasek narzędzi ---
         self.btn_sync = QPushButton("Synchronizuj")
         self.btn_import = QPushButton("Importuj .ics")
-        self.btn_event = QPushButton("Wydarzenie")
         self.btn_task = QPushButton("Zadanie")
         self.btn_edit = QPushButton("Edytuj")
         self.btn_delete = QPushButton("Usuń")
         self.btn_new = QPushButton("Nowe wydarzenie")
-        self.btn_new.setStyleSheet("background:#1976d2; color:white; padding:4px 12px; font-weight:bold;")
-        self.btn_sync.clicked.connect(self._sync)
+        self.btn_sync.clicked.connect(lambda: self._sync())
         self.btn_import.clicked.connect(self._import_ics)
-        self.btn_event.clicked.connect(self._add)
         self.btn_new.clicked.connect(self._add)
         self.btn_task.clicked.connect(self._add_task)
         self.btn_edit.clicked.connect(self._edit)
         self.btn_delete.clicked.connect(self._delete)
         toolbar = QHBoxLayout()
-        for b in (self.btn_sync, self.btn_import, self.btn_event, self.btn_task, self.btn_edit, self.btn_delete):
+        toolbar.setSpacing(6)
+        for b in (self.btn_new, self.btn_task, self.btn_edit, self.btn_delete):
             toolbar.addWidget(b)
-        toolbar.addStretch()
-        toolbar.addWidget(self.btn_new)
 
         # --- panel boczny ---
         self.calendar = QCalendarWidget()
@@ -258,30 +309,23 @@ class CalendarPage(QWidget):
         self.calendar.currentPageChanged.connect(self._mark_days)
 
         self.calendars = QListWidget()
+        self.calendars.setMaximumHeight(110)
         self.calendars.itemChanged.connect(lambda _: self._rebuild())
         self.status = QLabel("")
         self.status.setWordWrap(True)
+        self.status.setStyleSheet("color:#555;")
         side = QVBoxLayout()
+        side.setSpacing(6)
         side.addWidget(self.calendar)
         side.addWidget(QLabel("<b>Kalendarze</b>"))
-        side.addWidget(self.calendars, 1)
+        side.addWidget(self.calendars)
         side.addWidget(self.status)
+        side.addStretch(1)
         side_w = QWidget()
         side_w.setLayout(side)
-        side_w.setMaximumWidth(300)
+        side_w.setFixedWidth(280)
 
-        # --- nawigacja i widoki ---
-        self.view_buttons: list[QPushButton] = []
-        nav = QHBoxLayout()
-        for i, name in enumerate(VIEWS):
-            b = QPushButton(name)
-            b.setCheckable(True)
-            b.clicked.connect(lambda _=False, idx=i: self._set_view(idx))
-            self.view_buttons.append(b)
-            nav.addWidget(b)
-        self.view = 3
-        self.view_buttons[3].setChecked(True)
-        nav.addStretch()
+        # --- nawigacja, szukanie i widoki w jednym wierszu ---
         self.btn_prev = QPushButton("◀")
         self.btn_today = QPushButton("Dzisiaj")
         self.btn_next = QPushButton("▶")
@@ -289,41 +333,77 @@ class CalendarPage(QWidget):
         self.btn_next.clicked.connect(lambda: self._shift(1))
         self.btn_today.clicked.connect(self._go_today)
         self.period_label = QLabel()
-        self.period_label.setStyleSheet("font-weight:bold; font-size:15px; padding:0 8px;")
+        self.period_label.setMinimumWidth(150)
+        self.period_label.setStyleSheet("font-weight:bold; font-size:16px; padding:0 8px;")
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Szukaj w wydarzeniach…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(140)
+        self.search.setMaximumWidth(320)
+        self.search.textChanged.connect(lambda _: self._rebuild())
+
+        self.view_buttons: list[QPushButton] = []
+        nav = toolbar
+        nav.addSpacing(16)
         for w in (self.btn_prev, self.btn_today, self.btn_next, self.period_label):
             nav.addWidget(w)
+        nav.addStretch()
+        nav.addWidget(self.search, 1)
+        nav.addStretch()
+        for i, name in enumerate(VIEWS):
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.clicked.connect(lambda _=False, idx=i: self._set_view(idx))
+            self.view_buttons.append(b)
+            nav.addWidget(b)
+        nav.addSpacing(16)
+        for b in (self.btn_sync, self.btn_import):
+            nav.addWidget(b)
+        self.view = 3
+        self.view_buttons[3].setChecked(True)
 
-        # --- lista wydarzeń + szukanie ---
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("zawiera:")
-        self.search.textChanged.connect(lambda _: self._rebuild())
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("zawiera:"))
-        search_row.addWidget(self.search)
+        # --- lista wydarzeń wybranego dnia ---
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Nazwa", "Początek", "Koniec", "Kategoria"])
         self.tree.setRootIsDecorated(False)
-        self.tree.setMaximumHeight(170)
+        self.tree.setMaximumHeight(120)
         self.tree.itemDoubleClicked.connect(lambda *_: self._edit())
+        self.tree.currentItemChanged.connect(self._tree_current_changed)
+        self.tree.setStyleSheet("font-size:14px;")
+        self.calendars.setStyleSheet("font-size:14px;")
         self.events = self.tree
 
         self.grid_host = QWidget()
         self.grid = QGridLayout(self.grid_host)
         self.grid.setSpacing(0)
         self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid_scroll = QScrollArea()
+        self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.grid_scroll.setWidget(self.grid_host)
 
         main = self._main = QVBoxLayout()
-        main.addLayout(nav)
-        main.addLayout(search_row)
+        main.setSpacing(6)
         main.addWidget(self.tree)
-        main.addWidget(self.grid_host, 1)
+        main.addWidget(self.grid_scroll, 1)
 
         body = QHBoxLayout()
+        body.setSpacing(10)
         body.addWidget(side_w)
         body.addLayout(main, 1)
         layout = QVBoxLayout(self)
-        layout.addLayout(toolbar)
-        layout.addLayout(body)
+        layout.setSpacing(8)
+        bar = QWidget()
+        bar.setLayout(toolbar)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        bar_scroll = QScrollArea()
+        bar_scroll.setWidgetResizable(True)
+        bar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        bar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        bar_scroll.setWidget(bar)
+        bar_scroll.setFixedHeight(bar.sizeHint().height() + 18)
+        layout.addWidget(bar_scroll)
+        layout.addLayout(body, 1)
 
         self._fill_calendar_list()
         self._rebuild()
@@ -332,7 +412,9 @@ class CalendarPage(QWidget):
     def _fill_calendar_list(self):
         self.calendars.blockSignals(True)
         self.calendars.clear()
-        entries = [("Lokalne (Biuro)", "lokalne")]
+        entries = []
+        if google_sync.is_connected(self.pracownik_id):
+            entries.append(("Google Calendar", "google"))
         if caldav_sync.is_configured():
             host = urlparse(caldav_sync.get_config()["url"]).hostname or "CalDAV"
             entries.append((f"CalDAV: {host}", "caldav"))
@@ -414,8 +496,8 @@ class CalendarPage(QWidget):
         out = []
         for ev in rows:
             source = ev.get("zrodlo") or "lokalne"
-            if source not in SOURCE_COLORS:
-                source = "lokalne"  # np. zaimportowane z .ics
+            if source == "lokalne" or source not in SOURCE_COLORS:
+                continue  # lokalny kalendarz został usunięty z widoku
             if source not in sources:
                 continue
             hay = f"{ev['tytul']} {ev.get('opis') or ''} {ev.get('lokalizacja') or ''} {ev.get('firma_nazwa') or ''}"
@@ -436,8 +518,8 @@ class CalendarPage(QWidget):
             self.period_label.setText(f"{first.strftime('%d.%m')} – {end.strftime('%d.%m.%Y')}")
         self._events = self._visible_events(first, last)
         self._fill_tree(self._day_events(self._events, a))
-        self.grid_host.setVisible(weeks > 0)
-        self.tree.setMaximumHeight(170 if weeks else 16777215)
+        self.grid_scroll.setVisible(weeks > 0)
+        self.tree.setMaximumHeight(120 if weeks else 16777215)
         self._main.setStretchFactor(self.tree, 0 if weeks else 1)
         if weeks:
             self._fill_grid(first, weeks, self._events)
@@ -456,6 +538,7 @@ class CalendarPage(QWidget):
         return out
 
     def _fill_tree(self, events: list):
+        keep = getattr(self, "_sel_id", None)
         self.tree.clear()
         for ev in events:
             if ev["caly_dzien"]:
@@ -465,7 +548,10 @@ class CalendarPage(QWidget):
             if ev.get("firma_nazwa"):
                 cat = ev["firma_nazwa"]
             else:
-                cat = "CalDAV" if ev.get("zrodlo") == "caldav" else "Lokalne"
+                cat = {
+                    "caldav": "CalDAV",
+                    "google": "Google",
+                }.get(ev.get("zrodlo"), "Lokalne")
             title = ev["tytul"]
             if ev.get("udostepnione"):
                 title += f"  (udostępnił: {ev['wlasciciel']})"
@@ -474,6 +560,8 @@ class CalendarPage(QWidget):
             item = QTreeWidgetItem([title, s, e, cat])
             item.setData(0, Qt.ItemDataRole.UserRole, ev)
             self.tree.addTopLevelItem(item)
+            if keep is not None and ev["id"] == keep:
+                self.tree.setCurrentItem(item)
         for c in range(4):
             self.tree.resizeColumnToContents(c)
 
@@ -496,20 +584,20 @@ class CalendarPage(QWidget):
         for c, name in enumerate(WEEKDAYS_PL):
             h = QLabel(name)
             h.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            h.setStyleSheet("font-weight:bold; background:#eceff1; padding:2px;")
+            h.setStyleSheet("font-weight:bold; background:#eceff1; padding:2px; font-size:14px;")
             self.grid.addWidget(h, 0, c + 1)
         today = date.today()
         for r in range(weeks):
             monday = first + timedelta(weeks=r)
             wk = QLabel(f"{monday.isocalendar()[1]}. tydz.")
             wk.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-            wk.setStyleSheet("color:#666; background:#eceff1; padding:2px; font-size:11px;")
+            wk.setStyleSheet("color:#666; background:#eceff1; padding:2px; font-size:13px;")
             wk.setFixedWidth(62)
             self.grid.addWidget(wk, r + 1, 0)
             for c in range(7):
                 d = monday + timedelta(days=c)
                 dimmed = self.view == 3 and d.month != self.anchor.month
-                cell = _DayCell(d, by_day.get(d, []), dimmed, d == today)
+                cell = _DayCell(d, by_day.get(d, []), dimmed, d == today, d == self.anchor)
                 cell.day_clicked.connect(self._cell_clicked)
                 cell.day_double_clicked.connect(self._cell_double_clicked)
                 cell.event_clicked.connect(self._select_event)
@@ -518,6 +606,18 @@ class CalendarPage(QWidget):
             self.grid.setRowStretch(r + 1, 1)
         for c in range(1, 8):
             self.grid.setColumnStretch(c, 1)
+        self._apply_event_selection()
+
+    def _apply_event_selection(self):
+        sel = getattr(self, "_sel_id", None)
+        for i in range(self.grid.count()):
+            w = self.grid.itemAt(i).widget()
+            if isinstance(w, _DayCell):
+                w.set_selected_event(sel)
+
+    def _tree_current_changed(self, current, _previous):
+        self._sel_id = current.data(0, Qt.ItemDataRole.UserRole)["id"] if current else None
+        self._apply_event_selection()
 
     def _cell_clicked(self, d: date):
         self.anchor = d
@@ -525,6 +625,10 @@ class CalendarPage(QWidget):
         self.calendar.setSelectedDate(QDate(d.year, d.month, d.day))
         self.calendar.blockSignals(False)
         self._fill_tree(self._day_events(getattr(self, "_events", []), d))
+        for i in range(self.grid.count()):
+            w = self.grid.itemAt(i).widget()
+            if isinstance(w, _DayCell):
+                w.set_selected_day(w.day == d)
 
     def _cell_double_clicked(self, d: date):
         self._cell_clicked(d)
@@ -585,7 +689,21 @@ class CalendarPage(QWidget):
             QMessageBox.critical(self, "Błąd", str(exc))
             return
         self._refresh_all()
-        if caldav_sync.is_configured() and data.get("zrodlo") != "google":
+        if data.get("google_event_id") and data.get("google_calendar_id"):
+            try:
+                google_sync.mark_event_pending(
+                    self.pracownik_id, data["google_calendar_id"], data["google_event_id"], "upsert"
+                )
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Google Calendar",
+                    f"Wydarzenie zapisano lokalnie, ale nie udało się dodać zmiany do kolejki: {exc}",
+                )
+                return
+        if (data.get("google_calendar_id") and google_sync.is_connected(self.pracownik_id)):
+            saved = dao_calendar.get_event(data["id"])
+            self._run(lambda: google_sync.push_event(self.pracownik_id, saved), refresh=True)
+        elif caldav_sync.is_configured() and data.get("zrodlo") != "google":
             saved = dao_calendar.get_event(data["id"])
             self._run(lambda: caldav_sync.push_event(self.pracownik_id, saved), refresh=True)
 
@@ -603,9 +721,27 @@ class CalendarPage(QWidget):
             QMessageBox.StandardButton.Yes
         ):
             return
+        google_event_id = ev.get("google_event_id")
+        google_calendar_id = ev.get("google_calendar_id")
+        if google_event_id and google_calendar_id:
+            try:
+                google_sync.mark_event_pending(
+                    self.pracownik_id, google_calendar_id, google_event_id, "delete"
+                )
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Google Calendar",
+                    f"Nie udało się przygotować usunięcia wydarzenia z Google: {exc}",
+                )
+                return
         dao_calendar.delete_event(ev["id"], self.pracownik_id)
         self._refresh_all()
-        if ev.get("caldav_uid") and caldav_sync.is_configured():
+        if (google_event_id and google_calendar_id
+                and google_sync.has_calendar_access(self.pracownik_id, google_calendar_id)
+                and google_sync.is_account_connected()):
+            self._run(lambda: google_sync.delete_remote(
+                self.pracownik_id, google_calendar_id, google_event_id))
+        elif ev.get("caldav_uid") and caldav_sync.is_configured():
             self._run(lambda: caldav_sync.delete_remote(self.pracownik_id, ev["caldav_uid"]))
 
     def _refresh_all(self):
@@ -629,12 +765,24 @@ class CalendarPage(QWidget):
         )
         self._refresh_all()
 
-    # ---------- synchronizacja CalDAV ----------
-    def _sync(self):
-        if not caldav_sync.is_configured():
+    # ---------- synchronizacja zewnętrzna ----------
+    def _auto_sync(self):
+        self._sync(silent=True)
+
+    def _sync(self, silent: bool = False):
+        if not self.btn_sync.isEnabled():
+            return
+        if google_sync.is_connected(self.pracownik_id):
+            sync = lambda: google_sync.sync(self.pracownik_id)
+        elif caldav_sync.is_configured():
+            sync = lambda: caldav_sync.sync(self.pracownik_id)
+        elif silent:
+            return
+        else:
             QMessageBox.information(
                 self, "Synchronizacja",
-                "Najpierw skonfiguruj połączenie CalDAV w Ustawieniach → Kalendarz.",
+                "Brak przypisanego kalendarza Google (administrator przypisuje go w Ustawieniach) "
+                "ani skonfigurowanego serwera CalDAV.",
             )
             return
         self.btn_sync.setEnabled(False)
@@ -647,13 +795,15 @@ class CalendarPage(QWidget):
             self._refresh_all()
 
         self._run(
-            lambda: caldav_sync.sync(self.pracownik_id),
+            sync,
             on_done=done,
             on_fail=lambda: self.status.setText("Synchronizacja nie powiodła się."),
             always=lambda: self.btn_sync.setEnabled(True),
+            silent=silent,
         )
 
-    def _run(self, func, refresh: bool = False, on_done=None, on_fail=None, always=None):
+    def _run(self, func, refresh: bool = False, on_done=None, on_fail=None, always=None,
+             silent: bool = False):
         worker = _Worker(func, self)
         self._workers.append(worker)
 
@@ -671,7 +821,8 @@ class CalendarPage(QWidget):
             cleanup()
 
         def fail(message):
-            QMessageBox.warning(self, "Kalendarz", message)
+            if not silent:
+                QMessageBox.warning(self, "Kalendarz", message)
             if on_fail:
                 on_fail()
             cleanup()

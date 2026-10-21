@@ -477,6 +477,7 @@ class OfficeManagerApp(QMainWindow):
         self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
         sidebar_layout.addWidget(self.sidebar_toggle)
         sidebar_layout.addWidget(self.sidebar)
+        sidebar_layout.setAlignment(self.sidebar_toggle, Qt.AlignmentFlag.AlignTop)
         main_layout.addWidget(self.sidebar_panel)
 
         content = QWidget()
@@ -641,7 +642,21 @@ class OfficeManagerApp(QMainWindow):
         if 0 <= index < self.pages.count():
             self.pages.setCurrentIndex(index)
 
+    def restore_window_state(self):
+        settings = QSettings("Biuro", "OfficeManager")
+        geometry = settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        if settings.value("window/maximized", True, type=bool):
+            self.showMaximized()
+        else:
+            self.show()
+
     def closeEvent(self, event):
+        settings = QSettings("Biuro", "OfficeManager")
+        settings.setValue("window/maximized", self.isMaximized())
+        if not self.isMaximized():
+            settings.setValue("window/geometry", self.saveGeometry())
         # zatrzymaj timer przy zamykaniu
         try:
             if self._header_timer and self._header_timer.isActive():

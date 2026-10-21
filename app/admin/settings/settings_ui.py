@@ -4,8 +4,18 @@ from typing import Callable, List, Optional, Tuple
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QStackedWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
+
+
+def _scrollable(factory: Callable[[], QWidget]) -> Callable[[], QWidget]:
+    def build() -> QWidget:
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(factory())
+        return area
+    return build
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.admin.settings.audit_settings import AuditSettings
@@ -68,7 +78,7 @@ class GlobalSettingsPage(QWidget):
             ]),
             ("Poczta i powiadomienia", [
                 ("Konta e-mail", EmailSettings, True),
-                ("Konto systemowe i kalendarz", CalendarAndResetSettings, True),
+                ("Konto systemowe i kalendarz", _scrollable(CalendarAndResetSettings), True),
             ]),
             ("Cenniki i usługi", [
                 ("Cennik księgowość", PricingSettings, bool(can_view_invoices)),

@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QCheckBox, QDialogButtonBox
 )
 from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 
@@ -46,9 +47,59 @@ class RolesSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        matrix_title = QLabel("Dostęp do zakładek (administrator widzi wszystkie)")
+        matrix_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        layout.addWidget(matrix_title)
+
+        from app.security.authorization import TABS
+        self._tabs = TABS
+        self.matrix = QTableWidget(0, len(TABS))
+        self.matrix.setHorizontalHeaderLabels(TABS)
+        self.matrix.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.matrix)
+
+        btn_save_matrix = QPushButton("Zapisz dostęp do zakładek")
+        btn_save_matrix.clicked.connect(self._save_matrix)
+        layout.addWidget(btn_save_matrix)
+
         self._refresh()
 
+    def _refresh_matrix(self):
+        roles = self.logic.get_roles()
+        self.matrix.setRowCount(0)
+        self._matrix_role_ids = []
+        labels = []
+        for role in roles:
+            rid = role["id"]
+            allowed = set(self.logic.get_role_tabs(rid))
+            row = self.matrix.rowCount()
+            self.matrix.insertRow(row)
+            self._matrix_role_ids.append(rid)
+            labels.append(str(role["nazwa"]))
+            for col, tab in enumerate(self._tabs):
+                item = QTableWidgetItem()
+                item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                item.setCheckState(Qt.CheckState.Checked if tab in allowed else Qt.CheckState.Unchecked)
+                self.matrix.setItem(row, col, item)
+        self.matrix.setVerticalHeaderLabels(labels)
+
+    def _save_matrix(self):
+        try:
+            for row, rid in enumerate(self._matrix_role_ids):
+                tabs = [
+                    tab for col, tab in enumerate(self._tabs)
+                    if self.matrix.item(row, col).checkState() == Qt.CheckState.Checked
+                ]
+                self.logic.set_role_tabs(rid, tabs)
+            QMessageBox.information(self, "OK", "Zapisano dostęp do zakładek.")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać: {e}")
+
     def _refresh(self):
+        self._refresh_matrix()
+        self._refresh_table()
+
+    def _refresh_table(self):
         rows = self.logic.get_roles()
         self.table.setRowCount(0)
 

@@ -70,7 +70,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # Keep Chromium's Qt WebEngine helper process and libraries untouched.
+    upx=False,
     console=False,
     exclude_binaries=True,
 )
@@ -80,6 +81,6 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     name="Biuro",
 )

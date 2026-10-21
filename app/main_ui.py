@@ -211,8 +211,7 @@ class LoginWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Uzupełnij bazę danych, email i hasło")
             return
         try:
-            from app.db.schema import init_db
-            init_db()
+            self._require_current_schema()
             if not self._ensure_initial_admin():
                 return
             result = login_user(email, password)
@@ -233,6 +232,15 @@ class LoginWindow(QDialog):
             self.accept()
         else:
             QMessageBox.critical(self, "Błąd", "Nieprawidłowy email lub hasło")
+
+    def _require_current_schema(self):
+        from app.db.schema import schema_is_current
+        if not schema_is_current():
+            raise RuntimeError(
+                "Baza danych wymaga aktualizacji.\n"
+                "Uruchom aktualizację bazy (skrót „Biuro - aktualizacja bazy” albo Biuro.exe --migrate; "
+                "w wersji deweloperskiej: python migrate_db.py) - raz po aktualizacji programu."
+            )
 
     def _ensure_initial_admin(self) -> bool:
         """Przy pustej bazie prosi o utworzenie konta administratora."""
@@ -287,8 +295,7 @@ class LoginWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Uzupełnij bazę danych i email")
             return
         try:
-            from app.db.schema import init_db
-            init_db()
+            self._require_current_schema()
             ok, message = reset_password(email)
         except Exception as e:
             QMessageBox.critical(self, "Błąd", str(e))
@@ -305,8 +312,7 @@ class LoginWindow(QDialog):
             QMessageBox.warning(self, "Błąd", "Wybierz bazę danych przed rejestracją")
             return
         try:
-            from app.db.schema import init_db
-            init_db()
+            self._require_current_schema()
         except Exception as e:
             QMessageBox.critical(self, "Błąd", str(e))
             return
@@ -546,6 +552,7 @@ class OfficeManagerApp(QMainWindow):
 
         self.sidebar.setCurrentRow(0)
         self.pages.setCurrentIndex(0)
+        self._apply_tab_permissions()
         self.pages.currentChanged.connect(self._refresh_current_page)
 
         # Timer aktualizujący nagłówek co sekundę
@@ -554,26 +561,37 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer.timeout.connect(self._update_header_timer)
         self._header_timer.start()
 
+    def _apply_tab_permissions(self):
+        from app.security.authorization import allowed_tabs
+
+        try:
+            allowed = set(allowed_tabs(self.pracownik_id))
+        except Exception:
+            logger.warning("Nie udało się odczytać uprawnień do zakładek", exc_info=True)
+            return
+        first_visible = -1
+        for row in range(self.sidebar.count()):
+            item = self.sidebar.item(row)
+            visible = item.data(Qt.ItemDataRole.UserRole) in allowed
+            item.setHidden(not visible)
+            if visible and first_visible < 0:
+                first_visible = row
+        if first_visible >= 0:
+            self.sidebar.setCurrentRow(first_visible)
+            self.pages.setCurrentIndex(first_visible)
+
     def _toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed
         if self.sidebar_collapsed:
-            self.sidebar.setFixedWidth(58)
-            self.sidebar_panel.setFixedWidth(58)
+            self.sidebar.setVisible(False)
+            self.sidebar_panel.setFixedWidth(48)
             self.sidebar_toggle.setText("☰")
-            self.sidebar.setToolTip("Rozwiń menu")
-            for row in range(self.sidebar.count()):
-                item = self.sidebar.item(row)
-                item.setToolTip(item.data(Qt.ItemDataRole.UserRole))
-                item.setText("")
+            self.sidebar_toggle.setToolTip("Rozwiń menu")
         else:
-            self.sidebar.setFixedWidth(240)
+            self.sidebar.setVisible(True)
             self.sidebar_panel.setFixedWidth(240)
             self.sidebar_toggle.setText("☰  Menu")
-            self.sidebar.setToolTip("")
-            for row in range(self.sidebar.count()):
-                item = self.sidebar.item(row)
-                item.setText(item.data(Qt.ItemDataRole.UserRole))
-                item.setToolTip("")
+            self.sidebar_toggle.setToolTip("Zwiń lub rozwiń menu")
 
     def _update_header_timer(self):
         """

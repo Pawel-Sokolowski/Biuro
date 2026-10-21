@@ -59,6 +59,9 @@ FIRMA_FIELDS = [
     "wliczac_zdrowotna",
     "numer_umowy", "status_vat",
     "fakturowac",
+    "fakturowac_ksiegowosc", "fakturowac_kadry",
+    "stala_kwota_ksiegowosc", "stala_kwota_kadry",
+    "nazwa_saldeo",
 
     "adres_doreczen_elektronicznych",
     "urzad_skarbowy",
@@ -102,10 +105,14 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
     sql = """
-        SELECT id, nazwa, nip, miasto, status, uslugi_zawieszone,
-               glowny_cennik, limit_dokumentow,
-               typ_rozliczenia, vat_czynny
-        FROM firmy
+        SELECT f.id, f.nazwa, f.nip, f.miasto, f.status, f.uslugi_zawieszone,
+               f.glowny_cennik, f.limit_dokumentow,
+               f.typ_rozliczenia, f.vat_czynny, f.forma_opodatkowania,
+               TRIM(COALESCE(pk.imie, '') || ' ' || COALESCE(pk.nazwisko, '')) AS ksiegowa,
+               TRIM(COALESCE(pd.imie, '') || ' ' || COALESCE(pd.nazwisko, '')) AS kadrowa
+        FROM firmy f
+        LEFT JOIN pracownicy pk ON pk.id = f.ksiegowa_id
+        LEFT JOIN pracownicy pd ON pd.id = f.kadrowa_id
     """
     params: List[Any] = []
     if actor_id and not is_administrator(actor_id):
@@ -114,7 +121,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
             conn.close()
             return []
         placeholders = ",".join("%s" for _ in ids)
-        sql += f" WHERE id IN ({placeholders})"
+        sql += f" WHERE f.id IN ({placeholders})"
         params.extend(sorted(ids))
     cur.execute(sql, params)
     rows = cur.fetchall()
@@ -138,9 +145,14 @@ def get_companies_filtered(
     base_select = """
         SELECT f.id, f.nazwa, f.nip, f.miasto,
                COALESCE(f.status, 'Aktywne') AS status, f.uslugi_zawieszone,
-               f.glowny_cennik, f.limit_dokumentow
+               f.glowny_cennik, f.limit_dokumentow, f.typ_rozliczenia, f.vat_czynny,
+               f.forma_opodatkowania,
+               TRIM(COALESCE(pk.imie, '') || ' ' || COALESCE(pk.nazwisko, '')) AS ksiegowa,
+               TRIM(COALESCE(pd.imie, '') || ' ' || COALESCE(pd.nazwisko, '')) AS kadrowa
     """
-    base_from = " FROM firmy f"
+    base_from = (" FROM firmy f"
+                 " LEFT JOIN pracownicy pk ON pk.id = f.ksiegowa_id"
+                 " LEFT JOIN pracownicy pd ON pd.id = f.kadrowa_id")
     where = []
     params = []
 
@@ -148,10 +160,6 @@ def get_companies_filtered(
         base_from += " JOIN pracownik_firma pf ON pf.firma_id = f.id"
         where.append("pf.pracownik_id = %s")
         params.append(employee_id)
-    elif actor_id and not is_administrator(actor_id):
-        base_from += " JOIN pracownik_firma pf_actor ON pf_actor.firma_id = f.id"
-        where.append("pf_actor.pracownik_id = %s")
-        params.append(actor_id)
 
     if search:
         where.append("(LOWER(f.nazwa) LIKE %s OR LOWER(f.nip) LIKE %s)")

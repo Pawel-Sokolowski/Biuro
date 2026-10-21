@@ -22,6 +22,19 @@ def excepthook(type, value, tb):
 sys.excepthook = excepthook
 
 if __name__ == "__main__":
+    if "--migrate" in sys.argv:
+        # Biuro.exe --migrate: aktualizacja schematu bazy (bez okna logowania)
+        from app.db.schema import init_db, schema_is_current
+        from PyQt6.QtWidgets import QMessageBox
+        app = QApplication(sys.argv)
+        try:
+            init_db()
+            ok = schema_is_current()
+            msg = "Baza danych jest aktualna." if ok else "Aktualizacja bazy nie powiodła się."
+        except Exception as exc:
+            ok, msg = False, f"Błąd aktualizacji bazy:\n{exc}"
+        (QMessageBox.information if ok else QMessageBox.critical)(None, "Aktualizacja bazy", msg)
+        sys.exit(0 if ok else 1)
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)

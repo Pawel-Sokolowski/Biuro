@@ -54,15 +54,54 @@ def can(pracownik_id: Optional[int], permission: str) -> bool:
     return is_administrator(pracownik_id) or get_permissions(pracownik_id).get(permission, False)
 
 
+TABS = [
+    "Pulpit", "Widok miesięczny", "Klienci", "E-mail", "Czat",
+    "Faktury", "Raporty", "Zadania", "Kalendarz", "Ustawienia",
+]
+
+
+def default_tabs(can_admin_settings: bool) -> list:
+    return [t for t in TABS if t != "Ustawienia" or can_admin_settings]
+
+
+def parse_tabs(raw: Optional[str], can_admin_settings: bool = False) -> list:
+    """Lista zakładek roli; brak zapisu (NULL) oznacza ustawienia domyślne."""
+    if raw is None:
+        return default_tabs(can_admin_settings)
+    chosen = {part.strip() for part in raw.split("|") if part.strip()}
+    return [t for t in TABS if t in chosen]
+
+
+def allowed_tabs(pracownik_id: Optional[int]) -> list:
+    """Zakładki dostępne dla pracownika (administrator widzi wszystkie)."""
+    if not pracownik_id:
+        return []
+    if is_administrator(pracownik_id):
+        return list(TABS)
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT r.zakladki, COALESCE(r.can_access_admin_settings, 0) AS adm
+            FROM pracownicy p JOIN role r ON r.id = p.rola_id
+            WHERE p.id = %s
+            """,
+            (pracownik_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return default_tabs(False)
+    return parse_tabs(row["zakladki"], bool(row["adm"]))
+
+
 def assigned_company_ids(pracownik_id: Optional[int]) -> Set[int]:
+    """Każdy pracownik ma dostęp do wszystkich firm; przypisanie księgowa/kadrowa służy tylko do filtrów."""
     if not pracownik_id:
         return set()
     conn = get_conn()
     try:
-        rows = conn.execute(
-            "SELECT DISTINCT firma_id FROM pracownik_firma WHERE pracownik_id = %s",
-            (pracownik_id,),
-        ).fetchall()
-        return {int(row[0]) for row in rows if row[0] is not None}
+        rows = conn.execute("SELECT id FROM firmy").fetchall()
+        return {int(row[0]) for row in rows}
     finally:
         conn.close()

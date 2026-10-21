@@ -1,5 +1,6 @@
 # app/invoices/faktury_logic.py
 import json
+import logging
 import psycopg
 from app.utils.parsing import to_float
 from typing import List, Dict, Any, Optional
@@ -13,6 +14,9 @@ from app.db.dao_invoices import (
 )
 from app.db.dao_monthly import count_documents_for_month
 from app.utils.months import previous_month
+
+
+logger = logging.getLogger(__name__)
 
 
 class FakturyLogic:
@@ -113,11 +117,72 @@ class FakturyLogic:
     # ---------------- HELPER ----------------
     _to_float = staticmethod(to_float)
 
+    @staticmethod
+    def _accounting_vat() -> int:
+        from app.db.dao_app_settings import get_setting
+
+        raw = str(get_setting("ksiegowosc_domyslny_vat") or "23").replace("%", "").strip()
+        try:
+            return int(float(raw))
+        except ValueError:
+            return 23
+
     # ---------------- GENEROWANIE POZYCJI ----------------
+    @staticmethod
+    def _kadry_vat() -> int:
+        from app.db.dao_app_settings import get_setting
+
+        raw = str(get_setting("kadry_domyslny_vat") or "23").replace("%", "").strip()
+        try:
+            return int(float(raw))
+        except ValueError:
+            return 23
+
+    def _kadry_positions(self, company: dict, stala_kwota: float) -> List[Dict[str, Any]]:
+        vat = self._kadry_vat()
+        mult = 1 + vat / 100
+
+        def pos(nazwa, ilosc, netto_jedn):
+            netto = round(netto_jedn * ilosc, 2)
+            return {
+                "nazwa": nazwa,
+                "ilosc": ilosc,
+                "jednostka": "mc" if ilosc == 1 and stala_kwota > 0 else "szt.",
+                "netto": netto,
+                "vat": vat,
+                "brutto": round(netto * mult, 2),
+                "kategoria": "kadry",
+                "generated": True,
+            }
+
+        if stala_kwota > 0:
+            return [pos("Obsługa kadrowa", 1, stala_kwota)]
+
+        result: List[Dict[str, Any]] = []
+        labels = {"uop": "Umowa o pracę", "uz": "Umowa zlecenie", "uod": "Umowa o dzieło"}
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            for prefix, label in labels.items():
+                ilosc = int(company.get(f"{prefix}_ilosc") or 0)
+                klucz = company.get(f"{prefix}_cennik")
+                if ilosc <= 0 or not klucz:
+                    continue
+                cur.execute("SELECT cena_netto_kadry FROM cenniki_kadry WHERE klucz = %s", (klucz,))
+                row = cur.fetchone()
+                cena = self._to_float(row["cena_netto_kadry"]) if row else 0.0
+                if cena > 0:
+                    result.append(pos(f"Kadry - {label}", ilosc, cena))
+        finally:
+            conn.close()
+        return result
+
     def generate_invoice_positions(self, firma_id: int, miesiac: str) -> List[Dict[str, Any]]:
         company = self._get_company(firma_id)
         if not company:
             return []
+        vat_rate = self._accounting_vat()
+        vat_mult = 1 + vat_rate / 100
 
         status = self._get_month_status(firma_id, miesiac)
         extra = self._get_extra_services(firma_id, miesiac)
@@ -136,26 +201,46 @@ class FakturyLogic:
                 self._to_float(pricing.get("zdrowotna", 0.0))
 
         # ---------------- Usługa księgowa ----------------
-        if pricing and company.get("fakturowac", 0) == 1:
+        fakt_on = int(company.get("fakturowac") or 0) == 1
+        ks_on = fakt_on and int(company.get("fakturowac_ksiegowosc") if company.get("fakturowac_ksiegowosc") is not None else 1) == 1
+        kd_on = fakt_on and int(company.get("fakturowac_kadry") if company.get("fakturowac_kadry") is not None else 1) == 1
+        stala_ks = self._to_float(company.get("stala_kwota_ksiegowosc"))
+        stala_kd = self._to_float(company.get("stala_kwota_kadry"))
+        if ks_on and stala_ks > 0:
+            pozycje.append({
+                "nazwa": "Usługa księgowa",
+                "ilosc": 1,
+                "jednostka": "mc",
+                "netto": round(stala_ks, 2),
+                "vat": vat_rate,
+                "brutto": round(stala_ks * vat_mult, 2),
+                "kategoria": "księgowość",
+                "generated": True
+            })
+            ks_full = False
+        else:
+            ks_full = ks_on and bool(pricing)
+
+        if ks_full:
             netto = self._to_float(company.get("cena_netto_ksiegowosc", 0.0)) or \
                 self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
-            brutto = round(netto * 1.23, 2)
+            brutto = round(netto * vat_mult, 2)
             if wliczona and zdrowotna_val > 0:
                 netto = round(netto + zdrowotna_val * zdrowotna_sztuk, 2)
-                brutto = round(brutto + zdrowotna_val * zdrowotna_sztuk * 1.23, 2)
+                brutto = round(brutto + zdrowotna_val * zdrowotna_sztuk * vat_mult, 2)
             pozycje.append({
                 "nazwa": "Usługa księgowa",
                 "ilosc": 1,
                 "jednostka": "mc",
                 "netto": netto,
-                "vat": 23,
+                "vat": vat_rate,
                 "brutto": brutto,
                 "kategoria": "księgowość",
                 "generated": True
             })
 
         # ---------------- Dokumenty ponad limit ----------------
-        if pricing and company.get("fakturowac", 0) == 1:
+        if ks_full:
             ilosc_dok = self._get_document_count_for_invoice(
                 firma_id, miesiac, int((status or {}).get("ilosc_dok") or 0)
             )
@@ -165,20 +250,20 @@ class FakturyLogic:
                 cena = self._to_float(company.get("cena_ponad_limit", 0.0)) or \
                     self._to_float(pricing.get("cena_za_dokument_ponad_limit", 0.0))
                 netto = round(ponad * cena, 2)
-                brutto = round(netto * 1.23, 2)
+                brutto = round(netto * vat_mult, 2)
                 pozycje.append({
                     "nazwa": "Dokumenty ponad limit",
                     "ilosc": ponad,
                     "jednostka": "szt.",
                     "netto": netto,
-                    "vat": 23,
+                    "vat": vat_rate,
                     "brutto": brutto,
                     "kategoria": "księgowość",
                     "generated": True
                 })
 
         # ---------------- Zdrowotna ----------------
-        if pricing and company.get("fakturowac", 0) == 1 and not wliczona:
+        if ks_full and not wliczona:
             if zdrowotna_val > 0:
                 sztuk = zdrowotna_sztuk
                 pozycje.append({
@@ -186,11 +271,15 @@ class FakturyLogic:
                     "ilosc": sztuk,
                     "jednostka": "szt.",
                     "netto": round(zdrowotna_val * sztuk, 2),
-                    "vat": 0,
-                    "brutto": round(zdrowotna_val * sztuk, 2),
+                    "vat": vat_rate,
+                    "brutto": round(zdrowotna_val * sztuk * vat_mult, 2),
                     "kategoria": "księgowość",
                     "generated": True
                 })
+
+        # ---------------- Kadry ----------------
+        if kd_on:
+            pozycje.extend(self._kadry_positions(company, stala_kd))
 
         # ---------------- Usługi dodatkowe (zawsze) ----------------
         for u in extra:
@@ -272,6 +361,9 @@ class FakturyLogic:
         generated_positions = self.generate_invoice_positions(firma_id, miesiac)
 
         existing = get_invoice_for_company_month(firma_id, miesiac)
+        if not existing and not generated_positions:
+            return {"id": None, "created": False, "skipped": True, "firma_id": firma_id,
+                    "miesiac": miesiac, "pozycje": [], "kwota_netto": 0.0, "kwota_brutto": 0.0}
         if existing:
             try:
                 existing_positions = json.loads(existing.get("pozycje_json") or "[]")
@@ -360,6 +452,9 @@ class FakturyLogic:
                 if fakturowac_flag:
                     # pełna faktura
                     result = self.generate_and_save_invoice(fid, miesiac)
+                    if result.get("skipped"):
+                        skipped += 1
+                        continue
                     processed += 1
                     if result.get("created"):
                         created += 1
@@ -433,6 +528,7 @@ class FakturyLogic:
             except InvoiceLockedError:
                 skipped += 1
             except Exception as e:
+                logger.exception("Błąd generowania faktury dla firmy %s (%s)", fid, miesiac)
                 errors.append(f"Firma {fid}: {e}")
 
         return {

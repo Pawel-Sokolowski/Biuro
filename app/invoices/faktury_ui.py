@@ -138,17 +138,7 @@ class FakturyPage(QWidget):
         self.firma_combo.addItem("Wszystkie firmy", None)
         conn = get_conn()
         try:
-            if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
-                rows = conn.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa").fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT DISTINCT f.id, f.nazwa FROM firmy f
-                    JOIN pracownik_firma pf ON pf.firma_id = f.id
-                    WHERE pf.pracownik_id = %s ORDER BY f.nazwa
-                    """,
-                    (self.pracownik_id,),
-                ).fetchall()
+            rows = conn.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa").fetchall()
         finally:
             conn.close()
         for row in rows:
@@ -293,7 +283,13 @@ class FakturyPage(QWidget):
         if result.get("skipped"):
             message += f"\nPominięto (już wystawione): {result['skipped']}."
         if result.get("errors"):
-            message += f"\nBłędy: {len(result['errors'])}. Sprawdź logi."
+            errors = result["errors"]
+            message += f"\n\nBłędy: {len(errors)}:\n" + "\n".join(errors[:15])
+            if len(errors) > 15:
+                message += f"\n… i {len(errors) - 15} więcej (szczegóły w logach)."
+            QMessageBox.warning(self, "Generowanie zbiorcze", message)
+            self.refresh()
+            return
         QMessageBox.information(self, "Generowanie zbiorcze", message)
         self.refresh()
 

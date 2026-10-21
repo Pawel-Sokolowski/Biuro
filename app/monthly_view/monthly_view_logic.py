@@ -80,24 +80,19 @@ class MonthlyViewLogic:
 
         sql = """
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
-                   f.status, f.uslugi_zawieszone,
+                   f.status, f.uslugi_zawieszone, f.ksiegowa_id, f.kadrowa_id,
                    f.vat_status, f.vat_sprawdzono, f.vat_sprawdzil,
                    f.vat_ue_status, f.vat_ue_sprawdzono, f.vat_ue_sprawdzil,
                    COALESCE(sm.etap, 'Brak') AS etap,
+                   COALESCE(sm.etap_kadry, 'Brak') AS etap_kadry,
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    sm.data_dostarczenia AS data_dostarczenia,
                    COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
-                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
-                   rs.przychod, rs.koszty, rs.dochod,
-                   rs.vat_kwota, rs.vat_opis, rs.vat_okres, rs.vat_termin,
-                   rs.cit_kwota, rs.cit_okres, rs.cit_termin,
-                   rs.pit_kwota, rs.pit_okres, rs.pit_termin
+                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = %s
-            LEFT JOIN rozliczenia_saldeo rs
-                ON rs.firma_id = f.id AND rs.miesiac = %s
             LEFT JOIN (
                 SELECT firma_id, COUNT(*) AS ilosc_dok
                 FROM dokumenty
@@ -105,15 +100,7 @@ class MonthlyViewLogic:
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
         """
-        params: List[Any] = [selected_month, selected_month, month_start, month_end]
-        if not is_administrator(self.pracownik_id):
-            company_ids = assigned_company_ids(self.pracownik_id)
-            if not company_ids:
-                conn.close()
-                return []
-            placeholders = ",".join("%s" for _ in company_ids)
-            sql += f" WHERE f.id IN ({placeholders})"
-            params.extend(sorted(company_ids))
+        params: List[Any] = [selected_month, month_start, month_end]
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
@@ -121,14 +108,6 @@ class MonthlyViewLogic:
 
         rows.sort(key=lambda row: polish_sort_key(row.get("nazwa")))
 
-        assigned_map: Dict[int, bool] = {}
-        if selected_employee:
-            cur.execute(
-                "SELECT firma_id FROM pracownik_firma WHERE pracownik_id = %s",
-                (selected_employee,),
-            )
-            for r in cur.fetchall():
-                assigned_map[r["firma_id"]] = True
         conn.close()
 
         result: List[Dict[str, Any]] = []
@@ -144,7 +123,7 @@ class MonthlyViewLogic:
                     continue
 
             if selected_employee:
-                if not assigned_map.get(r["id"]):
+                if selected_employee not in (r.get("ksiegowa_id"), r.get("kadrowa_id")):
                     continue
 
             note = notes_map.get(r["id"])
@@ -239,6 +218,7 @@ class MonthlyViewLogic:
         uod: Optional[int] = None,
         dokumenty_dostarczone: Optional[int] = None,
         data_dostarczenia: Optional[str] = None,
+        etap_kadry: Optional[str] = None,
     ):
         row = get_month_status(firma_id, self.aktualny_miesiac)
         payload: Dict[str, Any] = {}
@@ -266,6 +246,9 @@ class MonthlyViewLogic:
             payload["sekundy_ksiegowosc"] = 0
             payload["sekundy_kadry"] = 0
             payload["wartosc_uslug"] = 0.0
+
+        if etap_kadry is not None:
+            payload["etap_kadry"] = etap_kadry
 
         save_month_status(firma_id, self.aktualny_miesiac, payload)
 

@@ -8,7 +8,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
-from app.admin.settings.user_companies_dialog import UserCompaniesDialog
 
 class UsersSettings(QWidget):
     """Użytkownicy: podgląd, dodawanie, edycja, reset hasła, aktywacja."""
@@ -88,16 +87,6 @@ class UsersSettings(QWidget):
         )
         btn_row.addWidget(
             btn_reset
-        )
-
-        btn_companies = QPushButton(
-            "Przypisz firmy"
-        )
-        btn_companies.clicked.connect(
-            self._assign_companies
-        )
-        btn_row.addWidget(
-            btn_companies
         )
 
         btn_signature = QPushButton("Stopka")
@@ -309,13 +298,3 @@ class UsersSettings(QWidget):
             self._refresh()
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zmienić statusu: {e}")
-
-    def _assign_companies(self):
-        row = self.table.currentRow()
-        if row < 0:
-            QMessageBox.information(self, "Użytkownicy", "Wybierz użytkownika.")
-            return
-
-        uid = int(self.table.item(row, 0).text())
-        dlg = UserCompaniesDialog(uid, parent=self)
-        dlg.exec()

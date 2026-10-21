@@ -647,11 +647,13 @@ class MonthlyViewPage(QWidget):
                     else QHeaderView.ResizeMode.ResizeToContents,
                 )
             vat_col = table.model()._vat_cols()[0]
+            etap_col = table.model().COL_ETAP
+            metrics = header.fontMetrics()
+            etap_width = max(metrics.horizontalAdvance(text) for text in ETAP_CHOICES) + 40
+            header.setSectionResizeMode(etap_col, QHeaderView.ResizeMode.Fixed)
+            table.setColumnWidth(etap_col, etap_width)
             header.moveSection(header.visualIndex(vat_col), 1)
             header.moveSection(header.visualIndex(vat_col + 1), 2)
-            after = 3 if table is self.table_ks else 5
-            for offset, col in enumerate(table.model().result_cols(), start=1):
-                header.moveSection(header.visualIndex(col), header.visualIndex(after) + offset)
 
     def _populate_months(self):
         now = datetime.datetime.now()
@@ -676,6 +678,9 @@ class MonthlyViewPage(QWidget):
         employees = self.logic.get_employee_filter_list()
         for emp_id, label in employees:
             self.employee_combo.addItem(label, emp_id)
+        own = self.employee_combo.findData(self.logic.pracownik_id)
+        if own >= 0:
+            self.employee_combo.setCurrentIndex(own)
 
     def _current_month(self) -> str:
         return self.month_combo.currentText()

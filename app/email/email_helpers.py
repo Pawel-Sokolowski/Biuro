@@ -73,6 +73,14 @@ def decode_mailbox_utf7(name: str) -> str:
     return re.sub(r"&([^-]*)-", _chunk, name or "")
 
 
+def friendly_folder_name(name: str) -> str:
+    """Czytelna nazwa folderu: polskie znaki i bez prefiksu INBOX. / INBOX/."""
+    text = decode_mailbox_utf7(name or "").strip()
+    if text[:6].upper() in ("INBOX.", "INBOX/") and len(text) > 6:
+        text = text[6:]
+    return text
+
+
 def encode_mailbox_utf7(text: str) -> str:
     """Koduje tekst do zmodyfikowanego UTF-7 używanego w nazwach skrzynek IMAP."""
     out: List[str] = []

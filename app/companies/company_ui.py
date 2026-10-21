@@ -1,4 +1,5 @@
 # app/companies/company_ui.py
+import logging
 from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
@@ -55,12 +56,15 @@ class CompanyUI(QWidget):
 
         layout.addLayout(filter_layout)
 
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 15)
         self.table.setHorizontalHeaderLabels([
             "ID", "Nazwa", "NIP", "Miasto", "Status",
+            "Forma opodatkowania", "Typ rozliczenia", "VAT",
+            "Księgowa", "Kadrowa",
             "Cennik", "Limit dokumentów", "PEL", "UPL", "Ostatni backup"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnHidden(0, True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
@@ -96,6 +100,8 @@ class CompanyUI(QWidget):
         self.btn_delete.clicked.connect(self._delete_company)
         self.btn_restore.clicked.connect(self._restore_company)
         self.btn_refresh.clicked.connect(self._refresh)
+        self.status_filter.currentIndexChanged.connect(self._search)
+        self.search_input.textChanged.connect(self._search)
 
         self._refresh()
 
@@ -103,8 +109,7 @@ class CompanyUI(QWidget):
     #  LOAD TABLE
     # ============================================================
     def _refresh(self):
-        rows = list_companies(self.pracownik_id)
-        self._load_table(rows)
+        self._search()
 
     @staticmethod
     def _backup_by_company() -> Dict[str, Dict[str, Any]]:
@@ -112,6 +117,7 @@ class CompanyUI(QWidget):
             from app.utils.backup_status import get_backup_status
             return {b['firma']: b for b in get_backup_status()['bazy'] if b.get('firma')}
         except Exception:
+            logging.getLogger(__name__).exception("Nie udało się odczytać statusu backupu")
             return {}
 
     def _load_table(self, rows: List[Dict[str, Any]]):
@@ -126,11 +132,16 @@ class CompanyUI(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(r.get("nip") or ""))
             self.table.setItem(row, 3, QTableWidgetItem(r.get("miasto") or ""))
             self.table.setItem(row, 4, QTableWidgetItem(r.get("status") or ""))
-            self.table.setItem(row, 5, QTableWidgetItem(r.get("glowny_cennik") or ""))
-            self.table.setItem(row, 6, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
-            self.table.setItem(row, 7, QTableWidgetItem(r.get("pel") or ""))
-            self.table.setItem(row, 8, QTableWidgetItem(r.get("upl") or ""))
-            self.table.setItem(row, 9, self._backup_item(backups.get(r.get("nazwa"))))
+            self.table.setItem(row, 5, QTableWidgetItem(r.get("forma_opodatkowania") or ""))
+            self.table.setItem(row, 6, QTableWidgetItem(r.get("typ_rozliczenia") or ""))
+            self.table.setItem(row, 7, QTableWidgetItem("czynny" if r.get("vat_czynny") else "—"))
+            self.table.setItem(row, 8, QTableWidgetItem(r.get("ksiegowa") or ""))
+            self.table.setItem(row, 9, QTableWidgetItem(r.get("kadrowa") or ""))
+            self.table.setItem(row, 10, QTableWidgetItem(r.get("glowny_cennik") or ""))
+            self.table.setItem(row, 11, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
+            self.table.setItem(row, 12, QTableWidgetItem(r.get("pel") or ""))
+            self.table.setItem(row, 13, QTableWidgetItem(r.get("upl") or ""))
+            self.table.setItem(row, 14, self._backup_item(backups.get(r.get("nazwa"))))
             if r.get("uslugi_zawieszone"):
                 for col in range(self.table.columnCount()):
                     item = self.table.item(row, col)

@@ -367,7 +367,7 @@ def build_profitability_report(
     try:
         work = [dict(r) for r in conn.execute(
             f"""
-            SELECT c.firma_id, f.nazwa AS firma_nazwa, c.miesiac, c.pracownik_nazwa, c.dzial, c.sekundy
+            SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac, c.pracownik_nazwa, c.dzial, c.sekundy
             FROM import_czas_pracy c JOIN firmy f ON f.id = c.firma_id
             WHERE c.firma_id IN ({ph_f}) AND c.miesiac IN ({ph_m})
             """,
@@ -377,7 +377,7 @@ def build_profitability_report(
         ph_y = ",".join("%s" for _ in years)
         invoices = [dict(r) for r in conn.execute(
             f"""
-            SELECT i.firma_id, f.nazwa AS kontrahent, i.miesiac, i.rodzaj, i.wartosc_netto
+            SELECT i.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS kontrahent, i.miesiac, i.rodzaj, i.wartosc_netto
             FROM import_faktury_pozycje i JOIN firmy f ON f.id = i.firma_id
             WHERE i.firma_id IN ({ph_f}) AND substr(i.miesiac, 1, 4) IN ({ph_y})
             """,

@@ -14,7 +14,7 @@ def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
 
-    sql = "SELECT id, nazwa FROM firmy"
+    sql = "SELECT id, COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa FROM firmy"
     params: List[int] = []
     if pracownik_id and not (
         is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
@@ -26,7 +26,7 @@ def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
         placeholders = ",".join("%s" for _ in ids)
         sql += f" WHERE id IN ({placeholders})"
         params.extend(sorted(ids))
-    cur.execute(sql + " ORDER BY nazwa", params)
+    cur.execute(sql + " ORDER BY 2", params)
     rows = cur.fetchall()
     conn.close()
 
@@ -146,14 +146,14 @@ def build_summary_report(
     rows = conn.execute(
         f"""
         SELECT c.firma_id, c.miesiac, c.typ, c.sekundy,
-               f.nazwa AS klient,
+               COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS klient,
                COALESCE(p.imie || ' ' || p.nazwisko, 'Nieprzypisany') AS ksiegowa
         FROM czasomierze c
         JOIN firmy f ON f.id = c.firma_id
         LEFT JOIN pracownicy p ON p.id = c.pracownik_id
         WHERE c.firma_id IN ({placeholders_firm})
           AND c.miesiac IN ({placeholders_month})
-        ORDER BY f.nazwa, c.miesiac, ksiegowa, c.typ
+        ORDER BY COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa), c.miesiac, ksiegowa, c.typ
         """,
         [*firma_ids, *months],
     ).fetchall()

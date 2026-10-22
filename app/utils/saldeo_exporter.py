@@ -179,8 +179,11 @@ def export_saldeo_xlsx(
                         adres_budynek, adres_lokal, adres_email,
                         konto_bankowe, uwagi, kategoria_domyslna,
                         forma_opodatkowania, vat_czynny, glowny_cennik, limit_dokumentow,
-                        wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa
-                    FROM firmy WHERE id = %s
+                        wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa,
+                        adres_koresp_ulica, adres_koresp_budynek, adres_koresp_lokal,
+                        adres_koresp_kod_pocztowy, adres_koresp_miasto,
+                        adres_zam_ulica, adres_zam_budynek, adres_zam_lokal,
+                        adres_zam_kod_pocztowy, adres_zam_miasto WHERE id = %s
                 """, (firma_id,))
                 row = cur.fetchone()
                 if row:
@@ -193,8 +196,13 @@ def export_saldeo_xlsx(
         nazwa_skrocona = _get_field(fv, "nabywca_skrocona", "") or fr.get("nazwa_skrocona") or nazwa_pelna
         nip = _get_field(fv, "nabywca_nip", "") or fr.get("nip") or _get_field(fv, "firma_nip", "")
         regon = _get_field(fv, "nabywca_regon", "") or fr.get("regon") or ""
-        miasto = _get_field(fv, "nabywca_miasto", "") or fr.get("miasto") or _get_field(fv, "firma_miasto", "")
-        kod = _get_field(fv, "nabywca_kod", "") or fr.get("kod_pocztowy") or _get_field(fv, "firma_kod", "")
+        def _alt(field):
+            return fr.get(field) or fr.get(field.replace("adres_koresp_", "adres_zam_", 1)) or ""
+
+        miasto = (_get_field(fv, "nabywca_miasto", "") or fr.get("miasto")
+                  or _get_field(fv, "firma_miasto", "") or _alt("adres_koresp_miasto"))
+        kod = (_get_field(fv, "nabywca_kod", "") or fr.get("kod_pocztowy")
+               or _get_field(fv, "firma_kod", "") or _alt("adres_koresp_kod_pocztowy"))
         inv_adres = _get_field(fv, "nabywca_adres", "")
         if inv_adres:
             adres = inv_adres
@@ -202,7 +210,14 @@ def export_saldeo_xlsx(
             ulica = fr.get("ulica") or _get_field(fv, "firma_ulica", "")
             budynek = fr.get("adres_budynek") or ""
             lokal = fr.get("adres_lokal") or ""
+            if not ulica and not budynek:
+                ulica = _alt("adres_koresp_ulica")
+                budynek = _alt("adres_koresp_budynek")
+                lokal = _alt("adres_koresp_lokal")
             adres = " ".join(p for p in [ulica, budynek, f"/{lokal}" if lokal else ""] if p).replace(" /", "/").strip()
+        if not adres:
+            # Saldeo wymaga adresu; dla miejscowości bez ulic adresem jest sama miejscowość
+            adres = miasto
         email = _get_field(fv, "nabywca_email", "") or fr.get("adres_email") or _get_field(fv, "firma_email", "")
         kraj = _get_field(fv, "nabywca_kraj", "") or "PL"
         # Konto bankowe w Saldeo to rachunek wystawcy, nie nabywcy.
@@ -222,7 +237,9 @@ def export_saldeo_xlsx(
             pozycje = []
 
         price_mode = "netto"
-        if pozycje and pozycje[0].get("brutto") and not pozycje[0].get("netto"):
+        if pozycje and not any(
+            p.get("netto") or p.get("cena_netto") for p in pozycje
+        ) and any(p.get("brutto") or p.get("cena_brutto") for p in pozycje):
             price_mode = "brutto"
 
         inv_metoda_kasowa = _get_field(fv, "metoda_kasowa", None)
@@ -276,8 +293,9 @@ def export_saldeo_xlsx(
                 brutto = brutto / max(float(ilosc or 1), 1)
                 netto = brutto / (1 + vat_pct / 100)
 
-            cena_netto_fmt = format_amount_pl(netto)
-            cena_brutto_fmt = format_amount_pl(brutto)
+            # Saldeo: wszystkie pozycje faktury muszą być podane od netto albo od brutto
+            cena_netto_fmt = format_amount_pl(netto) if price_mode == "netto" else ""
+            cena_brutto_fmt = format_amount_pl(brutto) if price_mode == "brutto" else ""
             vat = vat_label
 
             forma_platnosci = _get_field(fv, "forma_platnosci", "przelew")
@@ -343,7 +361,7 @@ def export_saldeo_xlsx(
                     poz.get("rejestr", "") or _get_field(fv, "rejestr", ""),
                 ]
             else:
-                row_out = [""] * 58
+                row_out = [""] * len(SALDEO_HEADERS)
                 row_out[10] = nazwa_skrocona
                 row_out[30] = _get_field(fv, "waluta", "") or "PLN"
                 row_out[31] = nazwa_towaru

@@ -665,6 +665,17 @@ def init_db():
         cur.execute(
             "INSERT INTO app_settings (klucz, wartosc) VALUES ('migracja_fakturowac_domyslnie', '1')"
         )
+    cur.execute("SELECT 1 FROM app_settings WHERE klucz = 'migracja_flagi_eksportu_globalne_v3'")
+    if not cur.fetchone():
+        # Tylko metoda kasowa podąża za ustawieniem globalnym (NULL); KSeF i kontrahent są ustawiane w firmie
+        cur.execute("ALTER TABLE firmy ALTER COLUMN metoda_kasowa DROP DEFAULT")
+        cur.execute("UPDATE firmy SET metoda_kasowa = NULL")
+        for _col in ("wysylac_do_ksef", "wysylac_do_kontrahenta"):
+            cur.execute(f"UPDATE firmy SET {_col} = 0 WHERE {_col} IS NULL")
+            cur.execute(f"ALTER TABLE firmy ALTER COLUMN {_col} SET DEFAULT 0")
+        cur.execute(
+            "INSERT INTO app_settings (klucz, wartosc) VALUES ('migracja_flagi_eksportu_globalne_v3', '1')"
+        )
     for _col in ("vat", "vat_ue"):
         _safe_alter_add_column(cur, "firmy", f"{_col}_status TEXT")
         _safe_alter_add_column(cur, "firmy", f"{_col}_sprawdzono TEXT")
@@ -947,6 +958,8 @@ def init_db():
         );
     """)
     # Jedna faktura miesięczna na firmę, ale dowolnie wiele korekt
+    cur.execute("DROP INDEX IF EXISTS ux_faktury_firma_miesiac_v2;")
+    cur.execute("DROP INDEX IF EXISTS ux_faktury_firma_miesiac_dodatkowe;")
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_faktury_firma_miesiac "
         "ON faktury(firma_id, miesiac) WHERE rodzaj = 'faktura' AND reczna = 0;"

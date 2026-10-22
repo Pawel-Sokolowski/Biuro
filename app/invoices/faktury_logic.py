@@ -10,7 +10,7 @@ from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     InvoiceLockedError,
     get_invoice_for_company_month,
-    create_or_update_invoice
+    create_or_update_invoice,
 )
 from app.db.dao_monthly import count_documents_for_month
 from app.utils.months import previous_month
@@ -201,9 +201,11 @@ class FakturyLogic:
                 self._to_float(pricing.get("zdrowotna", 0.0))
 
         # ---------------- Usługa księgowa ----------------
+        # Zakres fakturowania wynika z wypełnionych cenników: księgowość (cennik/stała kwota),
+        # kadry (cennik/stała kwota); usługi dodatkowe są fakturowane zawsze.
         fakt_on = int(company.get("fakturowac") or 0) == 1
-        ks_on = fakt_on and int(company.get("fakturowac_ksiegowosc") if company.get("fakturowac_ksiegowosc") is not None else 1) == 1
-        kd_on = fakt_on and int(company.get("fakturowac_kadry") if company.get("fakturowac_kadry") is not None else 1) == 1
+        ks_on = fakt_on
+        kd_on = fakt_on
         stala_ks = self._to_float(company.get("stala_kwota_ksiegowosc"))
         stala_kd = self._to_float(company.get("stala_kwota_kadry"))
         if ks_on and stala_ks > 0:
@@ -437,6 +439,7 @@ class FakturyLogic:
         created = 0
         updated = 0
         skipped = 0
+        skipped_details: List[str] = []
         errors: List[str] = []
 
         for r in rows:
@@ -454,6 +457,7 @@ class FakturyLogic:
                     result = self.generate_and_save_invoice(fid, miesiac)
                     if result.get("skipped"):
                         skipped += 1
+                        skipped_details.append(self._skip_description(fid, miesiac))
                         continue
                     processed += 1
                     if result.get("created"):
@@ -527,6 +531,7 @@ class FakturyLogic:
 
             except InvoiceLockedError:
                 skipped += 1
+                skipped_details.append(self._skip_description(fid, miesiac))
             except Exception as e:
                 logger.exception("Błąd generowania faktury dla firmy %s (%s)", fid, miesiac)
                 errors.append(f"Firma {fid}: {e}")
@@ -536,8 +541,27 @@ class FakturyLogic:
             "created": created,
             "updated": updated,
             "skipped": skipped,
+            "skipped_details": skipped_details,
             "errors": errors
         }
+
+    def _skip_description(self, firma_id: int, miesiac: str, reason: Optional[str] = None) -> str:
+        company = self._get_company(firma_id) or {}
+        name = company.get("nazwa") or company.get("nazwa_skrocona") or f"Firma {firma_id}"
+        if reason:
+            return f"{name} - {reason}"
+        try:
+            existing = get_invoice_for_company_month(firma_id, miesiac) or {}
+        except Exception:
+            existing = {}
+        if not existing:
+            return f"{name} - brak pozycji do zafakturowania"
+        numer = existing.get("numer")
+        suffix = f" ({numer})" if numer else ""
+        hint = "usuń ją przyciskiem „Usuń wystawioną” i wygeneruj ponownie, aby dodać usługi dodatkowe"
+        if not company.get("fakturowac", 0):
+            return f"{name} - płatność z góry za rok{suffix}; {hint}"
+        return f"{name} - faktura już wystawiona{suffix}; {hint}"
 
     # ---------------- ADD SINGLE POSITION ----------------
     def add_single_position_to_invoice(self, firma_id: int, miesiac: str, position: Dict[str, Any], mark_generated: bool = True) -> Dict[str, Any]:

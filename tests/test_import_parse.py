@@ -54,6 +54,14 @@ class ImportParseTests(unittest.TestCase):
         self.assertEqual(parsed[0]["dzial"], "kadry")
         self.assertEqual(parsed[0]["miesiac"], "2026-01")
 
+    def test_work_month_is_date_of_work_unless_document_month_given(self):
+        row = ("A", "1", "Jan Kowalski", "", "2026-02-05", "08:00", "08:10", "0:10:00", 10,
+               "0:00:00", 0, "x", "")
+        row_with_month = ("A", "1", "Jan Kowalski", "2026-03", "2026-02-05", "08:00", "08:10", "0:10:00", 10,
+                          "0:00:00", 0, "x", "")
+        parsed = parse_work_rows([WORK_HEADER, row, row_with_month])
+        self.assertEqual([p["miesiac"] for p in parsed], ["2026-02", "2026-03"])
+
     def test_parse_invoice_rows_default_month(self):
         rows = [INV_HEADER, (1, "FirmaB", "1234567890", "FV 15", "Usługa księgowa", "", "1 234,50", "PLN")]
         parsed = parse_invoice_rows(rows, "2026-02")

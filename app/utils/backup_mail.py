@@ -114,7 +114,9 @@ def find_latest_backup_mail() -> Optional[Dict[str, Any]]:
         conn.close()
     if not rows:
         return None
-    best = max((dict(r) for r in rows), key=lambda r: (_message_date(r["data"]), _uid_number(r["uid"])))
+    rows = [dict(r) for r in rows]
+    subject_rows = [r for r in rows if "backup" in str(r.get("temat") or "").casefold()]
+    best = max(subject_rows or rows, key=lambda r: (_message_date(r["data"]), _uid_number(r["uid"])))
     best["data_dt"] = _message_date(best["data"])
     return best
 
@@ -128,7 +130,33 @@ def _sync_inbox(account_id: int) -> None:
         logger.exception("Nie udało się odświeżyć skrzynki konta %s", account_id)
 
 
-def refresh_backup_log_from_mail(sync_headers: bool = True) -> Dict[str, Any]:
+def check_backup_from_latest_mail() -> Dict[str, Any]:
+    """Ręczne sprawdzenie: najnowszy mail z logiem -> daty ostatniej kopii zapisane w firmach."""
+    from app.utils.backup_status import get_backup_status, save_backup_dates_to_companies
+
+    refreshed = refresh_backup_log_from_mail(force=True)
+    if not refreshed.get("ok"):
+        return {"ok": False, "komunikat": refreshed["komunikat"]}
+    status = get_backup_status(from_mail=True)
+    if not status["bazy"]:
+        return {"ok": False, "komunikat": status["komunikat"]}
+    saved = save_backup_dates_to_companies(status)
+    mail_date = get_setting(LOG_MAIL_DATE_KEY) or "?"
+    wiersze = []
+    for db in status["bazy"]:
+        when = db.get("ostatnia_kopia")
+        day = db.get("data_bazy") or (when.date() if when else None)
+        wiersze.append((
+            db.get("firma") or f"{db['nazwa']} (brak firmy)",
+            day.strftime("%Y-%m-%d") if day else "—",
+            "NIE" if db.get("stan") == "ok" else "TAK",
+        ))
+    wiersze.sort(key=lambda w: (w[2] == "NIE", w[0].casefold()))
+    text = f"Mail z {mail_date}: zapisano datę kopii w {saved['zapisano']} firmach."
+    return {"ok": True, "komunikat": text, "wiersze": wiersze, **saved}
+
+
+def refresh_backup_log_from_mail(sync_headers: bool = True, force: bool = False) -> Dict[str, Any]:
     """Pobiera najnowszy mail z logiem i zapisuje jego tekst w ustawieniach."""
     from app.email.email_sync import fetch_message_from_imap
 
@@ -142,7 +170,7 @@ def refresh_backup_log_from_mail(sync_headers: bool = True) -> Dict[str, Any]:
     if mail is None:
         return {"ok": False, "komunikat": "Nie znaleziono maila z logiem kopii."}
     ref = f"{mail['konto_id']}:{mail['uid']}"
-    if get_setting(LOG_MAIL_KEY) == ref and get_setting(LOG_TEXT_KEY):
+    if not force and get_setting(LOG_MAIL_KEY) == ref and get_setting(LOG_TEXT_KEY):
         return {"ok": True, "komunikat": "Log jest aktualny.", "zmieniono": False}
     msg = fetch_message_from_imap(mail["konto_id"], mail["server_name"], mail["uid"])
     if msg is None:

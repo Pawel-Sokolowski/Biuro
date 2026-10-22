@@ -1,4 +1,5 @@
 import os
+import traceback
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -95,6 +96,28 @@ class UiSmokeTests(DbTestCase):
         form.pel_table.item(row, 1).setCheckState(Qt.CheckState.Checked)
         form._save_pelnomocnictwa()
         self.assertEqual(get_pelnomocnictwa(self.firma), {"PEL": [self.emp], "UPL": []})
+
+    def test_company_form_full_save_succeeds(self):
+        from unittest import mock
+        from app.companies.company_form import CompanyForm
+        from app.db.dao_companies import save_contact
+        save_contact(self.firma, {"imie": "Jan", "nazwisko": "K", "email": "jan@x.pl"})
+        form = CompanyForm(self.firma)
+        form.inputs["pesel"].setText("44051401359")
+        with mock.patch.object(form, "accept") as accept, mock.patch("app.companies.company_form.logger.exception", side_effect=lambda *a, **k: traceback.print_exc()):
+            form._on_save()
+        self.assertTrue(accept.called)
+
+    def test_month_picker_switches_year_and_month(self):
+        from app.monthly_view.month_picker import MonthPicker
+        from app.reports.import_dao import _prev_month
+        picker = MonthPicker("2026-10")
+        got = []
+        picker.monthChanged.connect(got.append)
+        picker._shift_year(-1)
+        picker._choose(8)
+        self.assertEqual((picker.currentText(), got), ("2025-08", ["2025-08"]))
+        self.assertEqual((_prev_month("2026-09"), _prev_month("2026-01")), ("2026-08", "2025-12"))
 
     def test_monthly_view_has_delivered_column(self):
         from app.monthly_view.monthly_view_ui import MonthlyViewPage

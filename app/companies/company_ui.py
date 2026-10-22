@@ -123,6 +123,11 @@ class CompanyUI(QWidget):
     def _load_table(self, rows: List[Dict[str, Any]]):
         self.table.setRowCount(0)
         backups = self._backup_by_company()
+        try:
+            from app.utils.backup_status import stored_backup_dates
+            stored = stored_backup_dates()
+        except Exception:
+            stored = {}
         for r in rows:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -141,7 +146,7 @@ class CompanyUI(QWidget):
             self.table.setItem(row, 11, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
             self.table.setItem(row, 12, QTableWidgetItem(r.get("pel") or ""))
             self.table.setItem(row, 13, QTableWidgetItem(r.get("upl") or ""))
-            self.table.setItem(row, 14, self._backup_item(backups.get(r.get("nazwa"))))
+            self.table.setItem(row, 14, self._backup_item(backups.get(r.get("nazwa")), stored.get(r.get("id"))))
             if r.get("uslugi_zawieszone"):
                 for col in range(self.table.columnCount()):
                     item = self.table.item(row, col)
@@ -150,7 +155,11 @@ class CompanyUI(QWidget):
                         item.setForeground(QColor("#000000"))
 
     @staticmethod
-    def _backup_item(info):
+    def _backup_item(info, stored=None):
+        if stored:
+            item = QTableWidgetItem(stored[0])
+            item.setToolTip(f"Kopia zapisana: {stored[1] or '?'} (z ostatniego maila)")
+            return item
         if not info or not info.get('ostatnia_kopia'):
             return QTableWidgetItem('—')
         saved = info['ostatnia_kopia'].strftime('%Y-%m-%d %H:%M')

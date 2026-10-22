@@ -145,15 +145,64 @@ def _company_rows() -> list:
     from app.db.dao_conn import get_conn
     conn = get_conn()
     try:
-        return [dict(r) for r in conn.execute("SELECT nazwa, nazwa_skrocona, nazwa_saldeo FROM firmy")]
+        return [dict(r) for r in conn.execute("SELECT id, nazwa, nazwa_skrocona, nazwa_saldeo FROM firmy")]
     finally:
         conn.close()
 
 
-def get_backup_status(now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Stan: brak_konfiguracji, brak_logu, brak_kopii, ok, nieaktualna, blad."""
+def save_backup_dates_to_companies(status: Dict[str, Any]) -> Dict[str, Any]:
+    """Zapisuje w firmach datę ostatniej kopii (z nazwy pliku, a gdy jej brak - z logu)."""
+    from app.db.dao_conn import get_conn
+
+    companies = _company_rows()
+    by_name = {c["nazwa"]: c["id"] for c in companies}
+    best: Dict[int, tuple] = {}
+    unmatched = []
+    for db in status.get("bazy", []):
+        firma_id = by_name.get(db.get("firma"))
+        saved = db.get("ostatnia_kopia")
+        if firma_id is None:
+            unmatched.append(db["nazwa"])
+            continue
+        if saved is None:
+            continue
+        day = db.get("data_bazy") or saved.date()
+        key = (day, saved)
+        if firma_id not in best or key > best[firma_id][0]:
+            best[firma_id] = (key, day, saved)
+    conn = get_conn()
+    try:
+        for firma_id, (_, day, saved) in best.items():
+            conn.execute(
+                "UPDATE firmy SET data_ostatniej_kopii = %s, zapis_ostatniej_kopii = %s WHERE id = %s",
+                (day.strftime("%Y-%m-%d"), saved.strftime("%Y-%m-%d %H:%M"), firma_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"zapisano": len(best), "bez_firmy": unmatched}
+
+
+def stored_backup_dates() -> Dict[int, tuple]:
+    from app.db.dao_conn import get_conn
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, data_ostatniej_kopii, zapis_ostatniej_kopii FROM firmy "
+            "WHERE data_ostatniej_kopii IS NOT NULL"
+        ).fetchall()
+        return {r["id"]: (r["data_ostatniej_kopii"], r["zapis_ostatniej_kopii"]) for r in rows}
+    finally:
+        conn.close()
+
+
+def get_backup_status(now: Optional[datetime] = None, from_mail: bool = False) -> Dict[str, Any]:
+    """Stan: brak_konfiguracji, brak_logu, brak_kopii, ok, nieaktualna, blad.
+
+    from_mail=True ignoruje ścieżkę pliku logu i bierze log z ostatniego maila."""
     now = now or datetime.now()
-    path = (get_setting(LOG_PATH_KEY) or "").strip()
+    path = "" if from_mail else (get_setting(LOG_PATH_KEY) or "").strip()
     result: Dict[str, Any] = {
         "stan": "brak_konfiguracji", "ostatnia_kopia": None, "wiek_godzin": None,
         "pliki": 0, "bazy": [], "komunikat": "Brak danych o kopii zapasowej.",

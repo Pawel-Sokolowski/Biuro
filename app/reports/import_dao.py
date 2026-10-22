@@ -128,7 +128,8 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
                 last_month = max(last_month, r["miesiac"])
             typ = kadry_contract_type(r["pozycja"])
             if r["rodzaj"] == "ponad_limit" and firma_id is not None and r["miesiac"] and r["wartosc_netto"] > 0:
-                key = (firma_id, r["miesiac"])
+                # faktura z miesiąca M rozlicza dokumenty z miesiąca M-1
+                key = (firma_id, _prev_month(r["miesiac"]))
                 limit_match = re.search(r"(\d+)\s*szt", str(r["pozycja"]), re.IGNORECASE)
                 prev = over_limit.get(key, (0.0, None))
                 over_limit[key] = (prev[0] + float(r["wartosc_netto"]),
@@ -139,7 +140,7 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
         updated = _apply_kadry_contracts(conn, kadry_totals)
         backfill = {
             (fid, m) for fid in seen_firms
-            for m in _all_months(f"{MIN_YEAR}-01", last_month)
+            for m in _all_months(f"{MIN_YEAR}-01", _prev_month(last_month))
         } if last_month else set()
         docs_set = _apply_document_counts(conn, over_limit, backfill, overwrite)
         conn.commit()
@@ -190,6 +191,11 @@ def _apply_document_counts(conn, over_limit: Dict[Tuple[int, str], Tuple[float, 
             total = limit
         done += conn.execute(sql, (firma_id, month, total)).rowcount
     return done
+
+
+def _prev_month(month: str) -> str:
+    y, m = int(month[:4]), int(month[5:7])
+    return f"{y - 1}-12" if m == 1 else f"{y}-{m - 1:02d}"
 
 
 def _all_months(first: str, last: str) -> List[str]:

@@ -16,15 +16,35 @@ SAMPLE = """Connection timed out.
 
 
 class ParseTests(unittest.TestCase):
+    def test_backup_done_line_is_not_an_error(self):
+        text = (
+            '2026-10-22 01:12 Compressing the file "E:\\b\\Alfa_20261021.BAK" into "\\\\nas\\Alfa.zip"\n'
+            '2026-10-22 01:20 The file "E:\\b\\Alfa_20261021.BAK" has been compressed\n'
+            '2026-10-22 01:21 Backup done for the task "ENOVA". Errors: 0\n'
+        )
+        self.assertIsNone(parse_backup_log(text)["error"])
+        failed = text + '2026-10-22 01:22 Error: connection timed out while checking for update\n'
+        self.assertIsNone(parse_backup_log(failed)["error"])
+        versions = text + '2026-10-22 01:23 Error checking for new versions: connection failed\n'
+        self.assertIsNone(parse_backup_log(versions)["error"])
+        generic = text + '2026-10-22 01:24 Error: something went wrong\n'
+        self.assertIsNone(parse_backup_log(generic)["error"])
+        broken = text + '2026-10-22 01:22 Cannot connect to Baza1\n'
+        parsed = parse_backup_log(broken)
+        self.assertIn("Baza1", parsed["error"])
+        self.assertIn("Cannot connect", parsed["databases"]["Baza1"]["error"])
+
     def test_sample_log(self):
         parsed = parse_backup_log(SAMPLE)
         self.assertEqual(parsed["last_success"], datetime(2026, 10, 15, 1, 15))
         self.assertEqual(parsed["files"], 2)
         self.assertIsNone(parsed["error"])
 
-    def test_error_after_success_is_reported(self):
-        parsed = parse_backup_log(SAMPLE + "Connection timed out.\n")
-        self.assertEqual(parsed["error"], "Connection timed out.")
+    def test_timed_out_is_ignored_and_database_error_is_reported(self):
+        self.assertIsNone(parse_backup_log(SAMPLE + "Connection timed out.\n")["error"])
+        parsed = parse_backup_log(SAMPLE + "2026-10-15 01:30 Cannot connect to Monika\n")
+        self.assertIn("Monika", parsed["error"])
+        self.assertEqual(parsed["databases"]["Monika"]["error"], "Cannot connect to Monika")
 
     def test_per_database_results(self):
         dbs = parse_backup_log(SAMPLE)["databases"]

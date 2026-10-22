@@ -16,7 +16,11 @@ LOG_SUFFIXES = {".log", ".txt"}
 
 LINE_RE = re.compile(r"^\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)\s+(.*)$")
 SUCCESS_RE = re.compile(r"has been compressed|został[oa]? skompresowan|backup completed", re.I)
-ERROR_RE = re.compile(r"timed out|error|failed|denied|błąd|nie udało", re.I)
+ERROR_RE = re.compile(r"error|failed|denied|cannot|can't|could not|unable to|błąd|nie udało", re.I)
+IGNORED_RE = re.compile(r"timed out|update|new versions?|checking for", re.I)
+FILE_IN_QUOTES_RE = re.compile(r'"([^"]+\.(?:bak|zip|7z|sql))"', re.I)
+DB_ERROR_RE = re.compile(r"(?:cannot|can't|could not|unable to)\s+connect\s+to\s+[\"']?([^\s\"',;]+)", re.I)
+DONE_TASK_RE = re.compile(r"\bbackup done\b|\bdone for the task\b", re.I)
 DONE_RE = re.compile(r'The file "([^"]+)" has been compressed', re.I)
 START_RE = re.compile(r'Compressing the file "([^"]+)"', re.I)
 DATE_SUFFIX_RE = re.compile(r"[_\- ]?\d{8}(?:[_\-]?\d{4,6})?$")
@@ -70,6 +74,22 @@ def _parse_time(text: str) -> datetime:
     return datetime.strptime(text, fmt)
 
 
+def _error_database(message: str, known: set) -> Optional[str]:
+    """Nazwa bazy, której dotyczy błąd; None, gdy komunikat nie wskazuje żadnej bazy
+    (np. błędy samego programu backupującego, jak sprawdzanie nowych wersji)."""
+    found = DB_ERROR_RE.search(message)
+    if found:
+        return backup_name(found.group(1))
+    path = FILE_IN_QUOTES_RE.search(message)
+    if path:
+        return backup_name(path.group(1))
+    lowered = message.lower()
+    for name in known:
+        if name.lower() in lowered:
+            return name
+    return None
+
+
 def parse_backup_log(text: str) -> Dict[str, Any]:
     """Zwraca czas ostatniej udanej kopii i informację, czy po niej wystąpił błąd."""
     last_success: Optional[datetime] = None
@@ -79,6 +99,7 @@ def parse_backup_log(text: str) -> Dict[str, Any]:
     started: Dict[str, Optional[datetime]] = {}
     done: Dict[str, datetime] = {}
     file_dates: Dict[str, Optional[date]] = {}
+    db_errors: Dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -97,6 +118,7 @@ def parse_backup_log(text: str) -> Dict[str, Any]:
         if done_match and stamp:
             name = backup_name(done_match.group(1))
             done[name] = stamp
+            db_errors.pop(name, None)
             file_dates[name] = backup_file_date(done_match.group(1)) or file_dates.get(name)
         if match and SUCCESS_RE.search(message):
             if last_success is None or stamp.date() != last_success.date():
@@ -104,16 +126,20 @@ def parse_backup_log(text: str) -> Dict[str, Any]:
             last_success = stamp
             files += 1
             error_after_success = None
-        elif ERROR_RE.search(message):
-            error_after_success = message
+        elif not DONE_TASK_RE.search(message) and not IGNORED_RE.search(message) and ERROR_RE.search(message):
+            db_name = _error_database(message, set(started) | set(done))
+            if db_name:
+                error_after_success = message
+                db_errors[db_name] = message
     return {
         "last_success": last_success,
         "last_seen": last_seen,
         "files": files,
         "error": error_after_success,
         "databases": {
-            name: {"last_success": done.get(name), "started": started.get(name), "file_date": file_dates.get(name)}
-            for name in sorted(set(started) | set(done), key=str.lower)
+            name: {"last_success": done.get(name), "started": started.get(name),
+                   "file_date": file_dates.get(name), "error": db_errors.get(name)}
+            for name in sorted(set(started) | set(done) | set(db_errors), key=str.lower)
         },
     }
 
@@ -240,7 +266,7 @@ def get_backup_status(now: Optional[datetime] = None, from_mail: bool = False) -
     for name, info in parsed["databases"].items():
         when = info["last_success"]
         db_age = (now - when).total_seconds() / 3600 if when else None
-        if when is None:
+        if when is None or info.get("error"):
             state = "blad"
         elif db_age > max_age:
             state = "nieaktualna"

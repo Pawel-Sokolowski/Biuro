@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     InvoiceLockedError, can_access_invoice, create_correction, delete_draft_invoice,
-    get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
+    delete_issued_invoice, get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
     update_invoice_draft,
 )
 from app.invoices.positions import normalize_position
@@ -212,7 +212,10 @@ class FakturyPage(QWidget):
         self.btn_ksef.clicked.connect(self._edit_ksef_number)
         self.btn_ksef_download = QPushButton("Pobierz z KSeF")
         self.btn_ksef_download.clicked.connect(self._download_from_ksef)
-        for button in (self.btn_view, self.btn_reexport, self.btn_correction, self.btn_ksef, self.btn_ksef_download):
+        self.btn_delete_issued = QPushButton("Usuń wystawioną")
+        self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
+        for button in (self.btn_view, self.btn_reexport, self.btn_correction, self.btn_ksef,
+                       self.btn_ksef_download, self.btn_delete_issued):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -448,6 +451,26 @@ class FakturyPage(QWidget):
                     delete_draft_invoice(invoice_id)
                 except InvoiceLockedError as exc:
                     QMessageBox.warning(self, "Faktura", str(exc))
+        self.refresh()
+
+    def _delete_selected_issued(self):
+        ids = self._selected_ids(self.issued_table)
+        if not ids:
+            QMessageBox.information(self, "Faktura", "Zaznacz wystawioną fakturę do usunięcia.")
+            return
+        if not self._can_export():
+            return
+        if QMessageBox.question(
+            self, "Usuwanie",
+            f"Trwale usunąć zaznaczone wystawione faktury ({len(ids)})?\n"
+            "Tej operacji nie można cofnąć.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        for invoice_id in ids:
+            invoice = get_invoice_by_id(invoice_id)
+            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+                delete_issued_invoice(invoice_id)
         self.refresh()
 
     # ---------------- eksport ----------------

@@ -768,6 +768,19 @@ def update_invoice_draft(
     return netto, brutto
 
 
+def delete_issued_invoice(invoice_id: int) -> None:
+    """Trwale usuwa wystawioną (wyeksportowaną) fakturę."""
+    invoice = get_invoice_by_id(invoice_id)
+    if not invoice:
+        return
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def delete_draft_invoice(invoice_id: int) -> None:
     invoice = get_invoice_by_id(invoice_id)
     if not invoice:

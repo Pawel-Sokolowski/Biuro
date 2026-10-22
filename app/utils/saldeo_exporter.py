@@ -188,8 +188,7 @@ def export_saldeo_xlsx(
             except Exception:
                 fr = {}
 
-        # zamiana fr.get → fr["pole"]
-                firm_name = fr.get("nazwa") or _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
+        firm_name = fr.get("nazwa") or _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
         nazwa_pelna = _get_field(fv, "nabywca_pelna", "") or firm_name
         nazwa_skrocona = _get_field(fv, "nabywca_skrocona", "") or fr.get("nazwa_skrocona") or nazwa_pelna
         nip = _get_field(fv, "nabywca_nip", "") or fr.get("nip") or _get_field(fv, "firma_nip", "")

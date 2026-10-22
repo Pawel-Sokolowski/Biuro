@@ -37,6 +37,14 @@ class MailBodyTests(unittest.TestCase):
         parsed = parse_backup_log(backup_mail.message_log_text(msg))
         self.assertEqual(sorted(parsed["databases"]), ["Adamac_S_C", "Adamkiewicz_Paweł", "Adamowicz_Monika", "Ajdukonis_Klaudia"])
 
+    def test_html_table_rows_keep_date_and_message_apart(self):
+        html = ("<table><tr><td>2026-10-22 01:12</td><td>Compressing the file "
+                '"E:\\backup_baz\\Adamac_S_C__20261021.BAK" into "x.zip"</td></tr>'
+                "<tr><td>2026-10-22 01:13</td><td>The file "
+                '"E:\\backup_baz\\Adamac_S_C__20261021.BAK" has been compressed</td></tr></table>')
+        parsed = parse_backup_log(backup_mail.html_to_text(html))
+        self.assertIsNotNone(parsed["databases"]["Adamac_S_C"]["last_success"])
+
     def test_log_attachment_used_when_body_empty(self):
         msg = EmailMessage()
         msg["From"] = "powiadomienia@szczecin-ksiegowosc.pl"
@@ -46,6 +54,7 @@ class MailBodyTests(unittest.TestCase):
 
     def test_user_sample_per_database(self):
         dbs = parse_backup_log(LOG)["databases"]
+        self.assertEqual(str(dbs["Adamac_S_C"]["file_date"]), "2026-10-14")
         self.assertIsNotNone(dbs["Adamac_S_C"]["last_success"])
         self.assertIsNotNone(dbs["Adamowicz_Monika"]["last_success"])
         self.assertIsNone(dbs["Ajdukonis_Klaudia"]["last_success"])
@@ -70,6 +79,19 @@ class MailRefreshTests(DbTestCase):
         conn.commit()
         conn.close()
         set_setting("password_reset_account_id", "1")
+
+    def test_latest_mail_uses_stored_date_format_not_row_id(self):
+        conn = get_conn()
+        conn.execute("DELETE FROM wiadomosci_email WHERE konto_id = 1")
+        # nagłówki są zapisywane od najnowszych, więc najnowszy mail ma najmniejsze id
+        for uid, date in (("30", "2026-10-22 01:15"), ("20", "2026-10-21 01:15"), ("10", "2026-10-20 01:15")):
+            conn.execute(
+                "INSERT INTO wiadomosci_email (konto_id, folder_id, uid, nadawca, data) VALUES (1, 1, %s, 'x', %s)",
+                (uid, date),
+            )
+        conn.commit()
+        conn.close()
+        self.assertEqual(backup_mail.find_latest_backup_mail()["uid"], "30")
 
     def test_latest_mail_from_sender(self):
         mail = backup_mail.find_latest_backup_mail()

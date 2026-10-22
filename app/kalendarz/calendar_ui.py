@@ -412,7 +412,7 @@ class CalendarPage(QWidget):
     def _fill_calendar_list(self):
         self.calendars.blockSignals(True)
         self.calendars.clear()
-        entries = []
+        entries = [("Lokalne (import ICS)", "lokalne")]
         if google_sync.is_connected(self.pracownik_id):
             entries.append(("Google Calendar", "google"))
         if caldav_sync.is_configured():
@@ -496,9 +496,7 @@ class CalendarPage(QWidget):
         out = []
         for ev in rows:
             source = ev.get("zrodlo") or "lokalne"
-            if source == "lokalne" or source not in SOURCE_COLORS:
-                continue  # lokalny kalendarz został usunięty z widoku
-            if source not in sources:
+            if source not in SOURCE_COLORS or source not in sources:
                 continue
             hay = f"{ev['tytul']} {ev.get('opis') or ''} {ev.get('lokalizacja') or ''} {ev.get('firma_nazwa') or ''}"
             if needle and needle not in hay.lower():

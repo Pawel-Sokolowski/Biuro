@@ -156,7 +156,7 @@ class CaldavTests(DbTestCase):
 
 class CalendarPageTests(DbTestCase):
     def test_page_builds_and_switches_views(self):
-        app = QApplication.instance() or QApplication([])
+        app = QApplication.instance() or QApplication(["biuro-tests"])
         from app.kalendarz.calendar_ui import CalendarPage
         emp = self.make_employee()
         today = date.today().isoformat()
@@ -177,11 +177,11 @@ class CalendarPageTests(DbTestCase):
 
 
     def test_imported_ics_events_are_listed(self):
-        app = QApplication.instance() or QApplication([])
+        app = QApplication.instance() or QApplication(["biuro-tests"])
         from app.kalendarz.calendar_ui import CalendarPage
         emp = self.make_employee()
         today = date.today().isoformat()
-        dao_calendar.save_event(emp, {"tytul": "Z pliku", "start": today + "T09:00", "koniec": today + "T10:00", "zrodlo": "ics"})
+        dao_calendar.save_event(emp, {"tytul": "Z pliku", "start": today + "T09:00", "koniec": today + "T10:00", "zrodlo": "lokalne"})
         page = CalendarPage(emp)
         self.assertEqual(page.tree.topLevelItemCount(), 1)
 

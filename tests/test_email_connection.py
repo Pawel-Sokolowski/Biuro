@@ -77,7 +77,7 @@ class AccessTests(DbTestCase):
         from app.admin.global_settings_logic import GlobalSettingsLogic
         from app.admin.settings import email_settings as es
 
-        _app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication(["biuro-tests"])
         acc = GlobalSettingsLogic().add_email_account("b@x.pl", "i", "s", "haslo")
         page = es.EmailSettings()
         page.table.selectRow(0)

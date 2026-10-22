@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QImage
 
-app = QApplication.instance() or QApplication([])
+app = QApplication.instance() or QApplication(["biuro-tests"])
 
 
 class LabelsAndImagesTests(DbTestCase):

@@ -153,7 +153,10 @@ class CompanyUI(QWidget):
     def _backup_item(info):
         if not info or not info.get('ostatnia_kopia'):
             return QTableWidgetItem('—')
-        item = QTableWidgetItem(info['ostatnia_kopia'].strftime('%Y-%m-%d %H:%M'))
+        saved = info['ostatnia_kopia'].strftime('%Y-%m-%d %H:%M')
+        file_date = info.get('data_bazy')
+        item = QTableWidgetItem(file_date.strftime('%Y-%m-%d') if file_date else saved)
+        item.setToolTip(f"Kopia zapisana: {saved}")
         if info.get('stan') != 'ok':
             item.setForeground(QColor('#c0392b'))
         return item

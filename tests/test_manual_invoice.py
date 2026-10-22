@@ -59,7 +59,7 @@ class ManualInvoiceTests(DbTestCase):
 class ManualInvoiceUiTests(DbTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
+        cls.app = QApplication.instance() or QApplication(["biuro-tests"])
 
     def test_manual_invoice_dialog_searches_firms_and_contractors(self):
         from app.invoices.manual_invoice_dialog import ManualInvoiceDialog

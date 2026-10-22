@@ -20,7 +20,7 @@ from app.email.email_helpers import (
 )
 from tests.base import DbTestCase
 
-_app = QApplication.instance() or QApplication([])
+_app = QApplication.instance() or QApplication(["biuro-tests"])
 
 
 class MailboxNameTests(unittest.TestCase):
@@ -186,8 +186,22 @@ class EmailPageTests(DbTestCase):
             self.assertEqual(item.text(2), "01.01.2024, 10:00")
             page.mail_list.setCurrentItem(item)
             page._open_selected_now()
-            self.assertIn("Tresc listu", page.mail_view.toPlainText())
-            self.assertFalse(item.font(0).bold())
+            from PyQt6.QtCore import QEventLoop, QTimer
+            text = ""
+            for _ in range(50):
+                result = []
+                loop = QEventLoop()
+                page.mail_view.page().toPlainText(lambda t: (result.append(t), loop.quit()))
+                QTimer.singleShot(2000, loop.quit)
+                loop.exec()
+                text = result[0] if result else ""
+                if "Tresc listu" in text:
+                    break
+                wait = QEventLoop()
+                QTimer.singleShot(200, wait.quit)
+                wait.exec()
+            self.assertIn("Tresc listu", text)
+            self.assertFalse(page.mail_list.topLevelItem(0).font(0).bold())
             self.assertFalse(hasattr(page, "btn_download_message"))
 
     def test_attachments_bar_inline_image_and_multi_save(self):

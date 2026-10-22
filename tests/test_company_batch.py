@@ -59,7 +59,7 @@ class CompanyBatchTests(DbTestCase):
                 os.environ["GUS_API_KEY"] = old
 
     def test_form_pesel_required_copy_and_wheel(self):
-        app = QApplication.instance() or QApplication([])
+        app = QApplication.instance() or QApplication(["biuro-tests"])
         from app.companies.company_form import CompanyForm
         f = CompanyForm()
         f.inputs["nazwa"].setText("X")
@@ -76,7 +76,7 @@ class CompanyBatchTests(DbTestCase):
         self.assertEqual(f.inputs["ko_miasto"].text(), "Gdynia")
 
     def test_checkboxes_persist_after_save_and_reopen(self):
-        app = QApplication.instance() or QApplication([])
+        app = QApplication.instance() or QApplication(["biuro-tests"])
         from app.companies.company_form import CompanyForm
         from app.db.dao_companies import save_company
         fid = save_company({"nazwa": "Chk", "wliczac_zdrowotna": 1, "fakturowac": 1, "metoda_kasowa": 1})
@@ -114,7 +114,7 @@ class CompanyBatchTests(DbTestCase):
         self.assertEqual(cnt[without], 2)
 
     def test_monthly_columns(self):
-        app = QApplication.instance() or QApplication([])
+        app = QApplication.instance() or QApplication(["biuro-tests"])
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{"id": 1, "nazwa": "A", "etap": "Brak", "ilosc_dok": 4}], "ksiegowosc")
         heads = [m.headerData(i, m.headerData.__self__ and __import__("PyQt6.QtCore", fromlist=["Qt"]).Qt.Orientation.Horizontal) for i in range(4)]

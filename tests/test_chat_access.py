@@ -68,7 +68,7 @@ class ChatAccessTests(DbTestCase):
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import Qt
         from app.chat.chat_ui import ChatPage
-        _app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication(["biuro-tests"])
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
 
         def select(page, konw_id):

@@ -574,10 +574,6 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
                 report["skipped"].append((fid, "fakturowac=0"))
                 continue
 
-            if firma.get("fakturowac_ksiegowosc") == 0:
-                report["skipped"].append((fid, "Księgowość wyłączona z fakturowania"))
-                continue
-
             stala_ks = float(firma.get("stala_kwota_ksiegowosc") or 0.0)
             klucz = firma.get("glowny_cennik")
             ccur = conn.cursor()

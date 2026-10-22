@@ -19,6 +19,7 @@ from app.db.dao_companies import (
 )
 from app.db.dao_notes import (
     get_notes_for_company, save_company_note)
+from app.db.dao_app_settings import get_setting_bool
 from app.companies.company_logic import ceidg_fetch
 from app.email.email_storage import (
     get_all_email_accounts,
@@ -104,7 +105,18 @@ logger = logging.getLogger(__name__)
 
 
 class CompanyForm(QDialog):
-    _DEFAULT_CHECKED = {"fakturowac", "fakturowac_ksiegowosc", "fakturowac_kadry"}
+    _DEFAULT_CHECKED = {"fakturowac"}
+    # pole firmy -> klucze ustawień globalnych (domyślna wartość dla nowych firm)
+    _GLOBAL_DEFAULTS = {
+        "metoda_kasowa": ("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa"),
+    }
+
+    @classmethod
+    def _checkbox_default(cls, key: str) -> bool:
+        if key in cls._DEFAULT_CHECKED:
+            return True
+        keys = cls._GLOBAL_DEFAULTS.get(key)
+        return get_setting_bool(keys, default=False) if keys else False
 
     def __init__(
         self,
@@ -487,6 +499,7 @@ class CompanyForm(QDialog):
         wysylac_do_ksef = QCheckBox()
         wysylac_do_kontrahenta = QCheckBox()
         metoda_kasowa = QCheckBox()
+        metoda_kasowa.setChecked(self._checkbox_default("metoda_kasowa"))
         wliczac_zdrowotna = QCheckBox()
 
         add_cennik_row(
@@ -496,14 +509,7 @@ class CompanyForm(QDialog):
 
         fakturowac = QCheckBox()
         fakturowac.setChecked(True)
-        fakturowac_ksiegowosc = QCheckBox()
-        fakturowac_ksiegowosc.setChecked(True)
-        fakturowac_kadry = QCheckBox()
-        fakturowac_kadry.setChecked(True)
-        add_cennik_row(
-            ["Fakturować:", "Fakturować księgowość:", "Fakturować kadry:"],
-            [fakturowac, fakturowac_ksiegowosc, fakturowac_kadry],
-        )
+        add_cennik_row(["Fakturować:"], [fakturowac])
 
         stala_kwota_ksiegowosc = QDoubleSpinBox()
         stala_kwota_ksiegowosc.setRange(0, 1000000)
@@ -519,8 +525,6 @@ class CompanyForm(QDialog):
         )
 
         self.inputs.update({
-            "fakturowac_ksiegowosc": fakturowac_ksiegowosc,
-            "fakturowac_kadry": fakturowac_kadry,
             "stala_kwota_ksiegowosc": stala_kwota_ksiegowosc,
             "stala_kwota_kadry": stala_kwota_kadry,
         })
@@ -977,9 +981,12 @@ class CompanyForm(QDialog):
                 else:
                     payload[key] = widget.currentText()
             elif isinstance(widget, QCheckBox):
-                payload[key] = 1 if widget.isChecked() else 0
-
-        return payload
+                if key in self._GLOBAL_DEFAULTS:
+                    # zgodne z ustawieniem globalnym = brak nadpisania (NULL)
+                    checked = widget.isChecked()
+                    payload[key] = None if checked == self._checkbox_default(key) else int(checked)
+                else:
+                    payload[key] = 1 if widget.isChecked() else 0
 
     def _load_email_filters(self):
         company = get_company(self.firma_id)
@@ -1163,9 +1170,7 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QComboBox):
                 self._set_combo_value(key, widget, val)
             elif isinstance(widget, QCheckBox):
-                widget.setChecked(
-                    bool(val) if val is not None or key not in self._DEFAULT_CHECKED else True
-                )
+                widget.setChecked(bool(val) if val is not None else self._checkbox_default(key))
         self._refresh_cennik_options()
         self._fill_prices_from_cennik(only_missing=True)
 
@@ -1234,9 +1239,7 @@ class CompanyForm(QDialog):
 
 
             elif isinstance(widget, QCheckBox):
-                widget.setChecked(
-                    bool(val) if val is not None or key not in self._DEFAULT_CHECKED else True
-                )
+                widget.setChecked(bool(val) if val is not None else self._checkbox_default(key))
 
         self._refresh_cennik_options()
         self._fill_prices_from_cennik(only_missing=True)

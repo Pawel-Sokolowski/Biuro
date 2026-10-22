@@ -284,7 +284,12 @@ class FakturyPage(QWidget):
             f"Zaktualizowano: {result.get('updated', 0)} faktur."
         )
         if result.get("skipped"):
-            message += f"\nPominięto (już wystawione): {result['skipped']}."
+            message += f"\n\nPominięto {result['skipped']} faktur:"
+            details = result.get("skipped_details") or []
+            if details:
+                message += "\n" + "\n".join(details[:30])
+                if len(details) > 30:
+                    message += f"\n… i {len(details) - 30} więcej."
         if result.get("errors"):
             errors = result["errors"]
             message += f"\n\nBłędy: {len(errors)}:\n" + "\n".join(errors[:15])

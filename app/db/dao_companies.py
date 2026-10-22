@@ -87,6 +87,9 @@ FIRMA_FIELDS = [
 
 ASSIGNEE_FIELDS = {"ksiegowa_id": "firma:ksiegowa", "kadrowa_id": "firma:kadrowa"}
 
+# NULL w tych polach = wartość z ustawień globalnych
+GLOBAL_DEFAULT_FLAGS = ("metoda_kasowa",)
+
 
 # ============================================================
 #  LIST / FILTER
@@ -438,7 +441,11 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
     cur = conn.cursor()
 
     mapped = _apply_aliases(payload)
-    data = {f: mapped.get(f) for f in FIRMA_FIELDS if mapped.get(f) is not None}
+    data = {
+        f: mapped.get(f)
+        for f in FIRMA_FIELDS
+        if mapped.get(f) is not None or (f in GLOBAL_DEFAULT_FLAGS and f in mapped)
+    }
     from app.companies.company_names import clean_company_name
 
     for name_field in ("nazwa", "nazwa_skrocona"):

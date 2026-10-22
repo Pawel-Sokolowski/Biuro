@@ -43,6 +43,7 @@ from app.db.dao_services import add_company_extra_service
 from app.db.dao_tasks import list_tasks_for_timer
 from app.utils.timer import TimerUtils
 from app.monthly_view.monthly_view_model import MonthlyViewModel
+from app.monthly_view.month_picker import MonthPicker
 from app.monthly_view.notes_window import NotesWindow
 
 COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
@@ -512,8 +513,7 @@ class MonthlyViewPage(QWidget):
 
         filters_layout = QHBoxLayout()
 
-        self.month_combo = QComboBox()
-        self._populate_months()
+        self.month_combo = MonthPicker(self.logic.aktualny_miesiac)
         filters_layout.addWidget(QLabel("Miesiąc:"))
         filters_layout.addWidget(self.month_combo)
 
@@ -584,7 +584,7 @@ class MonthlyViewPage(QWidget):
 
         self._setup_column_widths()
 
-        self.month_combo.currentTextChanged.connect(self._on_filters_changed)
+        self.month_combo.monthChanged.connect(self._on_filters_changed)
         self.employee_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.status_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.btn_refresh.clicked.connect(self._reload_rows)
@@ -654,15 +654,6 @@ class MonthlyViewPage(QWidget):
             table.setColumnWidth(etap_col, etap_width)
             header.moveSection(header.visualIndex(vat_col), 1)
             header.moveSection(header.visualIndex(vat_col + 1), 2)
-
-    def _populate_months(self):
-        now = datetime.datetime.now()
-        months = []
-        for i in range(-6, 7):
-            m = now + datetime.timedelta(days=30 * i)
-            months.append(m.strftime("%Y-%m"))
-        self.month_combo.addItems(months)
-        self.month_combo.setCurrentText(self.logic.aktualny_miesiac)
 
     def _load_initial_data(self):
         self._load_employee_filter()

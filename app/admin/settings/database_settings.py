@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QHBoxLayout, QFileDialog, QSpinBox
 )
 from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.config import get_database
@@ -72,7 +73,9 @@ class DatabaseSettings(QWidget):
         btn_log_dir.clicked.connect(self._choose_backup_dir)
         btn_backup_save = QPushButton("Zapisz i sprawdź")
         btn_backup_save.clicked.connect(self._save_backup)
-        for button in (btn_log_file, btn_log_dir, btn_backup_save):
+        btn_backup_mail = QPushButton("Sprawdź z ostatniego maila")
+        btn_backup_mail.clicked.connect(self._check_backup_mail)
+        for button in (btn_log_file, btn_log_dir, btn_backup_save, btn_backup_mail):
             backup_btns.addWidget(button)
         backup_btns.addStretch()
         layout.addLayout(backup_btns)
@@ -124,6 +127,51 @@ class DatabaseSettings(QWidget):
             QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać: {e}")
             return
         self._show_backup_status()
+
+    def _check_backup_mail(self):
+        from PyQt6.QtWidgets import QApplication
+        from app.utils.backup_mail import check_backup_from_latest_mail
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = check_backup_from_latest_mail()
+        except Exception as e:
+            result = {"ok": False, "komunikat": f"Błąd: {e}"}
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.backup_status.setText(result["komunikat"])
+        if not result["ok"]:
+            QMessageBox.warning(self, "Kopie zapasowe", result["komunikat"])
+            return
+        self._show_backup_table(result)
+
+    def _show_backup_table(self, result):
+        from PyQt6.QtGui import QColor
+        from PyQt6.QtWidgets import (
+            QDialog, QDialogButtonBox, QHeaderView, QTableWidget, QTableWidgetItem,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Kopie zapasowe")
+        dlg.resize(620, 480)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(result["komunikat"]))
+        rows = result["wiersze"]
+        table = QTableWidget(len(rows), 3)
+        table.setHorizontalHeaderLabels(["Nazwa firmy", "Data", "Błąd"])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for i, values in enumerate(rows):
+            for j, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if values[2] == "TAK":
+                    item.setForeground(QColor("#c0392b"))
+                table.setItem(i, j, item)
+        lay.addWidget(table)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        dlg.exec()
 
     def _show_backup_status(self):
         from app.utils.backup_status import get_backup_status

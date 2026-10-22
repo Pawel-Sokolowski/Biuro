@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-22.1"
+SCHEMA_VERSION = "2026-10-22.2"
 
 
 def _schema_hash() -> str:
@@ -597,6 +597,8 @@ def init_db():
     """)
     _safe_alter_add_column(cur, "firmy", "ceidg_zawieszona INTEGER NOT NULL DEFAULT 0")
     _safe_alter_add_column(cur, "firmy", "uslugi_zawieszone INTEGER NOT NULL DEFAULT 0")
+    _safe_alter_add_column(cur, "firmy", "data_ostatniej_kopii TEXT")
+    _safe_alter_add_column(cur, "firmy", "zapis_ostatniej_kopii TEXT")
     _safe_alter_add_column(cur, "firmy", "cena_netto_ksiegowosc DOUBLE PRECISION")
     _safe_alter_add_column(cur, "firmy", "cena_ponad_limit DOUBLE PRECISION")
     _safe_alter_add_column(cur, "firmy", "fakturowac_ksiegowosc INTEGER NOT NULL DEFAULT 1")

@@ -987,6 +987,7 @@ class CompanyForm(QDialog):
                     payload[key] = None if checked == self._checkbox_default(key) else int(checked)
                 else:
                     payload[key] = 1 if widget.isChecked() else 0
+        return payload
 
     def _load_email_filters(self):
         company = get_company(self.firma_id)

@@ -115,7 +115,7 @@ class MonthlyViewLogic:
         rows = [dict(r) for r in cur.fetchall()]
         from app.utils.polish_sort import polish_sort_key
 
-        rows.sort(key=lambda row: polish_sort_key(row.get("nazwa")))
+        rows.sort(key=lambda row: polish_sort_key(row.get("nazwa") or ""))
 
         conn.close()
 
@@ -158,7 +158,7 @@ class MonthlyViewLogic:
 
             result.append(r)
 
-        result.sort(key=lambda item: (item.get("nazwa") or "").casefold())
+        result.sort(key=lambda item: polish_sort_key(item.get("nazwa") or ""))
         return result
 
     def format_seconds(self, sekundy: int) -> str:

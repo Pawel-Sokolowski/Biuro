@@ -64,11 +64,10 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 12 if self._mode == "ksiegowosc" else 13
+        return 12 if self._mode == "ksiegowosc" else 11
 
     def _vat_cols(self):
-        base = 10 if self._mode == "ksiegowosc" else 11
-        return base, base + 1
+        return (10, 11) if self._mode == "ksiegowosc" else ()
 
     _VAT_ICONS = {"czynny": ("✔", "#2e9b4f"), "zwolniony": ("▲", "#d93025"), "nieznany": ("?", "#e69500")}
 
@@ -176,7 +175,7 @@ class MonthlyViewModel(QAbstractTableModel):
             if self._mode == "ksiegowosc":
                 headers = ["Firma", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
-                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "VAT", "EU"]
+                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()

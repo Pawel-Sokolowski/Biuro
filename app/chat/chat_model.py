@@ -108,6 +108,75 @@ def get_new_messages(konwersacja_id: int, last_timestamp: str) -> List[Dict[str,
     return [{k: row[k] for k in row.keys()} for row in rows]
 
 
+def get_latest_message_ids(konwersacja_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """Zwraca {konwersacja_id: {"id": najnowsze id, "pracownik_id": autor}}."""
+    ids = [int(i) for i in konwersacja_ids if i is not None]
+    if not ids:
+        return {}
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT ON (konwersacja_id) konwersacja_id, id, pracownik_id
+        FROM wiadomosci_chat
+        WHERE konwersacja_id = ANY(%s)
+        ORDER BY konwersacja_id, id DESC
+    """, (ids,))
+    rows = cur.fetchall()
+    conn.close()
+    return {r["konwersacja_id"]: {"id": r["id"], "pracownik_id": r["pracownik_id"]} for r in rows}
+
+
+def count_messages_after(konwersacja_id: int, after_id: int, exclude_pracownik_id: Optional[int] = None) -> int:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM wiadomosci_chat
+        WHERE konwersacja_id = %s AND id > %s
+          AND (%s::int IS NULL OR pracownik_id IS DISTINCT FROM %s::int)
+    """, (konwersacja_id, after_id, exclude_pracownik_id, exclude_pracownik_id))
+    row = cur.fetchone()
+    conn.close()
+    return int(row["n"] if row else 0)
+
+
+def get_unread_counts(pracownik_id: int) -> Dict[int, int]:
+    """Nieprzeczytane wiadomości od innych osób, per konwersacja."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    # pierwszy raz: nie traktuj starej historii jako nieprzeczytanej
+    cur.execute("""
+        UPDATE uczestnicy_chat u
+        SET ostatnie_przeczytane_id = COALESCE(
+            (SELECT MAX(w.id) FROM wiadomosci_chat w WHERE w.konwersacja_id = u.konwersacja_id), 0)
+        WHERE u.pracownik_id = %s AND u.ostatnie_przeczytane_id IS NULL
+    """, (pracownik_id,))
+    conn.commit()
+    cur.execute("""
+        SELECT w.konwersacja_id AS kid, COUNT(*) AS n
+        FROM wiadomosci_chat w
+        JOIN uczestnicy_chat u ON u.konwersacja_id = w.konwersacja_id AND u.pracownik_id = %s
+        WHERE w.id > COALESCE(u.ostatnie_przeczytane_id, 0)
+          AND w.pracownik_id IS DISTINCT FROM %s
+        GROUP BY w.konwersacja_id
+    """, (pracownik_id, pracownik_id))
+    rows = cur.fetchall()
+    conn.close()
+    return {r["kid"]: int(r["n"]) for r in rows}
+
+
+def mark_conversation_read(konwersacja_id: int, pracownik_id: int) -> None:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE uczestnicy_chat
+        SET ostatnie_przeczytane_id = COALESCE(
+            (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id = %s), 0)
+        WHERE konwersacja_id = %s AND pracownik_id = %s
+    """, (konwersacja_id, konwersacja_id, pracownik_id))
+    conn.commit()
+    conn.close()
+
+
 def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None,
                         participant_ids: Optional[List[int]] = None) -> int:
     """

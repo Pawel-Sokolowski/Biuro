@@ -626,13 +626,32 @@ class EmailPage(QWidget):
 
         # Labels and folder tree
         self.mail_list = QTreeWidget()
+
         self.folder_tree = FolderTree(self.mail_list)
-        self.folder_tree.setHeaderLabel("Foldery")
+        self.folder_tree.setColumnCount(2)
+        self.folder_tree.setHeaderLabels(["Folder", ""])
+
         self.folder_tree.setIndentation(16)
         self.folder_tree.setMinimumWidth(240)
-        self.folder_tree.header().setStretchLastSection(False)
-        self.folder_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+
+        header = self.folder_tree.header()
+        header.setStretchLastSection(False)
+
+        header.setSectionResizeMode(
+            0,
+            QHeaderView.ResizeMode.Stretch,
+        )
+
+        header.setSectionResizeMode(
+            1,
+            QHeaderView.ResizeMode.ResizeToContents,
+        )
+
         self.folder_tree.setHeaderHidden(True)
+
+        self.folder_tree.currentItemChanged.connect(
+            self._on_folder_current_changed
+        )
         self.folder_tree.currentItemChanged.connect(self._on_folder_current_changed)
         self.folder_tree.mails_dropped.connect(self._on_mails_dropped)
         self.folder_tree.folder_dropped.connect(self._on_folder_dropped)
@@ -772,42 +791,63 @@ class EmailPage(QWidget):
         button.setToolTip(text)
         button.clicked.connect(callback)
         return button
+
     def load_folders_from_db(self) -> None:
         if not self.accounts:
             self.folder_tree.clear()
             return
 
         data = []
+
         for account in self.accounts:
             konto_id = account["id"]
+
             try:
                 folders = get_folders_for_account(konto_id)
                 unread = get_unread_counts(konto_id)
             except Exception:
                 folders, unread = [], {}
+
             if not any(f["server_name"].upper() == "INBOX" for f in folders):
-                folders = folders + [{"server_name": "INBOX", "display_name": "INBOX",
-                                      "delimiter": None, "attributes": "", "id": None}]
+                folders = folders + [{
+                    "server_name": "INBOX",
+                    "display_name": "INBOX",
+                    "delimiter": None,
+                    "attributes": "",
+                    "id": None,
+                }]
+
             data.append((account, folders, unread))
 
         current_id = self.current_account["id"] if self.current_account else None
+
         signature = (
             current_id,
             self.current_folder_local,
             self.show_hidden_folders,
             tuple(
-                (account["id"], tuple(sorted(self.hidden_folders.get(str(account["id"]), set()))))
+                (
+                    account["id"],
+                    tuple(sorted(self.hidden_folders.get(str(account["id"]), set())))
+                )
                 for account in self.accounts
             ),
             tuple(
-                (acc["id"],
-                 tuple((f.get("id"), f["server_name"], f.get("attributes")) for f in folders),
-                 tuple(sorted(unread.items())))
+                (
+                    acc["id"],
+                    tuple(
+                        (f.get("id"), f["server_name"], f.get("attributes"))
+                        for f in folders
+                    ),
+                    tuple(sorted(unread.items())),
+                )
                 for acc, folders, unread in data
             ),
         )
+
         if signature == self._tree_signature:
             return
+
         self._tree_signature = signature
 
         try:
@@ -817,84 +857,225 @@ class EmailPage(QWidget):
 
         previously_expanded = self._expanded_folder_keys()
         had_tree = self.folder_tree.topLevelItemCount() > 0
+
         self.folder_tree.blockSignals(True)
         self.folder_tree.clear()
+
         selected_item: Optional[QTreeWidgetItem] = None
 
-        def add(account_id: int, unread: Dict[Any, int], node: Dict[str, Any],
-                parent: QTreeWidgetItem, flatten: bool = False,
-                under_staff: bool = False) -> QTreeWidgetItem:
+        def subtree_unread(
+                unread: Dict[Any, int],
+                node: Dict[str, Any],
+        ) -> int:
+            total = 0
+
+            folder = node.get("folder")
+
+            if folder and folder.get("id"):
+                total += unread.get(folder["id"], 0)
+
+            for child in node["children"]:
+                total += subtree_unread(unread, child)
+
+            return total
+
+        def add(
+                account_id: int,
+                unread: Dict[Any, int],
+                node: Dict[str, Any],
+                parent: QTreeWidgetItem,
+                flatten: bool = False,
+                under_staff: bool = False,
+        ) -> Optional[QTreeWidgetItem]:
+
             nonlocal selected_item
-            hidden = node["path"] in self.hidden_folders.get(str(account_id), set())
+
+            hidden = node["path"] in self.hidden_folders.get(
+                str(account_id),
+                set(),
+            )
+
             if hidden and not self.show_hidden_folders:
                 return None
+
             role = node["role"]
+
             label = SPECIAL_FOLDER_LABELS.get(role) if role else None
+
             if label is None:
                 label = clean_folder_label(node["label"])
+
                 if under_staff:
                     label = employee_label(label, employees)
+
             folder = node["folder"]
-            count = unread.get(folder["id"], 0) if folder and folder.get("id") else 0
-            item_label = f"{label} ({count})" if count else label
+
+            count = subtree_unread(
+                unread,
+                node,
+            )
+
+            text_label = label
+
             if hidden:
-                item_label += " (ukryty)"
-            item = QTreeWidgetItem([item_label])
-            selectable = folder is not None and "\\noselect" not in (folder.get("attributes") or "").lower()
+                text_label += " (ukryty)"
+
+            item = QTreeWidgetItem([
+                text_label,
+                str(count) if count else "",
+            ])
+
+            selectable = (
+                    folder is not None
+                    and "\\noselect"
+                    not in (folder.get("attributes") or "").lower()
+            )
+
             if selectable:
                 item.setData(0, ROLE_DATA, node["path"])
                 item.setData(0, ROLE_ACCOUNT, account_id)
-                item.setToolTip(0, decode_mailbox_utf7(node["path"]))
+                item.setToolTip(
+                    0,
+                    decode_mailbox_utf7(node["path"]),
+                )
             else:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                item.setFlags(
+                    item.flags()
+                    & ~Qt.ItemFlag.ItemIsSelectable
+                )
+
             if count:
                 font = item.font(0)
                 font.setBold(True)
                 item.setFont(0, font)
+
+                badge_font = item.font(1)
+                badge_font.setBold(True)
+                item.setFont(1, badge_font)
+
+                item.setForeground(1, QColor("#0078D4"))
+
+                item.setTextAlignment(
+                    1,
+                    Qt.AlignmentFlag.AlignCenter,
+                )
+
             if hidden:
                 font = item.font(0)
                 font.setItalic(True)
                 item.setFont(0, font)
-                item.setForeground(0, QColor("#888888"))
+
+                item.setForeground(
+                    0,
+                    QColor("#888888"),
+                )
+
             item.setData(0, ROLE_FOLDER, node["path"])
             item.setData(0, ROLE_ACCOUNT, account_id)
+
             parent.addChild(item)
-            if selectable and account_id == current_id and node["path"] == self.current_folder_local:
+
+            if (
+                    selectable
+                    and account_id == current_id
+                    and node["path"] == self.current_folder_local
+            ):
                 selected_item = item
+
             if not flatten:
-                staff = clean_folder_label(node["label"]).casefold() == "pracownicy"
+                staff = (
+                        clean_folder_label(node["label"])
+                        .casefold()
+                        == "pracownicy"
+                )
+
                 for child in node["children"]:
-                    add(account_id, unread, child, item, under_staff=staff)
+                    add(
+                        account_id,
+                        unread,
+                        child,
+                        item,
+                        under_staff=staff,
+                    )
+
             return item
 
         for account, folders, unread in data:
-            account_item = QTreeWidgetItem([account.get("email", "")])
-            account_item.setFlags(account_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            account_item.setData(0, ROLE_ACCOUNT, account["id"])
+
+            account_item = QTreeWidgetItem([
+                account.get("email", ""),
+                "",
+            ])
+
+            account_item.setFlags(
+                account_item.flags()
+                & ~Qt.ItemFlag.ItemIsSelectable
+            )
+
+            account_item.setData(
+                0,
+                ROLE_ACCOUNT,
+                account["id"],
+            )
+
             font = account_item.font(0)
             font.setBold(True)
             account_item.setFont(0, font)
+
             self.folder_tree.addTopLevelItem(account_item)
+
             account_item.setExpanded(True)
+
             for root in build_folder_tree(folders):
+
                 if root["role"] == "inbox":
-                    # "Odebrane" i podfoldery INBOX na jednym poziomie pod kontem
-                    inbox_hidden = root["path"] in self.hidden_folders.get(str(account["id"]), set())
-                    add(account["id"], unread, root, account_item, flatten=True)
+
+                    inbox_hidden = (
+                            root["path"]
+                            in self.hidden_folders.get(
+                        str(account["id"]),
+                        set(),
+                    )
+                    )
+
+                    add(
+                        account["id"],
+                        unread,
+                        root,
+                        account_item,
+                        flatten=True,
+                    )
+
                     if not inbox_hidden or self.show_hidden_folders:
                         for child in root["children"]:
-                            add(account["id"], unread, child, account_item)
+                            add(
+                                account["id"],
+                                unread,
+                                child,
+                                account_item,
+                            )
+
                 else:
-                    add(account["id"], unread, root, account_item)
+                    add(
+                        account["id"],
+                        unread,
+                        root,
+                        account_item,
+                    )
 
         if had_tree:
             self._restore_expanded(previously_expanded)
+
         if selected_item is not None:
+
             self.folder_tree.setCurrentItem(selected_item)
+
             parent = selected_item.parent()
+
             while parent is not None:
                 parent.setExpanded(True)
                 parent = parent.parent()
+
         self.folder_tree.blockSignals(False)
 
     @staticmethod

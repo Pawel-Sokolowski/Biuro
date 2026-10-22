@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-22.2"
+SCHEMA_VERSION = "2026-10-22.3"
 
 
 def _schema_hash() -> str:
@@ -864,6 +864,7 @@ def init_db():
         "ON wiadomosci_chat(konwersacja_id, data_wysylki);"
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_uczestnicy_chat_konwersacja ON uczestnicy_chat(konwersacja_id);")
+    _safe_alter_add_column(cur, "uczestnicy_chat", "ostatnie_przeczytane_id INTEGER")
 
     # -------------------------
     # kontrahenci faktur

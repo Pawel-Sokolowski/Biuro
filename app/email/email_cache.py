@@ -5,7 +5,9 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import Optional
+import threading
 
+_cache_prune_lock = threading.Lock()
 from app.config import EMAIL_LOCAL_LIMIT, get_data_dir
 
 logger = logging.getLogger(__name__)
@@ -53,19 +55,27 @@ def remove_message(konto_id: int, folder: str, uid: str) -> None:
 
 
 def prune(konto_id: int, limit: int = EMAIL_LOCAL_LIMIT) -> int:
-    """Zostawia tylko `limit` ostatnio zapisanych wiadomości; zwraca liczbę usuniętych."""
     if limit <= 0:
         return 0
-    files = sorted(
-        cache_dir(konto_id).glob("*.eml"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    removed = 0
-    for old in files[limit:]:
-        try:
-            old.unlink()
-            removed += 1
-        except OSError:
-            logger.warning("Nie można usunąć %s", old, exc_info=True)
-    return removed
+
+    with _cache_prune_lock:
+        files = sorted(
+            cache_dir(konto_id).glob("*.eml"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        removed = 0
+
+        for old in files[limit:]:
+            try:
+                old.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                logger.warning(
+                    "Nie można usunąć %s",
+                    old,
+                    exc_info=True,
+                )
+
+        return removed

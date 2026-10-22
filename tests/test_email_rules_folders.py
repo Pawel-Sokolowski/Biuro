@@ -6,7 +6,7 @@ from app.email import email_ui
 
 from tests.base import DbTestCase
 
-_app = QApplication.instance() or QApplication([])
+_app = QApplication.instance() or QApplication(["biuro-tests"])
 
 TB_FILTERS = {
     "accountName": "imap://biuro%40x.pl@host",

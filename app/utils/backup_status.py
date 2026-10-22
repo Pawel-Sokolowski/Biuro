@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -26,6 +26,19 @@ def backup_name(path: str) -> str:
     """Nazwa bazy z nazwy pliku, np. E:\\x\\Monika_20261014.BAK -> Monika."""
     stem = re.split(r"[\\/]", path)[-1].rsplit(".", 1)[0]
     return DATE_SUFFIX_RE.sub("", stem).strip("_ -") or stem
+
+
+def backup_file_date(path: str) -> Optional[date]:
+    """Data zakodowana w nazwie pliku, np. Monika_20261014.BAK -> 2026-10-14."""
+    stem = re.split(r"[\\/]", path)[-1].rsplit(".", 1)[0]
+    match = DATE_SUFFIX_RE.search(stem)
+    if not match:
+        return None
+    digits = re.search(r"\d{8}", match.group(0)).group(0)
+    try:
+        return datetime.strptime(digits, "%Y%m%d").date()
+    except ValueError:
+        return None
 
 
 def _fold(text: str) -> str:
@@ -65,6 +78,7 @@ def parse_backup_log(text: str) -> Dict[str, Any]:
     files = 0
     started: Dict[str, Optional[datetime]] = {}
     done: Dict[str, datetime] = {}
+    file_dates: Dict[str, Optional[date]] = {}
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -76,10 +90,14 @@ def parse_backup_log(text: str) -> Dict[str, Any]:
             last_seen = stamp
         start_match = START_RE.search(message)
         if start_match:
-            started[backup_name(start_match.group(1))] = stamp
+            name = backup_name(start_match.group(1))
+            started[name] = stamp
+            file_dates[name] = backup_file_date(start_match.group(1)) or file_dates.get(name)
         done_match = DONE_RE.search(message)
         if done_match and stamp:
-            done[backup_name(done_match.group(1))] = stamp
+            name = backup_name(done_match.group(1))
+            done[name] = stamp
+            file_dates[name] = backup_file_date(done_match.group(1)) or file_dates.get(name)
         if match and SUCCESS_RE.search(message):
             if last_success is None or stamp.date() != last_success.date():
                 files = 0
@@ -94,7 +112,7 @@ def parse_backup_log(text: str) -> Dict[str, Any]:
         "files": files,
         "error": error_after_success,
         "databases": {
-            name: {"last_success": done.get(name), "started": started.get(name)}
+            name: {"last_success": done.get(name), "started": started.get(name), "file_date": file_dates.get(name)}
             for name in sorted(set(started) | set(done), key=str.lower)
         },
     }
@@ -182,6 +200,7 @@ def get_backup_status(now: Optional[datetime] = None) -> Dict[str, Any]:
         bazy.append({
             "nazwa": name, "firma": match_company(name, companies),
             "ostatnia_kopia": when, "wiek_godzin": db_age, "stan": state,
+            "data_bazy": info.get("file_date"),
         })
     result.update(ostatnia_kopia=last, wiek_godzin=age, pliki=parsed["files"], bazy=bazy)
     stamp = last.strftime("%Y-%m-%d %H:%M")

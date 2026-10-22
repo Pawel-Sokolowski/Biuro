@@ -336,13 +336,19 @@ def _year_months(year: str) -> List[str]:
     return [f"{year}-{m:02d}" for m in range(1, 13)]
 
 
+MAX_PREPAID_INVOICES = 3
+
+
 def spread_annual_fees(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Jedna duża opłata księgowa w roku (np. w styczniu), a w pozostałych miesiącach
     tylko inne pozycje -> kwota jest rozbijana równo na 12 miesięcy roku."""
     by_firm_year: Dict[tuple, List[Dict[str, Any]]] = {}
+    last_month_of_year: Dict[str, str] = {}
     for inv in invoices:
+        year = inv["miesiac"][:4]
+        last_month_of_year[year] = max(last_month_of_year.get(year, ""), inv["miesiac"])
         if inv.get("firma_id"):
-            by_firm_year.setdefault((inv["firma_id"], inv["miesiac"][:4]), []).append(inv)
+            by_firm_year.setdefault((inv["firma_id"], year), []).append(inv)
 
     result = []
     for (firma_id, year), items in by_firm_year.items():
@@ -350,13 +356,20 @@ def spread_annual_fees(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         spread = []
         for rodzaj in ("ksiegowosc", "kadry"):
             fee_items = [i for i in items if i["rodzaj"] == rodzaj and float(i.get("wartosc_netto") or 0) > 0]
-            fee_months = {i["miesiac"] for i in fee_items}
-            if len(fee_months) != 1 or not (all_months - fee_months):
+            fee_months = sorted({i["miesiac"] for i in fee_items})
+            if not fee_months or len(fee_months) > MAX_PREPAID_INVOICES:
                 continue
-            fee_month = next(iter(fee_months))
-            fee_items = [i for i in items if i["rodzaj"] == rodzaj and i["miesiac"] == fee_month]
+            # jedna opłata, a firma ma pozycje w innych miesiącach, albo opłaty tylko
+            # na początku roku (styczeń/luty), choć import sięga później (płatność z góry)
+            single_with_other_months = len(fee_months) == 1 and bool(all_months - set(fee_months))
+            prepaid_early = (
+                fee_months[0][5:7] in ("01", "02") and last_month_of_year[year] > fee_months[-1]
+            )
+            if not (single_with_other_months or prepaid_early):
+                continue
+            fee_items = [i for i in items if i["rodzaj"] == rodzaj and i["miesiac"] in fee_months]
             if rodzaj == "ksiegowosc":
-                fee_items += [i for i in items if i["rodzaj"] == "rabat" and i["miesiac"] == fee_month]
+                fee_items += [i for i in items if i["rodzaj"] == "rabat" and i["miesiac"] in fee_months]
             total = sum(float(i.get("wartosc_netto") or 0) for i in fee_items)
             for month in _year_months(year):
                 result.append({**fee_items[0], "rodzaj": rodzaj, "miesiac": month, "wartosc_netto": total / 12})

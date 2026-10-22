@@ -125,6 +125,17 @@ class ImportParseTests(unittest.TestCase):
         res = compute_employee_report([], inv, {})
         self.assertEqual([r["cena_glowna"] for r in res], [300, 300])
 
+    def test_prepaid_fees_in_january_and_february_spread_over_year(self):
+        inv = [
+            {"firma_id": 7, "kontrahent": "Bovimilk", "miesiac": "2026-01", "rodzaj": "ksiegowosc", "wartosc_netto": 8000},
+            {"firma_id": 7, "kontrahent": "Bovimilk", "miesiac": "2026-02", "rodzaj": "ksiegowosc", "wartosc_netto": 4000},
+            # inna firma z fakturami do października pokazuje, że import sięga dalej
+            {"firma_id": 8, "kontrahent": "X", "miesiac": "2026-10", "rodzaj": "ksiegowosc", "wartosc_netto": 300},
+        ]
+        res = compute_employee_report([], inv, {}, months=["2026-01", "2026-06", "2026-12"])
+        by = {r["miesiac"]: r["cena_glowna"] for r in res if r["firma_id"] == 7}
+        self.assertEqual(by, {"2026-01": 1000, "2026-06": 1000, "2026-12": 1000})
+
     def test_zdrowotna_without_kadry_time_goes_to_accounting(self):
         inv = [
             {"firma_id": 3, "kontrahent": "D", "miesiac": "2026-02", "rodzaj": "zdrowotna", "wartosc_netto": 70},

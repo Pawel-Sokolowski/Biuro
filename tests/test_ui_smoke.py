@@ -10,7 +10,7 @@ from app.db.dao_calendar import save_event
 from app.db.dao_companies import set_pelnomocnictwa
 from tests.base import DbTestCase
 
-_app = QApplication.instance() or QApplication([])
+_app = QApplication.instance() or QApplication(["biuro-tests"])
 
 ENGLISH_MARKERS = {"Dashboard", "Save", "Cancel", "Delete", "Settings", "Password", "Login"}
 

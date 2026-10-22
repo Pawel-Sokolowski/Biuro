@@ -12,7 +12,7 @@ from app.email.compose_dialog import ComposeDialog
 from app.email.email_storage import get_email_accounts_for_employee
 from tests.base import DbTestCase
 
-_app = QApplication.instance() or QApplication([])
+_app = QApplication.instance() or QApplication(["biuro-tests"])
 
 
 class SignatureTests(DbTestCase):

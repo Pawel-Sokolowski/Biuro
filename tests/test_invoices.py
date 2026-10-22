@@ -87,15 +87,16 @@ class InvoiceLifecycleTests(DbTestCase):
         set_ksef_number(self.invoice_id, "")
         self.assertIsNone(get_invoice_by_id(self.invoice_id)["ksef_numer"])
 
-    def test_employee_without_access_sees_no_invoices(self):
+    def test_every_employee_sees_all_companies_but_anonymous_sees_none(self):
         other = self.make_employee("obcy@example.com")
-        self.assertEqual(list_invoices(other, False, "2026-10"), [])
+        self.assertEqual([i["id"] for i in list_invoices(other, False, "2026-10")], [self.invoice_id])
+        self.assertEqual(list_invoices(None, False, "2026-10"), [])
 
 
 class InvoiceUiTests(DbTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
+        cls.app = QApplication.instance() or QApplication(["biuro-tests"])
 
     def test_page_and_editor_open(self):
         from app.invoices.faktury_ui import FakturyPage

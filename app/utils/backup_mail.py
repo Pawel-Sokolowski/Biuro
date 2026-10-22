@@ -30,6 +30,8 @@ class _TextExtractor(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in BLOCK_TAGS:
             self.parts.append("\n")
+        elif tag in ("td", "th"):
+            self.parts.append(" ")
 
     def handle_endtag(self, tag):
         if tag in BLOCK_TAGS:
@@ -68,13 +70,26 @@ def message_log_text(msg) -> str:
 
 
 def _message_date(value: Optional[str]) -> datetime:
+    text = (value or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
     try:
-        parsed = parsedate_to_datetime(value or "")
+        parsed = parsedate_to_datetime(text)
     except (TypeError, ValueError):
         return datetime.min
     if parsed.tzinfo:
         parsed = parsed.astimezone().replace(tzinfo=None)
     return parsed
+
+
+def _uid_number(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def find_latest_backup_mail() -> Optional[Dict[str, Any]]:
@@ -91,7 +106,7 @@ def find_latest_backup_mail() -> Optional[Dict[str, Any]]:
             JOIN foldery_email f ON f.id = w.folder_id
             WHERE w.konto_id = %s AND COALESCE(w.usunieta, 0) = 0
             ORDER BY w.id DESC
-            LIMIT 50
+            LIMIT 200
             """,
             (account_id,),
         ).fetchall()
@@ -99,7 +114,7 @@ def find_latest_backup_mail() -> Optional[Dict[str, Any]]:
         conn.close()
     if not rows:
         return None
-    best = max((dict(r) for r in rows), key=lambda r: (_message_date(r["data"]), r["id"]))
+    best = max((dict(r) for r in rows), key=lambda r: (_message_date(r["data"]), _uid_number(r["uid"])))
     best["data_dt"] = _message_date(best["data"])
     return best
 

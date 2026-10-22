@@ -151,6 +151,8 @@ class DashboardPage(QWidget):
         for db in status["bazy"]:
             when = db["ostatnia_kopia"]
             stamp = when.strftime("%Y-%m-%d %H:%M") if when else "brak udanej kopii"
+            if when and db.get("data_bazy"):
+                stamp = f"baza z {db['data_bazy'].strftime('%Y-%m-%d')} (zapisano {stamp})"
             label = db["nazwa"] + (f" ({db['firma']})" if db["firma"] and db["firma"] != db["nazwa"] else "")
             item = QListWidgetItem(f"{label} — {stamp}")
             if db["stan"] != "ok":

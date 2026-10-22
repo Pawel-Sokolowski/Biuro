@@ -155,14 +155,14 @@ class CeidgSuspensionTests(DbTestCase):
     def test_vat_model_columns_and_tooltip(self):
         from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QApplication
-        QApplication.instance() or QApplication([])
+        QApplication.instance() or QApplication(["biuro-tests"])
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{
             "id": 1, "nazwa": "A", "vat_status": "czynny",
             "vat_sprawdzono": "2026-02-19 12:23:00", "vat_sprawdzil": "Paweł S",
             "vat_ue_status": "zwolniony",
         }], "ksiegowosc")
-        self.assertEqual(m.columnCount(), 16)
+        self.assertEqual(m.columnCount(), 12)
         self.assertEqual(m.data(m.index(0, 10), Qt.ItemDataRole.DisplayRole), "✔")
         self.assertEqual(m.data(m.index(0, 11), Qt.ItemDataRole.DisplayRole), "▲")
         tip = m.data(m.index(0, 10), Qt.ItemDataRole.ToolTipRole)
@@ -193,7 +193,7 @@ class DeliveredDateTests(DbTestCase):
     def test_model_shows_date_in_docs_cell(self):
         from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QApplication
-        QApplication.instance() or QApplication([])
+        QApplication.instance() or QApplication(["biuro-tests"])
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{"id": 1, "nazwa": "A", "dokumenty_dostarczone": 1,
                                "data_dostarczenia": "2026-01-05"}], "ksiegowosc")

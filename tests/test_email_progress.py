@@ -13,7 +13,7 @@ from app.email.email_storage import (
 )
 from tests.base import DbTestCase
 
-_app = QApplication.instance() or QApplication([])
+_app = QApplication.instance() or QApplication(["biuro-tests"])
 
 
 def header(uid):

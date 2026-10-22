@@ -1,19 +1,22 @@
 # app/chat/chat_ui.py
+import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox,
-    QScrollArea, QSizePolicy, QFrame, QDialog, QDialogButtonBox, QFormLayout
+    QScrollArea, QSizePolicy, QFrame, QDialog, QDialogButtonBox, QFormLayout,
+    QApplication
 )
 
 from PyQt6.QtGui import QFont, QColor
-from PyQt6.QtCore import Qt, QDateTime, pyqtSignal
+from PyQt6.QtCore import Qt, QDateTime, QTimer, pyqtSignal
 from typing import Optional
 
 from app.chat.chat_model import (
     get_conversations, get_messages, add_message, create_conversation,
     get_conversation, get_participant_ids, get_active_employees,
     update_conversation, can_manage_conversation, is_participant,
-    get_direct_conversations,
+    get_direct_conversations, get_latest_message_ids, get_unread_counts,
+    mark_conversation_read,
 )
 
 import psycopg
@@ -48,6 +51,8 @@ def _format_date_header(dt_str: str) -> str:
 
 
 class ChatPage(QWidget):
+    unread_changed = pyqtSignal(int)
+
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
@@ -57,9 +62,70 @@ class ChatPage(QWidget):
         self.has_more_history = True
         self.loading_history = False
         self.current_pracownik_id = pracownik_id  # alias used in rendering
+        self._seen_ids = {}
+        self._unread = {}
 
         self._build_ui()
         self.refresh_chat_conversations()
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_new_messages)
+        self._poll_timer.start(3000)
+        self._poll_new_messages()
+
+    def _poll_new_messages(self):
+        try:
+            ids = [self.chat_conversations.item(i).data(Qt.ItemDataRole.UserRole)
+                   for i in range(self.chat_conversations.count())]
+            latest = get_latest_message_ids([i for i in ids if i is not None])
+            for kid, info in latest.items():
+                prev = self._seen_ids.get(kid)
+                self._seen_ids[kid] = info["id"]
+                if prev is None or info["id"] <= prev:
+                    continue
+                if kid == self.current_konwersacja and self.isVisible():
+                    bar = self.scroll_area.verticalScrollBar()
+                    at_bottom = bar.value() >= bar.maximum() - 40
+                    self.load_messages(scroll_to_bottom=at_bottom)
+            if self.current_konwersacja and self.isVisible():
+                mark_conversation_read(self.current_konwersacja, self.pracownik_id)
+            counts = get_unread_counts(self.pracownik_id)
+        except Exception:
+            return
+        grew = sum(counts.values()) > sum(self._unread.values())
+        if counts != self._unread:
+            self._unread = counts
+            self._refresh_unread_marks()
+            if grew:
+                QApplication.beep()
+
+    def _mark_read(self, kid):
+        try:
+            mark_conversation_read(kid, self.pracownik_id)
+        except Exception:
+            return
+        if kid in self._unread:
+            del self._unread[kid]
+            self._refresh_unread_marks()
+
+    def _refresh_unread_marks(self):
+        for i in range(self.chat_conversations.count()):
+            item = self.chat_conversations.item(i)
+            kid = item.data(Qt.ItemDataRole.UserRole)
+            if kid is None:
+                continue
+            text = re.sub(r"  \(\d+\)$", "", item.text())
+            n = self._unread.get(kid, 0)
+            font = item.font()
+            font.setBold(n > 0)
+            item.setFont(font)
+            item.setText(text + (f"  ({n})" if n else ""))
+        self.unread_changed.emit(sum(self._unread.values()))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.current_konwersacja:
+            self._mark_read(self.current_konwersacja)
+            self._scroll_to_bottom()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -173,6 +239,7 @@ class ChatPage(QWidget):
         for r in directs:
             add_item(r, "● ")
         self.chat_conversations.blockSignals(False)
+        self._refresh_unread_marks()
         if select_id is not None and self.chat_conversations.currentItem():
             self.on_chat_selected()
         elif self.current_konwersacja not in [r.get("id") for r in rows]:
@@ -185,6 +252,8 @@ class ChatPage(QWidget):
         if not item:
             return
         self.current_konwersacja = item.data(Qt.ItemDataRole.UserRole)
+        if self.current_konwersacja in self._unread:
+            self._mark_read(self.current_konwersacja)
         self.btn_manage.setEnabled(can_manage_conversation(self.current_konwersacja, self.pracownik_id))
         self.offset = 0
         self.has_more_history = True
@@ -299,8 +368,12 @@ class ChatPage(QWidget):
                 border-radius: 8px;
                 padding: 8px;
                 margin-bottom: 4px;
-                max-width: 600px;
             """)
+            max_w = max(400, int(self.scroll_area.viewport().width() * 0.85))
+            text_w = max((text_label.fontMetrics().horizontalAdvance(line)
+                          for line in (msg.get("tresc") or "").split("\n")), default=0) + 40
+            text_label.setMaximumWidth(max_w)
+            text_label.setMinimumWidth(min(text_w, max_w))
 
             # alignment wrapper
             wrapper = QHBoxLayout()
@@ -316,9 +389,20 @@ class ChatPage(QWidget):
         # stretch at the end to push content up if few messages
         self.messages_layout.addStretch()
         if scroll_to_bottom:
-            self.scroll_area.verticalScrollBar().setValue(
-                self.scroll_area.verticalScrollBar().maximum()
-            )
+            self._scroll_to_bottom()
+
+    def _scroll_to_bottom(self):
+        # layout is recalculated lazily, so scroll now and again after it settles
+        def go():
+            bar = self.scroll_area.verticalScrollBar()
+            bar.blockSignals(True)
+            bar.setValue(bar.maximum())
+            bar.blockSignals(False)
+
+        self.messages_container.adjustSize()
+        go()
+        QTimer.singleShot(0, go)
+        QTimer.singleShot(50, go)
 
     # ============================================================
     # SENDING MESSAGES

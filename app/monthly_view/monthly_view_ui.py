@@ -533,6 +533,12 @@ class MonthlyViewPage(QWidget):
 
         main_layout.addLayout(filters_layout)
 
+        self.activity_label = QLabel("Aktywność pracownika: 0")
+        font = self.activity_label.font()
+        font.setBold(True)
+        self.activity_label.setFont(font)
+        main_layout.addWidget(self.activity_label)
+
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
@@ -646,14 +652,15 @@ class MonthlyViewPage(QWidget):
                     if col in (0, note_col)
                     else QHeaderView.ResizeMode.ResizeToContents,
                 )
-            vat_col = table.model()._vat_cols()[0]
             etap_col = table.model().COL_ETAP
             metrics = header.fontMetrics()
             etap_width = max(metrics.horizontalAdvance(text) for text in ETAP_CHOICES) + 40
             header.setSectionResizeMode(etap_col, QHeaderView.ResizeMode.Fixed)
             table.setColumnWidth(etap_col, etap_width)
-            header.moveSection(header.visualIndex(vat_col), 1)
-            header.moveSection(header.visualIndex(vat_col + 1), 2)
+            vat_cols = table.model()._vat_cols()
+            if vat_cols:
+                header.moveSection(header.visualIndex(vat_cols[0]), 1)
+                header.moveSection(header.visualIndex(vat_cols[1]), 2)
 
     def _load_initial_data(self):
         self._load_employee_filter()
@@ -714,8 +721,18 @@ class MonthlyViewPage(QWidget):
             rr.setdefault("uod", 0)
             rows_prepared.append(rr)
 
-        self.model_ks.set_rows(rows_prepared)
-        self.model_kadry.set_rows(rows_prepared)
+        ks_rows = [r for r in rows_prepared if self._row_in_tab(r, "ksiegowa_id")]
+        kadry_rows = [r for r in rows_prepared if self._row_in_tab(r, "kadrowa_id")]
+        self.model_ks.set_rows(ks_rows)
+        self.model_kadry.set_rows(kadry_rows)
+        total = sum(int(r.get("ilosc_dok") or 0) for r in ks_rows)
+        self.activity_label.setText(f"Aktywność pracownika: {total}")
+
+    def _row_in_tab(self, row: Dict[str, Any], role_field: str) -> bool:
+        emp_id = self._current_employee_id()
+        if not emp_id:
+            return True
+        return row.get(role_field) == emp_id
 
     def _update_running_timer(self):
         if self.logic.aktywna_firma_stoper_ks and self.logic.czas_start_ks:

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
 from app.config import EMAIL_HISTORY_DAYS
+from app.db.dao_conn import get_conn
 from app.email import email_cache
 from app.email.email_connection import open_imap
 from app.email.email_helpers import (
@@ -43,7 +44,7 @@ from app.email.email_storage import (
     rename_folder_local,
     save_folder,
     save_message_header,
-    update_message_read_flag,
+    update_message_read_flag, delete_missing_folders,
 )
 from app.utils.crypto import decrypt_password
 
@@ -160,24 +161,45 @@ def close_sessions() -> None:
     for session in sessions:
         session.close()
 
-
 def list_folder_infos(
     konto_id: int,
     timeout: int = 30,
 ) -> List[Dict[str, Any]]:
-    """Foldery z serwera: surowa nazwa, separator, flagi i nazwa do wyświetlenia."""
+    """
+    Foldery z serwera: surowa nazwa, separator, flagi i nazwa do wyświetlenia.
+    """
+
     account = _get_account_info(konto_id)
 
     if not account:
+        logger.warning(
+            "list_folder_infos: brak konfiguracji konta %s",
+            konto_id,
+        )
         return []
 
     imap_conn = _connect_imap(account, timeout)
 
     if not imap_conn:
+        logger.warning(
+            "list_folder_infos: brak połączenia IMAP dla konta %s",
+            konto_id,
+        )
         return []
 
     try:
         typ, folders = imap_conn.list()
+
+        logger.info(
+            "IMAP LIST konto=%s typ=%s folders=%s",
+            konto_id,
+            typ,
+            len(folders or []),
+        )
+
+        if folders:
+            for entry in folders:
+                logger.info("IMAP RAW FOLDER: %r", entry)
 
         if typ != "OK" or not folders:
             return []
@@ -187,19 +209,48 @@ def list_folder_infos(
         for entry in folders:
             try:
                 info = parse_list_response(entry)
-            except Exception:
-                logger.exception("Failed parsing mailbox")
-                continue
-            if info:
-                result[info["name"]] = info
 
-        return sorted(result.values(), key=lambda i: i["name"])
+                logger.info(
+                    "PARSED FOLDER: %s",
+                    info,
+                )
+
+            except Exception:
+                logger.exception(
+                    "Failed parsing mailbox: %r",
+                    entry,
+                )
+                continue
+
+            if not info:
+                continue
+
+            if info["name"] in result:
+                logger.warning(
+                    "DUPLIKAT FOLDERU: %s",
+                    info["name"],
+                )
+
+            result[info["name"]] = info
+
+        logger.info(
+            "Po parsowaniu znaleziono %s folderów",
+            len(result),
+        )
+
+        return sorted(
+            result.values(),
+            key=lambda i: i["name"],
+        )
 
     finally:
         try:
             imap_conn.logout()
         except Exception:
-            logger.warning("Zignorowany błąd", exc_info=True)
+            logger.warning(
+                "Zignorowany błąd logout",
+                exc_info=True,
+            )
 
 
 def list_folders(
@@ -477,8 +528,19 @@ def delete_message(
         session.conn.expunge()
         return True
 
+def _store_folders(
+    konto_id: int,
+    infos: List[Dict[str, Any]],
+) -> None:
 
-def _store_folders(konto_id: int, infos: List[Dict[str, Any]]) -> None:
+    delete_missing_folders(
+        konto_id,
+        {
+            info["name"]
+            for info in infos
+        },
+    )
+
     for info in infos:
         save_folder(
             konto_id,
@@ -488,21 +550,34 @@ def _store_folders(konto_id: int, infos: List[Dict[str, Any]]) -> None:
             " ".join(info["flags"]),
         )
 
-
 def sync_account(
     konto_id: int,
 ) -> None:
 
     infos = list_folder_infos(konto_id)
-    _store_folders(konto_id, infos)
+
+    logger.info(
+        "sync_account konto=%s foldery=%s",
+        konto_id,
+        len(infos),
+    )
+
+    _store_folders(
+        konto_id,
+        infos,
+    )
 
     for info in infos:
-        if "\\noselect" in [f.lower() for f in info["flags"]]:
+        flags = [f.lower() for f in info["flags"]]
+
+        if "\\noselect" in flags:
             continue
+
         sync_folder(
             konto_id,
             info["name"],
         )
+
 def mark_unread_remote(
     konto_id: int,
     folder: str,

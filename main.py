@@ -1,11 +1,23 @@
 import os
+
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+    "--disable-gpu "
+    "--disable-software-rasterizer "
+    "--disable-gpu-compositing "
+)
+
+os.environ["QT_OPENGL"] = "software"
 import sys
 
 from app.utils.env_config import load_environment, ensure_encryption_key
 
 load_environment()
 ensure_encryption_key()
+from PyQt6.QtCore import Qt, QCoreApplication
 
+QCoreApplication.setAttribute(
+    Qt.ApplicationAttribute.AA_UseSoftwareOpenGL
+)
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QApplication, QDialog)
 import traceback

@@ -132,6 +132,22 @@ class UiSmokeTests(DbTestCase):
         self.assertIn("Kalendarz", items)
         self.assertNotIn("Dashboard", items)
 
+    def test_monthly_tabs_split_by_role_and_activity_sum(self):
+        from app.db.dao_companies import save_company
+        from app.monthly_view.monthly_view_ui import MonthlyViewPage
+        kadrowa = self.make_employee("kadry@example.com", "Ola", "Kadrowa")
+        save_company({"nazwa": "Tylko Kadry", "kadrowa_id": kadrowa})
+        save_company({"nazwa": "Tylko Ksiegowosc", "ksiegowa_id": kadrowa})
+        page = MonthlyViewPage(kadrowa)
+        idx = page.employee_combo.findData(kadrowa)
+        page.employee_combo.setCurrentIndex(idx)
+        page._reload_rows()
+        self.assertEqual([page.model_kadry.get_row(i)["nazwa"] for i in range(page.model_kadry.rowCount())],
+                         ["Tylko Kadry"])
+        self.assertEqual([page.model_ks.get_row(i)["nazwa"] for i in range(page.model_ks.rowCount())],
+                         ["Tylko Ksiegowosc"])
+        self.assertTrue(page.activity_label.text().startswith("Aktywność pracownika:"))
+
     def test_polish_translations_load(self):
         from app.utils.i18n import install_polish_translations
         self.assertTrue(install_polish_translations(_app))

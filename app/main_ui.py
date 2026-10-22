@@ -1,7 +1,10 @@
 import os
 
-from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog
-from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog, QStyledItemDelegate
+from PyQt6.QtCore import QSettings, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPen
+
+from app.email.email_storage import get_unread_counts
 from app.utils.ui_imports import *
 from app.config import get_database
 
@@ -24,6 +27,34 @@ from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class BadgeDelegate(QStyledItemDelegate):
+    """Rysuje czerwone kółko z liczbą po prawej stronie pozycji menu."""
+    BADGE_ROLE = Qt.ItemDataRole.UserRole + 1
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        count = index.data(self.BADGE_ROLE) or 0
+        if not count:
+            return
+        text = "99+" if count > 99 else str(count)
+        d = 24
+        w = d if len(text) < 3 else d + 10
+        rect = QRectF(option.rect.right() - w - 14,
+                      option.rect.center().y() - d / 2, w, d)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#e53935"))
+        painter.drawRoundedRect(rect, d / 2, d / 2)
+        painter.setPen(QColor("white"))
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(10)
+        painter.setFont(f)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
 
 class ShrinkableStack(QStackedWidget):
@@ -451,6 +482,7 @@ class OfficeManagerApp(QMainWindow):
             QListWidget::item:hover { background-color: #1668a3; }
         """)
 
+        self.sidebar.setItemDelegate(BadgeDelegate(self.sidebar))
         self.sidebar.addItems([
             "Pulpit",
             "Widok miesięczny",
@@ -534,6 +566,8 @@ class OfficeManagerApp(QMainWindow):
         self.page_companies = CompanyUI(self.pracownik_id, self)
         self.page_email = EmailPage(self.pracownik_id)
         self.page_chat = ChatPage(self.pracownik_id)
+        self.page_chat.unread_changed.connect(self._set_chat_badge)
+        self.page_chat._refresh_unread_marks()
         self.page_faktury = FakturyPage(self.pracownik_id)
         self.page_raporty = ReportsPage(self.pracownik_id)
         self.page_tasks = TasksPage(self.pracownik_id)
@@ -562,6 +596,12 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer.timeout.connect(self._update_header_timer)
         self._header_timer.start()
 
+        self._email_badge_timer = QTimer(self)
+        self._email_badge_timer.setInterval(10000)
+        self._email_badge_timer.timeout.connect(self._update_email_badge)
+        self._email_badge_timer.start()
+        self._update_email_badge()
+
     def _apply_tab_permissions(self):
         from app.security.authorization import allowed_tabs
 
@@ -580,6 +620,36 @@ class OfficeManagerApp(QMainWindow):
         if first_visible >= 0:
             self.sidebar.setCurrentRow(first_visible)
             self.pages.setCurrentIndex(first_visible)
+
+    def _set_chat_badge(self, count: int):
+        self._set_badge("Czat", count)
+
+    def _set_badge(self, tab_name: str, count: int):
+        for row in range(self.sidebar.count()):
+            item = self.sidebar.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == tab_name:
+                item.setData(BadgeDelegate.BADGE_ROLE, count)
+                self.sidebar.viewport().update()
+                break
+
+    def _update_email_badge(self):
+        try:
+            total = 0
+
+            for account in self.page_email.accounts:
+                unread = get_unread_counts(account["id"])
+                total += sum(unread.values())
+
+            self._set_badge(
+                "E-mail",
+                total,
+            )
+
+        except Exception:
+            logger.debug(
+                "Nie udało się odczytać liczby nieprzeczytanych maili",
+                exc_info=True,
+            )
 
     def _toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed

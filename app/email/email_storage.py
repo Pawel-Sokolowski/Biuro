@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import psycopg
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.db.dao_conn import get_conn
 from app.config import EMAIL_LOCAL_LIMIT
@@ -125,6 +125,44 @@ def add_email_filter(
     finally:
         conn.close()
 
+def delete_missing_folders(
+    konto_id: int,
+    valid_names: set[str],
+) -> None:
+    conn = get_conn()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT server_name
+            FROM foldery_email
+            WHERE konto_id = %s
+            """,
+            (konto_id,),
+        )
+
+        existing = {row[0] for row in cur.fetchall()}
+        missing = existing - valid_names
+
+        if missing:
+            cur.execute(
+                """
+                DELETE FROM foldery_email
+                WHERE konto_id = %s
+                  AND server_name = ANY(%s)
+                """,
+                (
+                    konto_id,
+                    list(missing),
+                ),
+            )
+
+        conn.commit()
+
+    finally:
+        conn.close()
 
 def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
     conn = get_conn()

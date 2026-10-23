@@ -411,6 +411,7 @@ class EmailPage(QWidget):
         self.show_hidden_folders = False
         self._reload_employees()
         self._chips_signature = None
+        self._loading_message_key = None
 
         self._select_timer = QTimer(self)
         self._select_timer.setSingleShot(True)
@@ -1797,11 +1798,31 @@ class EmailPage(QWidget):
             completed = all(rid in self.completed_map for rid in row_ids)
             self._set_selected_completed(not completed)
 
-    def on_mail_clicked(self, item: QTreeWidgetItem, column: int = 0) -> None:
+    def on_mail_clicked(
+            self,
+            item: QTreeWidgetItem,
+            column: int = 0,
+    ) -> None:
         uid = item.data(0, Qt.ItemDataRole.UserRole)
-        local_folder = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        local_folder = item.data(
+            0,
+            Qt.ItemDataRole.UserRole + 1,
+        )
 
         if not uid or not local_folder or not self.current_account:
+            return
+
+        konto_id = self.current_account["id"]
+
+        load_key = (
+            konto_id,
+            str(local_folder),
+            str(uid),
+        )
+
+        # Nie uruchamiaj ponownie pobierania tej samej wiadomości,
+        # jeśli poprzednie pobieranie nadal trwa.
+        if self._loading_message_key == load_key:
             return
 
         self.current_uid = uid
@@ -1817,7 +1838,10 @@ class EmailPage(QWidget):
 
         row_labels = sorted(
             self.assign_map.get(row_id, []),
-            key=lambda employee_id: self.label_numbers.get(employee_id, 99),
+            key=lambda employee_id: self.label_numbers.get(
+                employee_id,
+                99,
+            ),
         )
 
         self.current_message_labels = [
@@ -1837,19 +1861,23 @@ class EmailPage(QWidget):
                 )
             )
 
-        konto_id = self.current_account["id"]
-
         self._load_token += 1
         token = self._load_token
 
+        self._loading_message_key = load_key
+
         self._clear_view()
+        self.mail_view.setPlainText("Pobieranie wiadomości…")
 
         def show(msg) -> None:
+            if token != self._load_token:
+                return
 
             if not msg:
                 self.mail_view.setPlainText(
-                    "Nie udało się pobrać treści wiadomości z serwera.\n"
-                    "Sprawdź połączenie (Ustawienia → Konta e-mail → Testuj) i kliknij wiadomość ponownie."
+                    "Nie udało się pobrać treści wiadomości.\n"
+                    "Sprawdź połączenie z serwerem i bazą PostgreSQL, "
+                    "a następnie spróbuj ponownie."
                 )
                 return
 
@@ -1862,48 +1890,56 @@ class EmailPage(QWidget):
                 uid,
             )
 
-        if email_cache.has_message(
-                konto_id,
-                local_folder,
-                uid,
-        ):
-            try:
-                show(
-                    load_message(
-                        konto_id,
-                        local_folder,
-                        uid,
-                    )
-                )
-                return
-
-            except Exception:
-                logger.warning(
-                    "Nie można odczytać wiadomości z cache",
-                    exc_info=True,
-                )
-
-        self.mail_view.setPlainText(
-            "Pobieranie wiadomości…"
-        )
-
         def done(msg, err) -> None:
-
             if token != self._load_token:
                 return
 
-            show(
-                None if err else msg
-            )
+            self._loading_message_key = None
 
-        self._run_async(
-            lambda: load_message(
+            if err:
+                logger.error(
+                    "Nie udało się załadować wiadomości "
+                    "konto=%s folder=%s uid=%s",
+                    konto_id,
+                    local_folder,
+                    uid,
+                    exc_info=(
+                        type(err),
+                        err,
+                        err.__traceback__,
+                    ) if isinstance(err, BaseException) else None,
+                )
+
+                self.mail_view.setPlainText(
+                    "Wystąpił błąd podczas pobierania wiadomości.\n"
+                    "Sprawdź logi aplikacji, połączenie z PostgreSQL "
+                    "oraz dostępność serwera IMAP."
+                )
+                return
+
+            show(msg)
+
+        try:
+            self._run_async(
+                lambda: load_message(
+                    konto_id,
+                    local_folder,
+                    uid,
+                ),
+                done,
+            )
+        except Exception:
+            self._loading_message_key = None
+            logger.exception(
+                "Nie udało się uruchomić pobierania wiadomości "
+                "konto=%s folder=%s uid=%s",
                 konto_id,
                 local_folder,
                 uid,
-            ),
-            done,
-        )
+            )
+            self.mail_view.setPlainText(
+                "Nie udało się uruchomić pobierania wiadomości."
+            )
 
     def _mark_opened_as_read(self, item: QTreeWidgetItem, konto_id: int, folder: str, uid: str) -> None:
         if not self.unread_map.get(uid, False):

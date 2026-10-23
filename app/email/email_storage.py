@@ -980,16 +980,6 @@ def get_cached_messages_by_folder_name(
 
         rows = cur.fetchall()
 
-        print(
-            "DEBUG MAILS:",
-            konto_id,
-            server_name,
-            len(rows),
-        )
-
-        for row in rows:
-            print("ROW:", dict(row))
-
         return [
             dict(r)
             for r in rows

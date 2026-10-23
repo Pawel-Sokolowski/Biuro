@@ -40,7 +40,6 @@ def main():
     if not account:
         print("Brak konta e-mail w bazie.")
         return
-    print(f"Konto id={account['id']}, serwer={account.get('serwer_imap')}:{account.get('port_imap')}")
 
     def connect_logout():
         conn = email_sync._connect_imap(account, 30)

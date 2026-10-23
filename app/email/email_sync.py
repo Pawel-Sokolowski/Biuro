@@ -369,57 +369,104 @@ def prefetch_messages(
 ) -> int:
     folder_id = get_folder_id(konto_id, folder)
     if not folder_id:
+        logger.warning(
+            "Brak folder_id: konto=%s, folder=%s",
+            konto_id, folder,
+        )
         return 0
 
-    # Odfiltruj powtarzające się UID-y.
+    # Usuń duplikaty UID-ów.
     unique_uids = list(dict.fromkeys(str(uid) for uid in uids))
+    total = len(unique_uids)
     fetched = 0
+    skipped = 0
+    failed = 0
+
+    if total == 0:
+        logger.info(
+            "%s — brak wiadomości do pobrania",
+            folder,
+        )
+        return 0
+
+    logger.warning(
+        "%s — rozpoczęto pobieranie pełnych wiadomości: %s",
+        folder, total,
+    )
 
     try:
         with _shared_session(konto_id, timeout) as session:
             if session is None or not session.select(folder, True):
+                logger.error(
+                    "%s — nie udało się wybrać folderu IMAP",
+                    folder,
+                )
                 return 0
 
-            for uid in unique_uids:
+            for index, uid in enumerate(unique_uids, start=1):
                 try:
                     row_id = get_message_row_id(
                         konto_id, folder_id, uid
                     )
+
                     if not row_id:
-                        continue
-
-                    # Nie pobieraj ponownie pełnej wiadomości.
-                    if load_raw_message(row_id):
-                        continue
-
-                    typ, data = session.conn.uid(
-                        "FETCH", uid, "(BODY.PEEK[])"
-                    )
-
-                    raw = _raw_from_fetch(data) if typ == "OK" else None
-                    if not raw:
-                        logger.warning(
-                            "Brak treści wiadomości uid=%s, folder=%s",
-                            uid, folder,
+                        skipped += 1
+                    elif load_raw_message(row_id):
+                        # Pełna treść jest już w bazie.
+                        skipped += 1
+                    else:
+                        typ, data = session.conn.uid(
+                            "FETCH", uid, "(BODY.PEEK[])"
                         )
-                        continue
 
-                    save_raw_message(row_id, raw)
-                    fetched += 1
+                        raw = (
+                            _raw_from_fetch(data)
+                            if typ == "OK"
+                            else None
+                        )
+
+                        if not raw:
+                            failed += 1
+                            logger.warning(
+                                "Brak treści uid=%s, folder=%s",
+                                uid, folder,
+                            )
+                        else:
+                            save_raw_message(row_id, raw)
+                            fetched += 1
 
                 except Exception:
+                    failed += 1
                     logger.warning(
                         "Nie udało się pobrać uid=%s, folder=%s",
                         uid, folder,
                         exc_info=True,
                     )
-                    # Nie przerywaj pozostałych wiadomości.
+
+                # Raport co 100 UID-ów oraz na końcu folderu.
+                if index % 100 == 0 or index == total:
+                    logger.warning(
+                        "%s — sprawdzono %s/%s wiadomości; "
+                        "zapisano nowych: %s; pominięto: %s; "
+                        "błędy: %s",
+                        folder,
+                        index,
+                        total,
+                        fetched,
+                        skipped,
+                        failed,
+                    )
 
     except Exception:
         logger.exception(
-            "Nie udało się otworzyć sesji IMAP: konto=%s, folder=%s",
+            "Błąd sesji IMAP: konto=%s, folder=%s",
             konto_id, folder,
         )
+
+    logger.warning(
+        "%s — zakończono: zapisano %s, pominięto %s, błędy %s",
+        folder, fetched, skipped, failed,
+    )
 
     return fetched
 
@@ -447,6 +494,7 @@ def prefetch_recent(
     )
 
 
+
 def prefetch_all_messages(
     konto_id: int,
     folder: str,
@@ -454,23 +502,49 @@ def prefetch_all_messages(
 ) -> int:
     folder_id = get_folder_id(konto_id, folder)
     if not folder_id:
+        print(f"{folder} — folder nie znaleziony w PostgreSQL")
         return 0
 
     rows = get_cached_messages(konto_id, folder_id)
-    uids = [str(row["uid"]) for row in rows if row.get("uid") is not None]
+    uids = [
+        str(row["uid"])
+        for row in rows
+        if row.get("uid") is not None
+    ]
 
-    total = 0
+    total = len(uids)
+    downloaded = 0
 
-    for start in range(0, len(uids), batch_size):
+    print(f"\n{folder} — start pobierania: {total} messages", flush=True)
+
+    if total == 0:
+        print(f"{folder} — brak wiadomości do pobrania", flush=True)
+        return 0
+
+    for start in range(0, total, batch_size):
         batch = uids[start:start + batch_size]
-        total += prefetch_messages(konto_id, folder, batch)
 
-    logger.info(
-        "Pobieranie pełnych wiadomości zakończone: "
-        "konto=%s, folder=%s, pobrano=%s, rekordów=%s",
-        konto_id, folder, total, len(uids),
+        downloaded += prefetch_messages(
+            konto_id,
+            folder,
+            batch,
+        )
+
+        processed = min(start + len(batch), total)
+
+        print(
+            f"{folder} — downloaded {processed}/{total} messages "
+            f"(newly saved: {downloaded})",
+            flush=True,
+        )
+
+    print(
+        f"{folder} — FINISHED: {downloaded} new messages saved "
+        f"out of {total}",
+        flush=True,
     )
-    return total
+
+    return downloaded
 
 def fetch_headers(
     konto_id: int,
@@ -822,73 +896,87 @@ def _store_folders(
             " ".join(info["flags"]),
         )
 
-def sync_account(
-    konto_id: int,
-) -> None:
 
-    infos = list_folder_infos(
+def sync_account(konto_id: int) -> None:
+    logger.warning(
+        "SYNC_ACCOUNT START konto=%s",
         konto_id,
     )
 
-    logger.info(
-        "sync_account konto=%s foldery=%s",
-        konto_id,
+    infos = list_folder_infos(konto_id)
+
+    logger.warning(
+        "SYNC_ACCOUNT: serwer zwrócił %s folderów: %s",
         len(infos),
+        [info.get("name") for info in infos],
     )
 
-    _store_folders(
-        konto_id,
-        infos,
-    )
+    _store_folders(konto_id, infos)
 
-    first_sync = True
-
-    try:
-        folders = get_folders_for_account(
-            konto_id,
-        )
-
-        for folder in folders:
-
-            folder_id = folder.get("id")
-
-            if not folder_id:
-                continue
-
-            if get_known_uids(
-                konto_id,
-                folder_id,
-            ):
-                first_sync = False
-                break
-
-    except Exception:
-        logger.warning(
-            "Nie można sprawdzić pierwszej synchronizacji",
-            exc_info=True,
-        )
-
-    logger.info(
-        "konto=%s first_sync=%s",
-        konto_id,
-        first_sync,
-    )
+    selectable_folders = []
 
     for info in infos:
-
+        name = info.get("name")
         flags = [
-            f.lower()
-            for f in info["flags"]
+            str(flag).lower()
+            for flag in info.get("flags", [])
         ]
 
-        if "\\noselect" in flags:
+        if not name:
             continue
 
-        sync_folder(
-            konto_id,
-            info["name"],
-            full_sync=True,
+        if "\\noselect" in flags:
+            logger.warning(
+                "POMINIĘTO folder bez możliwości wyboru: %s",
+                name,
+            )
+            continue
+
+        selectable_folders.append(name)
+
+    logger.warning(
+        "SYNC_ACCOUNT: foldery do synchronizacji: %s",
+        selectable_folders,
+    )
+
+    for index, folder_name in enumerate(
+        selectable_folders,
+        start=1,
+    ):
+        logger.warning(
+            "SYNC_ACCOUNT: folder %s/%s START: %s",
+            index,
+            len(selectable_folders),
+            folder_name,
         )
+
+        try:
+            count = sync_folder(
+                konto_id,
+                folder_name,
+                full_sync=True,
+            )
+
+            logger.warning(
+                "SYNC_ACCOUNT: folder %s/%s KONIEC: %s; "
+                "pobrano nagłówków: %s",
+                index,
+                len(selectable_folders),
+                folder_name,
+                count,
+            )
+
+        except Exception:
+            logger.exception(
+                "SYNC_ACCOUNT: błąd folderu %s",
+                folder_name,
+            )
+
+    logger.warning(
+        "SYNC_ACCOUNT KONIEC konto=%s",
+        konto_id,
+    )
+
 
 def mark_unread_remote(
     konto_id: int,
@@ -913,28 +1001,25 @@ def archive_message(
         timeout,
     )
 
+
 def sync_folder(
     konto_id: int,
     folder: str,
-    full_sync: bool = False,
+    full_sync: bool = True,
 ) -> int:
+    history_days = 730 if full_sync else EMAIL_HISTORY_DAYS
 
     logger.warning(
-        "SYNC START konto=%s folder=%s full_sync=%s "
-        "history_days=%s",
+        "SYNC START konto=%s folder=%s full_sync=%s history_days=%s",
         konto_id,
         folder,
         full_sync,
-        730 if full_sync else EMAIL_HISTORY_DAYS,
+        history_days,
     )
 
-    folder_id = get_folder_id(
-        konto_id,
-        folder,
-    )
+    folder_id = get_folder_id(konto_id, folder)
 
     if not folder_id:
-
         folder_id = save_folder(
             konto_id,
             folder,
@@ -942,21 +1027,28 @@ def sync_folder(
         )
 
     flags: Dict[str, set] = {}
-
     known = set()
 
     if not full_sync:
-        known = get_known_uids(
-            konto_id,
-            folder_id,
-        )
+        known = get_known_uids(konto_id, folder_id)
+
+    logger.warning(
+        "%s — rozpoczynam pobieranie nagłówków",
+        folder,
+    )
 
     headers = fetch_headers(
         konto_id,
         folder,
         known_uids=known,
         flags_out=flags,
-        history_days=730 if full_sync else EMAIL_HISTORY_DAYS,
+        history_days=history_days,
+    )
+
+    logger.warning(
+        "%s — pobrano %s nagłówków",
+        folder,
+        len(headers),
     )
 
     save_message_headers(
@@ -965,25 +1057,25 @@ def sync_folder(
         headers,
     )
 
-    try:
+    logger.warning(
+        "%s — zapisano nagłówki w PostgreSQL",
+        folder,
+    )
 
+    try:
         backfill_refs(
             konto_id,
             folder,
             folder_id,
         )
-
     except Exception:
-
         logger.warning(
             "Nie udało się pobrać nagłówków wątków",
             exc_info=True,
         )
 
     if known and headers and folder.upper() == "INBOX":
-
         try:
-
             from app.email.email_rules import apply_rules
 
             apply_rules(
@@ -991,19 +1083,16 @@ def sync_folder(
                 folder,
                 headers,
             )
-
         except Exception:
-
             logger.warning(
                 "Nie udało się zastosować filtrów",
                 exc_info=True,
             )
 
     if "all" in flags:
-
         cutoff = (
             datetime.now()
-            - timedelta(days=EMAIL_HISTORY_DAYS - 7)
+            - timedelta(days=history_days - 7)
         ).strftime("%Y-%m-%d")
 
         apply_server_state(
@@ -1030,8 +1119,6 @@ def needs_initial_sync(konto_id: int) -> bool:
     """Pierwsze otwarcie konta: brak folderów lub nagłówków w bazie (gotowa baza = już zsynchronizowane)."""
     return not account_has_headers(konto_id)
 
-
-
 def sync_and_prefetch(
     konto_id: int,
     folders: List[str],
@@ -1041,15 +1128,24 @@ def sync_and_prefetch(
     all_folders: bool = False,
 ) -> int:
     """
-    Odświeża foldery i pobiera nagłówki wiadomości.
-    Pierwsza synchronizacja pobiera nagłówki z ostatnich 730 dni.
-    Kolejne synchronizacje używają EMAIL_HISTORY_DAYS.
+    Synchronizuje nagłówki oraz pełne treści wiadomości.
+
+    Przy first_run lub all_folders:
+    - synchronizuje wszystkie wybieralne foldery,
+    - ogranicza wiadomości do ostatnich 730 dni.
+
+    W pozostałych przypadkach synchronizuje przekazane foldery
+    według standardowego EMAIL_HISTORY_DAYS.
     """
 
-    if first_run or all_folders or not get_folders_for_account(konto_id):
+    if (
+        first_run
+        or all_folders
+        or not get_folders_for_account(konto_id)
+    ):
         list_folders_from_imap_and_store(konto_id)
 
-    if all_folders:
+    if first_run or all_folders:
         wanted = list(folders)
 
         for name in selectable_folder_names(konto_id):
@@ -1058,26 +1154,139 @@ def sync_and_prefetch(
 
         folders = wanted
 
+    # Usuń duplikaty, zachowując kolejność.
+    folders = list(dict.fromkeys(folders))
+
     total = len(folders)
-    fetched = 0
+    total_headers = 0
+    total_bodies = 0
+
+    logger.warning(
+        "SYNC: konto=%s, foldery do przetworzenia=%s",
+        konto_id,
+        folders,
+    )
 
     for index, folder in enumerate(folders):
         if on_progress:
-            on_progress(index, total, folder, fetched)
+            on_progress(index, total, folder, total_headers)
 
-        count = sync_folder(
-            konto_id,
+        logger.warning(
+            "=== FOLDER %s/%s: %s ===",
+            index + 1,
+            total,
             folder,
-            full_sync=(first_run or all_folders),
-        ) or 0
+        )
 
-        fetched += count
+        try:
+            # 1. Pobierz i zapisz nagłówki.
+            count = sync_folder(
+                konto_id,
+                folder,
+                full_sync=(first_run or all_folders),
+            ) or 0
 
-        if on_headers:
-            on_headers()
+            total_headers += count
+
+            if on_headers:
+                on_headers()
+
+            # 2. Pobierz wiadomości z tego folderu z PostgreSQL.
+            folder_id = get_folder_id(konto_id, folder)
+
+            if not folder_id:
+                logger.warning(
+                    "%s — brak folder_id, pomijam treści",
+                    folder,
+                )
+                continue
+
+            rows = get_cached_messages(
+                konto_id,
+                folder_id,
+            )
+
+            # get_cached_messages powinno zwracać rekordy
+            # uporządkowane od najnowszych. Odfiltruj rekordy
+            # starsze niż 730 dni podczas pełnej synchronizacji.
+            if first_run or all_folders:
+                cutoff = datetime.now() - timedelta(days=730)
+
+                def within_last_two_years(row):
+                    value = row.get("data")
+                    if not value:
+                        return False
+
+                    if isinstance(value, str):
+                        try:
+                            value = datetime.fromisoformat(
+                                value.strip().replace("Z", "+00:00")
+                            )
+                        except (ValueError, TypeError):
+                            return False
+
+                    if not isinstance(value, datetime):
+                        return False
+
+                    # Ujednolicenie stref czasowych przed porównaniem.
+                    if value.tzinfo is not None:
+                        value = value.replace(tzinfo=None)
+
+                    return value >= cutoff
+
+                rows = [row for row in rows if within_last_two_years(row)]
+
+            uids = [
+                str(row["uid"])
+                for row in rows
+                if row.get("uid") is not None
+            ]
+
+            logger.warning(
+                "%s — wiadomości do sprawdzenia pod kątem treści: %s",
+                folder,
+                len(uids),
+            )
+
+            # 3. Prefetch wiadomości w paczkach po 100 UID-ów.
+            for start in range(0, len(uids), 100):
+                batch = uids[start:start + 100]
+
+                saved = prefetch_messages(
+                    konto_id,
+                    folder,
+                    batch,
+                )
+
+                total_bodies += saved
+
+                logger.warning(
+                    "%s — sprawdzono %s/%s wiadomości; "
+                    "w tej paczce zapisano nowych: %s",
+                    folder,
+                    min(start + len(batch), len(uids)),
+                    len(uids),
+                    saved,
+                )
+
+            logger.warning(
+                "=== KONIEC FOLDERU: %s ===",
+                folder,
+            )
+
+        except Exception:
+            logger.exception(
+                "Błąd synchronizacji folderu %s",
+                folder,
+            )
 
         if on_progress:
-            on_progress(index + 1, total, folder, fetched)
+            on_progress(
+                index + 1,
+                total,
+                folder,
+                total_headers,
+            )
 
     try:
         from app.utils.saldeo_status import apply_saldeo_emails
@@ -1087,7 +1296,15 @@ def sync_and_prefetch(
             "Nie udało się zaktualizować statusów z maili Saldeo"
         )
 
-    return fetched
+    logger.warning(
+        "SYNC KONIEC konto=%s; nagłówki=%s; nowe pełne treści=%s",
+        konto_id,
+        total_headers,
+        total_bodies,
+    )
+
+    return total_headers
+
 def _set_seen_remote(
     konto_id: int,
     folder: str,

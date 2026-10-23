@@ -23,10 +23,8 @@ def _path(konto_id: int, folder: str, uid: str) -> Path:
     key = hashlib.sha1(f"{folder}\x00{uid}".encode("utf-8")).hexdigest()
     return cache_dir(konto_id) / f"{key}.eml"
 
-
 def has_message(konto_id: int, folder: str, uid: str) -> bool:
     return _path(konto_id, folder, str(uid)).is_file()
-
 
 def read_message(konto_id: int, folder: str, uid: str) -> Optional[bytes]:
     path = _path(konto_id, folder, str(uid))

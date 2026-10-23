@@ -560,20 +560,35 @@ def get_cached_messages(
 
 
 def get_unread_counts(konto_id: int) -> Dict[int, int]:
+
     conn = get_conn()
+
     try:
-        rows = conn.execute(
+        cur = conn.cursor()
+
+        cur.execute(
             """
-            SELECT folder_id, COUNT(*) FROM wiadomosci_email
-            WHERE konto_id = %s AND usunieta = 0 AND COALESCE(przeczytana, 0) = 0
+            SELECT
+                folder_id,
+                COUNT(*)
+            FROM wiadomosci_email
+            WHERE konto_id = %s
+              AND COALESCE(usunieta, 0) = 0
+              AND COALESCE(przeczytana, 0) = 0
             GROUP BY folder_id
             """,
             (konto_id,),
-        ).fetchall()
-        return {int(r[0]): int(r[1]) for r in rows}
+        )
+
+        rows = cur.fetchall()
+
+        return {
+            int(row["folder_id"]): int(row["count"])
+            for row in rows
+        }
+
     finally:
         conn.close()
-
 
 def find_special_folder(konto_id: int, role: str) -> Optional[str]:
     """Zwraca surową nazwę serwerową folderu o danej roli (archive/junk/trash/sent/drafts)."""
@@ -621,6 +636,113 @@ def get_message_by_uid(
     finally:
         conn.close()
 
+def save_raw_message(
+    message_row_id: int,
+    raw_eml: bytes,
+) -> None:
+
+    conn = get_conn()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO email_raw_messages
+            (
+                wiadomosc_id,
+                raw_eml,
+                size_bytes
+            )
+            VALUES
+            (
+                %s,
+                %s,
+                %s
+            )
+
+            ON CONFLICT (wiadomosc_id)
+            DO UPDATE SET
+                raw_eml = EXCLUDED.raw_eml,
+                size_bytes = EXCLUDED.size_bytes,
+                downloaded_at = to_char(
+                    now(),
+                    'YYYY-MM-DD HH24:MI:SS'
+                )
+            """,
+            (
+                message_row_id,
+                raw_eml,
+                len(raw_eml),
+            ),
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+def load_raw_message(
+    message_row_id: int,
+) -> Optional[bytes]:
+
+    conn = get_conn()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT raw_eml
+            FROM email_raw_messages
+            WHERE wiadomosc_id = %s
+            """,
+            (message_row_id,),
+        )
+
+        row = cur.fetchone()
+
+        if not row:
+            return None
+
+        return row[0]
+
+    finally:
+        conn.close()
+
+def get_message_row_id(
+    konto_id: int,
+    folder_id: int,
+    uid: str,
+) -> Optional[int]:
+
+    conn = get_conn()
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id
+            FROM wiadomosci_email
+            WHERE konto_id = %s
+              AND folder_id = %s
+              AND uid = %s
+            LIMIT 1
+            """,
+            (
+                konto_id,
+                folder_id,
+                uid,
+            ),
+        )
+
+        row = cur.fetchone()
+
+        return int(row[0]) if row else None
+
+    finally:
+        conn.close()
 
 def update_message_read_flag(
     konto_id: int,
@@ -653,7 +775,6 @@ def update_message_read_flag(
     finally:
         conn.close()
 
-
 def mark_deleted(
     konto_id: int,
     uid: str,
@@ -682,7 +803,6 @@ def mark_deleted(
 
     finally:
         conn.close()
-
 
 def move_local_message(
     konto_id: int,
@@ -830,6 +950,7 @@ def prune_email_storage(
 
     finally:
         conn.close()
+
 def get_cached_messages_by_folder_name(
     konto_id: int,
     server_name: str,
@@ -857,9 +978,21 @@ def get_cached_messages_by_folder_name(
             ),
         )
 
+        rows = cur.fetchall()
+
+        print(
+            "DEBUG MAILS:",
+            konto_id,
+            server_name,
+            len(rows),
+        )
+
+        for row in rows:
+            print("ROW:", dict(row))
+
         return [
             dict(r)
-            for r in cur.fetchall()
+            for r in rows
         ]
 
     finally:
@@ -1085,9 +1218,24 @@ def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> Lis
         conn.close()
 
 
-def refresh_email_list(konto_id: int, server_folder: str) -> List[Dict[str, Any]]:
-    return get_cached_messages_by_folder_name(konto_id, server_folder)
+def refresh_email_list(
+    konto_id: int,
+    server_folder: str,
+) -> List[Dict[str, Any]]:
 
+    rows = get_cached_messages_by_folder_name(
+        konto_id,
+        server_folder,
+    )
+
+    print(
+        "REFRESH_EMAIL_LIST",
+        konto_id,
+        server_folder,
+        len(rows),
+    )
+
+    return rows
 
 __all__ = [
     "apply_server_state",

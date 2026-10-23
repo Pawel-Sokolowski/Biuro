@@ -726,6 +726,34 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_email_attachments_message "
         "ON email_attachments(wiadomosc_id);"
     )
+    # -------------------------
+    # email_raw_messages
+    # -------------------------
+    #
+    # Pełne źródło wiadomości EML.
+    # Dzięki temu wiadomość zostaje w systemie nawet po
+    # usunięciu jej z serwera IMAP.
+    #
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS email_raw_messages (
+            wiadomosc_id INTEGER PRIMARY KEY,
+
+            raw_eml BYTEA NOT NULL,
+
+            size_bytes INTEGER,
+
+            downloaded_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+
+            FOREIGN KEY(wiadomosc_id)
+                REFERENCES wiadomosci_email(id)
+                ON DELETE CASCADE
+        );
+    """)
+
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_raw_messages_message "
+        "ON email_raw_messages(wiadomosc_id);"
+    )
 
     # -------------------------
     # pracownik_konto_email

@@ -917,12 +917,15 @@ class EmailPage(QWidget):
 
             text_label = label
 
+            if count:
+                text_label = f"{text_label} ({count})"
+
             if hidden:
                 text_label += " (ukryty)"
 
             item = QTreeWidgetItem([
                 text_label,
-                str(count) if count else "",
+                "",
             ])
 
             selectable = (
@@ -1142,17 +1145,34 @@ class EmailPage(QWidget):
         except Exception:
             return {}
 
-    def load_mail_list_from_db(self, local_folder: str, keep_view: bool = False) -> None:
+    def load_mail_list_from_db(
+            self,
+            local_folder: str,
+            keep_view: bool = False,
+    ) -> None:
+
         selected_uids = {
-            it.data(0, Qt.ItemDataRole.UserRole) for it in self.mail_list.selectedItems()
+            it.data(0, Qt.ItemDataRole.UserRole)
+            for it in self.mail_list.selectedItems()
         } if keep_view else set()
-        scroll = self.mail_list.verticalScrollBar().value() if keep_view else 0
-        selected_uid = self.current_uid if keep_view else None
+
+        scroll = (
+            self.mail_list.verticalScrollBar().value()
+            if keep_view else 0
+        )
+
+        selected_uid = (
+            self.current_uid
+            if keep_view else None
+        )
+
         self.mail_list.blockSignals(True)
         self.mail_list.clear()
+
         if not keep_view:
             self._clear_view()
             self.cached_message = None
+
         self.unread_map.clear()
         self.assign_map = {}
 
@@ -1167,113 +1187,341 @@ class EmailPage(QWidget):
             if self.completed_filter:
                 rows = list_completed_rows(konto_id)
             elif self.employee_filter:
-                rows = list_assigned_rows(konto_id, self.employee_filter)
+                rows = list_assigned_rows(
+                    konto_id,
+                    self.employee_filter,
+                )
             else:
-                rows = refresh_email_list(konto_id, local_folder)
+                rows = refresh_email_list(
+                    konto_id,
+                    local_folder,
+                )
         except Exception:
+            logger.exception("Nie można wczytać listy wiadomości")
             rows = []
 
         query = self.search_input.text().strip().casefold()
+
         if query:
             rows = [
-                row for row in rows
+                row
+                for row in rows
                 if query in " ".join(
                     str(row.get(field) or "")
-                    for field in ("temat", "nadawca", "od", "do")
+                    for field in (
+                        "temat",
+                        "nadawca",
+                        "od",
+                        "do",
+                    )
                 ).casefold()
             ]
 
         try:
-            self.assign_map = get_assignment_map([r["id"] for r in rows if r.get("id")])
+            self.assign_map = get_assignment_map(
+                [
+                    r["id"]
+                    for r in rows
+                    if r.get("id")
+                ]
+            )
         except Exception:
             self.assign_map = {}
-        try:
-            self.completed_map = get_completed_map([r["id"] for r in rows if r.get("id")])
-        except Exception:
-            logger.warning("Nie można wczytać statusu ukończenia wiadomości", exc_info=True)
-            self.completed_map = set()
-        by_id = {e["id"]: e for e in self.employees}
 
-        restore: Optional[QTreeWidgetItem] = None
-        all_items: List[QTreeWidgetItem] = []
-        to_select: List[QTreeWidgetItem] = []
+        try:
+            self.completed_map = get_completed_map(
+                [
+                    r["id"]
+                    for r in rows
+                    if r.get("id")
+                ]
+            )
+        except Exception:
+            logger.warning(
+                "Nie można wczytać statusu ukończenia wiadomości",
+                exc_info=True,
+            )
+            self.completed_map = set()
+
+        by_id = {
+            e["id"]: e
+            for e in self.employees
+        }
+
+        restore = None
+        all_items = []
+        to_select = []
+
         for r in rows:
+
             uid = r.get("uid")
             folder = r.get("server_name") or local_folder
-            is_unread = not bool(r.get("przeczytana"))
+
+            is_unread = not bool(
+                r.get("przeczytana")
+            )
+
             self.unread_map[uid] = is_unread
-            outgoing = roles.get(folder) in ("sent", "drafts")
-            full = (r.get("odbiorca") if outgoing else r.get("nadawca")) or ""
-            tags = [by_id[i] for i in self.assign_map.get(r.get("id"), []) if i in by_id]
-            subject = r.get("temat") or "(brak tematu)"
-            completed = r.get("id") in self.completed_map
+
+            outgoing = (
+                    roles.get(folder)
+                    in ("sent", "drafts")
+            )
+
+            full = (
+                       r.get("odbiorca")
+                       if outgoing
+                       else r.get("nadawca")
+                   ) or ""
+
+            tags = [
+                by_id[i]
+                for i in self.assign_map.get(
+                    r.get("id"),
+                    [],
+                )
+                if i in by_id
+            ]
+
+            subject = (
+                    r.get("temat")
+                    or "(brak tematu)"
+            )
+
+            completed = (
+                    r.get("id")
+                    in self.completed_map
+            )
+
             if completed:
                 subject = "✓ " + subject
+
             if tags:
-                tags.sort(key=lambda e: self.label_numbers.get(e["id"], 99))
-                tag_text = ", ".join(employee_tag(emp) for emp in tags)
-                subject = f"[{tag_text}] {subject}"
+                tags.sort(
+                    key=lambda e:
+                    self.label_numbers.get(
+                        e["id"],
+                        99,
+                    )
+                )
+
+                tag_text = ", ".join(
+                    employee_tag(emp)
+                    for emp in tags
+                )
+
+                subject = (
+                    f"[{tag_text}] {subject}"
+                )
+
             if r.get("has_attachments"):
-                subject = "\U0001F4CE " + subject
+                subject = "📎 " + subject
+
             item = QTreeWidgetItem([
                 subject,
                 display_names(full),
-                format_list_date(r.get("data") or ""),
+                format_list_date(
+                    r.get("data") or ""
+                ),
             ])
-            item.setToolTip(1, full)
+
+            item.setToolTip(
+                1,
+                full,
+            )
+
             if tags:
-                tooltip = "Pracownicy: " + ", ".join(employee_tag(e) for e in tags)
-                color = QColor(self._employee_color(tags[0]["id"]))
-                for column in range(item.columnCount()):
-                    item.setBackground(column, color.lighter(185))
-                    item.setForeground(column, QColor("#202020"))
+
+                tooltip = (
+                        "Pracownicy: "
+                        + ", ".join(
+                    employee_tag(e)
+                    for e in tags
+                )
+                )
+
+                color = QColor(
+                    self._employee_color(
+                        tags[0]["id"]
+                    )
+                )
+
+                for column in range(
+                        item.columnCount()
+                ):
+                    item.setBackground(
+                        column,
+                        color.lighter(185),
+                    )
+                    item.setForeground(
+                        column,
+                        QColor("#202020"),
+                    )
             else:
                 tooltip = ""
+
             if completed:
-                tooltip = f"{tooltip}\nZrobione" if tooltip else "Zrobione"
+
+                tooltip = (
+                    f"{tooltip}\nZrobione"
+                    if tooltip
+                    else "Zrobione"
+                )
+
                 if not tags:
-                    color = QColor(label_color(COMPLETED_LABEL_NUMBER))
-                    for column in range(item.columnCount()):
-                        item.setBackground(column, color.lighter(185))
-                        item.setForeground(column, QColor("#202020"))
+                    color = QColor(
+                        label_color(
+                            COMPLETED_LABEL_NUMBER
+                        )
+                    )
+
+                    for column in range(
+                            item.columnCount()
+                    ):
+                        item.setBackground(
+                            column,
+                            color.lighter(185),
+                        )
+                        item.setForeground(
+                            column,
+                            QColor("#202020"),
+                        )
+
             if tooltip:
-                item.setToolTip(0, tooltip)
-            item.setData(0, Qt.ItemDataRole.UserRole, uid)
-            item.setData(0, Qt.ItemDataRole.UserRole + 1, folder)
-            item.setData(0, ROLE_ROW_ID, r.get("id"))
-            self._style_mail_item(item, is_unread)
-            item.setData(0, ROLE_MSGID, (r.get("message_id") or "").strip())
-            item.setData(0, ROLE_REFS, r.get("refs") or "")
+                item.setToolTip(
+                    0,
+                    tooltip,
+                )
+
+            item.setData(
+                0,
+                Qt.ItemDataRole.UserRole,
+                uid,
+            )
+
+            item.setData(
+                0,
+                Qt.ItemDataRole.UserRole + 1,
+                folder,
+            )
+
+            item.setData(
+                0,
+                ROLE_ROW_ID,
+                r.get("id"),
+            )
+
+            self._style_mail_item(
+                item,
+                is_unread,
+            )
+
+            item.setData(
+                0,
+                ROLE_MSGID,
+                (
+                        r.get("message_id")
+                        or ""
+                ).strip(),
+            )
+
+            item.setData(
+                0,
+                ROLE_REFS,
+                r.get("refs") or "",
+            )
+
             all_items.append(item)
-            if selected_uid is not None and uid == selected_uid:
+
+            if (
+                    selected_uid is not None
+                    and uid == selected_uid
+            ):
                 restore = item
+
             if uid in selected_uids:
                 to_select.append(item)
 
-        if self.employee_filter or self.completed_filter:
-            grouped = [[it] for it in all_items]
+        if (
+                self.employee_filter
+                or self.completed_filter
+        ):
+            grouped = [
+                [it]
+                for it in all_items
+            ]
         else:
             grouped = group_threads(
-                [(it, it.data(0, ROLE_MSGID), it.data(0, ROLE_REFS)) for it in all_items]
+                [
+                    (
+                        it,
+                        it.data(0, ROLE_MSGID),
+                        it.data(0, ROLE_REFS),
+                    )
+                    for it in all_items
+                ]
             )
+
         for members in grouped:
+
             head = members[0]
+
             for child in members[1:]:
                 head.addChild(child)
+
             if len(members) > 1:
-                head.setText(0, f"{head.text(0)}  [{len(members)}]")
-                if any(self.unread_map.get(m.data(0, Qt.ItemDataRole.UserRole)) for m in members):
-                    self._style_mail_item(head, True)
-            self.mail_list.addTopLevelItem(head)
-            if any(m.parent() is head for m in to_select) or (restore is not None and restore.parent() is head):
+
+                head.setText(
+                    0,
+                    f"{head.text(0)} [{len(members)}]"
+                )
+
+                if any(
+                        self.unread_map.get(
+                            m.data(
+                                0,
+                                Qt.ItemDataRole.UserRole,
+                            )
+                        )
+                        for m in members
+                ):
+                    self._style_mail_item(
+                        head,
+                        True,
+                    )
+
+            self.mail_list.addTopLevelItem(
+                head
+            )
+
+            if (
+                    any(
+                        m.parent() is head
+                        for m in to_select
+                    )
+                    or (
+                    restore is not None
+                    and restore.parent()
+                    is head
+            )
+            ):
                 head.setExpanded(True)
+
         if restore is not None:
-            self.mail_list.setCurrentItem(restore)
+            self.mail_list.setCurrentItem(
+                restore
+            )
+
         for it in to_select:
             it.setSelected(True)
+
         if keep_view:
-            self.mail_list.verticalScrollBar().setValue(scroll)
+            self.mail_list.verticalScrollBar().setValue(
+                scroll
+            )
+
         self.mail_list.blockSignals(False)
+
         self._refresh_chips()
 
     # ------------------------------------------------------------------
@@ -1559,50 +1807,103 @@ class EmailPage(QWidget):
         self.current_uid = uid
         self.current_folder_local = local_folder
         self.cached_message = None
+
         row_id = item.data(0, ROLE_ROW_ID)
-        by_id = {employee["id"]: employee for employee in self.employees}
+
+        by_id = {
+            employee["id"]: employee
+            for employee in self.employees
+        }
+
         row_labels = sorted(
             self.assign_map.get(row_id, []),
             key=lambda employee_id: self.label_numbers.get(employee_id, 99),
         )
+
         self.current_message_labels = [
-            (employee_tag(by_id[employee_id]), self._employee_color(employee_id))
-            for employee_id in row_labels if employee_id in by_id
+            (
+                employee_tag(by_id[employee_id]),
+                self._employee_color(employee_id),
+            )
+            for employee_id in row_labels
+            if employee_id in by_id
         ]
+
         if row_id in self.completed_map:
             self.current_message_labels.append(
-                ("Zrobione", label_color(COMPLETED_LABEL_NUMBER))
+                (
+                    "Zrobione",
+                    label_color(COMPLETED_LABEL_NUMBER),
+                )
             )
+
         konto_id = self.current_account["id"]
+
         self._load_token += 1
         token = self._load_token
+
         self._clear_view()
 
         def show(msg) -> None:
+
             if not msg:
                 self.mail_view.setPlainText(
                     "Nie udało się pobrać treści wiadomości z serwera.\n"
                     "Sprawdź połączenie (Ustawienia → Konta e-mail → Testuj) i kliknij wiadomość ponownie."
                 )
                 return
+
             self._render_message(msg)
-            self._mark_opened_as_read(item, konto_id, local_folder, uid)
 
-        if email_cache.has_message(konto_id, local_folder, uid):
+            self._mark_opened_as_read(
+                item,
+                konto_id,
+                local_folder,
+                uid,
+            )
+
+        if email_cache.has_message(
+                konto_id,
+                local_folder,
+                uid,
+        ):
             try:
-                show(load_message(konto_id, local_folder, uid))
+                show(
+                    load_message(
+                        konto_id,
+                        local_folder,
+                        uid,
+                    )
+                )
                 return
-            except Exception:
-                logger.warning("Nie można odczytać wiadomości z cache", exc_info=True)
 
-        self.mail_view.setPlainText("Pobieranie wiadomości…")
+            except Exception:
+                logger.warning(
+                    "Nie można odczytać wiadomości z cache",
+                    exc_info=True,
+                )
+
+        self.mail_view.setPlainText(
+            "Pobieranie wiadomości…"
+        )
 
         def done(msg, err) -> None:
-            if token != self._load_token:
-                return  # użytkownik wybrał już inną wiadomość
-            show(None if err else msg)
 
-        self._run_async(lambda: load_message(konto_id, local_folder, uid), done)
+            if token != self._load_token:
+                return
+
+            show(
+                None if err else msg
+            )
+
+        self._run_async(
+            lambda: load_message(
+                konto_id,
+                local_folder,
+                uid,
+            ),
+            done,
+        )
 
     def _mark_opened_as_read(self, item: QTreeWidgetItem, konto_id: int, folder: str, uid: str) -> None:
         if not self.unread_map.get(uid, False):
@@ -1836,6 +2137,10 @@ class EmailPage(QWidget):
             return
 
         self._synced_accounts.clear()
+
+        self._sync_running = False
+        self._resync_pending = False
+
         self.start_background_sync()
 
     def refresh_all(self) -> None:
@@ -2010,12 +2315,35 @@ class EmailPage(QWidget):
         return refs
 
     def _after_change(self) -> None:
+
+        current_item = self.mail_list.currentItem()
+
+        current_row = 0
+
+        if current_item:
+            current_row = self.mail_list.indexOfTopLevelItem(current_item)
+
         self.current_uid = None
         self.cached_message = None
         self._chips_signature = None
-        self._clear_view()
+
         if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local)
+
+            count = self.mail_list.topLevelItemCount()
+
+            if count:
+
+                row = min(
+                    current_row,
+                    count - 1,
+                )
+
+                item = self.mail_list.topLevelItem(row)
+
+                if item:
+                    self.mail_list.setCurrentItem(item)
+
         self.load_folders_from_db()
 
     def _move_refs(self, refs, target: str, title: str) -> None:

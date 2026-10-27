@@ -377,6 +377,7 @@ def prefetch_messages(
     folder: str,
     uids: List[str],
     timeout: int = 30,
+    strict: bool = False,
 ) -> int:
     folder_id = get_folder_id(konto_id, folder)
     if not folder_id:
@@ -384,6 +385,8 @@ def prefetch_messages(
             "Brak folder_id: konto=%s, folder=%s",
             konto_id, folder,
         )
+        if strict:
+            raise RuntimeError(f"Brak folderu {folder} w bazie PostgreSQL")
         return 0
 
     # Usuń duplikaty UID-ów.
@@ -392,6 +395,7 @@ def prefetch_messages(
     fetched = 0
     skipped = 0
     failed = 0
+    session_error = None
 
     if total == 0:
         logger.info(
@@ -412,6 +416,8 @@ def prefetch_messages(
                     "%s — nie udało się wybrać folderu IMAP",
                     folder,
                 )
+                if strict:
+                    raise RuntimeError(f"Nie można otworzyć folderu IMAP: {folder}")
                 return 0
 
             for index, uid in enumerate(unique_uids, start=1):
@@ -421,7 +427,10 @@ def prefetch_messages(
                     )
 
                     if not row_id:
-                        skipped += 1
+                        if strict:
+                            failed += 1
+                        else:
+                            skipped += 1
                     elif load_raw_message(row_id):
                         # Pełna treść jest już w bazie.
                         skipped += 1
@@ -468,7 +477,8 @@ def prefetch_messages(
                         failed,
                     )
 
-    except Exception:
+    except Exception as exc:
+        session_error = exc
         logger.exception(
             "Błąd sesji IMAP: konto=%s, folder=%s",
             konto_id, folder,
@@ -478,6 +488,12 @@ def prefetch_messages(
         "%s — zakończono: zapisano %s, pominięto %s, błędy %s",
         folder, fetched, skipped, failed,
     )
+
+    if strict and (failed or session_error):
+        raise RuntimeError(
+            f"Nie udało się pobrać wszystkich treści z folderu {folder}: "
+            f"{failed} wiadomości z błędem"
+        ) from session_error
 
     return fetched
 
@@ -1221,6 +1237,8 @@ def _sync_and_prefetch_impl(
                     "%s — brak folder_id, pomijam treści",
                     folder,
                 )
+                if full_mailbox:
+                    raise RuntimeError(f"Brak folder_id dla {folder}")
                 continue
 
             rows = get_cached_messages(
@@ -1280,6 +1298,7 @@ def _sync_and_prefetch_impl(
                     konto_id,
                     folder,
                     batch,
+                    strict=full_mailbox,
                 )
 
                 total_bodies += saved

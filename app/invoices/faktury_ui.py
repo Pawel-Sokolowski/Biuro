@@ -138,7 +138,13 @@ class FakturyPage(QWidget):
         self.firma_combo.addItem("Wszystkie firmy", None)
         conn = get_conn()
         try:
-            rows = conn.execute("SELECT id, nazwa FROM firmy ORDER BY nazwa").fetchall()
+            rows = conn.execute(
+                """
+                SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa)
+                FROM firmy
+                ORDER BY LOWER(COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa)), id
+                """
+            ).fetchall()
         finally:
             conn.close()
         for row in rows:

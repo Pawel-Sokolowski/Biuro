@@ -703,7 +703,8 @@ def list_invoices(
             return []
         where.append(f"f.firma_id IN ({','.join('%s' for _ in ids)})")
         params.extend(ids)
-    order = "f.data_eksportu DESC, f.id DESC" if wystawione else "lower(COALESCE(c.nazwa, k.nazwa, f.nabywca_pelna)), f.id"
+    # Sortowanie A-Z po nazwie skróconej w obu zakładkach (robocze i wystawione).
+    order = "lower(nazwa_skrocona) ASC, f.id ASC"
     conn = get_conn()
     try:
         rows = conn.execute(f"{INVOICE_LIST_SQL} WHERE {' AND '.join(where)} ORDER BY {order}", params).fetchall()

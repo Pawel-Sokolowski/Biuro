@@ -183,13 +183,15 @@ def export_saldeo_xlsx(
                         adres_koresp_ulica, adres_koresp_budynek, adres_koresp_lokal,
                         adres_koresp_kod_pocztowy, adres_koresp_miasto,
                         adres_zam_ulica, adres_zam_budynek, adres_zam_lokal,
-                        adres_zam_kod_pocztowy, adres_zam_miasto WHERE id = %s
+                        adres_zam_kod_pocztowy, adres_zam_miasto
+                    FROM firmy WHERE id = %s
                 """, (firma_id,))
                 row = cur.fetchone()
                 if row:
                     fr = dict(row)
             except Exception:
-                fr = {}
+                logger.exception("Błąd odczytu danych firmy %s podczas eksportu Saldeo", firma_id)
+                raise
 
         firm_name = fr.get("nazwa") or _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
         nazwa_pelna = _get_field(fv, "nabywca_pelna", "") or firm_name
@@ -356,7 +358,7 @@ def export_saldeo_xlsx(
                     poz.get("zamowienie_data", ""),
                     poz.get("umowa_nr", ""),
                     poz.get("umowa_data", ""),
-                    poz.get("kategoria", kategoria_domyslna),
+                    "",  # Kategoria Saldeo: pozostaw puste pole
                     _get_field(fv, "opis_zdarzenia", "") or (poz.get("opis", "") if poz.get("opis", "") != nazwa_towaru else ""),
                     poz.get("rejestr", "") or _get_field(fv, "rejestr", ""),
                 ]

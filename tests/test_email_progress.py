@@ -67,6 +67,44 @@ class ProgressTests(DbTestCase):
             email_sync.sync_and_prefetch(self.konto, ["INBOX.Sent", "INBOX"])
         self.assertEqual(synced, ["INBOX.Sent", "INBOX"])
 
+    def test_full_mailbox_only_when_requested(self):
+        """Pełna synchronizacja pobiera wszystkie foldery bez ograniczenia daty."""
+        history_windows = []
+
+        def fetch(konto_id, folder, **kwargs):
+            history_windows.append((folder, kwargs["history_days"]))
+            return [header(1), header(2)]
+
+        with mock.patch.object(email_sync, "list_folders_from_imap_and_store", self.fake_list), \
+             mock.patch.object(email_sync, "fetch_headers", side_effect=fetch), \
+             mock.patch.object(email_sync, "backfill_refs", return_value=0), \
+             mock.patch.object(email_sync, "prefetch_messages", return_value=2) as prefetch:
+            email_sync.sync_and_prefetch(self.konto, ["INBOX"], full_mailbox=True)
+
+        self.assertEqual(
+            {name for name, _ in history_windows},
+            {"INBOX", "INBOX.Sent", "INBOX.Archiwum"},
+        )
+        self.assertTrue(all(days is None for _, days in history_windows))
+        self.assertEqual(prefetch.call_count, 3)
+
+    def test_ordinary_sync_only_recent_messages_and_selected_folder(self):
+        self.fake_list(self.konto)
+        history_windows = []
+
+        def fetch(konto_id, folder, **kwargs):
+            history_windows.append(kwargs["history_days"])
+            return [header(uid) for uid in range(1, 26)]
+
+        with mock.patch.object(email_sync, "fetch_headers", side_effect=fetch), \
+             mock.patch.object(email_sync, "backfill_refs", return_value=0), \
+             mock.patch.object(email_sync, "prefetch_messages", return_value=0) as prefetch:
+            email_sync.sync_and_prefetch(self.konto, ["INBOX"])
+
+        self.assertEqual(history_windows, [email_sync.EMAIL_HISTORY_DAYS])
+        self.assertEqual(prefetch.call_count, 1)
+        self.assertEqual(len(prefetch.call_args.args[2]), email_sync.INCREMENTAL_PREFETCH_LIMIT)
+
     def test_prepopulated_db_skips_progress(self):
         self.fake_list(self.konto)
         from app.email.email_storage import save_message_headers

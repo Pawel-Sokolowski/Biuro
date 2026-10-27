@@ -1,5 +1,8 @@
 ﻿# app/admin/settings/email_settings.py
 
+import logging
+import threading
+
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
@@ -7,7 +10,11 @@ from PyQt6.QtWidgets import (
     QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
+
+from app.email.email_sync import sync_and_prefetch
+
+logger = logging.getLogger(__name__)
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.email.email_connection import (
@@ -169,11 +176,17 @@ class EmployeeAccessDialog(QDialog):
 
 
 class EmailSettings(QWidget):
-    """Konta e-mail: dodawanie, edycja, test połączenia i dostęp pracowników."""
+    """Konta e-mail: konfiguracja i ręczne pełne pobieranie skrzynki."""
+
+    full_sync_progress = pyqtSignal(object)
+    full_sync_finished = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.logic = GlobalSettingsLogic()
+        self._full_sync_running = False
+        self.full_sync_progress.connect(self._on_full_sync_progress)
+        self.full_sync_finished.connect(self._on_full_sync_finished)
 
         layout = QVBoxLayout(self)
 
@@ -208,6 +221,13 @@ class EmailSettings(QWidget):
             btn_row.addWidget(btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+        self.full_sync_button = QPushButton("Synchronizuj pełną skrzynkę (wszystkie foldery)")
+        self.full_sync_button.clicked.connect(self._sync_full_mailbox)
+        layout.addWidget(self.full_sync_button)
+        self.full_sync_status = QLabel("Pełna synchronizacja uruchamiana tylko ręcznie. Automatycznie pobierane są nowe wiadomości.")
+        self.full_sync_status.setWordWrap(True)
+        layout.addWidget(self.full_sync_status)
 
         self._refresh()
 
@@ -275,6 +295,62 @@ class EmailSettings(QWidget):
             ]
             for col, val in enumerate(values):
                 self.table.setItem(row, col, QTableWidgetItem(val))
+
+    def _sync_full_mailbox(self) -> None:
+        if self._full_sync_running:
+            return
+        account_id = self._selected_id()
+        if account_id is None:
+            return
+        if QMessageBox.question(
+            self,
+            "Pełna synchronizacja poczty",
+            "Pobrać wszystkie foldery i wszystkie wiadomości z całej historii "
+            "wybranego konta IMAP do PostgreSQL? Może to być czasochłonne.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        self._full_sync_running = True
+        self.full_sync_button.setEnabled(False)
+        self.full_sync_status.setText(f"Rozpoczynam pełną synchronizację konta {account_id}...")
+
+        def work():
+            error = None
+            try:
+                sync_and_prefetch(
+                    account_id, ["INBOX"], full_mailbox=True,
+                    on_progress=lambda done, total, folder, headers: self.full_sync_progress.emit(
+                        (done, total, folder, headers)
+                    ),
+                )
+            except Exception as exc:
+                logger.exception("Błąd pełnej synchronizacji konta %s", account_id)
+                error = str(exc)
+            try:
+                self.full_sync_finished.emit((account_id, error))
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_full_sync_progress(self, progress) -> None:
+        done, total, folder, headers = progress
+        self.full_sync_status.setText(
+            f"Pełna synchronizacja: folder {done}/{total}, "
+            f"zapisano {headers} nagłówków. {folder or ''}"
+        )
+
+    def _on_full_sync_finished(self, result) -> None:
+        account_id, error = result
+        self._full_sync_running = False
+        self.full_sync_button.setEnabled(True)
+        if error:
+            self.full_sync_status.setText(f"Synchronizacja konta {account_id}: błąd — {error}")
+            QMessageBox.warning(self, "Synchronizacja", f"Nie udało się ukończyć synchronizacji:\\n{error}")
+        else:
+            self.full_sync_status.setText(f"Pełna synchronizacja konta {account_id} zakończona.")
+            QMessageBox.information(self, "Synchronizacja", "Zakończono pobieranie całej skrzynki do PostgreSQL.")
 
     def _selected_id(self):
         row = self.table.currentRow()

@@ -321,7 +321,7 @@ class FakturyPage(QWidget):
         for inv in invoices:
             row = self.draft_table.rowCount()
             self.draft_table.insertRow(row)
-            values = [inv["id"], _kind_label(inv), inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+            values = [inv["id"], _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
                       f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                       inv["data_wystawienia"], inv["termin_platnosci"]]
             for column, value in enumerate(values):
@@ -332,7 +332,7 @@ class FakturyPage(QWidget):
         for inv in invoices:
             row = self.issued_table.rowCount()
             self.issued_table.insertRow(row)
-            values = [inv["id"], _kind_label(inv), inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+            values = [inv["id"], _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
                       f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                       inv["data_eksportu"], inv["ksef_numer"]]
             for column, value in enumerate(values):

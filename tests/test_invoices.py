@@ -81,6 +81,30 @@ class InvoiceLifecycleTests(DbTestCase):
         create_correction(self.invoice_id)
         self.assertEqual(get_invoice_for_company_month(self.firma, "2026-10")["id"], self.invoice_id)
 
+    def test_drafts_and_issued_sorted_by_company_short_name(self):
+        from app.db.dao_conn import get_conn
+
+        firma_a = self.make_company("Firma Pełna Alfa", nazwa_skrocona="Alfa")
+        firma_b = self.make_company("Firma Pełna Beta", nazwa_skrocona="beta")
+        for firma in (firma_a, firma_b):
+            create_or_update_invoice(firma, "2026-10", POSITIONS, 520.0, 639.6)
+
+        conn = get_conn()
+        try:
+            conn.execute(
+                "UPDATE firmy SET nazwa_skrocona = %s WHERE id = %s",
+                ("Zulu", self.firma),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        drafts = list_invoices(1, False, "2026-10")
+        self.assertEqual([r["nazwa_skrocona"] for r in drafts], ["Alfa", "beta", "Zulu"])
+        mark_exported([r["id"] for r in drafts], 1)
+        issued = list_invoices(1, True)
+        self.assertEqual([r["nazwa_skrocona"] for r in issued], ["Alfa", "beta", "Zulu"])
+
     def test_ksef_number_round_trip(self):
         set_ksef_number(self.invoice_id, " 1234567890-20261015-ABCDEF-01 ")
         self.assertEqual(get_invoice_by_id(self.invoice_id)["ksef_numer"], "1234567890-20261015-ABCDEF-01")

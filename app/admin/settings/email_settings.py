@@ -347,7 +347,7 @@ class EmailSettings(QWidget):
         self.full_sync_button.setEnabled(True)
         if error:
             self.full_sync_status.setText(f"Synchronizacja konta {account_id}: błąd — {error}")
-            QMessageBox.warning(self, "Synchronizacja", f"Nie udało się ukończyć synchronizacji:\\n{error}")
+            QMessageBox.warning(self, "Synchronizacja", f"Nie udało się ukończyć synchronizacji:\n{error}")
         else:
             self.full_sync_status.setText(f"Pełna synchronizacja konta {account_id} zakończona.")
             QMessageBox.information(self, "Synchronizacja", "Zakończono pobieranie całej skrzynki do PostgreSQL.")

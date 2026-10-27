@@ -397,7 +397,6 @@ class EmailPage(QWidget):
         self.unread_map: Dict[str, bool] = {}
         self._sync_running = False
         self._resync_pending = False
-        self._synced_accounts: set = set()
         self._tree_signature = None
         self.employee_filter: Optional[int] = None
         self.completed_filter = False
@@ -490,30 +489,16 @@ class EmailPage(QWidget):
             if account["id"] == self.current_account["id"] and self.current_folder_local \
                     and self.current_folder_local not in folders:
                 folders.insert(0, self.current_folder_local)
-            first = account["id"] not in self._synced_accounts
-            self._synced_accounts.add(account["id"])
-            initial = first and needs_initial_sync(account["id"])
-            jobs.append((account["id"], folders, first, initial))
+            jobs.append((account["id"], folders))
         jobs.sort(key=lambda j: j[0] != self.current_account["id"])
-        labels = {a["id"]: a.get("email", "") for a in self.accounts}
-
         def work() -> None:
             ok = True
-            for konto_id, folders, first, initial in jobs:
+            for konto_id, folders in jobs:
                 try:
-                    on_progress = None
-                    if initial:
-                        label = labels.get(konto_id, "")
-                        on_progress = lambda d, t, f, n, label=label: self.sync_progress.emit(
-                            (label, d, t, f, n)
-                        )
                     sync_and_prefetch(
-                        konto_id, folders, first_run=first,
+                        konto_id, folders,
                         on_headers=lambda: self.headers_ready.emit(),
-                        on_progress=on_progress, all_folders=initial,
                     )
-                    for name in folders:
-                        prefetch_recent(konto_id, name, PREFETCH_COUNT)
                 except Exception:
                     logger.warning("Synchronizacja konta %s nie powiodła się", konto_id, exc_info=True)
                     ok = False
@@ -2172,11 +2157,7 @@ class EmailPage(QWidget):
             QMessageBox.warning(self, "Synchronizacja", f"Nie można połączyć się z serwerem:\n{msg}")
             return
 
-        self._synced_accounts.clear()
-
-        self._sync_running = False
-        self._resync_pending = False
-
+        # Nie uruchamiaj drugiego wątku na już trwającej synchronizacji.
         self.start_background_sync()
 
     def refresh_all(self) -> None:

@@ -54,6 +54,17 @@ from app.utils.crypto import decrypt_password
 logger = logging.getLogger(__name__)
 
 HEADER_BATCH = 100
+INCREMENTAL_PREFETCH_LIMIT = 20
+
+# Synchronizacje tego samego konta nie mogą pobierać równocześnie tych samych wiadomości.
+_ACCOUNT_SYNC_LOCKS = {}
+_ACCOUNT_SYNC_LOCKS_MUTEX = threading.Lock()
+
+
+def _account_sync_lock(konto_id: int) -> threading.Lock:
+    with _ACCOUNT_SYNC_LOCKS_MUTEX:
+        return _ACCOUNT_SYNC_LOCKS.setdefault(konto_id, threading.Lock())
+
 _IMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
@@ -1006,8 +1017,9 @@ def sync_folder(
     konto_id: int,
     folder: str,
     full_sync: bool = True,
+    entire_mailbox: bool = False,
 ) -> int:
-    history_days = 730 if full_sync else EMAIL_HISTORY_DAYS
+    history_days = None if entire_mailbox else (730 if full_sync else EMAIL_HISTORY_DAYS)
 
     logger.warning(
         "SYNC START konto=%s folder=%s full_sync=%s history_days=%s",
@@ -1029,7 +1041,7 @@ def sync_folder(
     flags: Dict[str, set] = {}
     known = set()
 
-    if not full_sync:
+    if not full_sync and not entire_mailbox:
         known = get_known_uids(konto_id, folder_id)
 
     logger.warning(
@@ -1091,9 +1103,10 @@ def sync_folder(
 
     if "all" in flags:
         cutoff = (
-            datetime.now()
-            - timedelta(days=history_days - 7)
-        ).strftime("%Y-%m-%d")
+            "0001-01-01"
+            if history_days is None
+            else (datetime.now() - timedelta(days=history_days - 7)).strftime("%Y-%m-%d")
+        )
 
         apply_server_state(
             konto_id,
@@ -1119,13 +1132,14 @@ def needs_initial_sync(konto_id: int) -> bool:
     """Pierwsze otwarcie konta: brak folderów lub nagłówków w bazie (gotowa baza = już zsynchronizowane)."""
     return not account_has_headers(konto_id)
 
-def sync_and_prefetch(
+def _sync_and_prefetch_impl(
     konto_id: int,
     folders: List[str],
     first_run: bool = False,
     on_headers=None,
     on_progress=None,
     all_folders: bool = False,
+    full_mailbox: bool = False,
 ) -> int:
     """
     Synchronizuje nagłówki oraz pełne treści wiadomości.
@@ -1134,18 +1148,24 @@ def sync_and_prefetch(
     - synchronizuje wszystkie wybieralne foldery,
     - ogranicza wiadomości do ostatnich 730 dni.
 
-    W pozostałych przypadkach synchronizuje przekazane foldery
-    według standardowego EMAIL_HISTORY_DAYS.
+    full_mailbox=True: wszystkie foldery, cała historia IMAP i wszystkie treści
+    zapisywane do PostgreSQL (tylko na żądanie z ustawień).
+
+    Zwykła synchronizacja: wybrane foldery, standardowy zakres nagłówków
+    i tylko ostatnie INCREMENTAL_PREFETCH_LIMIT pełnych wiadomości.
     """
 
     if (
         first_run
         or all_folders
+        or full_mailbox
         or not get_folders_for_account(konto_id)
     ):
-        list_folders_from_imap_and_store(konto_id)
+        refreshed = list_folders_from_imap_and_store(konto_id)
+        if full_mailbox and not refreshed:
+            raise RuntimeError("Nie udało się odczytać listy folderów z serwera IMAP.")
 
-    if first_run or all_folders:
+    if first_run or all_folders or full_mailbox:
         wanted = list(folders)
 
         for name in selectable_folder_names(konto_id):
@@ -1160,6 +1180,7 @@ def sync_and_prefetch(
     total = len(folders)
     total_headers = 0
     total_bodies = 0
+    failed_folders = []
 
     logger.warning(
         "SYNC: konto=%s, foldery do przetworzenia=%s",
@@ -1183,7 +1204,8 @@ def sync_and_prefetch(
             count = sync_folder(
                 konto_id,
                 folder,
-                full_sync=(first_run or all_folders),
+                full_sync=(first_run or all_folders or full_mailbox),
+                entire_mailbox=full_mailbox,
             ) or 0
 
             total_headers += count
@@ -1209,7 +1231,7 @@ def sync_and_prefetch(
             # get_cached_messages powinno zwracać rekordy
             # uporządkowane od najnowszych. Odfiltruj rekordy
             # starsze niż 730 dni podczas pełnej synchronizacji.
-            if first_run or all_folders:
+            if (first_run or all_folders) and not full_mailbox:
                 cutoff = datetime.now() - timedelta(days=730)
 
                 def within_last_two_years(row):
@@ -1235,6 +1257,8 @@ def sync_and_prefetch(
                     return value >= cutoff
 
                 rows = [row for row in rows if within_last_two_years(row)]
+            elif not full_mailbox:
+                rows = rows[:INCREMENTAL_PREFETCH_LIMIT]
 
             uids = [
                 str(row["uid"])
@@ -1279,6 +1303,8 @@ def sync_and_prefetch(
                 "Błąd synchronizacji folderu %s",
                 folder,
             )
+            if full_mailbox:
+                failed_folders.append(folder)
 
         if on_progress:
             on_progress(
@@ -1303,7 +1329,30 @@ def sync_and_prefetch(
         total_bodies,
     )
 
+    if failed_folders:
+        raise RuntimeError(
+            "Błędy pełnej synchronizacji folderów: " + ", ".join(failed_folders[:15])
+        )
     return total_headers
+
+
+def sync_and_prefetch(
+    konto_id: int,
+    folders: List[str],
+    first_run: bool = False,
+    on_headers=None,
+    on_progress=None,
+    all_folders: bool = False,
+    full_mailbox: bool = False,
+) -> int:
+    # Pełne i automatyczne synchronizacje jednego konta wykonują się kolejno.
+    with _account_sync_lock(konto_id):
+        return _sync_and_prefetch_impl(
+            konto_id, folders, first_run=first_run, on_headers=on_headers,
+            on_progress=on_progress, all_folders=all_folders,
+            full_mailbox=full_mailbox,
+        )
+
 
 def _set_seen_remote(
     konto_id: int,

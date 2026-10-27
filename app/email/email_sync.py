@@ -1205,8 +1205,8 @@ def _sync_and_prefetch_impl(
     )
 
     for index, folder in enumerate(folders):
-        if on_progress:
-            on_progress(index, total, folder, total_headers)
+        if on_progress and index == 0:
+            on_progress(0, total, folder, total_headers)
 
         logger.warning(
             "=== FOLDER %s/%s: %s ===",
@@ -1329,7 +1329,7 @@ def _sync_and_prefetch_impl(
             on_progress(
                 index + 1,
                 total,
-                folder,
+                folders[index + 1] if index + 1 < total else "",
                 total_headers,
             )
 

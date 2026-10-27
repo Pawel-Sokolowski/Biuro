@@ -64,9 +64,7 @@ from app.email.email_sync import (
     mark_unread_remote,
     create_folder,
     move_emails,
-    prefetch_recent,
     rename_folder,
-    needs_initial_sync,
     sync_and_prefetch,
 )
 
@@ -100,7 +98,6 @@ MAX_NUMBER_KEYS = 7
 ROLE_MSGID = Qt.ItemDataRole.UserRole + 20
 ROLE_REFS = Qt.ItemDataRole.UserRole + 21
 DEFAULT_COLUMN_WIDTHS = [430, 220, 180]
-PREFETCH_COUNT = 20
 _SUBJECT_PREFIX = re.compile(r"^\s*(re|odp|fw|fwd|pd|wg|aw|przekaż)\s*:\s*", re.IGNORECASE)
 
 

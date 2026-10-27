@@ -63,7 +63,7 @@ class ProgressTests(DbTestCase):
     def test_incremental_only_listed_folders(self):
         self.fake_list(self.konto)
         synced = []
-        with mock.patch.object(email_sync, "sync_folder", lambda k, f: synced.append(f) or 0):
+        with mock.patch.object(email_sync, "sync_folder", lambda k, f, **kwargs: synced.append(f) or 0):
             email_sync.sync_and_prefetch(self.konto, ["INBOX.Sent", "INBOX"])
         self.assertEqual(synced, ["INBOX.Sent", "INBOX"])
 

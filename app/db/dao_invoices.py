@@ -704,7 +704,11 @@ def list_invoices(
         where.append(f"f.firma_id IN ({','.join('%s' for _ in ids)})")
         params.extend(ids)
     # Sortowanie A-Z po nazwie skróconej w obu zakładkach (robocze i wystawione).
-    order = "lower(nazwa_skrocona) ASC, f.id ASC"
+    order = (
+        "LOWER(COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), "
+        "NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), "
+        "NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?')) ASC, f.id ASC"
+    )
     conn = get_conn()
     try:
         rows = conn.execute(f"{INVOICE_LIST_SQL} WHERE {' AND '.join(where)} ORDER BY {order}", params).fetchall()

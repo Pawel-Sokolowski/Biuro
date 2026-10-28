@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from email.utils import getaddresses
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
@@ -158,7 +159,16 @@ def rule_matches(rule: Dict[str, Any], header: Dict[str, Any]) -> bool:
         needle = _norm(rule.get(field)).strip()
         if needle:
             used = True
-            if needle not in _norm(haystack):
+            # Dla pełnych adresów w polach Od/Do wymagamy dokładnego
+            # dopasowania adresu, nie fragmentu nazwy ani innego maila.
+            if field in ("od", "do") and needle.count("@") == 1 and " " not in needle:
+                addresses = {
+                    email.strip().casefold()
+                    for _, email in getaddresses([str(haystack or "")])
+                }
+                if needle not in addresses:
+                    return False
+            elif needle not in _norm(haystack):
                 return False
     return used
 
@@ -223,17 +233,24 @@ def apply_rules(konto_id: int, folder: str, headers: List[Dict[str, Any]]) -> in
     return moved
 
 
-def apply_rules_to_folder(konto_id: int, folder: str) -> int:
-    """Stosuje reguĹ‚y do wszystkich wiadomoĹ›ci folderu zapisanych lokalnie."""
+def apply_rules_to_folder(konto_id: int, folder: str, history_days: Optional[int] = None) -> int:
+    """Stosuje reguły do folderu; podczas importu tylko zadanego okresu."""
+    from datetime import datetime, timedelta
+
     conn = get_conn()
     try:
+        cutoff = (
+            (datetime.now() - timedelta(days=history_days)).strftime("%Y-%m-%d")
+            if history_days is not None else None
+        )
         rows = conn.execute(
             """
             SELECT w.uid, w.nadawca, w.odbiorca, w.temat, w.przeczytana
             FROM wiadomosci_email w JOIN foldery_email f ON f.id = w.folder_id
             WHERE w.konto_id = %s AND f.server_name = %s AND COALESCE(w.usunieta, 0) = 0
+              AND (%s IS NULL OR w.data >= %s)
             """,
-            (konto_id, folder),
+            (konto_id, folder, cutoff, cutoff),
         ).fetchall()
     finally:
         conn.close()

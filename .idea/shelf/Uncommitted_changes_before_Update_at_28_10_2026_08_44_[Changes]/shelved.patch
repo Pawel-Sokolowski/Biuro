@@ -1,0 +1,25 @@
+Index: .idea/Biuro.iml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<module type=\"PYTHON_MODULE\" version=\"4\">\r\n  <component name=\"NewModuleRootManager\">\r\n    <content url=\"file://$MODULE_DIR$\" />\r\n    <orderEntry type=\"jdk\" jdkName=\"Python 3.11 (PyCharmMiscProject)\" jdkType=\"Python SDK\" />\r\n    <orderEntry type=\"sourceFolder\" forTests=\"false\" />\r\n  </component>\r\n</module>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/Biuro.iml b/.idea/Biuro.iml
+--- a/.idea/Biuro.iml	(revision 25ac4be587b0e7d8cd1d4195a3fd14188ea43a65)
++++ b/.idea/Biuro.iml	(date 1793173328031)
+@@ -1,7 +1,13 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <module type="PYTHON_MODULE" version="4">
+   <component name="NewModuleRootManager">
+-    <content url="file://$MODULE_DIR$" />
++    <content url="file://$MODULE_DIR$">
++      <excludeFolder url="file://$MODULE_DIR$/build" />
++      <excludeFolder url="file://$MODULE_DIR$/dist" />
++      <excludeFolder url="file://$MODULE_DIR$/email_cache" />
++      <excludeFolder url="file://$MODULE_DIR$/installer/output" />
++      <excludeFolder url="file://$MODULE_DIR$/logs" />
++    </content>
+     <orderEntry type="jdk" jdkName="Python 3.11 (PyCharmMiscProject)" jdkType="Python SDK" />
+     <orderEntry type="sourceFolder" forTests="false" />
+   </component>

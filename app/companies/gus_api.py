@@ -125,13 +125,29 @@ def parse_legal_report(xml_text: str) -> Dict[str, str]:
         return {}
 
     registry = _text(node, "praw_rodzajRejestruEwidencji_Nazwa")
+    registry_organ = _text(node, "praw_organRejestrowy_Nazwa")
     number = _text(node, "praw_numerWrejestrzeEwidencji")
     result = {
         "gus_rodzaj_rejestru": registry,
+        "gus_numer_w_rejestrze": number,
+        "gus_organ_rejestrowy": registry_organ,
         "gus_forma_prawna": _text(node, "praw_szczegolnaFormaPrawna_Nazwa"),
     }
-    # GUS przechowuje też numery innych rejestrów – nie są numerami KRS.
-    if "KRAJOWY REJESTR SĄDOWY" in registry.upper() and re.fullmatch(r"\d{1,10}", number):
+
+    # W GUS pole "rodzaj rejestru" nie zawsze ma dosłownie nazwę KRS.
+    # "REJESTR PRZEDSIĘBIORCÓW" to część KRS. Nie wolno jednak przyjąć
+    # numeru dowolnej ewidencji (np. CEIDG) jako numeru KRS.
+    registry_upper = " ".join(registry.upper().split())
+    organ_upper = " ".join(registry_organ.upper().split())
+    is_krs_register = (
+        "KRAJOWY REJESTR SĄDOWY" in registry_upper
+        or "REJESTR PRZEDSIĘBIORCÓW" in registry_upper
+        or (
+            "REJESTR STOWARZYSZEŃ" in registry_upper
+            and "KRAJOWEGO REJESTRU SĄDOWEGO" in organ_upper
+        )
+    )
+    if is_krs_register and re.fullmatch(r"\d{1,10}", number):
         result["krs"] = number.zfill(10)
     return result
 
@@ -162,10 +178,9 @@ def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
         )
         data = parse_search_result(_result(search, "DaneSzukajPodmiotyResult"))
         if data and data.get("typ") == "P" and data.get("regon"):
-            # BIR11OsPrawna: nowszy raport. PublDaneRaportPrawna: starszy,
-            # nadal spotykany w integracjach. Próbujemy drugi, gdy pierwszy
-            # nie dostarczy numeru KRS lub przy błędzie raportu.
-            for report_name in ("BIR11OsPrawna", "PublDaneRaportPrawna"):
+            # BIR1.2 jest bieżącą wersją raportu, BIR1.1 i starszy
+            # wariant pozostają jako fallback dla zgodności.
+            for report_name in ("BIR12OsPrawna", "BIR11OsPrawna", "PublDaneRaportPrawna"):
                 try:
                     report = _call(
                         url, "DanePobierzPelnyRaport",

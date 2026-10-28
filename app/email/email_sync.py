@@ -1156,6 +1156,8 @@ def _sync_and_prefetch_impl(
     on_progress=None,
     all_folders: bool = False,
     full_mailbox: bool = False,
+    learn_filters: bool = False,
+    on_filters=None,
 ) -> int:
     """
     Synchronizuje nagłówki oraz pełne treści wiadomości.
@@ -1333,6 +1335,24 @@ def _sync_and_prefetch_impl(
                 total_headers,
             )
 
+    if learn_filters and (first_run or all_folders or full_mailbox) and not failed_folders:
+        try:
+            from app.email.email_auto_filters import learn_filters_from_mail_history
+            from app.email.email_rules import apply_rules_to_folder
+
+            summary = learn_filters_from_mail_history(konto_id, days=730)
+            # Przenieś dopasowane wiadomości z INBOX dopiero PO pobraniu
+            # treści i zapisaniu folderów; nie ruszaj Sent/Archive/Spam.
+            summary["moved"] = apply_rules_to_folder(
+                konto_id, "INBOX", history_days=730
+            )
+            logger.info("Automatyczne filtry po synchronizacji: %s", summary)
+            if on_filters:
+                on_filters(summary)
+        except Exception:
+            # Błąd automatyzacji filtrów nie unieważnia pobranej poczty.
+            logger.exception("Nie udało się wywnioskować filtrów po pełnej synchronizacji")
+
     try:
         from app.utils.saldeo_status import apply_saldeo_emails
         apply_saldeo_emails()
@@ -1363,6 +1383,8 @@ def sync_and_prefetch(
     on_progress=None,
     all_folders: bool = False,
     full_mailbox: bool = False,
+    learn_filters: bool = False,
+    on_filters=None,
 ) -> int:
     # Pełne i automatyczne synchronizacje jednego konta wykonują się kolejno.
     with _account_sync_lock(konto_id):
@@ -1370,6 +1392,8 @@ def sync_and_prefetch(
             konto_id, folders, first_run=first_run, on_headers=on_headers,
             on_progress=on_progress, all_folders=all_folders,
             full_mailbox=full_mailbox,
+            learn_filters=learn_filters,
+            on_filters=on_filters,
         )
 
 

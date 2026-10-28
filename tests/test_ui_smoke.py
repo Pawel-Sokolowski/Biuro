@@ -108,6 +108,58 @@ class UiSmokeTests(DbTestCase):
             form._on_save()
         self.assertTrue(accept.called)
 
+    def test_ceidg_addresses_survive_save_and_reopening_company_form(self):
+        from app.companies.company_form import CompanyForm
+        from app.companies.company_logic import ceidg_apply
+        from app.db.dao_companies import get_company
+
+        form = CompanyForm(self.firma)
+        form.inputs["pesel"].setText("44051401359")
+        ceidg_apply(form, {
+            "nazwa": "Alfa",
+            "adresDzialalnosci": {
+                "miasto": "Szczecin",
+                "kodPocztowy": "70-001",
+                "ulica": "Kwiatowa",
+                "budynek": "4",
+                "lokal": "12",
+            },
+            "adresKorespondencyjny": {
+                "miasto": "Police",
+                "kodPocztowy": "72-010",
+                "ulica": "Szkolna",
+            },
+        })
+        form.inputs["zam_miasto"].setText("Gryfino")
+        form.inputs["zam_kod"].setText("74-100")
+        form._on_save()
+
+        fields = {
+            "dz_miasto": ("miasto", "Szczecin"),
+            "dz_kod": ("kod_pocztowy", "70-001"),
+            "dz_ulica": ("ulica", "Kwiatowa"),
+            "dz_budynek": ("adres_budynek", "4"),
+            "dz_lokal": ("adres_lokal", "12"),
+            "ko_miasto": ("adres_koresp_miasto", "Police"),
+            "ko_kod": ("adres_koresp_kod_pocztowy", "72-010"),
+            "ko_ulica": ("adres_koresp_ulica", "Szkolna"),
+            "zam_miasto": ("adres_zam_miasto", "Gryfino"),
+            "zam_kod": ("adres_zam_kod_pocztowy", "74-100"),
+        }
+        stored = get_company(self.firma)
+        for db_key, expected in fields.values():
+            self.assertEqual(stored[db_key], expected)
+
+        reopened = CompanyForm(self.firma)
+        for form_key, (_, expected) in fields.items():
+            self.assertEqual(reopened.inputs[form_key].text(), expected)
+
+        # Ponowny zapis bez zmian nie może wyczyścić adresów.
+        reopened._on_save()
+        stored_again = get_company(self.firma)
+        for db_key, expected in fields.values():
+            self.assertEqual(stored_again[db_key], expected)
+
     def test_month_picker_switches_year_and_month(self):
         from app.monthly_view.month_picker import MonthPicker
         from app.reports.import_dao import _prev_month

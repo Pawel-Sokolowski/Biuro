@@ -86,6 +86,30 @@ def build_missing_registry_updates(
     incoming.setdefault("data_rozpoczecia_dg", incoming.get("data_rozpoczecia"))
     incoming.setdefault("kody_pkd", incoming.get("pkd"))
 
+    # Nie składamy adresu z dwóch sprzecznych źródeł. Gdy np. obecna
+    # ulica to "Stara", a rejestr zwraca "Nowa 23/1", nie wolno dopisać
+    # budynku 23 do ulicy "Stara". Konflikt w kluczowych polach blokuje
+    # automatyczne uzupełnianie całego tego adresu.
+    address_suffixes = ("miasto", "kod", "ulica", "budynek", "lokal",
+                        "wojewodztwo", "powiat", "gmina", "kraj")
+    for prefix in ("dz", "ko"):
+        existing_columns = {
+            source.rsplit("_", 1)[-1]: column
+            for source, column in _REGISTRY_TEXT_FIELDS.items()
+            if source.startswith(prefix + "_")
+        }
+        def normalized(value: Any) -> str:
+            return " ".join(str(value or "").casefold().split()).strip(" .")
+        conflicting = any(
+            not _missing(current.get(existing_columns[part]))
+            and not _missing(incoming.get(f"{prefix}_{part}"))
+            and normalized(current[existing_columns[part]]) != normalized(incoming[f"{prefix}_{part}"])
+            for part in ("miasto", "kod", "ulica")
+        )
+        if conflicting:
+            for part in address_suffixes:
+                incoming.pop(f"{prefix}_{part}", None)
+
     # Z CEIDG można uzupełnić nazwę skróconą przedsiębiorcy, ale nigdy
     # nie tworzymy jej na podstawie listy wspólników spółki cywilnej.
     updates: Dict[str, Any] = {}

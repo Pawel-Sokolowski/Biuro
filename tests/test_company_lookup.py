@@ -132,6 +132,97 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(inputs["ko_gmina"].value, "Police")
         self.assertEqual(inputs["ko_kraj"].value, "Polska")
 
+    def test_gus_handles_unwrapped_and_namespaced_dane(self):
+        from app.companies.gus_api import parse_search_result, parse_legal_report
+        bare = (
+            "<dane><Regon>123456789</Regon><Nip>1234563218</Nip>"
+            "<Nazwa>Spółka z o.o.</Nazwa><Typ>P</Typ>"
+            "<Miejscowosc>Szczecin</Miejscowosc></dane>"
+        )
+        self.assertEqual(parse_search_result(bare)["nazwa"], "Spółka z o.o.")
+        self.assertEqual(parse_search_result(bare)["nip"], "1234563218")
+        wrapped = (
+            "<root><n:dane xmlns:n='urn:example'><n:Regon>123456789</n:Regon>"
+            "<n:Nip>1234563218</n:Nip><n:Nazwa>Firma</n:Nazwa>"
+            "<n:Typ>P</n:Typ></n:dane></root>"
+        )
+        self.assertEqual(parse_search_result(wrapped)["regon"], "123456789")
+        legal = (
+            "<dane><praw_rodzajRejestruEwidencji_Nazwa>KRAJOWY REJESTR SĄDOWY"
+            "</praw_rodzajRejestruEwidencji_Nazwa>"
+            "<praw_numerWrejestrzeEwidencji>482087"
+            "</praw_numerWrejestrzeEwidencji></dane>"
+        )
+        self.assertEqual(parse_legal_report(legal)["krs"], "0000482087")
+
+    def test_gus_fetches_krs_using_fallback_report_when_needed(self):
+        from unittest.mock import patch
+        from app.companies.gus_api import get_gus_firma_by_nip
+
+        calls = []
+        def mock_call(url, action, body, sid=None):
+            calls.append((action, body))
+            if action == "Zaloguj":
+                return "<s:ZalogujResult>SESSION_ID</s:ZalogujResult>"
+            if action == "DaneSzukajPodmioty":
+                return (
+                    "<a:DaneSzukajPodmiotyResult>"
+                    "&lt;dane&gt;&lt;Regon&gt;123456789&lt;/Regon&gt;"
+                    "&lt;Nip&gt;1234563218&lt;/Nip&gt;"
+                    "&lt;Typ&gt;P&lt;/Typ&gt;&lt;Nazwa&gt;Firma&lt;/Nazwa&gt;&lt;/dane&gt;"
+                    "</a:DaneSzukajPodmiotyResult>"
+                )
+            if "BIR11OsPrawna" in body:
+                return "<a:DanePobierzPelnyRaportResult />"
+            self.assertIn("PublDaneRaportPrawna", body)
+            return (
+                "<a:DanePobierzPelnyRaportResult>"
+                "&lt;dane&gt;"
+                "&lt;praw_rodzajRejestruEwidencji_Nazwa&gt;"
+                "KRAJOWY REJESTR SĄDOWY"
+                "&lt;/praw_rodzajRejestruEwidencji_Nazwa&gt;"
+                "&lt;praw_numerWrejestrzeEwidencji&gt;482087"
+                "&lt;/praw_numerWrejestrzeEwidencji&gt;"
+                "&lt;/dane&gt;"
+                "</a:DanePobierzPelnyRaportResult>"
+            )
+
+        with (patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")),
+              patch("app.companies.gus_api._call", side_effect=mock_call)):
+            result = get_gus_firma_by_nip("1234563218")
+        self.assertEqual(result["nazwa"], "Firma")
+        self.assertEqual(result["regon"], "123456789")
+        self.assertEqual(result["krs"], "0000482087")
+        self.assertEqual([action for action, _ in calls], [
+            "Zaloguj", "DaneSzukajPodmioty",
+            "DanePobierzPelnyRaport", "DanePobierzPelnyRaport",
+        ])
+
+    def test_missing_gus_data_with_available_vat_is_explained(self):
+        result = lookup_company_by_nip(
+            "1234563218",
+            forma_dzialalnosci="Spółka z o.o.",
+            gus=lambda nip: {"error": True, "message": "GUS: testowa awaria"},
+            wl=lambda nip: {"status_vat": "Czynny", "konto_bankowe": "PL_TEST"},
+            krs=lambda n: self.fail("Brak numeru KRS, nie wywołujemy KRS"),
+            ceidg=lambda n: self.fail("Spółka z o.o. nie jest JDG"),
+        )
+        self.assertEqual(result["nip"], "1234563218")
+        self.assertEqual(result["status_vat"], "Czynny")
+        self.assertEqual(result["konto_bankowe"], "PL_TEST")
+        self.assertIn("testowa awaria", result["_registry_warning"])
+        self.assertNotIn("nazwa", result)
+
+    def test_gus_without_krs_still_returns_name_and_warning(self):
+        result = lookup_company_by_nip(
+            "1234563218", forma_dzialalnosci="Spółka z o.o.",
+            gus=lambda nip: {"nip": nip, "nazwa": "Firma z GUS", "regon": "123456789"},
+            wl=lambda nip: {"status_vat": "Zwolniony"},
+            krs=lambda n: self.fail("Brak numeru KRS"),
+        )
+        self.assertEqual(result["nazwa"], "Firma z GUS")
+        self.assertIn("numeru KRS", result["_registry_warning"])
+
     def test_company_goes_through_gus_and_krs(self):
         calls = []
         result = lookup_company_by_nip(

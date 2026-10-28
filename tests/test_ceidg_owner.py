@@ -13,6 +13,24 @@ class Field:
 
 
 class CeidgOwnerTests(unittest.TestCase):
+    def test_partial_vat_only_result_shows_gus_reason(self):
+        from unittest.mock import patch
+        from app.companies.company_logic import _apply_or_report
+
+        form = SimpleNamespace(inputs={"nip": Field(), "nazwa": Field()})
+        data = {
+            "nip": "1234563218",
+            "status_vat": "Czynny",
+            "_registry_warning": "GUS: Nie znaleziono danych rejestrowych.",
+        }
+        with patch("PyQt6.QtWidgets.QMessageBox.warning") as warning:
+            _apply_or_report((form, data), "Dane firmy")
+
+        self.assertEqual(form.inputs["nip"].value, "1234563218")
+        self.assertEqual(form.inputs["nazwa"].value, "")
+        warning.assert_called_once()
+        self.assertIn("GUS", warning.call_args.args[2])
+
     def test_owner_name_is_shown_in_contact_fields(self):
         first = Field()
         surname = Field()

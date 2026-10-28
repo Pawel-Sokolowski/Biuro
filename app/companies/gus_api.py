@@ -62,19 +62,30 @@ def _result(text: str, tag: str) -> str:
 
 
 def _text(node: ET.Element, name: str) -> str:
-    child = node.find(name)
+    # Obsługa zarówno zwykłych znaczników, jak i odpowiedzi z przestrzenią XML.
+    child = next((item for item in node if item.tag.rsplit("}", 1)[-1] == name), None)
     return (child.text or "").strip() if child is not None else ""
+
+
+def _first_dane(xml_text: str) -> Optional[ET.Element]:
+    """BIR zwraca zarówno <dane>, jak i <root><dane>...</dane></root>."""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+    if root.tag.rsplit("}", 1)[-1] == "dane":
+        return root
+    return next(
+        (item for item in root.iter() if item.tag.rsplit("}", 1)[-1] == "dane"),
+        None,
+    )
 
 
 def parse_search_result(xml_text: str) -> Optional[Dict[str, Any]]:
     """Zamienia odpowiedź DaneSzukajPodmioty na słownik pól formularza firmy."""
     if not xml_text:
         return None
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return None
-    node = root.find("dane")
+    node = _first_dane(xml_text)
     if node is None:
         return None
 
@@ -109,11 +120,7 @@ def parse_legal_report(xml_text: str) -> Dict[str, str]:
     """Numer KRS w GUS pochodzi z pełnego raportu jednostki prawnej, nie z wyszukania."""
     if not xml_text:
         return {}
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return {}
-    node = root.find("dane")
+    node = _first_dane(xml_text)
     if node is None:
         return {}
 
@@ -143,7 +150,7 @@ def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
         login = _call(url, "Zaloguj", f"<ns:Zaloguj><ns:pKluczUzytkownika>{html.escape(key)}</ns:pKluczUzytkownika></ns:Zaloguj>")
         sid = _result(login, "ZalogujResult")
         if not sid:
-            return {"error": True, "message": "GUS odrzucił klucz API (logowanie nie powiodło się)."}
+            return {"error": True, "message": "Nie udało się odczytać identyfikatora sesji SID z odpowiedzi logowania GUS. Sprawdź połączenie i format odpowiedzi SOAP."}
 
         search = _call(
             url,
@@ -155,19 +162,26 @@ def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
         )
         data = parse_search_result(_result(search, "DaneSzukajPodmiotyResult"))
         if data and data.get("typ") == "P" and data.get("regon"):
-            try:
-                report = _call(
-                    url, "DanePobierzPelnyRaport",
-                    "<ns:DanePobierzPelnyRaport>"
-                    f"<ns:pRegon>{html.escape(data['regon'])}</ns:pRegon>"
-                    "<ns:pNazwaRaportu>PublDaneRaportPrawna</ns:pNazwaRaportu>"
-                    "</ns:DanePobierzPelnyRaport>",
-                    sid=sid,
-                )
-                data.update(parse_legal_report(_result(report, "DanePobierzPelnyRaportResult")))
-            except (requests.RequestException, GusError):
-                # Podstawowe dane GUS są nadal przydatne, ale bez potwierdzonego KRS.
-                pass
+            # BIR11OsPrawna: nowszy raport. PublDaneRaportPrawna: starszy,
+            # nadal spotykany w integracjach. Próbujemy drugi, gdy pierwszy
+            # nie dostarczy numeru KRS lub przy błędzie raportu.
+            for report_name in ("BIR11OsPrawna", "PublDaneRaportPrawna"):
+                try:
+                    report = _call(
+                        url, "DanePobierzPelnyRaport",
+                        "<ns:DanePobierzPelnyRaport>"
+                        f"<ns:pRegon>{html.escape(data['regon'])}</ns:pRegon>"
+                        f"<ns:pNazwaRaportu>{report_name}</ns:pNazwaRaportu>"
+                        "</ns:DanePobierzPelnyRaport>",
+                        sid=sid,
+                    )
+                    details = parse_legal_report(_result(report, "DanePobierzPelnyRaportResult"))
+                    if details:
+                        data.update(details)
+                        if details.get("krs"):
+                            break
+                except (requests.RequestException, GusError):
+                    continue
     except requests.RequestException as exc:
         return {"error": True, "message": f"Brak połączenia z GUS: {exc}"}
     except GusError as exc:

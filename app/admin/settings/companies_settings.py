@@ -151,9 +151,9 @@ class CompaniesSettings(QWidget):
         answer = QMessageBox.question(
             self,
             "Uzupełnianie danych z rejestrów",
-            "Sprawdzić wszystkie firmy z poprawnym NIP w CEIDG, GUS, KRS i Białej Liście?\\n\\n"
+            "Sprawdzić wszystkie firmy z poprawnym NIP w CEIDG, GUS, KRS i Białej Liście?\n\n"
             "Uzupełnione zostaną tylko brakujące dane rejestrowe. "
-            "Istniejące dane, adresy, cenniki i ilości umów nie zostaną nadpisane.\\n"
+            "Istniejące dane, adresy, cenniki i ilości umów nie zostaną nadpisane.\n"
             "Operację można przerwać po zakończeniu bieżącej firmy.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -208,8 +208,8 @@ class CompaniesSettings(QWidget):
         if result.get("cancelled"):
             lines.insert(0, "Operację przerwano na żądanie użytkownika.")
         if result["errors"]:
-            lines.append("Przykładowe błędy:\\n" + "\\n".join(result["errors"][:15]))
-        QMessageBox.information(self, "Uzupełnianie danych zakończone", "\\n".join(lines))
+            lines.append("Przykładowe błędy:\n" + "\n".join(result["errors"][:15]))
+        QMessageBox.information(self, "Uzupełnianie danych zakończone", "\n".join(lines))
 
     def _on_registry_enrichment_error(self, message: str):
         self._finish_registry_enrichment_ui()

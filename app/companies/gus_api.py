@@ -125,13 +125,28 @@ def parse_legal_report(xml_text: str) -> Dict[str, str]:
         return {}
 
     registry = _text(node, "praw_rodzajRejestruEwidencji_Nazwa")
+    registry_organ = _text(node, "praw_organRejestrowy_Nazwa")
     number = _text(node, "praw_numerWrejestrzeEwidencji")
     result = {
         "gus_rodzaj_rejestru": registry,
+        "gus_organ_rejestrowy": registry_organ,
         "gus_forma_prawna": _text(node, "praw_szczegolnaFormaPrawna_Nazwa"),
     }
-    # GUS przechowuje też numery innych rejestrów – nie są numerami KRS.
-    if "KRAJOWY REJESTR SĄDOWY" in registry.upper() and re.fullmatch(r"\d{1,10}", number):
+
+    # W GUS pole "rodzaj rejestru" nie zawsze ma dosłownie nazwę KRS.
+    # "REJESTR PRZEDSIĘBIORCÓW" to część KRS. Nie wolno jednak przyjąć
+    # numeru dowolnej ewidencji (np. CEIDG) jako numeru KRS.
+    registry_upper = " ".join(registry.upper().split())
+    organ_upper = " ".join(registry_organ.upper().split())
+    is_krs_register = (
+        "KRAJOWY REJESTR SĄDOWY" in registry_upper
+        or "REJESTR PRZEDSIĘBIORCÓW" in registry_upper
+        or (
+            "REJESTR STOWARZYSZEŃ" in registry_upper
+            and "KRAJOWEGO REJESTRU SĄDOWEGO" in organ_upper
+        )
+    )
+    if is_krs_register and re.fullmatch(r"\d{1,10}", number):
         result["krs"] = number.zfill(10)
     return result
 

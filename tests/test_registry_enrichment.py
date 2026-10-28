@@ -14,14 +14,14 @@ class RegistryUpdatePlanTests(unittest.TestCase):
         company = {
             "forma_dzialalnosci": "Spółka cywilna",
             "nazwa": "Nazwa własna", "miasto": "Szczecin",
-            "ulica": "Stara", "adres_budynek": "",
+            "ulica": "Nowa", "adres_budynek": "",
             "konto_bankowe": "Zapisany rachunek", "status_vat": "Czynny",
             "vat_czynny": 1, "uop_ilosc": 22, "limit_dokumentow": 10,
             "adres_zam_miasto": "Własny adres",
         }
         registry = {
             "nazwa": "Inna nazwa", "nip": "8522669775",
-            "dz_miasto": "Poznań", "dz_ulica": "Nowa 23/1",
+            "dz_miasto": "Szczecin", "dz_ulica": "Nowa 23/1",
             "regon": "387974972", "krs": "0000000001",
             "koresp_ulica": "Korespondencyjna 4/3",
             "status_vat": "Zwolniony", "konto_bankowe": "Inny rachunek",
@@ -40,6 +40,27 @@ class RegistryUpdatePlanTests(unittest.TestCase):
             "konto_bankowe", "uop_ilosc", "limit_dokumentow", "adres_zam_miasto",
         ):
             self.assertNotIn(forbidden, updates)
+
+    def test_conflicting_street_or_city_cannot_mix_address_parts(self):
+        current = {
+            "forma_dzialalnosci": "JDG", "miasto": "Szczecin",
+            "ulica": "Stara", "adres_budynek": "", "kod_pocztowy": "",
+        }
+        registry = {
+            "dz_miasto": "Szczecin", "dz_ulica": "Nowa 23/1",
+            "dz_kod": "70-001", "dz_budynek": "23", "dz_lokal": "1",
+            "regon": "123456789",
+        }
+        updates = build_missing_registry_updates(current, registry)
+        self.assertEqual(updates, {"regon": "123456789"})
+
+        # Wystarczy sprzeczne miasto, nawet jeśli ulica jeszcze nieznana.
+        updates = build_missing_registry_updates(
+            {"miasto": "Szczecin"}, {
+                "dz_miasto": "Poznań", "dz_ulica": "Kwiatowa 23/1",
+            },
+        )
+        self.assertEqual(updates, {})
 
     def test_vat_fills_unknown_status_and_derived_flag(self):
         updates = build_missing_registry_updates(
@@ -85,7 +106,7 @@ class RegistryBatchTests(DbTestCase):
             called.append((nip, forma_dzialalnosci))
             return {
                 "nip": nip, "regon": "387974972", "nazwa": "Zmieniona",
-                "dz_miasto": "Inne miasto", "dz_ulica": "Obca 23/1",
+                "dz_miasto": "Szczecin", "dz_ulica": "Zapisana ulica 23/1",
                 "koresp_ulica": "Szkolna 5/2", "status_vat": "Czynny",
                 "konto_bankowe": "Nowy rachunek", "krs": "0000000001",
                 "adres_zam_miasto": "Błędny", "uop_ilosc": 999,

@@ -33,6 +33,47 @@ class MonthlyStatusTests(DbTestCase):
         self.assertEqual((row["etap"], row["dokumenty_dostarczone"]), ("Wysłane wyniki", 0))
 
 
+class MonthlyContractDefaultsTests(DbTestCase):
+    def test_newest_month_updates_company_defaults_without_changing_history(self):
+        from app.db.dao_companies import get_company
+        from app.db.dao_monthly import get_month_contracts
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+
+        firma = self.make_company(uop_ilosc=10, uz_ilosc=2, uod_ilosc=1)
+        # Pomijamy uruchamianie sprawdzania CEIDG w tle w konstruktorze.
+        logic = MonthlyViewLogic.__new__(MonthlyViewLogic)
+
+        logic.set_month("2026-09")
+        logic.save_status_for_company(firma, uop=20)
+        self.assertEqual(get_company(firma)["uop_ilosc"], 20)
+
+        logic.set_month("2026-10")
+        logic.save_status_for_company(firma, uop=22, uz=3, uod=2)
+        company = get_company(firma)
+        self.assertEqual(
+            (company["uop_ilosc"], company["uz_ilosc"], company["uod_ilosc"]),
+            (22, 3, 2),
+        )
+        self.assertEqual(
+            get_month_contracts(firma, "2026-09"),
+            {"uop_ilosc": 20, "uz_ilosc": 2, "uod_ilosc": 1},
+        )
+        self.assertEqual(
+            get_month_contracts(firma, "2026-10"),
+            {"uop_ilosc": 22, "uz_ilosc": 3, "uod_ilosc": 2},
+        )
+
+        # Korekta starszego miesiąca nie cofa domyślnych wartości klienta.
+        logic.set_month("2026-09")
+        logic.save_status_for_company(firma, uop=19)
+        self.assertEqual(get_month_contracts(firma, "2026-09")["uop_ilosc"], 19)
+        self.assertEqual(get_company(firma)["uop_ilosc"], 22)
+
+        logic.set_month("2026-10")
+        logic.save_status_for_company(firma, uop=23)
+        self.assertEqual(get_company(firma)["uop_ilosc"], 23)
+
+
 class TimerTaskFilterTests(DbTestCase):
     def test_only_tasks_of_selected_company_are_listed(self):
         emp = self.make_employee()

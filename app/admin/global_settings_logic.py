@@ -646,6 +646,11 @@ class GlobalSettingsLogic:
     # ============================
     # USŁUGI DODATKOWE
     # ============================
+    def import_extra_services_from_csv(self, csv_path: str) -> Dict[str, Any]:
+        """Import usług z CSV/XLSX/XLS. Nazwa zachowana dla istniejącego przycisku."""
+        from app.utils.extra_services_import import import_extra_services_from_file
+        return import_extra_services_from_file(csv_path)
+
     def get_extra_services(self) -> List[Row]:
         return dao_global_settings.get_extra_services()
 

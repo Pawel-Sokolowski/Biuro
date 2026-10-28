@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from app.utils.env_config import load_environment
+from app.companies.address_parsing import split_street_address
 
 load_environment()
 
@@ -84,9 +85,7 @@ def parse_search_result(xml_text: str) -> Optional[Dict[str, Any]]:
     ulica = _text(node, "Ulica")
     budynek = _text(node, "NrNieruchomosci")
     lokal = _text(node, "NrLokalu")
-    ulica_pelna = " ".join(p for p in (ulica, budynek) if p)
-    if lokal:
-        ulica_pelna += f"/{lokal}"
+    ulica, budynek, lokal = split_street_address(ulica, budynek, lokal)
 
     miasto = _text(node, "Miejscowosc")
     return {
@@ -95,7 +94,7 @@ def parse_search_result(xml_text: str) -> Optional[Dict[str, Any]]:
         "regon": _text(node, "Regon"),
         "dz_miasto": miasto,
         "dz_kod": kod,
-        "dz_ulica": ulica_pelna,
+        "dz_ulica": ulica,
         "dz_budynek": budynek,
         "dz_lokal": lokal,
         "dz_wojewodztwo": _text(node, "Wojewodztwo").lower(),

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.companies.company_form import CompanyForm
+from app.companies.registry_enrichment import enrich_all_companies
 from app.utils.importers import (
     import_companies_from_excel_file_payloads,
     import_companies_fast_from_excel_file,
@@ -52,6 +53,23 @@ class FastImportWorker(QThread):
             )
         except Exception as e:
             self.error.emit(str(e))
+
+
+class RegistryEnrichmentWorker(QThread):
+    """Pobieranie danych sieciowych bez blokowania interfejsu."""
+    finished_with_result = pyqtSignal(object)
+    progress = pyqtSignal(int, int, str)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            result = enrich_all_companies(
+                progress=self.progress.emit,
+                should_cancel=self.isInterruptionRequested,
+            )
+            self.finished_with_result.emit(result)
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 # ============================================================
@@ -112,10 +130,90 @@ class CompaniesSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        # Osobna akcja dla istniejących klientów, nie jest importem Excel.
+        registry_row = QHBoxLayout()
+        self.btn_fill_registry = QPushButton("Uzupełnij brakujące dane wszystkich firm z rejestrów")
+        self.btn_fill_registry.clicked.connect(self._enrich_all_from_registries)
+        registry_row.addWidget(self.btn_fill_registry)
+        registry_row.addStretch()
+        layout.addLayout(registry_row)
+        self._registry_worker = None
+        self._registry_progress = None
+
         self._refresh()
 
         self._current_worker = None
         self._progress_dialog = None
+
+    def _enrich_all_from_registries(self):
+        if self._registry_worker is not None and self._registry_worker.isRunning():
+            return
+        answer = QMessageBox.question(
+            self,
+            "Uzupełnianie danych z rejestrów",
+            "Sprawdzić wszystkie firmy z poprawnym NIP w CEIDG, GUS, KRS i Białej Liście?\\n\\n"
+            "Uzupełnione zostaną tylko brakujące dane rejestrowe. "
+            "Istniejące dane, adresy, cenniki i ilości umów nie zostaną nadpisane.\\n"
+            "Operację można przerwać po zakończeniu bieżącej firmy.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        worker = RegistryEnrichmentWorker(self)
+        dialog = QProgressDialog("Rozpoczynanie...", "Przerwij", 0, 0, self)
+        dialog.setWindowTitle("Uzupełnianie danych firm z rejestrów")
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setMinimumWidth(500)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+
+        self._registry_worker = worker
+        self._registry_progress = dialog
+        self.btn_fill_registry.setEnabled(False)
+        worker.progress.connect(self._on_registry_enrichment_progress)
+        worker.finished_with_result.connect(self._on_registry_enrichment_finished)
+        worker.error.connect(self._on_registry_enrichment_error)
+        dialog.canceled.connect(worker.requestInterruption)
+        worker.start()
+        dialog.show()
+
+    def _on_registry_enrichment_progress(self, done: int, total: int, name: str):
+        dialog = self._registry_progress
+        if dialog is None:
+            return
+        dialog.setMaximum(max(total, 1))
+        dialog.setValue(done)
+        dialog.setLabelText(f"Firma {done}/{total}: {name}")
+
+    def _finish_registry_enrichment_ui(self):
+        if self._registry_progress is not None:
+            self._registry_progress.close()
+            self._registry_progress = None
+        self.btn_fill_registry.setEnabled(True)
+        self._refresh()
+
+    def _on_registry_enrichment_finished(self, result):
+        self._finish_registry_enrichment_ui()
+        lines = [
+            f"Sprawdzono: {result['processed']} / {result['total']}",
+            f"Uzupełniono firm: {result['updated']}",
+            f"Uzupełniono pól: {result['updated_fields']}",
+            f"Bez zmian: {result['unchanged']}",
+            f"Pominięto (brak poprawnego NIP): {result['skipped']}",
+            f"Błędy: {len(result['errors'])}",
+        ]
+        if result.get("cancelled"):
+            lines.insert(0, "Operację przerwano na żądanie użytkownika.")
+        if result["errors"]:
+            lines.append("Przykładowe błędy:\\n" + "\\n".join(result["errors"][:15]))
+        QMessageBox.information(self, "Uzupełnianie danych zakończone", "\\n".join(lines))
+
+    def _on_registry_enrichment_error(self, message: str):
+        self._finish_registry_enrichment_ui()
+        QMessageBox.critical(self, "Błąd uzupełniania danych", message)
 
     # ============================================================
     # TABELA — ODSWIEŻANIE

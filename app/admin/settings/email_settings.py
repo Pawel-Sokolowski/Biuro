@@ -5,7 +5,7 @@ import threading
 
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
     QWidget,
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from app.email.email_sync import sync_and_prefetch
+from app.db.dao_app_settings import get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,7 @@ class EmailSettings(QWidget):
 
     full_sync_progress = pyqtSignal(object)
     full_sync_finished = pyqtSignal(object)
+    full_sync_filters = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -187,6 +189,8 @@ class EmailSettings(QWidget):
         self._full_sync_running = False
         self.full_sync_progress.connect(self._on_full_sync_progress)
         self.full_sync_finished.connect(self._on_full_sync_finished)
+        self.full_sync_filters.connect(self._on_full_sync_filters)
+        self._last_filter_stats = None
 
         layout = QVBoxLayout(self)
 
@@ -222,10 +226,34 @@ class EmailSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        self.full_sync_button = QPushButton("Synchronizuj pełną skrzynkę (wszystkie foldery)")
+        self.sync_two_years_only = QCheckBox("Pobieraj tylko ostatnie 2 lata (730 dni)")
+        self.sync_two_years_only.setChecked(True)
+        layout.addWidget(self.sync_two_years_only)
+
+        self.auto_folder_filters = QCheckBox(
+            "Automatycznie twórz filtry z nadawców i odbiorców w istniejących folderach"
+        )
+        self.auto_folder_filters.setChecked(True)
+        layout.addWidget(self.auto_folder_filters)
+
+        domains_row = QHBoxLayout()
+        domains_row.addWidget(QLabel("Domeny biura do pominięcia:"))
+        self.internal_mail_domains = QLineEdit(get_setting("email_internal_domains") or "")
+        self.internal_mail_domains.setPlaceholderText("np. biuro.pl, moja-domena.pl")
+        self.internal_mail_domains.setToolTip(
+            "Oddziel domeny przecinkiem. Domeny własnych kont pocztowych "
+            "są pomijane automatycznie (poza publicznymi dostawcami poczty)."
+        )
+        domains_row.addWidget(self.internal_mail_domains)
+        layout.addLayout(domains_row)
+
+        self.full_sync_button = QPushButton("Synchronizuj wszystkie foldery")
         self.full_sync_button.clicked.connect(self._sync_full_mailbox)
         layout.addWidget(self.full_sync_button)
-        self.full_sync_status = QLabel("Pełna synchronizacja uruchamiana tylko ręcznie. Automatycznie pobierane są nowe wiadomości.")
+        self.full_sync_status = QLabel(
+            "Synchronizację ręczną można ograniczyć do dwóch lat i wykorzystać "
+            "do utworzenia filtrów bez analizowania domen wewnętrznych."
+        )
         self.full_sync_status.setWordWrap(True)
         layout.addWidget(self.full_sync_status)
 
@@ -302,15 +330,31 @@ class EmailSettings(QWidget):
         account_id = self._selected_id()
         if account_id is None:
             return
+        two_years_only = self.sync_two_years_only.isChecked()
+        learn_filters = self.auto_folder_filters.isChecked()
+        window = "ostatnich 730 dni" if two_years_only else "całej historii"
+        extra = (
+            "Po synchronizacji powstaną filtry na podstawie już posortowanych "
+            "wiadomości (z wyjątkiem domen wewnętrznych)."
+            if learn_filters else "Filtry nie będą tworzone."
+        )
         if QMessageBox.question(
             self,
-            "Pełna synchronizacja poczty",
-            "Pobrać wszystkie foldery i wszystkie wiadomości z całej historii "
-            "wybranego konta IMAP do PostgreSQL? Może to być czasochłonne.",
+            "Synchronizacja poczty",
+            f"Pobrać wszystkie foldery i wiadomości z {window} wybranego konta IMAP?\n\n"
+            f"{extra}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
 
+        try:
+            set_setting("email_internal_domains", self.internal_mail_domains.text().strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "Ustawienia domen", f"Nie udało się zapisać domen: {exc}")
+            return
+
+        self._last_filter_stats = None
         self._full_sync_running = True
         self.full_sync_button.setEnabled(False)
         self.full_sync_status.setText(f"Rozpoczynam pełną synchronizację konta {account_id}...")
@@ -319,10 +363,14 @@ class EmailSettings(QWidget):
             error = None
             try:
                 sync_and_prefetch(
-                    account_id, ["INBOX"], full_mailbox=True,
+                    account_id, ["INBOX"],
+                    all_folders=two_years_only,
+                    full_mailbox=not two_years_only,
+                    learn_filters=learn_filters,
                     on_progress=lambda done, total, folder, headers: self.full_sync_progress.emit(
                         (done, total, folder, headers)
                     ),
+                    on_filters=lambda stats: self.full_sync_filters.emit(stats),
                 )
             except Exception as exc:
                 logger.exception("Błąd pełnej synchronizacji konta %s", account_id)
@@ -341,6 +389,9 @@ class EmailSettings(QWidget):
             f"zapisano {headers} nagłówków. {folder or ''}"
         )
 
+    def _on_full_sync_filters(self, stats) -> None:
+        self._last_filter_stats = stats
+
     def _on_full_sync_finished(self, result) -> None:
         account_id, error = result
         self._full_sync_running = False
@@ -349,8 +400,16 @@ class EmailSettings(QWidget):
             self.full_sync_status.setText(f"Synchronizacja konta {account_id}: błąd — {error}")
             QMessageBox.warning(self, "Synchronizacja", f"Nie udało się ukończyć synchronizacji:\n{error}")
         else:
-            self.full_sync_status.setText(f"Pełna synchronizacja konta {account_id} zakończona.")
-            QMessageBox.information(self, "Synchronizacja", "Zakończono pobieranie całej skrzynki do PostgreSQL.")
+            message = "Zakończono pobieranie wiadomości do PostgreSQL."
+            if self._last_filter_stats is not None:
+                stats = self._last_filter_stats
+                message += (
+                    f"\nRozpoznano adresów: {stats['addresses']}"
+                    f"\nNowych filtrów: {stats['added']}"
+                    f"\nPrzeniesiono wiadomości z Odebranych: {stats['moved']}"
+                )
+            self.full_sync_status.setText(f"Synchronizacja konta {account_id} zakończona.")
+            QMessageBox.information(self, "Synchronizacja", message)
 
     def _selected_id(self):
         row = self.table.currentRow()

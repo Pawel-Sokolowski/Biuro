@@ -172,7 +172,7 @@ class LookupTests(unittest.TestCase):
                     "&lt;Typ&gt;P&lt;/Typ&gt;&lt;Nazwa&gt;Firma&lt;/Nazwa&gt;&lt;/dane&gt;"
                     "</a:DaneSzukajPodmiotyResult>"
                 )
-            if "BIR11OsPrawna" in body:
+            if "BIR12OsPrawna" in body or "BIR11OsPrawna" in body:
                 return "<a:DanePobierzPelnyRaportResult />"
             self.assertIn("PublDaneRaportPrawna", body)
             return (
@@ -195,8 +195,45 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(result["krs"], "0000482087")
         self.assertEqual([action for action, _ in calls], [
             "Zaloguj", "DaneSzukajPodmioty",
-            "DanePobierzPelnyRaport", "DanePobierzPelnyRaport",
+            "DanePobierzPelnyRaport", "DanePobierzPelnyRaport", "DanePobierzPelnyRaport",
         ])
+
+    def test_gus_bir12_gets_dreamlune_krs_on_first_report(self):
+        from unittest.mock import patch
+        from app.companies.gus_api import get_gus_firma_by_nip
+
+        report_names = []
+        def fake_call(url, action, body, sid=None):
+            if action == "Zaloguj":
+                return "<ZalogujResult>SESSION_ID</ZalogujResult>"
+            if action == "DaneSzukajPodmioty":
+                return (
+                    "<DaneSzukajPodmiotyResult>"
+                    "&lt;dane&gt;&lt;Regon&gt;545639823&lt;/Regon&gt;"
+                    "&lt;Nip&gt;8393268547&lt;/Nip&gt;"
+                    "&lt;Typ&gt;P&lt;/Typ&gt;"
+                    "&lt;Nazwa&gt;DREAMLUNE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ&lt;/Nazwa&gt;"
+                    "&lt;/dane&gt;</DaneSzukajPodmiotyResult>"
+                )
+            report_names.append(body)
+            return (
+                "<DanePobierzPelnyRaportResult>"
+                "&lt;dane&gt;"
+                "&lt;praw_rodzajRejestruEwidencji_Nazwa&gt;REJESTR PRZEDSIĘBIORCÓW"
+                "&lt;/praw_rodzajRejestruEwidencji_Nazwa&gt;"
+                "&lt;praw_numerWrejestrzeEwidencji&gt;0001264722"
+                "&lt;/praw_numerWrejestrzeEwidencji&gt;"
+                "&lt;/dane&gt;"
+                "</DanePobierzPelnyRaportResult>"
+            )
+
+        with (patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")),
+              patch("app.companies.gus_api._call", side_effect=fake_call)):
+            data = get_gus_firma_by_nip("8393268547")
+        self.assertEqual(data["regon"], "545639823")
+        self.assertEqual(data["krs"], "0001264722")
+        self.assertEqual(len(report_names), 1)
+        self.assertIn("BIR12OsPrawna", report_names[0])
 
     def test_missing_gus_data_with_available_vat_is_explained(self):
         result = lookup_company_by_nip(
@@ -350,6 +387,56 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(result["nazwa"], "GUS")
         self.assertNotIn("dz_miasto", result)
         self.assertEqual(result["status_vat"], "Czynny")
+
+    def test_dreamlune_gus_register_przedsiebiorcow_yields_krs(self):
+        from app.companies.gus_api import parse_legal_report
+
+        # Zgłoszony rzeczywisty przypadek GUS: rodzaj rejestru to
+        # "REJESTR PRZEDSIĘBIORCÓW", a nie dosłownie "KRS".
+        xml = (
+            "<dane>"
+            "<praw_regon9>545639823</praw_regon9>"
+            "<praw_nip>8393268547</praw_nip>"
+            "<praw_nazwa>DREAMLUNE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ</praw_nazwa>"
+            "<praw_podstawowaFormaPrawna_Symbol>1</praw_podstawowaFormaPrawna_Symbol>"
+            "<praw_szczegolnaFormaPrawna_Symbol>117</praw_szczegolnaFormaPrawna_Symbol>"
+            "<praw_szczegolnaFormaPrawna_Nazwa>SPÓŁKI Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ</praw_szczegolnaFormaPrawna_Nazwa>"
+            "<praw_organRejestrowy_Nazwa>SĄD REJONOWY GDAŃSK-PÓŁNOC W GDAŃSKU, "
+            "VIII WYDZIAŁ GOSPODARCZY KRAJOWEGO REJESTRU SĄDOWEGO</praw_organRejestrowy_Nazwa>"
+            "<praw_rodzajRejestruEwidencji_Nazwa>REJESTR PRZEDSIĘBIORCÓW</praw_rodzajRejestruEwidencji_Nazwa>"
+            "<praw_numerWrejestrzeEwidencji>0001264722</praw_numerWrejestrzeEwidencji>"
+            "</dane>"
+        )
+        result = parse_legal_report(xml)
+        self.assertEqual(result["krs"], "0001264722")
+        self.assertEqual(result["gus_rodzaj_rejestru"], "REJESTR PRZEDSIĘBIORCÓW")
+
+    def test_register_przedsiebiorcow_krs_flows_gus_to_krs(self):
+        from app.companies.gus_api import parse_legal_report
+
+        report = parse_legal_report(
+            "<dane>"
+            "<praw_rodzajRejestruEwidencji_Nazwa>REJESTR PRZEDSIĘBIORCÓW</praw_rodzajRejestruEwidencji_Nazwa>"
+            "<praw_numerWrejestrzeEwidencji>0001264722</praw_numerWrejestrzeEwidencji>"
+            "</dane>"
+        )
+        calls = []
+        result = lookup_company_by_nip(
+            "8393268547", forma_dzialalnosci="Spółka z o.o.",
+            gus=lambda nip: {"nip": nip, "regon": "545639823", "nazwa": "GUS DREAMLUNE", **report},
+            wl=lambda nip: {"status_vat": "Czynny"},
+            krs=lambda number: calls.append(number) or {
+                "nip": "8393268547",
+                "nazwa": "DREAMLUNE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
+                "dz_miasto": "Wodnica",
+            },
+            ceidg=lambda nip: self.fail("Spółka z o.o. nie powinna trafiać do CEIDG"),
+        )
+        self.assertEqual(calls, ["0001264722"])
+        self.assertEqual(result["krs"], "0001264722")
+        self.assertEqual(result["dz_miasto"], "Wodnica")
+        self.assertEqual(result["nip"], "8393268547")
+        self.assertNotIn("_registry_warning", result)
 
     def test_gus_krs_number_requires_explicit_krs_register(self):
         from app.companies.gus_api import parse_legal_report

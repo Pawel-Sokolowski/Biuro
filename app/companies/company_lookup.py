@@ -115,8 +115,15 @@ def lookup_company_by_nip(
                         "KRS: " + str(krs_data.get("message") or "nie udało się zweryfikować NIP w KRS")
                     )
             elif kind == "krs" and _ok(gus_data):
+                registry_info = str(gus_data.get("gus_rodzaj_rejestru") or "").strip()
+                registry_number = str(gus_data.get("gus_numer_w_rejestrze") or "").strip()
+                details = (
+                    f" Rodzaj rejestru z GUS: {registry_info or 'brak'};"
+                    f" numer w rejestrze: {registry_number or 'brak'}."
+                )
                 diagnostics.append(
                     "GUS zwrócił dane firmy, ale nie udało się ustalić numeru KRS z pełnego raportu."
+                    + details
                 )
 
     if _ok(registry) and _matches_nip(registry, nip):

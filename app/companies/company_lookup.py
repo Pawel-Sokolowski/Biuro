@@ -70,10 +70,13 @@ def lookup_company_by_nip(
     kind = _kind(forma_dzialalnosci)
 
     gus_data: Dict[str, Any] = {}
+    diagnostics = []
     if kind in ("civil", "krs", "auto"):
         gus_data = gus(nip) or {}
         if _ok(gus_data) and not _matches_nip(gus_data, nip):
             gus_data = {"error": True, "message": "GUS zwrócił inny NIP niż wyszukiwany."}
+        if not _ok(gus_data):
+            diagnostics.append("GUS: " + str(gus_data.get("message") or "brak danych rejestrowych"))
 
     if kind == "jdg":
         registry = ceidg(nip)
@@ -107,14 +110,29 @@ def lookup_company_by_nip(
                     registry = dict(gus_data)
                     registry.update({key: value for key, value in krs_data.items() if value not in (None, "")})
                     registry["krs"] = reg_krs.zfill(10)
+                else:
+                    diagnostics.append(
+                        "KRS: " + str(krs_data.get("message") or "nie udało się zweryfikować NIP w KRS")
+                    )
+            elif kind == "krs" and _ok(gus_data):
+                diagnostics.append(
+                    "GUS zwrócił dane firmy, ale nie udało się ustalić numeru KRS z pełnego raportu."
+                )
 
     if _ok(registry) and _matches_nip(registry, nip):
         result = dict(registry)
         result["nip"] = nip
-        return _merge(result, wl_data) if _ok(wl_data) else result
+        result = _merge(result, wl_data) if _ok(wl_data) else result
+        if diagnostics:
+            result["_registry_warning"] = "\n".join(diagnostics)
+        return result
 
-    # Nie zwracaj danych adresowych/nazwy z Białej Listy zamiast CEIDG/GUS/KRS.
-    # Można natomiast nadal wypełnić status VAT i konto (jeżeli są dostępne).
+    # Nie zwracaj nazwy ani adresów z Białej Listy zamiast rejestru.
+    # Gdy VAT jest dostępny, zwracamy go WRAZ z ostrzeżeniem o braku danych.
     if _ok(wl_data):
-        return _merge({"nip": nip}, wl_data)
+        result = _merge({"nip": nip}, wl_data)
+        message = diagnostics or [str((registry or {}).get("message") or
+                                      "Nie udało się pobrać danych firmy z właściwego rejestru.")]
+        result["_registry_warning"] = "\n".join(message)
+        return result
     return registry or {"error": True, "message": "Nie znaleziono firmy w odpowiednim rejestrze."}

@@ -187,8 +187,8 @@ class LookupTests(unittest.TestCase):
                 "</a:DanePobierzPelnyRaportResult>"
             )
 
-        with patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")), \\
-             patch("app.companies.gus_api._call", side_effect=mock_call):
+        with (patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")),
+              patch("app.companies.gus_api._call", side_effect=mock_call)):
             result = get_gus_firma_by_nip("1234563218")
         self.assertEqual(result["nazwa"], "Firma")
         self.assertEqual(result["regon"], "123456789")

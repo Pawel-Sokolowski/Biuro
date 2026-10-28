@@ -46,7 +46,9 @@ class CEIDGWorker(QRunnable):
 # -------------------------
 def _safe_set(widget, value):
     try:
-        if widget is None:
+        # Brak pola w odpowiedzi rejestru nie może wyczyścić wartości
+        # wpisanej wcześniej przez użytkownika (np. adresu lub nazwy).
+        if widget is None or value is None or value == "":
             return
         if hasattr(widget, "setText"):
             widget.setText(str(value or ""))

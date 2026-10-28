@@ -176,6 +176,25 @@ class UiSmokeTests(DbTestCase):
         reopened_again = CompanyForm(self.firma)
         assert_addresses_in_database_and_form(reopened_again)
 
+    def test_company_form_passes_selected_civil_type_to_lookup(self):
+        from unittest import mock
+        from app.companies.company_form import CompanyForm
+
+        form = CompanyForm(self.firma)
+        form.inputs["forma_dzialalnosci"].setCurrentText("Spółka cywilna")
+        with mock.patch("app.companies.company_form.ceidg_fetch") as fetch:
+            form._on_ceidg()
+        fetch.assert_called_once()
+        selected_lookup = fetch.call_args.kwargs["fetch"]
+        with mock.patch(
+            "app.companies.company_form.lookup_company_by_nip",
+            return_value={"nip": "8522669775"},
+        ) as lookup:
+            selected_lookup("8522669775")
+        lookup.assert_called_once_with(
+            "8522669775", forma_dzialalnosci="Spółka cywilna"
+        )
+
     def test_month_picker_switches_year_and_month(self):
         from app.monthly_view.month_picker import MonthPicker
         from app.reports.import_dao import _prev_month

@@ -150,7 +150,7 @@ def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
         login = _call(url, "Zaloguj", f"<ns:Zaloguj><ns:pKluczUzytkownika>{html.escape(key)}</ns:pKluczUzytkownika></ns:Zaloguj>")
         sid = _result(login, "ZalogujResult")
         if not sid:
-            return {"error": True, "message": "GUS odrzucił klucz API (logowanie nie powiodło się)."}
+            return {"error": True, "message": "Nie udało się odczytać identyfikatora sesji SID z odpowiedzi logowania GUS. Sprawdź połączenie i format odpowiedzi SOAP."}
 
         search = _call(
             url,

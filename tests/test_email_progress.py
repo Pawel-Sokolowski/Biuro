@@ -88,6 +88,49 @@ class ProgressTests(DbTestCase):
         self.assertTrue(all(days is None for _, days in history_windows))
         self.assertEqual(prefetch.call_count, 3)
 
+    def test_two_year_manual_sync_generates_filters_after_all_folders(self):
+        self.fake_list(self.konto)
+        from app.email import email_auto_filters, email_rules
+        ordered = []
+        reports = []
+
+        def sync(konto_id, folder, **kwargs):
+            ordered.append(("sync", folder, kwargs["full_sync"]))
+            return 0
+
+        def learn(konto_id, days):
+            ordered.append(("learn", konto_id, days))
+            return {"added": 2, "addresses": 1, "candidates": 1}
+
+        def apply(konto_id, folder, history_days=None):
+            ordered.append(("move", folder, history_days))
+            return 3
+
+        with (mock.patch.object(email_sync, "sync_folder", side_effect=sync),
+              mock.patch.object(email_sync, "get_cached_messages", return_value=[]),
+              mock.patch.object(email_auto_filters, "learn_filters_from_mail_history", side_effect=learn),
+              mock.patch.object(email_rules, "apply_rules_to_folder", side_effect=apply)):
+            email_sync.sync_and_prefetch(
+                self.konto, ["INBOX"], all_folders=True, learn_filters=True,
+                on_filters=reports.append,
+            )
+
+        self.assertTrue(all(item[0] == "sync" for item in ordered[:-2]))
+        self.assertEqual(ordered[-2], ("learn", self.konto, 730))
+        self.assertEqual(ordered[-1], ("move", "INBOX", 730))
+        self.assertEqual(reports, [{
+            "added": 2, "addresses": 1, "candidates": 1, "moved": 3,
+        }])
+
+    def test_incremental_sync_does_not_learn_filters(self):
+        self.fake_list(self.konto)
+        from app.email import email_auto_filters
+        with (mock.patch.object(email_sync, "sync_folder", return_value=0),
+              mock.patch.object(email_sync, "get_cached_messages", return_value=[]),
+              mock.patch.object(email_auto_filters, "learn_filters_from_mail_history") as learn):
+            email_sync.sync_and_prefetch(self.konto, ["INBOX"], learn_filters=True)
+        learn.assert_not_called()
+
     def test_ordinary_sync_only_recent_messages_and_selected_folder(self):
         self.fake_list(self.konto)
         history_windows = []

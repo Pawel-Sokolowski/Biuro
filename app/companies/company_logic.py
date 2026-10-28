@@ -249,6 +249,16 @@ def _apply_or_report(payload, title: str):
         ceidg_error(form, Exception(message), title)
         return
     ceidg_apply(form, data)
+    if data.get("_registry_warning"):
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                form, title,
+                "Pobrano dostępne informacje, ale nie wszystkie dane rejestrowe:\n"
+                + str(data["_registry_warning"]),
+            )
+        except Exception:
+            logger.warning("Nie można wyświetlić ostrzeżenia rejestrowego", exc_info=True)
 
 
 def ceidg_fetch(form, fetch=None, button: str = "btn_ceidg",
@@ -263,10 +273,10 @@ def ceidg_fetch(form, fetch=None, button: str = "btn_ceidg",
 
     nip_widget = form.inputs.get(field)
     nip = "".join(ch for ch in (nip_widget.text() if nip_widget else "") if ch.isdigit())
-    if not nip:
+    if len(nip) != 10:
         try:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(form, title, f"Podaj {field_label} przed pobraniem danych z {title}.")
+            QMessageBox.warning(form, title, f"{field_label} musi składać się z 10 cyfr.")
         except Exception:
             logger.warning("Zignorowany błąd", exc_info=True)
         return
@@ -283,7 +293,14 @@ def ceidg_fetch(form, fetch=None, button: str = "btn_ceidg",
     worker = CEIDGWorker(nip, form, fetch)
     worker.signals.result.connect(lambda payload: _apply_or_report(payload, title))
     worker.signals.error.connect(lambda err: ceidg_error(form, err, title))
-    worker.signals.finished.connect(lambda: ceidg_finished(form, button, label))
+    # Utrzymujemy obiekt sygnałów/worker przez cały czas działania.
+    # Bez referencji przy szybko kończących się zapytaniach callbacki
+    # do formularza mogły zostać zwolnione przed obsługą zdarzeń GUI.
+    form._ceidg_worker = worker
+    def _done():
+        ceidg_finished(form, button, label)
+        form._ceidg_worker = None
+    worker.signals.finished.connect(_done)
     QThreadPool.globalInstance().start(worker)
 
 

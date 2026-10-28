@@ -8,6 +8,8 @@ from typing import Any, Dict
 
 import requests
 
+from app.companies.address_parsing import split_street_address
+
 WL_URL = "https://wl-api.mf.gov.pl/api/search/nip/{nip}"
 _TIMEOUT = 15
 
@@ -18,12 +20,13 @@ def _split_address(text: str) -> Dict[str, str]:
     """'FRYDERYKA CHOPINA 35, 71-450 SZCZECIN' -> ulica / kod / miasto."""
     street, _, rest = (text or "").partition(",")
     match = re.match(r"\s*(\d{2}-\d{3})\s+(.+)", rest)
-    if not match:
-        return {"dz_ulica": street.strip(), "dz_kod": "", "dz_miasto": ""}
+    ulica, budynek, lokal = split_street_address(street.strip().title())
     return {
-        "dz_ulica": street.strip().title(),
-        "dz_kod": match.group(1),
-        "dz_miasto": match.group(2).strip().title(),
+        "dz_ulica": ulica,
+        "dz_budynek": budynek,
+        "dz_lokal": lokal,
+        "dz_kod": match.group(1) if match else "",
+        "dz_miasto": match.group(2).strip().title() if match else "",
     }
 
 

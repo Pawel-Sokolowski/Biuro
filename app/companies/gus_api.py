@@ -129,6 +129,7 @@ def parse_legal_report(xml_text: str) -> Dict[str, str]:
     number = _text(node, "praw_numerWrejestrzeEwidencji")
     result = {
         "gus_rodzaj_rejestru": registry,
+        "gus_numer_w_rejestrze": number,
         "gus_organ_rejestrowy": registry_organ,
         "gus_forma_prawna": _text(node, "praw_szczegolnaFormaPrawna_Nazwa"),
     }
@@ -177,10 +178,9 @@ def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
         )
         data = parse_search_result(_result(search, "DaneSzukajPodmiotyResult"))
         if data and data.get("typ") == "P" and data.get("regon"):
-            # BIR11OsPrawna: nowszy raport. PublDaneRaportPrawna: starszy,
-            # nadal spotykany w integracjach. Próbujemy drugi, gdy pierwszy
-            # nie dostarczy numeru KRS lub przy błędzie raportu.
-            for report_name in ("BIR11OsPrawna", "PublDaneRaportPrawna"):
+            # BIR1.2 jest bieżącą wersją raportu, BIR1.1 i starszy
+            # wariant pozostają jako fallback dla zgodności.
+            for report_name in ("BIR12OsPrawna", "BIR11OsPrawna", "PublDaneRaportPrawna"):
                 try:
                     report = _call(
                         url, "DanePobierzPelnyRaport",

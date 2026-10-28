@@ -172,7 +172,7 @@ class LookupTests(unittest.TestCase):
                     "&lt;Typ&gt;P&lt;/Typ&gt;&lt;Nazwa&gt;Firma&lt;/Nazwa&gt;&lt;/dane&gt;"
                     "</a:DaneSzukajPodmiotyResult>"
                 )
-            if "BIR11OsPrawna" in body:
+            if "BIR12OsPrawna" in body or "BIR11OsPrawna" in body:
                 return "<a:DanePobierzPelnyRaportResult />"
             self.assertIn("PublDaneRaportPrawna", body)
             return (
@@ -195,8 +195,45 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(result["krs"], "0000482087")
         self.assertEqual([action for action, _ in calls], [
             "Zaloguj", "DaneSzukajPodmioty",
-            "DanePobierzPelnyRaport", "DanePobierzPelnyRaport",
+            "DanePobierzPelnyRaport", "DanePobierzPelnyRaport", "DanePobierzPelnyRaport",
         ])
+
+    def test_gus_bir12_gets_dreamlune_krs_on_first_report(self):
+        from unittest.mock import patch
+        from app.companies.gus_api import get_gus_firma_by_nip
+
+        report_names = []
+        def fake_call(url, action, body, sid=None):
+            if action == "Zaloguj":
+                return "<ZalogujResult>SESSION_ID</ZalogujResult>"
+            if action == "DaneSzukajPodmioty":
+                return (
+                    "<DaneSzukajPodmiotyResult>"
+                    "&lt;dane&gt;&lt;Regon&gt;545639823&lt;/Regon&gt;"
+                    "&lt;Nip&gt;8393268547&lt;/Nip&gt;"
+                    "&lt;Typ&gt;P&lt;/Typ&gt;"
+                    "&lt;Nazwa&gt;DREAMLUNE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ&lt;/Nazwa&gt;"
+                    "&lt;/dane&gt;</DaneSzukajPodmiotyResult>"
+                )
+            report_names.append(body)
+            return (
+                "<DanePobierzPelnyRaportResult>"
+                "&lt;dane&gt;"
+                "&lt;praw_rodzajRejestruEwidencji_Nazwa&gt;REJESTR PRZEDSIĘBIORCÓW"
+                "&lt;/praw_rodzajRejestruEwidencji_Nazwa&gt;"
+                "&lt;praw_numerWrejestrzeEwidencji&gt;0001264722"
+                "&lt;/praw_numerWrejestrzeEwidencji&gt;"
+                "&lt;/dane&gt;"
+                "</DanePobierzPelnyRaportResult>"
+            )
+
+        with (patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")),
+              patch("app.companies.gus_api._call", side_effect=fake_call)):
+            data = get_gus_firma_by_nip("8393268547")
+        self.assertEqual(data["regon"], "545639823")
+        self.assertEqual(data["krs"], "0001264722")
+        self.assertEqual(len(report_names), 1)
+        self.assertIn("BIR12OsPrawna", report_names[0])
 
     def test_missing_gus_data_with_available_vat_is_explained(self):
         result = lookup_company_by_nip(

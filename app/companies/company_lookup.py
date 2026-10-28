@@ -1,7 +1,8 @@
-"""Pobieranie danych firmy po NIP z kilku źródeł.
+"""Pobieranie danych rejestrowych zależnie od formy prawnej.
 
-Spółka (jest numer KRS):  NIP -> Biała Lista MF -> KRS -> API KRS
-JDG (brak KRS):           NIP -> CEIDG (zapasowo GUS) -> Biała Lista MF
+JDG: CEIDG. Spółka cywilna: REGON/GUS + powiązania wspólników w CEIDG.
+Pozostałe podmioty wpisane do KRS: GUS -> numer KRS -> odpis KRS.
+Biała Lista MF sprawdzana dla KAŻDEJ formy, ale uzupełnia WYŁĄCZNIE VAT i konto.
 """
 from typing import Any, Callable, Dict, Optional
 
@@ -15,13 +16,40 @@ def _ok(data: Optional[Dict[str, Any]]) -> bool:
     return bool(data) and not data.get("error")
 
 
+def _digits(value: Any) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _kind(forma_dzialalnosci: Optional[str]) -> str:
+    """Wybór źródła według formy ustawionej w kartotece."""
+    if not forma_dzialalnosci:
+        return "auto"
+    forma = forma_dzialalnosci.strip().casefold()
+    if forma == "jdg" or forma.startswith("osoba fizyczna") or "jednoosob" in forma:
+        return "jdg"
+    if "spółka cywilna" in forma or "spolka cywilna" in forma or "sp. cywilna" in forma:
+        return "civil"
+    if (
+        forma.startswith("spółka") or forma.startswith("spolka")
+        or forma.startswith("sp. ") or forma in ("fundacja", "stowarzyszenie")
+    ):
+        return "krs"
+    return "auto"
+
+
 def _merge(base: Dict[str, Any], wl: Dict[str, Any]) -> Dict[str, Any]:
-    """Dane rejestru mają pierwszeństwo, Biała Lista dopełnia braki i daje status VAT."""
+    """Biała Lista podaje WYŁĄCZNIE status VAT i numer rachunku bankowego."""
     merged = dict(base)
-    for key, value in wl.items():
-        if value and (key in ("status_vat", "konto_bankowe") or not merged.get(key)):
-            merged[key] = value
+    for key in ("status_vat", "konto_bankowe"):
+        if wl.get(key):
+            merged[key] = wl[key]
     return merged
+
+
+def _matches_nip(data: Dict[str, Any], nip: str) -> bool:
+    """Rekord nie może zostać przypisany do klienta z innym NIP."""
+    returned = _digits(data.get("nip"))
+    return not returned or returned == _digits(nip)
 
 
 def lookup_company_by_nip(
@@ -30,21 +58,63 @@ def lookup_company_by_nip(
     krs: Callable = get_krs_firma_by_krs,
     ceidg: Callable = get_ceidg_firma_by_nip,
     gus: Callable = get_gus_firma_by_nip,
+    forma_dzialalnosci: Optional[str] = None,
+    civil_partners: Optional[Callable] = None,
 ) -> Dict[str, Any]:
-    wl_data = wl(nip)
+    nip = _digits(nip)
+    if len(nip) != 10:
+        return {"error": True, "message": "NIP musi składać się z 10 cyfr."}
 
-    if _ok(wl_data) and wl_data.get("krs"):
-        krs_data = krs(wl_data["krs"])
-        if _ok(krs_data):
-            return _merge(krs_data, wl_data)
-        return wl_data
+    # VAT i numer konta sprawdzane zawsze, również dla spółek cywilnych.
+    wl_data = wl(nip) or {}
+    kind = _kind(forma_dzialalnosci)
 
-    registry = ceidg(nip)
-    if not _ok(registry):
-        gus_data = gus(nip)
-        registry = gus_data if _ok(gus_data) else registry
-    if _ok(registry):
-        return _merge(registry, wl_data) if _ok(wl_data) else registry
+    gus_data: Dict[str, Any] = {}
+    if kind in ("civil", "krs", "auto"):
+        gus_data = gus(nip) or {}
+        if _ok(gus_data) and not _matches_nip(gus_data, nip):
+            gus_data = {"error": True, "message": "GUS zwrócił inny NIP niż wyszukiwany."}
+
+    if kind == "jdg":
+        registry = ceidg(nip)
+    elif kind == "civil":
+        registry = gus_data
+        if _ok(registry):
+            registry = dict(registry)
+            # Spółka cywilna ma własny NIP i REGON, lecz nie ma numeru KRS.
+            registry.pop("krs", None)
+            if civil_partners is None:
+                from app.companies.ceidg_api import get_ceidg_civil_partners
+                civil_partners = get_ceidg_civil_partners
+            try:
+                registry["wspolnicy_ceidg"] = civil_partners(nip)
+            except Exception:
+                registry["wspolnicy_ceidg"] = []
+    else:
+        if kind == "auto" and (
+            not _ok(gus_data) or str(gus_data.get("typ") or "").upper() == "F"
+        ):
+            # Brak wskazanej formy: preferuj CEIDG dla osoby fizycznej.
+            person = ceidg(nip)
+            registry = person if _ok(person) and _matches_nip(person, nip) else gus_data
+        else:
+            registry = gus_data
+            reg_krs = _digits(gus_data.get("krs")) if _ok(gus_data) else ""
+            if reg_krs:
+                krs_data = krs(reg_krs)
+                if _ok(krs_data) and _matches_nip(krs_data, nip):
+                    # KRS jest źródłem szczegółowych danych, GUS numeru REGON.
+                    registry = dict(gus_data)
+                    registry.update({key: value for key, value in krs_data.items() if value not in (None, "")})
+                    registry["krs"] = reg_krs.zfill(10)
+
+    if _ok(registry) and _matches_nip(registry, nip):
+        result = dict(registry)
+        result["nip"] = nip
+        return _merge(result, wl_data) if _ok(wl_data) else result
+
+    # Nie zwracaj danych adresowych/nazwy z Białej Listy zamiast CEIDG/GUS/KRS.
+    # Można natomiast nadal wypełnić status VAT i konto (jeżeli są dostępne).
     if _ok(wl_data):
-        return wl_data
-    return registry if registry and registry.get("error") else wl_data
+        return _merge({"nip": nip}, wl_data)
+    return registry or {"error": True, "message": "Nie znaleziono firmy w odpowiednim rejestrze."}

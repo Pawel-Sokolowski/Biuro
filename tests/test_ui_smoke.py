@@ -108,6 +108,93 @@ class UiSmokeTests(DbTestCase):
             form._on_save()
         self.assertTrue(accept.called)
 
+    def test_ceidg_addresses_survive_save_and_reopening_company_form(self):
+        from app.companies.company_form import CompanyForm
+        from app.companies.company_logic import ceidg_apply
+        from app.db.dao_companies import get_company
+
+        form = CompanyForm(self.firma)
+        form.inputs["pesel"].setText("44051401359")
+        addresses = {
+            "dz": {
+                "miasto": "Szczecin", "kod": "70-001", "ulica": "Kwiatowa",
+                "budynek": "4", "lokal": "12", "wojewodztwo": "zachodniopomorskie",
+                "powiat": "Szczecin", "gmina": "Szczecin", "kraj": "Polska",
+            },
+            "ko": {
+                "miasto": "Police", "kod": "72-010", "ulica": "Szkolna",
+                "budynek": "2", "lokal": "3", "wojewodztwo": "zachodniopomorskie",
+                "powiat": "policki", "gmina": "Police", "kraj": "Polska",
+            },
+            "zam": {
+                "miasto": "Gryfino", "kod": "74-100", "ulica": "Ogrodowa",
+                "budynek": "15", "lokal": "7", "wojewodztwo": "zachodniopomorskie",
+                "powiat": "gryfinski", "gmina": "Gryfino", "kraj": "Polska",
+            },
+        }
+
+        def ceidg_address(values):
+            return {("kodPocztowy" if key == "kod" else key): value
+                    for key, value in values.items()}
+
+        ceidg_apply(form, {
+            "nazwa": "Alfa",
+            "adresDzialalnosci": ceidg_address(addresses["dz"]),
+            "adresKorespondencyjny": ceidg_address(addresses["ko"]),
+        })
+        # Adres zamieszkania jest edytowalny w formularzu, ale nie jest
+        # obecnie automatycznie wypełniany w ceidg_apply.
+        for key, value in addresses["zam"].items():
+            form.inputs[f"zam_{key}"].setText(value)
+
+        form._on_save()
+
+        def database_field(prefix, field):
+            if prefix == "dz":
+                return {"kod": "kod_pocztowy", "budynek": "adres_budynek",
+                        "lokal": "adres_lokal"}.get(field, field)
+            suffix = "kod_pocztowy" if field == "kod" else field
+            return f"adres_{'koresp' if prefix == 'ko' else 'zam'}_{suffix}"
+
+        def assert_addresses_in_database_and_form(company_form):
+            stored = get_company(self.firma)
+            for prefix, values in addresses.items():
+                for key, expected in values.items():
+                    with self.subTest(address=prefix, field=key):
+                        db_key = database_field(prefix, key)
+                        self.assertEqual(stored[db_key], expected)
+                        self.assertEqual(
+                            company_form.inputs[f"{prefix}_{key}"].text(), expected
+                        )
+
+        # Wszystkie 9 pól każdego z 3 adresów w bazie i po ponownym otwarciu.
+        reopened = CompanyForm(self.firma)
+        assert_addresses_in_database_and_form(reopened)
+
+        # Ponowny zapis bez zmian nie może wyczyścić żadnego z 27 pól.
+        reopened._on_save()
+        reopened_again = CompanyForm(self.firma)
+        assert_addresses_in_database_and_form(reopened_again)
+
+    def test_company_form_passes_selected_civil_type_to_lookup(self):
+        from unittest import mock
+        from app.companies.company_form import CompanyForm
+
+        form = CompanyForm(self.firma)
+        form.inputs["forma_dzialalnosci"].setCurrentText("Spółka cywilna")
+        with mock.patch("app.companies.company_form.ceidg_fetch") as fetch:
+            form._on_ceidg()
+        fetch.assert_called_once()
+        selected_lookup = fetch.call_args.kwargs["fetch"]
+        with mock.patch(
+            "app.companies.company_form.lookup_company_by_nip",
+            return_value={"nip": "8522669775"},
+        ) as lookup:
+            selected_lookup("8522669775")
+        lookup.assert_called_once_with(
+            "8522669775", forma_dzialalnosci="Spółka cywilna"
+        )
+
     def test_month_picker_switches_year_and_month(self):
         from app.monthly_view.month_picker import MonthPicker
         from app.reports.import_dao import _prev_month

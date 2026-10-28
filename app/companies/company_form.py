@@ -928,7 +928,13 @@ class CompanyForm(QDialog):
     # ============================================================
     def _on_ceidg(self):
         try:
-            ceidg_fetch(self, fetch=lookup_company_by_nip, label="Pobierz dane", title="Dane firmy")
+            form = self.inputs["forma_dzialalnosci"].currentText()
+            ceidg_fetch(
+                self,
+                fetch=lambda nip: lookup_company_by_nip(nip, forma_dzialalnosci=form),
+                label="Pobierz dane",
+                title="Dane firmy",
+            )
         except Exception as e:
             logger.warning("Błąd pobierania danych firmy: %s", e)
             QMessageBox.warning(self, "Dane firmy", f"Błąd pobierania danych: {e}")

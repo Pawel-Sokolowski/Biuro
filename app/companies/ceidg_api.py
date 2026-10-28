@@ -3,6 +3,7 @@ import os
 import requests
 
 from app.companies.company_names import clean_company_name
+from app.companies.address_parsing import split_street_address
 from app.utils.env_config import load_environment
 
 load_environment()
@@ -70,6 +71,13 @@ def get_ceidg_firma_by_nip(nip: str):
             "kraj": ko.get("kraj", "")
         }
 
+    dz_ulica, dz_budynek, dz_lokal = split_street_address(
+        dz.get("ulica"), dz.get("budynek"), dz.get("lokal")
+    )
+    ko_ulica, ko_budynek, ko_lokal = split_street_address(
+        ko.get("ulica"), ko.get("budynek"), ko.get("lokal")
+    )
+
     pkd_list = f.get("pkd", []) or []
     pkd_codes = [p.get("kod") for p in pkd_list if p.get("kod")]
 
@@ -88,9 +96,9 @@ def get_ceidg_firma_by_nip(nip: str):
 
         "dz_miasto": dz.get("miasto", ""),
         "dz_kod": dz.get("kod", ""),
-        "dz_ulica": dz.get("ulica", ""),
-        "dz_budynek": dz.get("budynek", ""),
-        "dz_lokal": dz.get("lokal", ""),
+        "dz_ulica": dz_ulica,
+        "dz_budynek": dz_budynek,
+        "dz_lokal": dz_lokal,
         "dz_wojewodztwo": dz.get("wojewodztwo", ""),
         "dz_powiat": dz.get("powiat", ""),
         "dz_gmina": dz.get("gmina", ""),
@@ -98,9 +106,9 @@ def get_ceidg_firma_by_nip(nip: str):
 
         "koresp_miasto": ko.get("miasto", ""),
         "koresp_kod": ko.get("kod", ""),
-        "koresp_ulica": ko.get("ulica", ""),
-        "koresp_budynek": ko.get("budynek", ""),
-        "koresp_lokal": ko.get("lokal", ""),
+        "koresp_ulica": ko_ulica,
+        "koresp_budynek": ko_budynek,
+        "koresp_lokal": ko_lokal,
         "koresp_wojewodztwo": ko.get("wojewodztwo", ""),
         "koresp_powiat": ko.get("powiat", ""),
         "koresp_gmina": ko.get("gmina", ""),

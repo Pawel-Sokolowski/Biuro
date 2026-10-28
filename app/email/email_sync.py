@@ -1349,9 +1349,12 @@ def _sync_and_prefetch_impl(
             logger.info("Automatyczne filtry po synchronizacji: %s", summary)
             if on_filters:
                 on_filters(summary)
-        except Exception:
-            # Błąd automatyzacji filtrów nie unieważnia pobranej poczty.
+        except Exception as exc:
+            # Błąd automatyzacji filtrów nie unieważnia pobranej poczty;
+            # jednak użytkownik musi dostać informację o niepowodzeniu.
             logger.exception("Nie udało się wywnioskować filtrów po pełnej synchronizacji")
+            if on_filters:
+                on_filters({"error": str(exc), "added": 0, "addresses": 0, "moved": 0})
 
     try:
         from app.utils.saldeo_status import apply_saldeo_emails

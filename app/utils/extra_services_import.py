@@ -118,8 +118,11 @@ def _sheet_rows(path: Path) -> List[Tuple[str, List[List[Any]]]]:
     if suffix == ".csv":
         return [("CSV", _csv_rows(path))]
     if suffix == ".xlsx":
-        with openpyxl.load_workbook(path, data_only=True, read_only=True) as wb:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        try:
             return [(sheet.title, list(sheet.values)) for sheet in wb.worksheets]
+        finally:
+            wb.close()
     if suffix == ".xls":
         try:
             import xlrd

@@ -403,11 +403,14 @@ class EmailSettings(QWidget):
             message = "Zakończono pobieranie wiadomości do PostgreSQL."
             if self._last_filter_stats is not None:
                 stats = self._last_filter_stats
-                message += (
-                    f"\nRozpoznano adresów: {stats['addresses']}"
-                    f"\nNowych filtrów: {stats['added']}"
-                    f"\nPrzeniesiono wiadomości z Odebranych: {stats['moved']}"
-                )
+                if stats.get("error"):
+                    message += f"\n\nNie udało się przygotować filtrów: {stats['error']}"
+                else:
+                    message += (
+                        f"\nRozpoznano adresów: {stats['addresses']}"
+                        f"\nNowych filtrów: {stats['added']}"
+                        f"\nPrzeniesiono wiadomości z Odebranych: {stats['moved']}"
+                    )
             self.full_sync_status.setText(f"Synchronizacja konta {account_id} zakończona.")
             QMessageBox.information(self, "Synchronizacja", message)
 

@@ -156,7 +156,7 @@ class FakturyLogic:
             }
 
         if stala_kwota > 0:
-            return [pos("Obsługa kadrowa", 1, stala_kwota)]
+            return [pos("Usługa kadrowo-płacowa", 1, stala_kwota)]
 
         result: List[Dict[str, Any]] = []
         labels = {"uop": "Umowa o pracę", "uz": "Umowa zlecenie", "uod": "Umowa o dzieło"}
@@ -168,11 +168,16 @@ class FakturyLogic:
                 klucz = company.get(f"{prefix}_cennik")
                 if ilosc <= 0 or not klucz:
                     continue
-                cur.execute("SELECT cena_netto_kadry FROM cenniki_kadry WHERE klucz = %s", (klucz,))
+                cur.execute(
+                    "SELECT COALESCE(cena_netto_kadry, cena) AS cena_netto_kadry, opis "
+                    "FROM cenniki_kadry WHERE klucz = %s",
+                    (klucz,),
+                )
                 row = cur.fetchone()
                 cena = self._to_float(row["cena_netto_kadry"]) if row else 0.0
                 if cena > 0:
-                    result.append(pos(f"Kadry - {label}", ilosc, cena))
+                    nazwa = str(row.get("opis") or "").strip() or f"Usługa kadrowo-płacowa - {label}"
+                    result.append(pos(nazwa, ilosc, cena))
         finally:
             conn.close()
         return result

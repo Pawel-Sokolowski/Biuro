@@ -1,4 +1,5 @@
 # app/companies/company_form.py
+import re
 from typing import Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
@@ -558,6 +559,29 @@ class CompanyForm(QDialog):
 
         kadry_opts = get_pricing_kadry()
 
+        def add_kadry_cennik_options(combo: QComboBox, typ: str) -> None:
+            """Pokaż nazwę usługi z cennika, zapisując techniczny klucz."""
+            combo.addItem("", "")
+            nazwy = {
+                "uop": ("UoP", "umowa o pracę"),
+                "uz": ("UZ", "umowa zlecenie"),
+                "uod": ("UoD", "umowa o dzieło"),
+            }
+            skrot, pelna = nazwy[typ]
+            for pozycja in kadry_opts:
+                klucz = str(pozycja.get("klucz") or "").strip()
+                opis = str(pozycja.get("opis") or "").strip()
+                tekst = f"{klucz} {opis}".casefold()
+                if not (
+                    re.search(rf"(?<![a-z]){skrot.casefold()}(?![a-z])", tekst)
+                    or pelna in tekst
+                ):
+                    continue
+                nazwa = opis or f"Usługa kadrowo-płacowa - {skrot}"
+                cena = float(pozycja.get("cena_netto_kadry") or 0)
+                combo.addItem(f"{nazwa} — {cena:.2f} zł netto ({klucz})", klucz)
+            make_searchable(combo)
+
         # -----------------------------
         # RZĄD 1
         # -----------------------------
@@ -565,10 +589,7 @@ class CompanyForm(QDialog):
         uop_ilosc.setRange(0, 10000)
 
         uop_cennik = QComboBox()
-        uop_cennik.addItem("", "")
-        for item in kadry_opts:
-            uop_cennik.addItem(item["klucz"], item["klucz"])
-        make_searchable(uop_cennik)
+        add_kadry_cennik_options(uop_cennik, "uop")
 
         add_kadry_row(["UoP ilość:", "UoP cennik:"], [uop_ilosc, uop_cennik])
 
@@ -576,10 +597,7 @@ class CompanyForm(QDialog):
         uz_ilosc.setRange(0, 10000)
 
         uz_cennik = QComboBox()
-        uz_cennik.addItem("", "")
-        for item in kadry_opts:
-            uz_cennik.addItem(item["klucz"], item["klucz"])
-        make_searchable(uz_cennik)
+        add_kadry_cennik_options(uz_cennik, "uz")
 
         add_kadry_row(["UZ ilość:", "UZ cennik:"], [uz_ilosc, uz_cennik])
 
@@ -587,10 +605,7 @@ class CompanyForm(QDialog):
         uod_ilosc.setRange(0, 10000)
 
         uod_cennik = QComboBox()
-        uod_cennik.addItem("", "")
-        for item in kadry_opts:
-            uod_cennik.addItem(item["klucz"], item["klucz"])
-        make_searchable(uod_cennik)
+        add_kadry_cennik_options(uod_cennik, "uod")
 
         add_kadry_row(["UoD ilość:", "UoD cennik:"], [uod_ilosc, uod_cennik])
 
@@ -984,6 +999,8 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QComboBox):
                 if key in ("ksiegowa_id", "kadrowa_id"):
                     payload[key] = int(widget.currentData() or 0)
+                elif key in ("uop_cennik", "uz_cennik", "uod_cennik"):
+                    payload[key] = widget.currentData() or ""
                 else:
                     payload[key] = widget.currentText()
             elif isinstance(widget, QCheckBox):
@@ -1150,9 +1167,15 @@ class CompanyForm(QDialog):
             widget.setCurrentIndex(max(idx, 0))
             return
         text = str(val)
-        if text and widget.findText(text) < 0:
-            widget.addItem(text, text)
-        idx = widget.findText(text)
+        if key in ("uop_cennik", "uz_cennik", "uod_cennik"):
+            idx = widget.findData(text)
+            if idx < 0:
+                widget.addItem(text, text)  # Zachowaj historyczny klucz spoza cennika
+                idx = widget.findData(text)
+        else:
+            if text and widget.findText(text) < 0:
+                widget.addItem(text, text)
+            idx = widget.findText(text)
         if idx >= 0:
             widget.setCurrentIndex(idx)
 

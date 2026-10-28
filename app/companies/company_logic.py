@@ -5,6 +5,7 @@ from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool, QDate
 
 from app.companies.ceidg_api import get_ceidg_firma_by_nip
 from app.companies.company_names import clean_company_name, sole_proprietor_short_name
+from app.companies.address_parsing import split_street_address
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import FIRMA_FIELDS
 from app.db.dao_cenniki_kadry import get_kadry_price, get_kadry_description
@@ -131,6 +132,17 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
     adres_dz = raw.get("adresDzialalnosci") or raw.get("adres_dzialalnosci") or {}
     adres_ko = raw.get("adresKorespondencyjny") or raw.get("adres_korespondencyjny") or {}
 
+    dz_ulica, dz_budynek, dz_lokal = split_street_address(
+        raw.get("dz_ulica") or adres_dz.get("ulica") or adres_dz.get("ulic") or adres_dz.get("street"),
+        raw.get("dz_budynek") or adres_dz.get("budynek") or adres_dz.get("building"),
+        raw.get("dz_lokal") or adres_dz.get("lokal") or adres_dz.get("apartment"),
+    )
+    ko_ulica, ko_budynek, ko_lokal = split_street_address(
+        raw.get("ko_ulica") or raw.get("koresp_ulica") or adres_ko.get("ulica") or adres_ko.get("ulic"),
+        raw.get("ko_budynek") or raw.get("koresp_budynek") or adres_ko.get("budynek"),
+        raw.get("ko_lokal") or raw.get("koresp_lokal") or adres_ko.get("lokal"),
+    )
+
     if form.inputs.get("dz_miasto"):
         _safe_set(form.inputs.get("dz_miasto"),
                   raw.get("dz_miasto") or adres_dz.get("miasto") or raw.get("miasto"))
@@ -138,14 +150,11 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
         _safe_set(form.inputs.get("dz_kod"),
                   raw.get("dz_kod") or adres_dz.get("kod") or adres_dz.get("kodPocztowy") or raw.get("kod"))
     if form.inputs.get("dz_ulica"):
-        _safe_set(form.inputs.get("dz_ulica"),
-                  raw.get("dz_ulica") or adres_dz.get("ulica") or adres_dz.get("ulic") or adres_dz.get("street"))
+        _safe_set(form.inputs.get("dz_ulica"), dz_ulica)
     if form.inputs.get("dz_budynek"):
-        _safe_set(form.inputs.get("dz_budynek"),
-                  raw.get("dz_budynek") or adres_dz.get("budynek") or adres_dz.get("building"))
+        _safe_set(form.inputs.get("dz_budynek"), dz_budynek)
     if form.inputs.get("dz_lokal"):
-        _safe_set(form.inputs.get("dz_lokal"),
-                  raw.get("dz_lokal") or adres_dz.get("lokal") or adres_dz.get("apartment"))
+        _safe_set(form.inputs.get("dz_lokal"), dz_lokal)
     if form.inputs.get("dz_wojewodztwo"):
         _safe_set(form.inputs.get("dz_wojewodztwo"),
                   raw.get("dz_wojewodztwo") or adres_dz.get("wojewodztwo") or adres_dz.get("province"))
@@ -166,26 +175,23 @@ def ceidg_apply(form, data: Optional[Dict[str, Any]]):
         _safe_set(form.inputs.get("ko_kod"),
                   raw.get("ko_kod") or adres_ko.get("kod") or adres_ko.get("kodPocztowy") or raw.get("koresp_kod"))
     if form.inputs.get("ko_ulica"):
-        _safe_set(form.inputs.get("ko_ulica"),
-                  raw.get("ko_ulica") or adres_ko.get("ulica") or adres_ko.get("ulic") or raw.get("koresp_ulica"))
+        _safe_set(form.inputs.get("ko_ulica"), ko_ulica)
     if form.inputs.get("ko_budynek"):
-        _safe_set(form.inputs.get("ko_budynek"),
-                  raw.get("ko_budynek") or adres_ko.get("budynek"))
+        _safe_set(form.inputs.get("ko_budynek"), ko_budynek)
     if form.inputs.get("ko_lokal"):
-        _safe_set(form.inputs.get("ko_lokal"),
-                  raw.get("ko_lokal") or adres_ko.get("lokal"))
+        _safe_set(form.inputs.get("ko_lokal"), ko_lokal)
     if form.inputs.get("ko_wojewodztwo"):
         _safe_set(form.inputs.get("ko_wojewodztwo"),
-                  raw.get("ko_wojewodztwo") or adres_ko.get("wojewodztwo"))
+                  raw.get("ko_wojewodztwo") or raw.get("koresp_wojewodztwo") or adres_ko.get("wojewodztwo"))
     if form.inputs.get("ko_powiat"):
         _safe_set(form.inputs.get("ko_powiat"),
-                  raw.get("ko_powiat") or adres_ko.get("powiat"))
+                  raw.get("ko_powiat") or raw.get("koresp_powiat") or adres_ko.get("powiat"))
     if form.inputs.get("ko_gmina"):
         _safe_set(form.inputs.get("ko_gmina"),
-                  raw.get("ko_gmina") or adres_ko.get("gmina"))
+                  raw.get("ko_gmina") or raw.get("koresp_gmina") or adres_ko.get("gmina"))
     if form.inputs.get("ko_kraj"):
         _safe_set(form.inputs.get("ko_kraj"),
-                  raw.get("ko_kraj") or adres_ko.get("kraj"))
+                  raw.get("ko_kraj") or raw.get("koresp_kraj") or adres_ko.get("kraj"))
 
     # kontakt
     if form.inputs.get("kont_imie"):

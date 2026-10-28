@@ -12,6 +12,56 @@ CEIDG_API_KEY = os.getenv("CEIDG_API_KEY")
 CEIDG_BASE_URL = os.getenv("CEIDG_BASE_URL")
 
 
+def get_ceidg_civil_partners(nip_sc: str):
+    """Wyszukuje wpisy JDG zawierające NIP wskazanej spółki cywilnej.
+
+    To dane WSPÓLNIKÓW, nie dane adresowe/NIP samej spółki cywilnej.
+    """
+    nip_sc = "".join(ch for ch in str(nip_sc or "") if ch.isdigit())
+    if len(nip_sc) != 10:
+        return []
+
+    key = (os.getenv("CEIDG_API_KEY") or CEIDG_API_KEY or "").strip()
+    base_url = (os.getenv("CEIDG_BASE_URL") or CEIDG_BASE_URL or "").strip().rstrip("/")
+    if not key or not base_url:
+        return []
+
+    try:
+        response = requests.get(
+            f"{base_url}/firmy",
+            params={"nip_sc": nip_sc, "limit": 100},
+            headers={"Authorization": "Bearer " + key},
+            timeout=10,
+        )
+        response.raise_for_status()
+        records = response.json().get("firmy") or []
+    except (requests.RequestException, ValueError):
+        return []
+
+    partners = []
+    seen = set()
+    for record in records:
+        matches = any(
+            "".join(c for c in str(company.get("nip") or "") if c.isdigit()) == nip_sc
+            for company in (record.get("spolki") or [])
+            if isinstance(company, dict)
+        )
+        if not matches:
+            continue
+        owner = record.get("wlasciciel") or {}
+        owner_nip = "".join(c for c in str(owner.get("nip") or record.get("nip") or "") if c.isdigit())
+        if not owner_nip or owner_nip in seen:
+            continue
+        seen.add(owner_nip)
+        partners.append({
+            "nip": owner_nip,
+            "imie": owner.get("imie") or owner.get("imiona") or "",
+            "nazwisko": owner.get("nazwisko") or "",
+            "nazwa_dzialalnosci": record.get("nazwa") or "",
+        })
+    return partners
+
+
 def get_ceidg_firma_by_nip(nip: str):
     key = (os.getenv("CEIDG_API_KEY") or CEIDG_API_KEY or "").strip()
     base_url = (os.getenv("CEIDG_BASE_URL") or CEIDG_BASE_URL or "").strip().rstrip("/")

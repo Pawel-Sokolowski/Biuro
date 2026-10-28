@@ -7,6 +7,8 @@ from typing import Any, Dict
 
 import requests
 
+from app.companies.address_parsing import split_street_address
+
 KRS_URL = "https://api-krs.ms.gov.pl/api/krs/OdpisAktualny/{krs}"
 _TIMEOUT = 15
 
@@ -32,9 +34,7 @@ def parse_odpis(data: Dict[str, Any]) -> Dict[str, Any]:
         kod = f"{kod[:2]}-{kod[2:]}"
     budynek = adres.get("nrDomu") or ""
     lokal = adres.get("nrLokalu") or ""
-    ulica = " ".join(p for p in (adres.get("ulica") or "", budynek) if p)
-    if lokal:
-        ulica += f"/{lokal}"
+    ulica, budynek, lokal = split_street_address(adres.get("ulica"), budynek, lokal)
 
     pkd = []
     przedmiot = dzial3.get("przedmiotDzialalnosci") or {}

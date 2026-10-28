@@ -928,7 +928,13 @@ class CompanyForm(QDialog):
     # ============================================================
     def _on_ceidg(self):
         try:
-            ceidg_fetch(self, fetch=lookup_company_by_nip, label="Pobierz dane", title="Dane firmy")
+            form = self.inputs["forma_dzialalnosci"].currentText()
+            ceidg_fetch(
+                self,
+                fetch=lambda nip: lookup_company_by_nip(nip, forma_dzialalnosci=form),
+                label="Pobierz dane",
+                title="Dane firmy",
+            )
         except Exception as e:
             logger.warning("Błąd pobierania danych firmy: %s", e)
             QMessageBox.warning(self, "Dane firmy", f"Błąd pobierania danych: {e}")
@@ -1157,6 +1163,12 @@ class CompanyForm(QDialog):
         data = get_company(self.firma_id)
         if not data:
             return
+
+        # Kolumny DB (miasto, adres_koresp_..., adres_zam_...) mają
+        # inne nazwy niż pola formularza (dz_..., ko_..., zam_...).
+        # Bez mapowania ponowne otwarcie pokazuje puste adresy, a kolejny
+        # zapis formularza może nadpisać istniejące adresy pustymi danymi.
+        data = self._payload_to_form_keys(data)
 
         for key, widget in self.inputs.items():
             val = data.get(key)

@@ -3,12 +3,63 @@ import os
 import requests
 
 from app.companies.company_names import clean_company_name
+from app.companies.address_parsing import split_street_address
 from app.utils.env_config import load_environment
 
 load_environment()
 
 CEIDG_API_KEY = os.getenv("CEIDG_API_KEY")
 CEIDG_BASE_URL = os.getenv("CEIDG_BASE_URL")
+
+
+def get_ceidg_civil_partners(nip_sc: str):
+    """Wyszukuje wpisy JDG zawierające NIP wskazanej spółki cywilnej.
+
+    To dane WSPÓLNIKÓW, nie dane adresowe/NIP samej spółki cywilnej.
+    """
+    nip_sc = "".join(ch for ch in str(nip_sc or "") if ch.isdigit())
+    if len(nip_sc) != 10:
+        return []
+
+    key = (os.getenv("CEIDG_API_KEY") or CEIDG_API_KEY or "").strip()
+    base_url = (os.getenv("CEIDG_BASE_URL") or CEIDG_BASE_URL or "").strip().rstrip("/")
+    if not key or not base_url:
+        return []
+
+    try:
+        response = requests.get(
+            f"{base_url}/firmy",
+            params={"nip_sc": nip_sc, "limit": 100},
+            headers={"Authorization": "Bearer " + key},
+            timeout=10,
+        )
+        response.raise_for_status()
+        records = response.json().get("firmy") or []
+    except (requests.RequestException, ValueError):
+        return []
+
+    partners = []
+    seen = set()
+    for record in records:
+        matches = any(
+            "".join(c for c in str(company.get("nip") or "") if c.isdigit()) == nip_sc
+            for company in (record.get("spolki") or [])
+            if isinstance(company, dict)
+        )
+        if not matches:
+            continue
+        owner = record.get("wlasciciel") or {}
+        owner_nip = "".join(c for c in str(owner.get("nip") or record.get("nip") or "") if c.isdigit())
+        if not owner_nip or owner_nip in seen:
+            continue
+        seen.add(owner_nip)
+        partners.append({
+            "nip": owner_nip,
+            "imie": owner.get("imie") or owner.get("imiona") or "",
+            "nazwisko": owner.get("nazwisko") or "",
+            "nazwa_dzialalnosci": record.get("nazwa") or "",
+        })
+    return partners
 
 
 def get_ceidg_firma_by_nip(nip: str):
@@ -70,6 +121,13 @@ def get_ceidg_firma_by_nip(nip: str):
             "kraj": ko.get("kraj", "")
         }
 
+    dz_ulica, dz_budynek, dz_lokal = split_street_address(
+        dz.get("ulica"), dz.get("budynek"), dz.get("lokal")
+    )
+    ko_ulica, ko_budynek, ko_lokal = split_street_address(
+        ko.get("ulica"), ko.get("budynek"), ko.get("lokal")
+    )
+
     pkd_list = f.get("pkd", []) or []
     pkd_codes = [p.get("kod") for p in pkd_list if p.get("kod")]
 
@@ -88,9 +146,9 @@ def get_ceidg_firma_by_nip(nip: str):
 
         "dz_miasto": dz.get("miasto", ""),
         "dz_kod": dz.get("kod", ""),
-        "dz_ulica": dz.get("ulica", ""),
-        "dz_budynek": dz.get("budynek", ""),
-        "dz_lokal": dz.get("lokal", ""),
+        "dz_ulica": dz_ulica,
+        "dz_budynek": dz_budynek,
+        "dz_lokal": dz_lokal,
         "dz_wojewodztwo": dz.get("wojewodztwo", ""),
         "dz_powiat": dz.get("powiat", ""),
         "dz_gmina": dz.get("gmina", ""),
@@ -98,9 +156,9 @@ def get_ceidg_firma_by_nip(nip: str):
 
         "koresp_miasto": ko.get("miasto", ""),
         "koresp_kod": ko.get("kod", ""),
-        "koresp_ulica": ko.get("ulica", ""),
-        "koresp_budynek": ko.get("budynek", ""),
-        "koresp_lokal": ko.get("lokal", ""),
+        "koresp_ulica": ko_ulica,
+        "koresp_budynek": ko_budynek,
+        "koresp_lokal": ko_lokal,
         "koresp_wojewodztwo": ko.get("wojewodztwo", ""),
         "koresp_powiat": ko.get("powiat", ""),
         "koresp_gmina": ko.get("gmina", ""),

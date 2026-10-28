@@ -26,7 +26,11 @@ def enrich_payload(
     if len(nip) != 10:
         return None
     if lookup is None:
-        from app.companies.company_lookup import lookup_company_by_nip as lookup
+        from app.companies.company_lookup import lookup_company_by_nip
+        selected_form = payload.get("forma_dzialalnosci")
+        lookup = lambda company_nip: lookup_company_by_nip(
+            company_nip, forma_dzialalnosci=selected_form
+        )
     try:
         data = lookup(nip) or {}
     except Exception as exc:

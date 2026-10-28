@@ -243,15 +243,16 @@ def apply_rules_to_folder(konto_id: int, folder: str, history_days: Optional[int
             (datetime.now() - timedelta(days=history_days)).strftime("%Y-%m-%d")
             if history_days is not None else None
         )
-        rows = conn.execute(
-            """
+        sql = """
             SELECT w.uid, w.nadawca, w.odbiorca, w.temat, w.przeczytana
             FROM wiadomosci_email w JOIN foldery_email f ON f.id = w.folder_id
             WHERE w.konto_id = %s AND f.server_name = %s AND COALESCE(w.usunieta, 0) = 0
-              AND (%s IS NULL OR w.data >= %s)
-            """,
-            (konto_id, folder, cutoff, cutoff),
-        ).fetchall()
+        """
+        params = [konto_id, folder]
+        if cutoff is not None:
+            sql += " AND w.data >= %s"
+            params.append(cutoff)
+        rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
     headers = [

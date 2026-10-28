@@ -1158,6 +1158,12 @@ class CompanyForm(QDialog):
         if not data:
             return
 
+        # Kolumny DB (miasto, adres_koresp_..., adres_zam_...) mają
+        # inne nazwy niż pola formularza (dz_..., ko_..., zam_...).
+        # Bez mapowania ponowne otwarcie pokazuje puste adresy, a kolejny
+        # zapis formularza może nadpisać istniejące adresy pustymi danymi.
+        data = self._payload_to_form_keys(data)
+
         for key, widget in self.inputs.items():
             val = data.get(key)
             if isinstance(widget, QLineEdit):

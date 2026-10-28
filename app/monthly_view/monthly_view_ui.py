@@ -498,6 +498,11 @@ class MonthlyViewPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.logic = MonthlyViewLogic(pracownik_id)
+        # Księgowość: dotychczasowy miesiąc domyślny; Kadry: miesiąc bieżący.
+        self._months_by_tab = {
+            0: self.logic.aktualny_miesiac,
+            1: datetime.date.today().strftime("%Y-%m"),
+        }
 
         self._rows: List[Dict[str, Any]] = []
 
@@ -591,6 +596,7 @@ class MonthlyViewPage(QWidget):
         self._setup_column_widths()
 
         self.month_combo.monthChanged.connect(self._on_filters_changed)
+        self.tabs.currentChanged.connect(self._on_month_tab_changed)
         self.employee_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.status_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.btn_refresh.clicked.connect(self._reload_rows)
@@ -693,8 +699,19 @@ class MonthlyViewPage(QWidget):
     def _current_status_filter(self) -> str:
         return self.status_combo.currentText() or "Wszystkie"
 
+    def _on_month_tab_changed(self, index: int):
+        if index not in self._months_by_tab:
+            return
+        month = self._months_by_tab[index]
+        if self.month_combo.currentText() != month:
+            self.month_combo.setCurrentText(month)
+        self.logic.set_month(month)
+        self._reload_rows()
+
     def _on_filters_changed(self):
-        self.logic.set_month(self._current_month())
+        month = self._current_month()
+        self._months_by_tab[self.tabs.currentIndex()] = month
+        self.logic.set_month(month)
         self._reload_rows()
 
     def _reload_rows(self):

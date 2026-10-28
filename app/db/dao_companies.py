@@ -780,7 +780,7 @@ def get_pricing_kadry() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT klucz, cena_netto_kadry
+        SELECT klucz, COALESCE(cena_netto_kadry, cena) AS cena_netto_kadry, opis
         FROM cenniki_kadry
         ORDER BY klucz
     """)

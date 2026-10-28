@@ -351,6 +351,56 @@ class LookupTests(unittest.TestCase):
         self.assertNotIn("dz_miasto", result)
         self.assertEqual(result["status_vat"], "Czynny")
 
+    def test_dreamlune_gus_register_przedsiebiorcow_yields_krs(self):
+        from app.companies.gus_api import parse_legal_report
+
+        # Zgłoszony rzeczywisty przypadek GUS: rodzaj rejestru to
+        # "REJESTR PRZEDSIĘBIORCÓW", a nie dosłownie "KRS".
+        xml = (
+            "<dane>"
+            "<praw_regon9>545639823</praw_regon9>"
+            "<praw_nip>8393268547</praw_nip>"
+            "<praw_nazwa>DREAMLUNE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ</praw_nazwa>"
+            "<praw_podstawowaFormaPrawna_Symbol>1</praw_podstawowaFormaPrawna_Symbol>"
+            "<praw_szczegolnaFormaPrawna_Symbol>117</praw_szczegolnaFormaPrawna_Symbol>"
+            "<praw_szczegolnaFormaPrawna_Nazwa>SPÓŁKI Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ</praw_szczegolnaFormaPrawna_Nazwa>"
+            "<praw_organRejestrowy_Nazwa>SĄD REJONOWY GDAŃSK-PÓŁNOC W GDAŃSKU, "
+            "VIII WYDZIAŁ GOSPODARCZY KRAJOWEGO REJESTRU SĄDOWEGO</praw_organRejestrowy_Nazwa>"
+            "<praw_rodzajRejestruEwidencji_Nazwa>REJESTR PRZEDSIĘBIORCÓW</praw_rodzajRejestruEwidencji_Nazwa>"
+            "<praw_numerWrejestrzeEwidencji>0001264722</praw_numerWrejestrzeEwidencji>"
+            "</dane>"
+        )
+        result = parse_legal_report(xml)
+        self.assertEqual(result["krs"], "0001264722")
+        self.assertEqual(result["gus_rodzaj_rejestru"], "REJESTR PRZEDSIĘBIORCÓW")
+
+    def test_register_przedsiebiorcow_krs_flows_gus_to_krs(self):
+        from app.companies.gus_api import parse_legal_report
+
+        report = parse_legal_report(
+            "<dane>"
+            "<praw_rodzajRejestruEwidencji_Nazwa>REJESTR PRZEDSIĘBIORCÓW</praw_rodzajRejestruEwidencji_Nazwa>"
+            "<praw_numerWrejestrzeEwidencji>0001264722</praw_numerWrejestrzeEwidencji>"
+            "</dane>"
+        )
+        calls = []
+        result = lookup_company_by_nip(
+            "8393268547", forma_dzialalnosci="Spółka z o.o.",
+            gus=lambda nip: {"nip": nip, "regon": "545639823", "nazwa": "GUS DREAMLUNE", **report},
+            wl=lambda nip: {"status_vat": "Czynny"},
+            krs=lambda number: calls.append(number) or {
+                "nip": "8393268547",
+                "nazwa": "DREAMLUNE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
+                "dz_miasto": "Wodnica",
+            },
+            ceidg=lambda nip: self.fail("Spółka z o.o. nie powinna trafiać do CEIDG"),
+        )
+        self.assertEqual(calls, ["0001264722"])
+        self.assertEqual(result["krs"], "0001264722")
+        self.assertEqual(result["dz_miasto"], "Wodnica")
+        self.assertEqual(result["nip"], "8393268547")
+        self.assertNotIn("_registry_warning", result)
+
     def test_gus_krs_number_requires_explicit_krs_register(self):
         from app.companies.gus_api import parse_legal_report
         result = parse_legal_report(

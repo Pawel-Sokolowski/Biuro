@@ -105,6 +105,30 @@ def parse_search_result(xml_text: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def parse_legal_report(xml_text: str) -> Dict[str, str]:
+    """Numer KRS w GUS pochodzi z pełnego raportu jednostki prawnej, nie z wyszukania."""
+    if not xml_text:
+        return {}
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return {}
+    node = root.find("dane")
+    if node is None:
+        return {}
+
+    registry = _text(node, "praw_rodzajRejestruEwidencji_Nazwa")
+    number = _text(node, "praw_numerWrejestrzeEwidencji")
+    result = {
+        "gus_rodzaj_rejestru": registry,
+        "gus_forma_prawna": _text(node, "praw_szczegolnaFormaPrawna_Nazwa"),
+    }
+    # GUS przechowuje też numery innych rejestrów – nie są numerami KRS.
+    if "KRAJOWY REJESTR SĄDOWY" in registry.upper() and re.fullmatch(r"\d{1,10}", number):
+        result["krs"] = number.zfill(10)
+    return result
+
+
 def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
     """Zwraca dane firmy z GUS albo {"error": True, "message": ...}."""
     key, url = _config()
@@ -130,6 +154,20 @@ def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
             sid=sid,
         )
         data = parse_search_result(_result(search, "DaneSzukajPodmiotyResult"))
+        if data and data.get("typ") == "P" and data.get("regon"):
+            try:
+                report = _call(
+                    url, "DanePobierzPelnyRaport",
+                    "<ns:DanePobierzPelnyRaport>"
+                    f"<ns:pRegon>{html.escape(data['regon'])}</ns:pRegon>"
+                    "<ns:pNazwaRaportu>PublDaneRaportPrawna</ns:pNazwaRaportu>"
+                    "</ns:DanePobierzPelnyRaport>",
+                    sid=sid,
+                )
+                data.update(parse_legal_report(_result(report, "DanePobierzPelnyRaportResult")))
+            except (requests.RequestException, GusError):
+                # Podstawowe dane GUS są nadal przydatne, ale bez potwierdzonego KRS.
+                pass
     except requests.RequestException as exc:
         return {"error": True, "message": f"Brak połączenia z GUS: {exc}"}
     except GusError as exc:

@@ -11,9 +11,11 @@ from app.db.dao_invoices import (
     InvoiceLockedError,
     get_invoice_for_company_month,
     create_or_update_invoice,
+    generate_extra_services_invoice,
 )
 from app.db.dao_monthly import count_documents_for_month
 from app.utils.months import previous_month
+from app.services.payroll_names import payroll_invoice_service_name
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +56,12 @@ class FakturyLogic:
                    uf.id AS extra_service_row_id, uf.usluga_id, uf.jednostka
             FROM uslugi_dodatkowe_firma uf
             JOIN uslugi_dodatkowe u ON uf.usluga_id = u.id
+            LEFT JOIN zadania z ON z.id = uf.zadanie_id
+            LEFT JOIN faktury_uslugi_dodatkowe a ON a.extra_service_row_id = uf.id
+            LEFT JOIN faktury allocated ON allocated.id = a.invoice_id
             WHERE uf.firma_id = %s AND uf.miesiac = %s AND uf.fakturowac = 1
+              AND (uf.zadanie_id IS NULL OR z.status = 'Zakończone')
+              AND (a.extra_service_row_id IS NULL OR COALESCE(allocated.reczna, 0) = 0)
             ORDER BY u.nazwa
         """, (firma_id, miesiac))
         rows = cur.fetchall()
@@ -160,11 +167,11 @@ class FakturyLogic:
             return [pos("Usługa kadrowo-płacowa", 1, stala_kwota)]
 
         result: List[Dict[str, Any]] = []
-        labels = {"uop": "Umowa o pracę", "uz": "Umowa zlecenie", "uod": "Umowa o dzieło"}
+        contract_types = ("uop", "uz", "uod")
         conn = get_conn()
         try:
             cur = conn.cursor()
-            for prefix, label in labels.items():
+            for prefix in contract_types:
                 ilosc = int(company.get(f"{prefix}_ilosc") or 0)
                 klucz = company.get(f"{prefix}_cennik")
                 if ilosc <= 0 or not klucz:
@@ -177,7 +184,7 @@ class FakturyLogic:
                 row = cur.fetchone()
                 cena = self._to_float(row["cena_netto_kadry"]) if row else 0.0
                 if cena > 0:
-                    nazwa = str(row.get("opis") or "").strip() or f"Usługa kadrowo-płacowa - {label}"
+                    nazwa = payroll_invoice_service_name(prefix, klucz, row.get("opis"))
                     result.append(pos(nazwa, ilosc, cena))
         finally:
             conn.close()
@@ -411,9 +418,10 @@ class FakturyLogic:
 
     # ---------------- SAVE SINGLE ----------------
     def generate_and_save_invoice(self, firma_id: int, miesiac: str) -> Dict[str, Any]:
-        generated_positions = self.generate_invoice_positions(firma_id, miesiac)
-
         existing = get_invoice_for_company_month(firma_id, miesiac)
+        if existing and existing.get("eksportowana"):
+            return generate_extra_services_invoice(firma_id, miesiac)
+        generated_positions = self.generate_invoice_positions(firma_id, miesiac)
         if not existing:
             generated_positions.extend(self._get_archived_manual_positions(firma_id, miesiac))
         if not existing and not generated_positions:
@@ -501,6 +509,18 @@ class FakturyLogic:
             try:
                 company = self._get_company(fid)
                 if not company:
+                    continue
+
+                existing_issued = get_invoice_for_company_month(fid, miesiac)
+                if existing_issued and existing_issued.get("eksportowana"):
+                    result = self.generate_and_save_invoice(fid, miesiac)
+                    if result.get("skipped"):
+                        skipped += 1
+                        skipped_details.append(self._skip_description(fid, miesiac))
+                    else:
+                        processed += 1
+                        created += int(bool(result.get("created")))
+                        updated += int(not result.get("created"))
                     continue
 
                 fakturowac_flag = bool(company.get("fakturowac", 0))
@@ -613,7 +633,7 @@ class FakturyLogic:
             return f"{name} - brak pozycji do zafakturowania"
         numer = existing.get("numer")
         suffix = f" ({numer})" if numer else ""
-        hint = "usuń ją przyciskiem „Usuń wystawioną” i wygeneruj ponownie, aby dodać usługi dodatkowe"
+        hint = "brak nowych wykonanych czynności dodatkowych do zafakturowania"
         if not company.get("fakturowac", 0):
             return f"{name} - płatność z góry za rok{suffix}; {hint}"
         return f"{name} - faktura już wystawiona{suffix}; {hint}"

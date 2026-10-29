@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-29.3"
+SCHEMA_VERSION = "2026-10-29.4"
 
 
 def _schema_hash() -> str:
@@ -902,6 +902,8 @@ def init_db():
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_zadania_status ON zadania(status, termin)"
     )
+    _safe_alter_add_column(cur, "uslugi_dodatkowe_firma", "zadanie_id INTEGER REFERENCES zadania(id) ON DELETE RESTRICT")
+    _ensure_index(cur, "idx_uslugi_dodatkowe_firma_zadanie", "uslugi_dodatkowe_firma", "zadanie_id")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja ON wiadomosci_chat(konwersacja_id);")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_wiadomosci_chat_konwersacja_data "
@@ -1058,6 +1060,15 @@ def init_db():
     _safe_alter_add_column(cur, "faktury", "ksef_srodowisko_wysylki TEXT")
     _safe_alter_add_column(cur, "faktury", "ksef_nip_wysylki TEXT")
     _safe_alter_add_column(cur, "faktury", "ksef_hash_faktury TEXT")
+    _safe_alter_add_column(cur, "faktury", "dodatkowa INTEGER NOT NULL DEFAULT 0")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS faktury_uslugi_dodatkowe (
+            extra_service_row_id INTEGER PRIMARY KEY
+                REFERENCES uslugi_dodatkowe_firma(id) ON DELETE RESTRICT,
+            invoice_id INTEGER NOT NULL REFERENCES faktury(id) ON DELETE CASCADE
+        )
+    """)
+    _ensure_index(cur, "idx_faktury_uslugi_dodatkowe_invoice", "faktury_uslugi_dodatkowe", "invoice_id")
 
     # Jedna faktura miesięczna na firmę, ale dowolnie wiele korekt
     cur.execute("DROP INDEX IF EXISTS ux_faktury_firma_miesiac_v2;")

@@ -2,6 +2,7 @@
 import json
 import re
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -34,6 +35,81 @@ SALDEO_HEADERS = [
     "Data zamówienia", "Numer umowy", "Data umowy", "Kategoria",
     "Opis", "Rejestr"
 ]
+
+
+class SaldeoExportError(ValueError):
+    """Dane nie mogą zostać bezpiecznie zapisane do szablonu faktur Saldeo."""
+
+
+class SaldeoCorrectionExportError(SaldeoExportError):
+    def __init__(self, corrections):
+        self.corrections = tuple(corrections)
+        labels = []
+        for invoice in self.corrections[:5]:
+            label = str(_get_field(invoice, "numer") or f"ID {_get_field(invoice, 'id', '?')}")
+            original = (_get_field(invoice, "korygowana_faktura_numer")
+                        or f"ID {_get_field(invoice, 'korygowana_faktura_id', '?')}")
+            labels.append(f"{label} → faktura pierwotna {original}")
+        if len(self.corrections) > 5:
+            labels.append(f"… i {len(self.corrections) - 5} kolejnych korekt")
+        super().__init__(
+            "Korekt nie można wyeksportować tym szablonem XLSX do Saldeo. "
+            "Szablon tworzy zwykłe faktury i nie zawiera powiązania z fakturą korygowaną. "
+            "Nie zmieniaj ujemnych wartości na dodatnie.\n\n"
+            + "\n".join(labels)
+            + "\n\nW Saldeo otwórz właściwą fakturę pierwotną i wystaw do niej korektę. "
+            "Następnie zapisz nadany numer przy lokalnej korekcie. "
+            "Jeżeli zaznaczono także zwykłe faktury, wyeksportuj je osobno. "
+            "Nie zapisano pliku i nie oznaczono dokumentów jako wystawionych."
+        )
+
+
+def _invoice_positions(invoice):
+    value = _get_field(invoice, "pozycje_json", _get_field(invoice, "pozycje", "[]"))
+    try:
+        positions = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError) as exc:
+        raise SaldeoExportError("Nieprawidłowe dane pozycji faktury. Popraw je przed eksportem do Saldeo.") from exc
+    if positions is None:
+        return []
+    if not isinstance(positions, list) or any(not isinstance(position, dict) for position in positions):
+        raise SaldeoExportError("Nieprawidłowe dane pozycji faktury. Popraw je przed eksportem do Saldeo.")
+    return positions
+
+
+def validate_saldeo_invoices(invoices: List[Dict[str, Any]]) -> None:
+    """Kontroluje cały zestaw przed utworzeniem/nadpisaniem pliku i zmianą statusów.
+
+    SALDEO_HEADERS opisują import zwykłych faktur, bez typu korekty ani numeru
+    faktury pierwotnej. Korekta pozostaje odrębnym dokumentem z własnymi znakami.
+    """
+    corrections = [invoice for invoice in invoices
+                   if str(_get_field(invoice, "rodzaj", "")).strip().lower() == "korekta"
+                   or _get_field(invoice, "korygowana_faktura_id", None) is not None]
+    if corrections:
+        raise SaldeoCorrectionExportError(corrections)
+    for invoice in invoices:
+        values = [_get_field(invoice, key, None) for key in ("kwota_netto", "kwota_brutto")]
+        for position in _invoice_positions(invoice):
+            values.extend(position.get(key) for key in (
+                "ilosc", "quantity", "cena_netto", "netto", "wartosc_netto", "cena_brutto", "brutto",
+            ))
+        for value in values:
+            if value in (None, ""):
+                continue
+            try:
+                amount = Decimal(str(value).strip().replace(",", "."))
+            except (InvalidOperation, ValueError) as exc:
+                raise SaldeoExportError("Nieprawidłowa ilość lub kwota pozycji przed eksportem do Saldeo.") from exc
+            if not amount.is_finite():
+                raise SaldeoExportError("Ilości i kwoty w eksporcie Saldeo muszą być skończonymi liczbami.")
+            if amount < 0:
+                raise SaldeoExportError(
+                    "Zwykła faktura zawiera ujemną ilość lub kwotę. Nie można importować jej "
+                    "jako zwykłej faktury w Saldeo. Jeżeli to korekta, wystaw ją w Saldeo "
+                    "na podstawie faktury pierwotnej i zapisz jej numer w lokalnej korekcie. "
+                    "Nie zmieniaj znaków wartości. Nie zapisano pliku."
+                )
 
 
 # -------------------------
@@ -109,7 +185,7 @@ def export_saldeo_xlsx(
     wysylac_do_ksef: Optional[bool] = None,
     wysylac_do_kontrahenta: Optional[bool] = None,
 ) -> None:
-
+    validate_saldeo_invoices(invoices)
     default_metoda_kasowa = _get_export_bool("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa")
     default_wysylac_do_ksef = _get_export_bool("eksport_do_ksef", "faktury_ksef", "domyslnie_wysylac_do_ksef")
     default_wysylac_do_kontrahenta = _get_export_bool(
@@ -232,13 +308,7 @@ def export_saldeo_xlsx(
         odb_pelna = _get_field(fv, "odbiorca_pelna", "") or ""
         has_odbiorca = bool(odb_skrocona or odb_pelna)
 
-        pozycje_json = _get_field(fv, "pozycje_json", _get_field(fv, "pozycje", "[]"))
-        try:
-            pozycje = json.loads(pozycje_json) if isinstance(pozycje_json, str) else pozycje_json
-            if pozycje is None:
-                pozycje = []
-        except Exception:
-            pozycje = []
+        pozycje = _invoice_positions(fv)
 
         price_mode = "netto"
         if pozycje and not any(

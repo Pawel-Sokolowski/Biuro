@@ -347,6 +347,7 @@ class MonthlyViewLogic:
                 TimerUtils.round_seconds_to_minimum_half(delta),
                 self.aktualny_miesiac,
                 self.pracownik_id,
+                zadanie_id=(activity or {}).get("task_id"),
             )
 
         setattr(self, fields[0], None)

@@ -234,7 +234,10 @@ def build_report(
             SELECT f.id AS firma_id, m.miesiac,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
-                   COALESCE(dc.dokumenty, 0) AS dokumenty,
+                   -- Te same dane co w widoku miesięcznym: rzeczywiste dokumenty
+                   -- z tabeli dokumenty albo ręczna/importowana liczba miesięczna.
+                   -- Limit firmy wpływa wyłącznie na cenę, nigdy na tę liczbę.
+                   COALESCE(NULLIF(dc.dokumenty, 0), sm.ilosc_dok, 0) AS dokumenty,
                    COALESCE(ex.extra, 0) AS extra,
                    COALESCE(c.netto, c.cena_netto_ksiegowosc, 0) AS netto,
                    COALESCE(c.brutto, c.cena_brutto_ksiegowosc, 0) AS brutto,

@@ -174,7 +174,7 @@ def export_saldeo_xlsx(
             try:
                 cur.execute("""
                     SELECT
-                        nazwa, nazwa_skrocona, nip, regon,
+                        nazwa, nazwa_skrocona, nazwa_saldeo, nip, regon,
                         miasto, kod_pocztowy, ulica,
                         adres_budynek, adres_lokal, adres_email,
                         konto_bankowe, uwagi, kategoria_domyslna,
@@ -195,7 +195,9 @@ def export_saldeo_xlsx(
 
         firm_name = fr.get("nazwa") or _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
         nazwa_pelna = _get_field(fv, "nabywca_pelna", "") or firm_name
-        nazwa_skrocona = _get_field(fv, "nabywca_skrocona", "") or fr.get("nazwa_skrocona") or nazwa_pelna
+        # Kontrahent w Saldeo ma własną nazwę skróconą; nazwa rejestrowa pozostaje niezależna.
+        nazwa_skrocona = (fr.get("nazwa_saldeo") or _get_field(fv, "nabywca_skrocona", "")
+                         or fr.get("nazwa_skrocona") or nazwa_pelna)
         nip = _get_field(fv, "nabywca_nip", "") or fr.get("nip") or _get_field(fv, "firma_nip", "")
         regon = _get_field(fv, "nabywca_regon", "") or fr.get("regon") or ""
         def _alt(field):
@@ -223,7 +225,7 @@ def export_saldeo_xlsx(
         email = _get_field(fv, "nabywca_email", "") or fr.get("adres_email") or _get_field(fv, "firma_email", "")
         kraj = _get_field(fv, "nabywca_kraj", "") or "PL"
         # Konto bankowe w Saldeo to rachunek wystawcy, nie nabywcy.
-        konto_bankowe = _get_field(fv, "konto_bankowe", "") or default_konto
+        konto_bankowe = default_konto or _get_field(fv, "konto_bankowe", "")
         wystawca = _get_field(fv, "wystawca", "") or default_wystawca
         kategoria_domyslna = fr.get("kategoria_domyslna") or ""
         odb_skrocona = _get_field(fv, "odbiorca_skrocona", "") or ""

@@ -154,7 +154,9 @@ class EmailPageTests(DbTestCase):
     def test_page_builds_tree_and_renders_cached_message(self):
         from app.db.dao_conn import get_conn
         from app.email import email_ui
-        from app.email.email_storage import get_folder_id, save_folder, save_message_header
+        from app.email.email_storage import (
+            get_folder_id, get_message_row_id, save_folder, save_message_header, save_raw_message,
+        )
 
         conn = get_conn()
         conn.execute("INSERT INTO konta_email (id, email) VALUES (1, 'a@b.pl')")
@@ -166,12 +168,12 @@ class EmailPageTests(DbTestCase):
         save_message_header(1, fid, "7", None, "x@y.pl", "a@b.pl", "Temat", "2024-01-01 10:00", False, False)
 
         raw = b"From: x@y.pl\r\nTo: a@b.pl\r\nSubject: Temat\r\n\r\nTresc listu"
+        save_raw_message(get_message_row_id(1, fid, "7"), raw)
         with mock.patch.object(email_ui, "get_email_accounts_for_employee", return_value=[{"id": 1, "email": "a@b.pl"}]), \
-                mock.patch.object(email_ui, "sync_and_prefetch", return_value=0), \
-                mock.patch("app.email.email_cache.get_data_dir", return_value=self._tmp), \
+                mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
+                mock.patch("app.email.email_sync._connect_imap", side_effect=AssertionError("Message should be loaded from PostgreSQL")), \
                 mock.patch("app.email.email_sync.mark_read_remote", return_value=True), \
                 mock.patch.object(email_ui, "mark_read_remote", return_value=True):
-            email_cache.write_message(1, "INBOX", "7", raw)
             page = email_ui.EmailPage(1)
             account = page.folder_tree.topLevelItem(0)
             self.assertEqual(account.text(0), "a@b.pl")

@@ -88,11 +88,6 @@ class MonthlyViewLogic:
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    sm.data_dostarczenia AS data_dostarczenia,
                    COALESCE(NULLIF(sm.ilosc_dok, 0), doc.ilosc_dok, 0) AS ilosc_dok,
-                   inv.numer AS numer_faktury,
-                   CASE WHEN COALESCE(pay.kwota_razem, 0) >= COALESCE(inv.kwota_brutto, 0)
-                             AND COALESCE(inv.kwota_brutto, 0) > 0
-                        THEN TO_CHAR(pay.data_ostatniej, 'DD/MM/YYYY')
-                        ELSE '' END AS faktura_zaplacona,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
                    COALESCE(k.uop_ilosc, f.uop_ilosc, 0) AS uop,
@@ -113,22 +108,8 @@ class MonthlyViewLogic:
                 WHERE data_wyst >= %s AND data_wyst < %s
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
-            -- Jedna faktura za wybrany miesiąc rozliczeniowy; nie za miesiąc
-            -- przelewu. Preferowana jest faktura już wystawiona.
-            LEFT JOIN LATERAL (
-                SELECT i.id, i.numer, i.kwota_brutto
-                FROM faktury i
-                WHERE i.firma_id = f.id AND i.miesiac = %s
-                  AND i.rodzaj = 'faktura'
-                ORDER BY COALESCE(i.eksportowana, 0) DESC,
-                         COALESCE(i.reczna, 0) ASC, i.id DESC LIMIT 1
-            ) inv ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT SUM(p.kwota) AS kwota_razem, MAX(p.data_zaplaty) AS data_ostatniej
-                FROM faktury_platnosci p WHERE p.faktura_id = inv.id
-            ) pay ON TRUE
         """
-        params: List[Any] = [selected_month, selected_month, month_start, month_end, selected_month]
+        params: List[Any] = [selected_month, selected_month, month_start, month_end]
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
@@ -145,7 +126,23 @@ class MonthlyViewLogic:
         if firm_ids:
             notes_map = get_latest_notes_for_firms(firm_ids)
 
+        from app.db.dao_payments import monthly_invoice_payments
+        invoices_by_company = monthly_invoice_payments(selected_month)
+
         for r in rows:
+            invoices = invoices_by_company.get(r["id"], [])
+            r["invoice_payments"] = invoices
+            r["numer_faktury"] = "\n".join(inv["numer"] for inv in invoices)
+            r["faktura_zaplacona"] = "\n".join(
+                inv["paid_on"].strftime("%d/%m/%Y") if inv["paid_on"] else "" for inv in invoices
+            )
+            details = []
+            for inv in invoices:
+                details.append(f"{inv['numer']}: wpłacono {inv['paid']:.2f} PLN; saldo {inv['balance']:.2f} PLN")
+                for p in inv["payments"]:
+                    method = "gotówka" if p["sposob"] == "gotowka" else "przelew"
+                    details.append(f"  {p['data_zaplaty']:%d/%m/%Y}: {p['kwota']:.2f} PLN ({method})")
+            r["faktura_platnosci_tooltip"] = "\n".join(details)
             if selected_status != "Wszystkie":
                 if (r["status"] or "Aktywne") != selected_status:
                     continue

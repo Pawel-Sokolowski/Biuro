@@ -891,6 +891,12 @@ def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) ->
         invoice = dict(row)
         if draft_only and invoice.get("eksportowana"):
             raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s LIMIT 1", (invoice_id,)).fetchone():
+            raise InvoiceLockedError("Faktura ma zapisane płatności. Nie można usunąć historii jej rozliczeń.")
+        if invoice.get("ksef_numer") or invoice.get("ksef_status") in (
+            "wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta"
+        ):
+            raise InvoiceLockedError("Faktura została wysłana do KSeF lub oczekuje na wynik. Nie można jej usunąć.")
         archive_invoice_positions(conn, invoice)
         _preserve_legacy_extra_services(conn, invoice)
         # Usunięcie nagłówka kasuje powiązane faktury_pozycje przez ON DELETE

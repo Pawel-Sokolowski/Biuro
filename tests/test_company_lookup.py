@@ -372,6 +372,7 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(result, {
             "nip": "8522669775", "status_vat": "Czynny",
             "konto_bankowe": "12121212",
+            "_registry_warning": "GUS: Niedostępny GUS",
         })
 
     def test_wrong_nip_from_krs_is_not_applied(self):

@@ -42,7 +42,10 @@ class CompanyBatchTests(DbTestCase):
         r = parse_odpis(data)
         self.assertEqual(r["nip"], "1111111111")
         self.assertEqual(r["dz_kod"], "80-001")
-        self.assertEqual(r["dz_ulica"], "ul. Długa 5/2")
+        self.assertEqual(
+            (r["dz_ulica"], r["dz_budynek"], r["dz_lokal"]),
+            ("ul. Długa", "5", "2"),
+        )
         self.assertEqual(r["pkd"], ["6201Z"])
 
     def test_gus_parse_and_missing_key(self):
@@ -117,8 +120,8 @@ class CompanyBatchTests(DbTestCase):
         app = QApplication.instance() or QApplication(["biuro-tests"])
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{"id": 1, "nazwa": "A", "etap": "Brak", "ilosc_dok": 4}], "ksiegowosc")
-        heads = [m.headerData(i, m.headerData.__self__ and __import__("PyQt6.QtCore", fromlist=["Qt"]).Qt.Orientation.Horizontal) for i in range(4)]
-        self.assertEqual(heads, ["Firma", "Komplet", "Etap", "Ilość dokumentów"])
+        heads = [m.headerData(i, m.headerData.__self__ and __import__("PyQt6.QtCore", fromlist=["Qt"]).Qt.Orientation.Horizontal) for i in range(6)]
+        self.assertEqual(heads, ["Firma", "Nr faktury", "Zapłacona", "Komplet", "Etap", "Ilość dokumentów"])
 
 
 if __name__ == "__main__":

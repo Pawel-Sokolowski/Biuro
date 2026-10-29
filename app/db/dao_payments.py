@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+import mt940
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice
@@ -23,80 +26,77 @@ def _allowed(actor_id: int) -> bool:
 
 def _money(text: str) -> Decimal:
     try:
-        return Decimal(str(text).replace(" ", "").replace(",", ".")).quantize(Decimal("0.01"))
-    except InvalidOperation as exc:
+        amount = Decimal(str(text).replace(" ", "").replace(",", "."))
+        if not amount.is_finite() or amount != amount.quantize(Decimal("0.01")):
+            raise PaymentError("Kwota musi być skończoną liczbą z najwyżej dwoma miejscami po przecinku.")
+        return amount.quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError) as exc:
         raise PaymentError(f"Nieprawidłowa kwota przelewu: {text}") from exc
 
 
 def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
-    """SWIFT MT940: :25:, :28C:, :61:, :86: i wieloliniowe opisy ING.
+    """Parser biblioteki mt-940; import zachowuje walutę i rodzaj operacji.
 
-    Parsowanie nie oznacza rozliczenia. Operacje D są importowane, ale nie
-    można ich wykorzystać jako dodatniej zapłaty za fakturę sprzedaży.
+    Każdy komunikat :20: parsujemy osobno, aby metadane kolejnego wyciągu
+    nie zmieniały identyfikatora poprzednich operacji. Zapłaty wykorzystują
+    datę księgowania (jeśli jest obecna); data waluty pozostaje w ewidencji.
     """
     try:
         source = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        source = raw.decode("cp1250")
+        try:
+            source = raw.decode("cp1250")
+        except UnicodeDecodeError as exc:
+            raise PaymentError("Nie można odczytać kodowania wyciągu MT940.") from exc
     source = source.replace("\r\n", "\n").replace("\r", "\n")
-    # MT940 bywa umieszczany w blokach SWIFT {4: ... -}.
-    lines = source.splitlines()
     result: list[dict[str, Any]] = []
-    account = ""
-    statement = ""
-    current = None
-    active_tag = ""
-
-    def flush():
-        nonlocal current
-        if current is not None:
-            current["title"] = " ".join(current.pop("description", [])).strip()
-            raw_id = "|".join((
-                account, statement, str(current["ordinal"]), current["date"],
-                str(current["amount"]), current["currency"], current["reference"],
-                current["title"],
-            ))
-            current["hash"] = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
-            result.append(current)
-            current = None
-
-    for line in lines:
-        tag = re.match(r"^:(20|25|28C|61|86):?(.*)$", line)
-        if tag:
-            code, text = tag.groups()
-            active_tag = code
-            if code == "25":
-                account = text.strip()
-            elif code == "28C":
-                statement = text.strip()
-            elif code == "61":
-                flush()
-                # YYMMDD value date, optional MMDD booking date, C/D or reversal
-                # and then amount with comma as decimal separator.
-                m = re.match(r"^(\d{6})(?:\d{4})?([RC]{0,1}[CD])([A-Z])?(\d+(?:,\d{0,2})?)", text.strip())
-                if not m:
-                    raise PaymentError(f"Niepoprawny rekord :61: w wyciągu: {text[:90]}")
-                raw_date, direction, _, raw_amount = m.groups()
-                yy = int(raw_date[:2])
-                year = 2000 + yy if yy <= 79 else 1900 + yy
-                try:
-                    day = date(year, int(raw_date[2:4]), int(raw_date[4:6])).isoformat()
-                except ValueError as exc:
-                    raise PaymentError(f"Niepoprawna data operacji MT940: {raw_date}") from exc
-                amount = _money(raw_amount)
+    for statement_source in re.split(r"(?=^:20:)", source, flags=re.MULTILINE):
+        if not re.search(r"^:61:", statement_source, flags=re.MULTILINE):
+            continue
+        try:
+            statement = mt940.parse(statement_source)
+            expected_count = len(re.findall(r"^:61:", statement_source, flags=re.MULTILINE))
+            if len(statement) != expected_count:
+                raise PaymentError("Nie wszystkie operacje :61: zostały poprawnie odczytane.")
+            account = re.sub(r"\s+", "", str(statement.data.get("account_identification") or ""))
+            statement_id = str(statement.data.get("statement_number") or "")
+            sequence = str(statement.data.get("sequence_number") or "")
+            if not account or not statement_id:
+                raise PaymentError("Wyciąg wymaga rachunku :25: i numeru :28C:.")
+            for ordinal, transaction in enumerate(statement, 1):
+                data = transaction.data
+                currency = str(data.get("currency") or "").upper()
+                if not re.fullmatch(r"[A-Z]{3}", currency):
+                    raise PaymentError("Wyciąg nie określa waluty. Wymagane jest saldo :60F: lub :60M:.")
+                direction = data["status"]
+                amount = abs(_money(str(data["amount"].amount)))
                 if direction in ("D", "RC"):
                     amount = -amount
-                current = {
-                    "ordinal": len(result) + 1, "date": day,
-                    "amount": amount, "currency": "PLN",
-                    "account": account, "reference": text[m.end():].strip(),
-                    "description": [],
-                }
-            elif code == "86" and current is not None:
-                current["description"].append(text.strip())
-        elif current is not None and active_tag == "86" and line.strip() and line.strip() not in ("-", "}"):
-            current["description"].append(line.strip())
-    flush()
+                value_date = data["date"].isoformat()
+                booked_date = (data.get("entry_date") or data["date"]).isoformat()
+                title = " ".join(str(data.get("transaction_details") or "").split())
+                bank_reference = str(data.get("bank_reference") or "").strip()
+                reference = bank_reference or str(data.get("customer_reference") or "")
+                if bank_reference and bank_reference.upper().replace(" ", "") not in {"NONREF", "NOTPROVIDED", "N/A", "UNKNOWN"}:
+                    # Referencja banku identyfikuje operację także w eksportach
+                    # o innych numerach wyciągu i kolejności wierszy.
+                    identity = [account, bank_reference, value_date, booked_date, str(amount), currency, direction]
+                else:
+                    # Bez unikalnej referencji banku deduplikacja dotyczy tego
+                    # samego wyciągu; identyczne rzeczywiste wpłaty zachowują osobne pozycje.
+                    identity = [account, statement_id, sequence, ordinal,
+                                str(data.get("transaction_reference") or ""), value_date, booked_date,
+                                str(amount), currency, direction, reference, title]
+                digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+                result.append({
+                    "ordinal": ordinal, "date": booked_date, "value_date": value_date,
+                    "amount": amount, "currency": currency, "direction": direction,
+                    "account": account, "reference": reference, "title": title, "hash": digest,
+                })
+        except PaymentError:
+            raise
+        except (ValueError, KeyError, TypeError, InvalidOperation, RuntimeError) as exc:
+            raise PaymentError(f"Niepoprawny wyciąg MT940: {exc}") from exc
     if not result:
         raise PaymentError("Plik nie zawiera transakcji MT940 (:61:).")
     return result
@@ -116,12 +116,12 @@ def import_mt940_file(path: str, actor_id: int) -> dict[str, int]:
             cur = conn.execute(
                 """
                 INSERT INTO bank_transakcje
-                  (hash, rachunek, data_operacji, kwota, waluta, kontrahent, tytul, referencja)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                  (hash, rachunek, data_operacji, data_waluty, kwota, waluta, kierunek, kontrahent, tytul, referencja)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(hash) DO NOTHING RETURNING id
                 """,
-                (entry["hash"], entry["account"], entry["date"], entry["amount"],
-                 entry["currency"], "", entry["title"], entry["reference"]),
+                (entry["hash"], entry["account"], entry["date"], entry["value_date"], entry["amount"],
+                 entry["currency"], entry["direction"], "", entry["title"], entry["reference"]),
             )
             if cur.fetchone():
                 inserted += 1
@@ -147,7 +147,8 @@ def list_unsettled_transfers(actor_id: int) -> list[dict[str, Any]]:
                 SELECT transakcja_id, SUM(kwota) AS used FROM faktury_platnosci
                 WHERE transakcja_id IS NOT NULL GROUP BY transakcja_id
             ) p ON p.transakcja_id = b.id
-            WHERE b.kwota > 0 AND b.kwota - COALESCE(p.used, 0) > 0.009
+            WHERE b.kwota > 0 AND b.waluta = 'PLN' AND b.kierunek = 'C'
+              AND b.kwota - COALESCE(p.used, 0) > 0.009
             ORDER BY b.data_operacji DESC, b.id DESC
             LIMIT 1000
             """
@@ -167,14 +168,14 @@ def list_invoice_choices(actor_id: int) -> list[dict[str, Any]]:
             SELECT i.id, i.firma_id, i.numer, i.miesiac, i.kwota_brutto,
                    COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
                    COALESCE(f.nip, i.nabywca_nip, '') AS nip,
-                   i.kwota_brutto - COALESCE(p.paid, 0) AS balance
+                   CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i
             LEFT JOIN firmy f ON f.id = i.firma_id
             LEFT JOIN (
                 SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
             ) p ON p.faktura_id = i.id
             WHERE i.rodzaj = 'faktura' AND COALESCE(i.eksportowana, 0) = 1
-              AND i.kwota_brutto > COALESCE(p.paid, 0) + 0.009
+              AND CAST(i.kwota_brutto AS NUMERIC(14,2)) > COALESCE(p.paid, 0)
             ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
             """
         ).fetchall()
@@ -221,6 +222,62 @@ def _check_date(value: str) -> date:
         raise PaymentError("Podaj datę w formacie RRRR-MM-DD.") from exc
 
 
+def get_invoice_payment_summary(invoice_id: int, actor_id: int) -> dict[str, Any]:
+    if not _allowed(actor_id):
+        raise PermissionError("Brak uprawnień do przeglądania rozliczeń.")
+    conn = get_conn()
+    try:
+        invoice = conn.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
+        if not invoice or not can_access_invoice(actor_id, invoice["firma_id"]):
+            raise PaymentError("Nie znaleziono dostępnej faktury.")
+        if invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
+            raise PaymentError("Rozliczać można tylko wystawione faktury.")
+        payments = [dict(row) for row in conn.execute(
+            "SELECT * FROM faktury_platnosci WHERE faktura_id = %s ORDER BY data_zaplaty, id",
+            (invoice_id,),
+        ).fetchall()]
+        total = _money(str(invoice["kwota_brutto"]))
+        paid = sum((row["kwota"] for row in payments), Decimal("0.00"))
+        last_date = max((row["data_zaplaty"] for row in payments), default=None)
+        return {"total": total, "paid": paid, "balance": total - paid, "payments": payments,
+                "paid_on": last_date.isoformat() if last_date and total > 0 and paid >= total else None}
+    finally:
+        conn.close()
+
+
+def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
+    """Wszystkie faktury wystawione za miesiąc, wraz z historią wpłat."""
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT i.id, i.firma_id, i.numer, i.kwota_brutto,
+                   p.id AS payment_id, p.kwota, p.data_zaplaty, p.sposob
+            FROM faktury i LEFT JOIN faktury_platnosci p ON p.faktura_id = i.id
+            WHERE i.miesiac = %s AND i.rodzaj = 'faktura'
+              AND COALESCE(i.eksportowana, 0) = 1 AND i.firma_id IS NOT NULL
+            ORDER BY i.id, p.data_zaplaty, p.id
+        """, (month,)).fetchall()
+        invoices = {}
+        for row in rows:
+            invoice = invoices.setdefault(row["id"], {
+                "id": row["id"], "firma_id": row["firma_id"], "numer": row["numer"] or "—",
+                "total": _money(str(row["kwota_brutto"])), "payments": [],
+            })
+            if row["payment_id"] is not None:
+                invoice["payments"].append({"kwota": row["kwota"], "data_zaplaty": row["data_zaplaty"], "sposob": row["sposob"]})
+        companies = {}
+        for invoice in invoices.values():
+            paid = sum((p["kwota"] for p in invoice["payments"]), Decimal("0.00"))
+            last_date = max((p["data_zaplaty"] for p in invoice["payments"]), default=None)
+            invoice["paid"] = paid
+            invoice["balance"] = invoice["total"] - paid
+            invoice["paid_on"] = last_date if last_date and invoice["total"] > 0 and paid >= invoice["total"] else None
+            companies.setdefault(invoice["firma_id"], []).append(invoice)
+        return companies
+    finally:
+        conn.close()
+
+
 def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, actor_id: int) -> None:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do rozliczania faktur.")
@@ -235,7 +292,11 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
             raise PaymentError("Nie znaleziono operacji bankowej lub faktury.")
         if not can_access_invoice(actor_id, invoice["firma_id"]):
             raise PermissionError("Brak dostępu do wskazanej faktury.")
-        if transfer["kwota"] <= 0 or invoice["rodzaj"] != "faktura":
+        if transfer["waluta"] != "PLN":
+            raise PaymentError("Do faktury w PLN można przypisać wyłącznie przelew w PLN.")
+        if transfer["kierunek"] != "C":
+            raise PaymentError("Rozliczać można tylko zwykły wpływ, bez storna i zwrotów.")
+        if transfer["kwota"] <= 0 or invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
             raise PaymentError("Można rozliczyć tylko wpływ na właściwą fakturę.")
         already_transfer = conn.execute(
             "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE transakcja_id = %s",
@@ -277,6 +338,8 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
         inv = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not inv or inv["rodzaj"] != "faktura" or not can_access_invoice(actor_id, inv["firma_id"]):
             raise PaymentError("Nie znaleziono dostępnej faktury.")
+        if not inv["eksportowana"]:
+            raise PaymentError("Rozliczać można tylko wystawione faktury.")
         paid = conn.execute(
             "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s",
             (invoice_id,),

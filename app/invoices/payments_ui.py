@@ -1,12 +1,13 @@
 """Potwierdzanie przelewów ING i płatności gotówkowych w GUI faktur."""
 from __future__ import annotations
 
-from decimal import Decimal
+import logging
+from decimal import Decimal, DecimalException
 
 from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
@@ -15,9 +16,21 @@ from app.db.dao_payments import (
     list_unsettled_transfers, record_cash_payment, suggested_invoice_ids,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def money_text(value) -> str:
     return f"{Decimal(str(value)):.2f}"
+
+
+def _payment_amount(text: str) -> Decimal:
+    try:
+        amount = Decimal(text.replace(" ", "").replace(",", "."))
+        if not amount.is_finite() or amount <= 0 or amount != amount.quantize(Decimal("0.01")):
+            raise PaymentError("Podaj dodatnią kwotę z najwyżej dwoma miejscami po przecinku.")
+        return amount
+    except DecimalException as exc:
+        raise PaymentError("Nieprawidłowa kwota płatności.") from exc
 
 
 class BankPaymentReview(QDialog):
@@ -25,6 +38,8 @@ class BankPaymentReview(QDialog):
     def __init__(self, actor_id: int, parent=None):
         super().__init__(parent)
         self.actor_id = actor_id
+        self.invoices = []
+        self.transactions = []
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
         self.resize(1200, 650)
         layout = QVBoxLayout(self)
@@ -69,6 +84,10 @@ class BankPaymentReview(QDialog):
         except (PaymentError, OSError, PermissionError) as exc:
             QMessageBox.warning(self, "Wyciąg MT940", str(exc))
             return
+        except Exception:
+            logger.exception("Błąd importu wyciągu MT940")
+            QMessageBox.warning(self, "Wyciąg MT940", "Nie udało się zaimportować wyciągu. Szczegóły w logach.")
+            return
         QMessageBox.information(
             self, "Wyciąg MT940",
             f"Transakcje w pliku: {report['all']}\n"
@@ -79,8 +98,17 @@ class BankPaymentReview(QDialog):
         self.refresh()
 
     def refresh(self):
-        self.invoices = list_invoice_choices(self.actor_id)
-        self.transactions = list_unsettled_transfers(self.actor_id)
+        try:
+            invoices = list_invoice_choices(self.actor_id)
+            transactions = list_unsettled_transfers(self.actor_id)
+        except (PaymentError, PermissionError) as exc:
+            QMessageBox.warning(self, "Rozliczenie", str(exc))
+            return
+        except Exception:
+            logger.exception("Błąd odświeżania rozliczeń bankowych")
+            QMessageBox.warning(self, "Rozliczenie", "Nie udało się odczytać rozliczeń. Szczegóły w logach.")
+            return
+        self.invoices, self.transactions = invoices, transactions
         self.table.setRowCount(0)
         for entry in self.transactions:
             idx = self.table.rowCount()
@@ -109,11 +137,20 @@ class BankPaymentReview(QDialog):
                 )
             # Sugestia jest tylko wizualna; nie wybieramy faktury automatycznie.
             self.table.setCellWidget(idx, 4, choices)
-            from PyQt6.QtWidgets import QLineEdit
             amount = QLineEdit(money_text(entry["remaining"]), self.table)
             self.table.setCellWidget(idx, 5, amount)
+            choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
+            amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, 5))
         if self.transactions:
             self.table.selectRow(0)
+
+    def _invoice_choice_changed(self, row):
+        self.table.setCurrentCell(row, 4)
+        invoice_id = self.table.cellWidget(row, 4).currentData()
+        invoice = next((item for item in self.invoices if item["id"] == invoice_id), None)
+        if invoice is not None:
+            amount = min(Decimal(str(self.transactions[row]["remaining"])), Decimal(str(invoice["balance"])))
+            self.table.cellWidget(row, 5).setText(money_text(amount))
 
     def _confirm(self):
         selected = self.table.currentRow()
@@ -126,8 +163,17 @@ class BankPaymentReview(QDialog):
         if invoice_id is None:
             QMessageBox.warning(self, "Rozliczenie", "Wybierz konkretną fakturę.")
             return
-        invoice = next(i for i in self.invoices if i["id"] == invoice_id)
-        amount = self.table.cellWidget(selected, 5).text().strip().replace(",", ".")
+        invoice = next((i for i in self.invoices if i["id"] == invoice_id), None)
+        if invoice is None:
+            QMessageBox.warning(self, "Rozliczenie", "Faktura nie jest już dostępna. Odśwież listę.")
+            return
+        try:
+            amount = _payment_amount(self.table.cellWidget(selected, 5).text().strip())
+            if amount > min(Decimal(str(transfer["remaining"])), Decimal(str(invoice["balance"]))):
+                raise PaymentError("Kwota przekracza pozostałe saldo faktury lub przelewu.")
+        except PaymentError as exc:
+            QMessageBox.warning(self, "Rozliczenie", str(exc))
+            return
         msg = (
             f"Czy zatwierdzić przypisanie przelewu?\n\n"
             f"Data: {transfer['data_operacji']}\n"
@@ -138,6 +184,7 @@ class BankPaymentReview(QDialog):
         if QMessageBox.question(
             self, "Potwierdzenie rozliczenia", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
         try:
@@ -145,23 +192,39 @@ class BankPaymentReview(QDialog):
         except (PaymentError, PermissionError) as exc:
             QMessageBox.warning(self, "Rozliczenie", str(exc))
             return
+        except Exception:
+            logger.exception("Błąd zapisu rozliczenia bankowego")
+            QMessageBox.warning(self, "Rozliczenie", "Nie udało się zapisać rozliczenia. Szczegóły w logach.")
+            return
         QMessageBox.information(self, "Rozliczenie", "Płatność przypisana do faktury.")
         self.refresh()
 
 
 def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
+    from app.db.dao_payments import get_invoice_payment_summary
+    try:
+        summary = get_invoice_payment_summary(int(invoice["id"]), actor_id)
+    except (PaymentError, PermissionError) as exc:
+        QMessageBox.warning(parent, "Gotówka", str(exc))
+        return False
+    except Exception:
+        logger.exception("Błąd odczytu salda faktury")
+        QMessageBox.warning(parent, "Gotówka", "Nie udało się odczytać salda faktury. Szczegóły w logach.")
+        return False
+    if summary["balance"] <= 0:
+        QMessageBox.information(parent, "Gotówka", "Ta faktura jest już w całości rozliczona.")
+        return False
     form = QDialog(parent)
     form.setWindowTitle("Zapłata gotówką")
     layout = QFormLayout(form)
     date_input = QDateEdit(QDate.currentDate(), form)
     date_input.setCalendarPopup(True)
     date_input.setDisplayFormat("dd/MM/yyyy")
-    amount_input = QInputDialog  # amount without a floating point round-trip
-    from PyQt6.QtWidgets import QLineEdit
     amount_edit = QLineEdit(form)
-    amount_edit.setText(money_text(invoice["kwota_brutto"]))
+    amount_edit.setText(money_text(summary["balance"]))
     layout.addRow("Faktura:", QLabel(str(invoice.get("numer") or invoice["id"]), form))
     layout.addRow("Data otrzymania gotówki:", date_input)
+    layout.addRow("Pozostało do zapłaty:", QLabel(f"{money_text(summary['balance'])} PLN", form))
     layout.addRow("Kwota (PLN):", amount_edit)
     buttons = QDialogButtonBox(
         QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -172,12 +235,19 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
     layout.addRow(buttons)
     if form.exec() != QDialog.DialogCode.Accepted:
         return False
-    amount = amount_edit.text().strip().replace(",", ".")
+    try:
+        amount = _payment_amount(amount_edit.text().strip())
+        if amount > summary["balance"]:
+            raise PaymentError("Kwota przekracza pozostałe saldo faktury.")
+    except PaymentError as exc:
+        QMessageBox.warning(parent, "Gotówka", str(exc))
+        return False
     if QMessageBox.question(
         parent, "Potwierdź płatność gotówkową",
         f"Zarejestrować wpłatę {amount} zł z dnia {date_input.date().toString('dd/MM/yyyy')} "
         f"na fakturę {invoice.get('numer') or invoice['id']}?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
     ) != QMessageBox.StandardButton.Yes:
         return False
     try:
@@ -187,5 +257,9 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
         )
     except (PaymentError, PermissionError) as exc:
         QMessageBox.warning(parent, "Gotówka", str(exc))
+        return False
+    except Exception:
+        logger.exception("Błąd zapisu płatności gotówkowej")
+        QMessageBox.warning(parent, "Gotówka", "Nie udało się zapisać płatności. Szczegóły w logach.")
         return False
     return True

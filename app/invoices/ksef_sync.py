@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -100,16 +101,30 @@ def _digits(value: Optional[str]) -> str:
 
 
 def _take_match(candidates: List[Dict[str, Any]], meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Faktura z bazy o tym samym NIP-ie nabywcy i kwocie brutto; każda pasuje tylko raz."""
+    """Preferuje numer faktury; niejednoznaczne NIP/kwota pozostają niedopasowane."""
     buyer_nip = _digits(((meta.get("buyer") or {}).get("identifier") or {}).get("value"))
-    gross = round(float(meta.get("grossAmount") or 0), 2)
-    if not buyer_nip:
+    if not buyer_nip or (meta.get("currency") or "PLN") != "PLN":
         return None
-    for invoice in candidates:
-        if _digits(invoice.get("firma_nip")) == buyer_nip and round(float(invoice.get("kwota_brutto") or 0), 2) == gross:
-            candidates.remove(invoice)
-            return invoice
-    return None
+    try:
+        gross = Decimal(str(meta.get("grossAmount"))).quantize(Decimal("0.01"))
+        matches = [invoice for invoice in candidates
+                   if _digits(invoice.get("firma_nip")) == buyer_nip
+                   and Decimal(str(invoice.get("kwota_brutto"))).quantize(Decimal("0.01")) == gross]
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    number = str(meta.get("invoiceNumber") or "").strip()
+    exact = [invoice for invoice in matches if number and str(invoice.get("numer") or "").strip() == number]
+    if exact:
+        matches = exact
+    else:
+        matches = [invoice for invoice in matches if not str(invoice.get("numer") or "").strip()]
+        issue_month = str(meta.get("issueDate") or "")[:7]
+        if issue_month:
+            matches = [invoice for invoice in matches if invoice.get("miesiac") == issue_month]
+    if len(matches) != 1:
+        return None
+    candidates.remove(matches[0])
+    return matches[0]
 
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None) -> Dict[str, Any]:
     """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""

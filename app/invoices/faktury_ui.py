@@ -129,6 +129,7 @@ class FakturyPage(QWidget):
 
         self._build_tab_robocze()
         self._build_tab_wystawione()
+        self.tabs.setCurrentWidget(self.tab_wystawione)
         self.refresh()
 
     # ---------------- budowa ekranu ----------------

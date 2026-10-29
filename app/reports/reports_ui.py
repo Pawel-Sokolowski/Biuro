@@ -482,6 +482,15 @@ class ReportsPage(QWidget):
         axis_y.setTitleText(count_title)
         axis_y.setLabelFormat("%d")
         axis_y.setMin(0)
+        # Zakres musi obejmować liczbę dokumentów, także gdy firma nie ma
+        # limitu dokumentów lub dokumentów jest więcej niż 10.
+        import math
+        max_count = max(
+            (float(data[fid][m].get(count_key, 0) or 0)
+             for fid in selected for m in months),
+            default=0.0,
+        )
+        axis_y.setMax(max(1, math.ceil(max_count * 1.15)))
         chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
         bars.attachAxis(axis_y)
 

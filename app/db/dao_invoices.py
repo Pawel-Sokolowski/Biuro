@@ -180,6 +180,7 @@ def add_invoice_item_for_service(
     miesiac: str,
     pracownik_id: Optional[int] = None,
     cena_netto: Optional[float] = None,
+    jednostka: str = "godz.",
 ) -> Optional[int]:
     if ilosc_hours is None or ilosc_hours <= 0:
         return None
@@ -203,9 +204,39 @@ def add_invoice_item_for_service(
         nazwa = svc.get("nazwa") or "Usługa dodatkowa"
         stawka_vat = svc.get("stawka_vat") if svc.get("stawka_vat") is not None else "23"
 
-        invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id)
-
         ilosc_rounded = round(float(ilosc_hours), 2)
+        if ilosc_rounded <= 0:
+            return None
+
+        # Ewidencja usługi jest niezależna od faktury. Pozostaje także po jej
+        # wycofaniu/usunięciu. Najpierw trwale zapisujemy ją w PostgreSQL.
+        cur.execute(
+            """
+            INSERT INTO uslugi_dodatkowe_firma
+                (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac, jednostka)
+            VALUES (%s, %s, %s, %s, %s, 1, %s) RETURNING id
+            """,
+            (firma_id, miesiac, usluga_id, ilosc_rounded, cena_netto, jednostka),
+        )
+        extra_service_row_id = cur.fetchone()[0]
+        conn.commit()
+
+        # Gdy faktura została już wystawiona, nie tworzymy drugiej faktury
+        # za ten sam miesiąc: usługa poczeka w ewidencji na jej regenerację.
+        cur.execute(
+            """
+            SELECT COALESCE(eksportowana, 0)
+            FROM faktury
+            WHERE firma_id = %s AND miesiac = %s
+              AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0
+            """,
+            (firma_id, miesiac),
+        )
+        issued = cur.fetchone()
+        if issued and issued[0]:
+            return None
+
+        invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id)
         wartosc_netto = round(cena_netto * ilosc_rounded, 2)
         vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
         wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
@@ -221,13 +252,14 @@ def add_invoice_item_for_service(
             {
                 "nazwa": nazwa,
                 "ilosc": ilosc_rounded,
-                "jednostka": "godz.",
+                "jednostka": jednostka,
                 "netto": wartosc_netto,
                 "cena_netto": round(cena_netto, 2),
                 "vat": int(vat_percent),
                 "brutto": wartosc_brutto,
                 "kategoria": svc.get("kategoria") or "usługi dodatkowe",
                 "usluga_id": usluga_id,
+                "extra_service_row_id": extra_service_row_id,
                 "generated": False,
             }
         )

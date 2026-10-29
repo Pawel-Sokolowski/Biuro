@@ -408,7 +408,13 @@ def build_profitability_report(
             """,
             [*firma_ids, *months],
         ).fetchall():
-            counts[("ksiegowosc", r["firma_id"], r["miesiac"])] = int(r["ilosc_dok"])
+            # Spójność z widokiem miesięcznym i raportem rocznym:
+            # fizyczne dokumenty mają pierwszeństwo, a liczba wpisana
+            # miesięcznie jest źródłem rezerwowym niezależnym od limitu.
+            counts.setdefault(
+                ("ksiegowosc", r["firma_id"], r["miesiac"]),
+                int(r["ilosc_dok"]),
+            )
         all_months = sorted({m for y in years for m in (f"{y}-{n:02d}" for n in range(1, 13))} | set(months))
         for (fid, month), total in contracts_by_month(conn, firma_ids, all_months).items():
             counts[("kadry", fid, month)] = total

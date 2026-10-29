@@ -469,24 +469,30 @@ class InlineExtraServiceWindow(QDialog):
         except ValueError:
             cena = 0.0
 
-        add_company_extra_service(
-            self.firma_id,
-            self.miesiac,
-            usluga_id,
-            ilosc,
-            cena,
-            self.chk_fakturowac.isChecked(),
-        )
-
         if self.chk_fakturowac.isChecked():
-            add_invoice_item_for_service(
+            # Jedno źródło danych: ta funkcja zapisuje usługę również w
+            # uslugi_dodatkowe_firma; nie dodajemy jej do ewidencji dwa razy.
+            invoice_id = add_invoice_item_for_service(
                 self.firma_id,
                 usluga_id,
                 ilosc,
                 self.miesiac,
                 cena_netto=cena,
+                jednostka="szt.",
             )
-            QMessageBox.information(self, "OK", "Dodano pozycję do faktury.")
+            if invoice_id:
+                QMessageBox.information(self, "OK", "Zapisano usługę dodatkową i dodano ją do faktury.")
+            else:
+                QMessageBox.information(self, "OK", "Zapisano usługę dodatkową. Zostanie uwzględniona po ponownym wygenerowaniu faktury.")
+        else:
+            add_company_extra_service(
+                self.firma_id,
+                self.miesiac,
+                usluga_id,
+                ilosc,
+                cena,
+                False,
+            )
         self.accept()
 
 

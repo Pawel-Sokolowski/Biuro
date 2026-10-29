@@ -10,17 +10,18 @@ def add_company_extra_service(
     ilosc: float,
     cena_netto: float,
     fakturowac: bool,
+    jednostka: str = "szt.",
 ) -> int:
     conn = get_conn()
     try:
         cur = conn.execute(
             """
             INSERT INTO uslugi_dodatkowe_firma
-                (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac, jednostka)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (firma_id, miesiac, usluga_id, ilosc, cena_netto, 1 if fakturowac else 0),
+            (firma_id, miesiac, usluga_id, ilosc, cena_netto, 1 if fakturowac else 0, jednostka),
         )
         new_id = int(cur.fetchone()[0])
         conn.commit()

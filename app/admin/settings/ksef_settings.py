@@ -68,7 +68,8 @@ class KsefSettings(QWidget):
 
         note = QLabel(
             "Certyfikat i klucz są szyfrowane w bazie. Jeśli certyfikat jest zaimportowany, "
-            "logowanie do KSeF odbywa się podpisem XAdES; w przeciwnym razie używany jest token."
+            "operacje pobierania i wysyłania faktur wymagają uwierzytelnienia podpisem XAdES. "
+            "Token KSeF nie jest używany ani jako zapasowa metoda logowania."
         )
         note.setWordWrap(True)
         layout.addWidget(note)

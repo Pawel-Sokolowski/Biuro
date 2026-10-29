@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog, QStyledItemDel
 from PyQt6.QtCore import QSettings, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen
 
-from app.email.email_storage import get_unread_counts
+from app.email.email_storage import get_visible_unread_counts
 from app.utils.ui_imports import *
 from app.config import get_database
 
@@ -637,7 +637,10 @@ class OfficeManagerApp(QMainWindow):
             total = 0
 
             for account in self.page_email.accounts:
-                unread = get_unread_counts(account["id"])
+                unread = get_visible_unread_counts(
+                    account["id"],
+                    self.page_email.hidden_folders.get(str(account["id"]), set()),
+                )
                 total += sum(unread.values())
 
             self._set_badge(

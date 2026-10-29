@@ -378,6 +378,7 @@ class FolderTree(QTreeWidget):
 
 
 class EmailPage(QWidget):
+    folder_visibility_changed = pyqtSignal()
     sync_finished = pyqtSignal(bool)
     headers_ready = pyqtSignal()
     sync_progress = pyqtSignal(object)
@@ -2599,6 +2600,7 @@ class EmailPage(QWidget):
             self._clear_view()
         self._tree_signature = None
         self.load_folders_from_db()
+        self.folder_visibility_changed.emit()
         if current_will_be_hidden:
             self._select_first_visible_folder()
 

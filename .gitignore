@@ -30,3 +30,6 @@ installer/output/
 /.idea/shelf/Uncommitted_changes_before_Update_at_28_10_2026_08_44__Changes_.xml
 /.idea/vcs.xml
 /.idea/workspace.xml
+/.idea/misc.xml
+/import_saldeo.py
+/app/db/dao_saldeo_import.py

@@ -61,6 +61,44 @@ class InvoiceLifecycleTests(DbTestCase):
         with self.assertRaises(InvoiceLockedError):
             delete_draft_invoice(self.invoice_id)
 
+    def test_regenerating_existing_invoice_preserves_its_issue_and_due_dates(self):
+        from app.db.dao_conn import get_conn
+
+        conn = get_conn()
+        try:
+            conn.execute(
+                "UPDATE faktury SET data_wystawienia = %s, termin_platnosci = %s WHERE id = %s",
+                ("2026-10-28", "2026-11-07", self.invoice_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        create_or_update_invoice(
+            self.firma, "2026-10", POSITIONS, 520.0, 639.6,
+            existing_invoice_id=self.invoice_id,
+        )
+        invoice = get_invoice_by_id(self.invoice_id)
+        self.assertEqual(invoice["data_wystawienia"], "2026-10-28")
+        self.assertEqual(invoice["termin_platnosci"], "2026-11-07")
+
+    def test_new_invoice_uses_seventh_of_following_month(self):
+        settings = {
+            "termin_platnosci_tryb": "dzien",
+            "termin_platnosci_dzien": "07",
+        }
+        with patch("app.db.dao_invoices._now_date", return_value="2026-10-28"), \
+             patch("app.utils.payment_terms.get_setting_first",
+                   side_effect=lambda keys, default=None: next(
+                       (settings[key] for key in keys if key in settings), default
+                   )):
+            invoice_id = create_or_update_invoice(
+                self.firma, "2026-11", POSITIONS, 520.0, 639.6
+            )
+        invoice = get_invoice_by_id(invoice_id)
+        self.assertEqual(invoice["data_wystawienia"], "2026-10-28")
+        self.assertEqual(invoice["termin_platnosci"], "2026-11-07")
+
     def test_correction_requires_issued_invoice_and_allows_many(self):
         with self.assertRaises(ValueError):
             create_correction(self.invoice_id)

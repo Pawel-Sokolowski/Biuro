@@ -451,7 +451,9 @@ class FakturyPage(QWidget):
             QMessageBox.information(self, "Faktura", "Zaznacz fakturę roboczą do usunięcia.")
             return
         if QMessageBox.question(
-            self, "Usuwanie", f"Usunąć zaznaczone faktury robocze ({len(ids)})?",
+            self, "Usuwanie",
+            f"Usunąć zaznaczone faktury robocze ({len(ids)})?\n"
+            "Usługi dodatkowe zostaną zachowane i uwzględnione przy ponownym generowaniu.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
@@ -474,6 +476,7 @@ class FakturyPage(QWidget):
         if QMessageBox.question(
             self, "Usuwanie",
             f"Trwale usunąć zaznaczone wystawione faktury ({len(ids)})?\n"
+            "Faktury zostaną usunięte, ale usługi dodatkowe pozostaną do ponownego wygenerowania.\n"
             "Tej operacji nie można cofnąć.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:

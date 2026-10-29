@@ -74,6 +74,27 @@ python main.py
 
 `migrate_db.py` kończy się sukcesem tylko wtedy, gdy schemat jest aktualny (`SCHEMA_VERSION` w `app\db\schema.py`). Zmiana struktury bazy wymaga podbicia tej wersji.
 
+## Rozliczenia i KSeF
+
+W **Fakturach wystawionych** przycisk **Rozlicz ING MT940** importuje wyciąg
+do kolejki uzgodnień. Wybierz przelew, fakturę i kwotę, a następnie potwierdź
+przypisanie. Można podzielić przelew na kilka faktur lub rozliczyć część salda.
+Import nie zapisuje płatności automatycznie. Rozliczane są tylko wpływy w PLN;
+storna i inne waluty pozostają poza listą wpłat do przypisania. Data zapłaty
+pochodzi z daty księgowania, a przy jej braku z daty waluty.
+
+**Zapłata gotówką** proponuje pozostałe saldo i pozwala wskazać rzeczywistą
+datę otrzymania pieniędzy. Księgowy widok miesięczny pokazuje numer faktury
+i datę pełnego rozliczenia przed „Kompletem”, dla faktur dotyczących wybranego
+miesiąca. Szczegóły częściowych wpłat są dostępne w podpowiedzi komórki.
+
+Pobieranie i wysyłka KSeF wymagają certyfikatu i klucza prywatnego w ustawieniach;
+token nie zastępuje certyfikatu. **Wyślij XML do KSeF** wysyła przygotowany plik
+FA(3) dla wybranej wystawionej faktury po sprawdzeniu jej danych i potwierdzeniu
+środowiska. Program nie generuje tego pliku. **Status wysyłki KSeF** sprawdza
+przetwarzanie i zapisuje numer dopiero po przyjęciu przez MF. Nieznany wynik
+wysyłki należy wyjaśnić przed jej ponowieniem, aby uniknąć duplikatu.
+
 ## Testy
 
 ```powershell

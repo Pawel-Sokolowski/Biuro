@@ -232,11 +232,16 @@ class FakturyPage(QWidget):
         self.btn_delete_issued = QPushButton("Usuń wystawioną")
         self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
         for button in (self.btn_view, self.btn_reexport, self.btn_correction, self.btn_ksef,
-                       self.btn_ksef_download, self.btn_send_ksef, self.btn_status_ksef,
-                       self.btn_bank, self.btn_cash, self.btn_delete_issued):
+                       self.btn_delete_issued):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
+        settlement_buttons = QHBoxLayout()
+        for button in (self.btn_ksef_download, self.btn_send_ksef, self.btn_status_ksef,
+                       self.btn_bank, self.btn_cash):
+            settlement_buttons.addWidget(button)
+        settlement_buttons.addStretch()
+        layout.addLayout(settlement_buttons)
 
         self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
@@ -275,9 +280,20 @@ class FakturyPage(QWidget):
         if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
             QMessageBox.warning(self, "Faktura", "Brak dostępu do wskazanej faktury.")
             return None
+        if not invoice.get("eksportowana"):
+            QMessageBox.warning(self, "Faktura", "Wybrany dokument nie jest już fakturą wystawioną. Odśwież listę.")
+            return None
         return invoice
 
+    def _can_manage_payments(self):
+        if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
+            return True
+        QMessageBox.warning(self, "Brak uprawnień", "Nie masz uprawnień do rozliczania płatności.")
+        return False
+
     def _open_bank_payments(self):
+        if not self._can_manage_payments():
+            return
         try:
             dialog = BankPaymentReview(self.pracownik_id, self)
             dialog.exec()
@@ -287,12 +303,16 @@ class FakturyPage(QWidget):
         self.refresh()
 
     def _mark_cash_payment(self):
+        if not self._can_manage_payments():
+            return
         invoice = self._selected_single_issued()
         if invoice and record_cash_in_dialog(invoice, self.pracownik_id, self):
             QMessageBox.information(self, "Gotówka", "Zapisano zapłatę gotówką.")
             self.refresh()
 
     def _send_selected_to_ksef(self):
+        if not self._can_export():
+            return
         invoice = self._selected_single_issued()
         if invoice is None:
             return
@@ -307,14 +327,17 @@ class FakturyPage(QWidget):
         )
         if not path:
             return
-        env = __import__("app.db.dao_app_settings", fromlist=["get_setting"]).get_setting("ksef_srodowisko") or "prod"
+        from app.db.dao_app_settings import get_setting
+        env = get_setting("ksef_srodowisko") or "prod"
+        environment_label = {"prod": "PRODUKCYJNE", "test": "testowe", "demo": "demo"}.get(env, env)
         confirm = QMessageBox.question(
             self, "Wyślij fakturę do KSeF",
-            f"Wysłać fakturę {invoice['numer']} do środowiska {env.upper()} KSeF?\n"
+            f"Wysłać fakturę {invoice['numer']} do środowiska {environment_label} KSeF?\n"
             "Źródłem jest wybrany plik XML FA(3).\n"
             "Faktura zostanie przyjęta dopiero po nadaniu numeru KSeF.\n"
             "Tej wysyłki nie można cofnąć.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
@@ -339,6 +362,8 @@ class FakturyPage(QWidget):
         )
 
     def _check_ksef_submission(self):
+        if not self._can_export():
+            return
         invoice = self._selected_single_issued()
         if invoice is None:
             return

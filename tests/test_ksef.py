@@ -102,7 +102,7 @@ class KsefTests(DbTestCase):
 
     def test_credentials_are_stored_encrypted(self):
         ksef_sync.save_ksef_credentials("123-456-78-90", "SEKRET", "test")
-        self.assertTrue(ksef_sync.is_configured())
+        self.assertFalse(ksef_sync.is_configured())  # token nie zastępuje wymaganego certyfikatu
         self.assertNotIn("SEKRET", get_setting(ksef_sync.TOKEN_KEY))
         self.assertEqual(get_setting(ksef_sync.NIP_KEY), "1234567890")
 

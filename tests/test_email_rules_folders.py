@@ -86,8 +86,7 @@ class FolderUiTests(RulesTests):
         conn.commit()
         conn.close()
         with mock.patch.object(email_ui, "get_email_accounts_for_employee", return_value=[{"id": 1, "email": "a@b.pl"}]), \
-                mock.patch.object(email_ui, "sync_and_prefetch", return_value=0), \
-                mock.patch.object(email_ui, "prefetch_recent", return_value=0):
+                mock.patch.object(email_ui.EmailPage, "start_background_sync"):
             page = email_ui.EmailPage(1)
         page.current_account = page.accounts[0]
         page.current_folder_local = "INBOX"

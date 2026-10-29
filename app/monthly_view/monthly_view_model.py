@@ -15,6 +15,8 @@ class MonthlyViewModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: List[Dict[str, Any]] = rows
         self._mode: str = mode
+        self.COL_DOCS = 3 if mode == "ksiegowosc" else 1
+        self.COL_ETAP = 4 if mode == "ksiegowosc" else 2
 
     def set_rows(self, rows: List[Dict[str, Any]]):
         # szybkie porównanie po id
@@ -40,10 +42,10 @@ class MonthlyViewModel(QAbstractTableModel):
     COL_ETAP = 2
 
     def _docs_col(self) -> int:
-        return 3 if self._mode == "ksiegowosc" else 1
+        return self.COL_DOCS
 
     def _etap_col(self) -> int:
-        return 4 if self._mode == "ksiegowosc" else 2
+        return self.COL_ETAP
 
     def _ilosc_col(self) -> int:
         return 5 if self._mode == "ksiegowosc" else -1
@@ -97,6 +99,9 @@ class MonthlyViewModel(QAbstractTableModel):
 
         row = self._rows[index.row()]
         col = index.column()
+
+        if self._mode == "ksiegowosc" and col in (1, 2) and role == Qt.ItemDataRole.ToolTipRole:
+            return row.get("faktura_platnosci_tooltip", "")
 
         if col in self._vat_cols():
             if role == Qt.ItemDataRole.BackgroundRole:

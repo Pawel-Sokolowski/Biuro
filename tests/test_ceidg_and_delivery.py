@@ -162,10 +162,10 @@ class CeidgSuspensionTests(DbTestCase):
             "vat_sprawdzono": "2026-02-19 12:23:00", "vat_sprawdzil": "Paweł S",
             "vat_ue_status": "zwolniony",
         }], "ksiegowosc")
-        self.assertEqual(m.columnCount(), 12)
-        self.assertEqual(m.data(m.index(0, 10), Qt.ItemDataRole.DisplayRole), "✔")
-        self.assertEqual(m.data(m.index(0, 11), Qt.ItemDataRole.DisplayRole), "▲")
-        tip = m.data(m.index(0, 10), Qt.ItemDataRole.ToolTipRole)
+        self.assertEqual(m.columnCount(), 14)
+        self.assertEqual(m.data(m.index(0, 12), Qt.ItemDataRole.DisplayRole), "✔")
+        self.assertEqual(m.data(m.index(0, 13), Qt.ItemDataRole.DisplayRole), "▲")
+        tip = m.data(m.index(0, 12), Qt.ItemDataRole.ToolTipRole)
         self.assertIn("VAT czynny", tip)
         self.assertIn("19.02.2026 12:23, Paweł S", tip)
 
@@ -197,7 +197,7 @@ class DeliveredDateTests(DbTestCase):
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{"id": 1, "nazwa": "A", "dokumenty_dostarczone": 1,
                                "data_dostarczenia": "2026-01-05"}], "ksiegowosc")
-        self.assertEqual(m.data(m.index(0, 1), Qt.ItemDataRole.DisplayRole), "05.01.2026")
+        self.assertEqual(m.data(m.index(0, m.COL_DOCS), Qt.ItemDataRole.DisplayRole), "05.01.2026")
 
 
 if __name__ == "__main__":

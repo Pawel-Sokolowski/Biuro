@@ -5,9 +5,8 @@ import csv
 import io
 import re
 import unicodedata
-from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from app.db.dao_conn import get_conn
 from app.security.authorization import is_administrator
@@ -185,8 +184,9 @@ def import_saldeo_contractors(path: str, actor_id: int) -> dict[str, Any]:
             # Ograniczamy aktualizację do dwóch dozwolonych pól.
             if "nazwa_saldeo" in updates and "adres_email" in updates:
                 conn.execute(
-                    "UPDATE firmy SET nazwa_saldeo = %s, adres_email = %s "
-                    "WHERE id = %s AND NULLIF(BTRIM(COALESCE(adres_email, '')), '') IS NULL",
+                    "UPDATE firmy SET nazwa_saldeo = %s, "
+                    "adres_email = CASE WHEN NULLIF(BTRIM(COALESCE(adres_email, '')), '') "
+                    "IS NULL THEN %s ELSE adres_email END WHERE id = %s",
                     (updates["nazwa_saldeo"], updates["adres_email"], company["id"]),
                 )
             elif "nazwa_saldeo" in updates:

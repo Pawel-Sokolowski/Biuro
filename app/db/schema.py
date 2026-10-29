@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-22.3"
+SCHEMA_VERSION = "2026-10-29.1"
 
 
 def _schema_hash() -> str:
@@ -318,13 +318,29 @@ def init_db():
             firma_id INTEGER NOT NULL,
             miesiac TEXT NOT NULL,
             usluga_id INTEGER NOT NULL,
-            ilosc INTEGER NOT NULL,
+            ilosc DOUBLE PRECISION NOT NULL,
             cena_netto DOUBLE PRECISION NOT NULL,
+            jednostka TEXT DEFAULT 'szt.',
             fakturowac INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(firma_id) REFERENCES firmy(id) ON DELETE CASCADE,
             FOREIGN KEY(usluga_id) REFERENCES uslugi_dodatkowe(id) ON DELETE RESTRICT
         );
     """)
+
+    # Ilości usług naliczanych stoperem mogą być ułamkowe (np. 0,5 godz.).
+    # Migracja zachowuje wszystkie istniejące wiersze usług dodatkowych.
+    cur.execute("""
+        SELECT data_type FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'uslugi_dodatkowe_firma' AND column_name = 'ilosc'
+    """)
+    quantity_type = cur.fetchone()
+    if quantity_type and quantity_type[0] in ('integer', 'smallint', 'bigint'):
+        cur.execute("""
+            ALTER TABLE uslugi_dodatkowe_firma
+            ALTER COLUMN ilosc TYPE DOUBLE PRECISION USING ilosc::DOUBLE PRECISION
+        """)
+    _safe_alter_add_column(cur, "uslugi_dodatkowe_firma", "jednostka TEXT DEFAULT 'szt.'")
 
     # -------------------------
     # role

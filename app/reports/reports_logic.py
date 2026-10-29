@@ -234,7 +234,7 @@ def build_report(
             SELECT f.id AS firma_id, m.miesiac,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
-                   COALESCE(dc.dokumenty, 0) AS dokumenty,
+                   COALESCE(NULLIF(sm.ilosc_dok, 0), dc.dokumenty, 0) AS dokumenty,
                    COALESCE(ex.extra, 0) AS extra,
                    COALESCE(c.netto, c.cena_netto_ksiegowosc, 0) AS netto,
                    COALESCE(c.brutto, c.cena_brutto_ksiegowosc, 0) AS brutto,

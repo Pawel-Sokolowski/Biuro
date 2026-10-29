@@ -590,6 +590,43 @@ def get_unread_counts(konto_id: int) -> Dict[int, int]:
     finally:
         conn.close()
 
+def filter_visible_unread_counts(
+    folders: List[Dict[str, Any]],
+    unread: Dict[int, int],
+    hidden_paths: set[str] | None = None,
+) -> Dict[int, int]:
+    """Zwraca nieodczytane tylko z widocznych folderów skrzynki.
+
+    Ukrycie folderu nadrzędnego wyłącza również wszystkie jego podfoldery.
+    Odpowiednik reguł widoczności w drzewie folderów, także dla separatora '/'.
+    Licznik nie zależy od przycisku „Pokaż ukryte foldery”.
+    """
+    hidden_paths = hidden_paths or set()
+    visible: Dict[int, int] = {}
+    for folder in folders:
+        folder_id = folder.get("id")
+        if folder_id is None or folder_id not in unread:
+            continue
+        path = str(folder.get("server_name") or "")
+        delimiter = folder.get("delimiter") or "."
+        if any(
+            path == hidden or path.startswith(hidden + delimiter)
+            for hidden in hidden_paths
+        ):
+            continue
+        visible[int(folder_id)] = int(unread[folder_id])
+    return visible
+
+
+def get_visible_unread_counts(konto_id: int, hidden_paths: set[str] | None = None) -> Dict[int, int]:
+    """Licznik widocznych folderów danego konta email."""
+    return filter_visible_unread_counts(
+        get_folders_for_account(konto_id),
+        get_unread_counts(konto_id),
+        hidden_paths,
+    )
+
+
 def find_special_folder(konto_id: int, role: str) -> Optional[str]:
     """Zwraca surową nazwę serwerową folderu o danej roli (archive/junk/trash/sent/drafts)."""
     for folder in get_folders_for_account(konto_id):

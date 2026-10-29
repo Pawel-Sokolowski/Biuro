@@ -177,7 +177,7 @@ class CompanyForm(QDialog):
 
         if is_administrator(self.actor_id):
             nazwa_saldeo = QLineEdit()
-            nazwa_saldeo.setPlaceholderText("Nazwa skrócona z Saldeo (do rozpoznawania maili)")
+            nazwa_saldeo.setPlaceholderText("Nazwa z Saldeo (do eksportu faktur i rozpoznawania maili)")
             add_row(["Nazwa skrócona w Saldeo:"], [nazwa_saldeo])
             self.inputs["nazwa_saldeo"] = nazwa_saldeo
 

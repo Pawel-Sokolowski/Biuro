@@ -2,9 +2,8 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QCheckBox, QComboBox,
-    QPushButton, QMessageBox, QHBoxLayout, QLineEdit, QSpinBox, QDateEdit
+    QPushButton, QMessageBox, QHBoxLayout, QLineEdit, QSpinBox
 )
-from PyQt6.QtCore import QDate
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
@@ -105,31 +104,31 @@ class InvoiceSettings(QWidget):
         layout.addWidget(QLabel("Domyślny termin płatności faktur:"))
         self.term_mode = QComboBox()
         self.term_mode.addItem("Liczba dni od wystawienia", MODE_DAYS)
-        self.term_mode.addItem("Konkretny dzień miesiąca (z kalendarza)", MODE_DAY_OF_MONTH)
+        self.term_mode.addItem("Konkretny dzień miesiąca (01–31)", MODE_DAY_OF_MONTH)
         self.term_days = QSpinBox()
         self.term_days.setRange(0, 365)
         self.term_days.setSuffix(" dni")
-        self.term_date = QDateEdit()
-        self.term_date.setCalendarPopup(True)
-        self.term_date.setDisplayFormat("dd.MM.yyyy")
-        today = QDate.currentDate()
+        # To numer dnia miesiąca, a nie konkretna data kalendarzowa.
+        # Zapisujemy np. '7' i wyświetlamy '07'.
+        self.term_day_of_month = QComboBox()
+        self.term_day_of_month.addItems([f"{day:02d}" for day in range(1, 32)])
         try:
             days = int(self.logic.get_setting(DAYS_KEY) or self.logic.get_setting("faktury_termin_dni") or 7)
-        except ValueError:
+        except (TypeError, ValueError):
             days = 7
         try:
-            day = int(self.logic.get_setting(DAY_OF_MONTH_KEY) or today.day())
-        except ValueError:
-            day = today.day()
-        self.term_days.setValue(days)
-        self.term_date.setDate(QDate(today.year(), today.month(), min(max(day, 1), today.daysInMonth())))
+            day = int(self.logic.get_setting(DAY_OF_MONTH_KEY) or 7)
+        except (TypeError, ValueError):
+            day = 7
+        self.term_days.setValue(max(0, min(days, 365)))
+        self.term_day_of_month.setCurrentIndex(max(1, min(day, 31)) - 1)
         mode = self.logic.get_setting(MODE_KEY) or MODE_DAYS
         self.term_mode.setCurrentIndex(max(self.term_mode.findData(mode), 0))
         self.term_mode.currentIndexChanged.connect(self._sync_term_widgets)
         row = QHBoxLayout()
         row.addWidget(self.term_mode)
         row.addWidget(self.term_days)
-        row.addWidget(self.term_date)
+        row.addWidget(self.term_day_of_month)
         row.addStretch()
         layout.addLayout(row)
         self._sync_term_widgets()
@@ -167,7 +166,7 @@ class InvoiceSettings(QWidget):
     def _sync_term_widgets(self):
         by_day = self.term_mode.currentData() == MODE_DAY_OF_MONTH
         self.term_days.setVisible(not by_day)
-        self.term_date.setVisible(by_day)
+        self.term_day_of_month.setVisible(by_day)
 
     def _get_flag_value(self, *keys: str) -> str:
         for key in keys:
@@ -234,7 +233,7 @@ class InvoiceSettings(QWidget):
 
         self.logic.set_setting(MODE_KEY, self.term_mode.currentData())
         self.logic.set_setting(DAYS_KEY, str(self.term_days.value()))
-        self.logic.set_setting(DAY_OF_MONTH_KEY, str(self.term_date.date().day()))
+        self.logic.set_setting(DAY_OF_MONTH_KEY, self.term_day_of_month.currentText())
 
         self.logic.set_setting(URL_TEMPLATE_KEY, self.ksef_url.text().strip() or DEFAULT_URL_TEMPLATE)
 

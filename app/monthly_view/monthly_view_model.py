@@ -40,10 +40,13 @@ class MonthlyViewModel(QAbstractTableModel):
     COL_ETAP = 2
 
     def _docs_col(self) -> int:
-        return self.COL_DOCS
+        return 3 if self._mode == "ksiegowosc" else 1
+
+    def _etap_col(self) -> int:
+        return 4 if self._mode == "ksiegowosc" else 2
 
     def _ilosc_col(self) -> int:
-        return 3 if self._mode == "ksiegowosc" else -1
+        return 5 if self._mode == "ksiegowosc" else -1
 
     def _uop_cols(self):
         return (3, 4, 5) if self._mode == "kadry" else ()
@@ -64,10 +67,10 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 12 if self._mode == "ksiegowosc" else 11
+        return 14 if self._mode == "ksiegowosc" else 11
 
     def _vat_cols(self):
-        return (10, 11) if self._mode == "ksiegowosc" else ()
+        return (12, 13) if self._mode == "ksiegowosc" else ()
 
     _VAT_ICONS = {"czynny": ("✔", "#2e9b4f"), "zwolniony": ("▲", "#d93025"), "nieznany": ("?", "#e69500")}
 
@@ -101,19 +104,21 @@ class MonthlyViewModel(QAbstractTableModel):
             return self._vat_cell(row, col, role)
 
         if role == Qt.ItemDataRole.DisplayRole:
-            if col == self.COL_DOCS:
+            if col == self._docs_col():
                 return self._delivered_text(row)
             if self._mode == "ksiegowosc":
                 mapping = {
                     0: row.get("nazwa", ""),
-                    2: row.get("etap", "Brak"),
-                    3: str(row.get("ilosc_dok", 0)),
-                    4: row.get("czas_ks_str", ""),
-                    5: "▶",
-                    6: row.get("note_full", row.get("note_snippet", "")),
-                    7: "➕",
-                    8: "✏️",
-                    9: "⋯",
+                    1: row.get("numer_faktury", "") or "",
+                    2: row.get("faktura_zaplacona", "") or "",
+                    4: row.get("etap", "Brak"),
+                    5: str(row.get("ilosc_dok", 0)),
+                    6: row.get("czas_ks_str", ""),
+                    7: "▶",
+                    8: row.get("note_full", row.get("note_snippet", "")),
+                    9: "➕",
+                    10: "✏️",
+                    11: "⋯",
                 }
                 return mapping.get(col, "")
             mapping = {
@@ -137,7 +142,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 else Qt.CheckState.Unchecked
             )
 
-        if role == Qt.ItemDataRole.EditRole and col == self.COL_ETAP:
+        if role == Qt.ItemDataRole.EditRole and col == self._etap_col():
             return row.get(self._etap_key(), "Brak")
 
         if role == Qt.ItemDataRole.UserRole:
@@ -173,7 +178,7 @@ class MonthlyViewModel(QAbstractTableModel):
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
             if self._mode == "ksiegowosc":
-                headers = ["Firma", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
+                headers = ["Firma", "Nr faktury", "Zapłacona", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
                 headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
             if 0 <= section < len(headers):
@@ -184,7 +189,7 @@ class MonthlyViewModel(QAbstractTableModel):
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if index.column() == self.COL_ETAP:
+        if index.column() == self._etap_col():
             flags |= Qt.ItemFlag.ItemIsEditable
         if index.column() == self._docs_col():
             flags |= Qt.ItemFlag.ItemIsUserCheckable
@@ -230,7 +235,7 @@ class MonthlyViewModel(QAbstractTableModel):
         if role != Qt.ItemDataRole.EditRole:
             return False
 
-        if col == self.COL_ETAP:
+        if col == self._etap_col():
             key = self._etap_key()
             row[key] = str(value)
             top = self.index(index.row(), 0)

@@ -6,7 +6,7 @@ import base64
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 from cryptography import x509
@@ -167,6 +167,103 @@ class KsefClient:
     def download_invoice_xml(self, ksef_number: str) -> str:
         response = self._request("GET", f"/invoices/ksef/{ksef_number}", token=self._access())
         return response.content.decode("utf-8")
+
+    def send_fa3_xml(
+        self, xml_bytes: bytes, *,
+        on_session: Optional[Callable[[str], None]] = None,
+        on_invoice: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Wysyła gotowy XML FA(3) do KSeF 2.0 z szyfrowaniem AES-256-CBC.
+
+        Zwrócony numer referencyjny nie oznacza jeszcze przyjęcia faktury.
+        Należy odczytać status faktury i pobrać UPO.
+        """
+        import hashlib
+        import os
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.padding import PKCS7
+
+        if self.certificate is None or self.private_key is None:
+            raise KsefError("Do wysyłki wymagane jest uwierzytelnienie certyfikatem KSeF.")
+        if not xml_bytes or len(xml_bytes) > 10 * 1024 * 1024:
+            raise KsefError("Plik XML jest pusty lub przekracza 10 MB.")
+
+        response = self._request("GET", "/security/public-key-certificates").json()
+        certificate = next(
+            (item for item in response if "SymmetricKeyEncryption" in (item.get("usage") or [])),
+            None,
+        )
+        if not certificate:
+            raise KsefError("KSeF nie udostępnił klucza do szyfrowania faktur.")
+        public_key = x509.load_der_x509_certificate(
+            base64.b64decode(certificate["certificate"])
+        ).public_key()
+        key = os.urandom(32)
+        iv = os.urandom(16)
+        encrypted_key = public_key.encrypt(
+            key,
+            padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+        )
+        b64 = lambda value: base64.b64encode(value).decode("ascii")
+        session = self._request(
+            "POST", "/sessions/online", token=self._access(),
+            json={
+                "formCode": {"systemCode": "FA (3)", "schemaVersion": "1-0E", "value": "FA"},
+                "encryption": {
+                    "encryptedSymmetricKey": b64(encrypted_key),
+                    "initializationVector": b64(iv),
+                    "publicKeyId": certificate.get("publicKeyId"),
+                },
+            },
+        ).json()
+        session_ref = session["referenceNumber"]
+        if on_session:
+            on_session(session_ref)
+        padder = PKCS7(128).padder()
+        padded = padder.update(xml_bytes) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+        encrypted = encryptor.update(padded) + encryptor.finalize()
+        result = {
+            "session_reference": session_ref,
+            "invoice_reference": None,
+            "close_error": None,
+        }
+        try:
+            sent = self._request(
+                "POST", f"/sessions/online/{session_ref}/invoices", token=self._access(),
+                json={
+                    "invoiceHash": b64(hashlib.sha256(xml_bytes).digest()),
+                    "invoiceSize": len(xml_bytes),
+                    "encryptedInvoiceHash": b64(hashlib.sha256(encrypted).digest()),
+                    "encryptedInvoiceSize": len(encrypted),
+                    "encryptedInvoiceContent": b64(encrypted),
+                    "offlineMode": False,
+                },
+            ).json()
+            result["invoice_reference"] = sent["referenceNumber"]
+            if on_invoice:
+                on_invoice(result["invoice_reference"])
+        finally:
+            try:
+                self._request(
+                    "POST", f"/sessions/online/{session_ref}/close",
+                    token=self._access(),
+                )
+            except KsefError as exc:
+                result["close_error"] = str(exc)
+                logger.warning("KSeF: nie zamknięto sesji %s", session_ref)
+        if result["invoice_reference"] is None:
+            raise KsefError(
+                f"Wysłanie XML nie zostało potwierdzone. Sprawdź sesję KSeF {session_ref} "
+                "przed ponowną próbą, aby nie zdublować faktury."
+            )
+        return result
+
+    def invoice_submission_status(self, session_reference: str, invoice_reference: str) -> dict:
+        return self._request(
+            "GET", f"/sessions/{session_reference}/invoices/{invoice_reference}",
+            token=self._access(),
+        ).json()
 
     def list_invoices(self, date_from: datetime, date_to: Optional[datetime] = None, **kwargs) -> List[Dict[str, Any]]:
         return list(self.query_invoices(date_from, date_to, **kwargs))

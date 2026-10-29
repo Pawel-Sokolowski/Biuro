@@ -23,6 +23,8 @@ from app.invoices.manual_invoice_dialog import ManualInvoiceDialog, KontrahenciD
 from app.invoices.ksef import ksef_url
 from app.invoices.ksef_client import KsefError
 from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
+from app.invoices.ksef_submission import send_invoice_xml, refresh_invoice_submission
+from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
 from app.security.authorization import can, is_administrator
 from app.utils.saldeo_exporter import export_saldeo_xlsx
 
@@ -129,6 +131,7 @@ class FakturyPage(QWidget):
 
         self._build_tab_robocze()
         self._build_tab_wystawione()
+        self.tabs.setCurrentWidget(self.tab_wystawione)
         self.refresh()
 
     # ---------------- budowa ekranu ----------------
@@ -218,10 +221,19 @@ class FakturyPage(QWidget):
         self.btn_ksef.clicked.connect(self._edit_ksef_number)
         self.btn_ksef_download = QPushButton("Pobierz z KSeF")
         self.btn_ksef_download.clicked.connect(self._download_from_ksef)
+        self.btn_send_ksef = QPushButton("Wyślij XML do KSeF")
+        self.btn_send_ksef.clicked.connect(self._send_selected_to_ksef)
+        self.btn_status_ksef = QPushButton("Status wysyłki KSeF")
+        self.btn_status_ksef.clicked.connect(self._check_ksef_submission)
+        self.btn_bank = QPushButton("Rozlicz ING MT940")
+        self.btn_bank.clicked.connect(self._open_bank_payments)
+        self.btn_cash = QPushButton("Zapłata gotówką")
+        self.btn_cash.clicked.connect(self._mark_cash_payment)
         self.btn_delete_issued = QPushButton("Usuń wystawioną")
         self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
         for button in (self.btn_view, self.btn_reexport, self.btn_correction, self.btn_ksef,
-                       self.btn_ksef_download, self.btn_delete_issued):
+                       self.btn_ksef_download, self.btn_send_ksef, self.btn_status_ksef,
+                       self.btn_bank, self.btn_cash, self.btn_delete_issued):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -233,7 +245,7 @@ class FakturyPage(QWidget):
 
     def _download_from_ksef(self):
         if not ksef_configured():
-            QMessageBox.warning(self, "KSeF", "KSeF nie jest skonfigurowany (NIP i token w ustawieniach).")
+            QMessageBox.warning(self, "KSeF", "Skonfiguruj NIP oraz certyfikat z kluczem prywatnym w ustawieniach. Token nie jest używany.")
             return
         month = self._current_month()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -253,6 +265,102 @@ class FakturyPage(QWidget):
         if result["niedopasowane"]:
             message += "\n\nNiedopasowane faktury:\n" + "\n".join(result["niedopasowane"][:15])
         QMessageBox.information(self, "KSeF", message)
+
+    def _selected_single_issued(self):
+        ids = self._selected_ids(self.issued_table)
+        if len(ids) != 1:
+            QMessageBox.information(self, "Faktura", "Zaznacz dokładnie jedną fakturę wystawioną.")
+            return None
+        invoice = get_invoice_by_id(ids[0])
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
+            QMessageBox.warning(self, "Faktura", "Brak dostępu do wskazanej faktury.")
+            return None
+        return invoice
+
+    def _open_bank_payments(self):
+        try:
+            dialog = BankPaymentReview(self.pracownik_id, self)
+            dialog.exec()
+        except Exception as exc:
+            logger.exception("Nie udało się otworzyć uzgadniania banku")
+            QMessageBox.warning(self, "ING MT940", str(exc))
+        self.refresh()
+
+    def _mark_cash_payment(self):
+        invoice = self._selected_single_issued()
+        if invoice and record_cash_in_dialog(invoice, self.pracownik_id, self):
+            QMessageBox.information(self, "Gotówka", "Zapisano zapłatę gotówką.")
+            self.refresh()
+
+    def _send_selected_to_ksef(self):
+        invoice = self._selected_single_issued()
+        if invoice is None:
+            return
+        if not ksef_configured():
+            QMessageBox.warning(self, "KSeF", "Wymagany certyfikat i klucz prywatny KSeF oraz NIP w ustawieniach.")
+            return
+        if not invoice.get("numer"):
+            QMessageBox.warning(self, "KSeF", "Faktura musi mieć numer zgodny z plikiem FA(3).")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Wybierz gotowy, poprawny XML FA(3)", "", "Faktury FA(3) (*.xml)"
+        )
+        if not path:
+            return
+        env = __import__("app.db.dao_app_settings", fromlist=["get_setting"]).get_setting("ksef_srodowisko") or "prod"
+        confirm = QMessageBox.question(
+            self, "Wyślij fakturę do KSeF",
+            f"Wysłać fakturę {invoice['numer']} do środowiska {env.upper()} KSeF?\n"
+            "Źródłem jest wybrany plik XML FA(3).\n"
+            "Faktura zostanie przyjęta dopiero po nadaniu numeru KSeF.\n"
+            "Tej wysyłki nie można cofnąć.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = send_invoice_xml(invoice["id"], path, self.pracownik_id)
+        except (KsefError, PermissionError, OSError) as exc:
+            QMessageBox.warning(self, "KSeF", str(exc))
+            return
+        except Exception:
+            logger.exception("Błąd wysyłki do KSeF")
+            QMessageBox.warning(self, "KSeF", "Wysyłka jest niepewna. Sprawdź stan w KSeF przed ponowną próbą.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.refresh()
+        QMessageBox.information(
+            self, "KSeF",
+            f"Wysłano do przetwarzania.\nSesja: {result['session_reference']}\n"
+            f"Referencja faktury: {result['invoice_reference']}\n"
+            "Sprawdź status wysyłki, aby uzyskać numer KSeF i potwierdzenie.",
+        )
+
+    def _check_ksef_submission(self):
+        invoice = self._selected_single_issued()
+        if invoice is None:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            response = refresh_invoice_submission(invoice["id"], self.pracownik_id)
+        except (KsefError, PermissionError) as exc:
+            QMessageBox.warning(self, "KSeF", str(exc))
+            return
+        except Exception:
+            logger.exception("Błąd sprawdzenia statusu KSeF")
+            QMessageBox.warning(self, "KSeF", "Nie można pobrać statusu wysyłki.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.refresh()
+        status = response.get("status") or {}
+        QMessageBox.information(
+            self, "KSeF",
+            f"Status: {status.get('code', '?')} — {status.get('description') or 'W toku'}\n"
+            f"Numer KSeF: {response.get('ksefNumber') or 'jeszcze nie nadano'}",
+        )
 
     # ---------------- filtry ----------------
     def _current_month(self):

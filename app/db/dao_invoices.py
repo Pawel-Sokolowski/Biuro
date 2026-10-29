@@ -534,8 +534,9 @@ def archive_invoice_positions(conn: psycopg.Connection, invoice_row: Dict[str, A
     cur.execute(
         """
         INSERT INTO faktury_archiwum (
-            faktura_id, firma_id, miesiac, pozycje_json, kwota_netto, kwota_brutto, archived_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+            faktura_id, firma_id, miesiac, pozycje_json, kwota_netto,
+            kwota_brutto, archived_at, restore_manual
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
     """,
         (
             invoice_row.get("id"),
@@ -545,6 +546,11 @@ def archive_invoice_positions(conn: psycopg.Connection, invoice_row: Dict[str, A
             invoice_row.get("kwota_netto"),
             invoice_row.get("kwota_brutto"),
             _now_datetime(),
+            int(
+                bool(invoice_row.get("firma_id"))
+                and invoice_row.get("rodzaj", "faktura") == "faktura"
+                and not invoice_row.get("reczna")
+            ),
         ),
     )
     _new_id = cur.fetchone()[0]
@@ -889,6 +895,7 @@ def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) ->
         invoice = dict(row)
         if draft_only and invoice.get("eksportowana"):
             raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
+        archive_invoice_positions(conn, invoice)
         _preserve_legacy_extra_services(conn, invoice)
         # Usunięcie nagłówka kasuje powiązane faktury_pozycje przez ON DELETE
         # CASCADE, ale nie dotyka odrębnej ewidencji uslugi_dodatkowe_firma.

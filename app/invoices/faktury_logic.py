@@ -377,11 +377,45 @@ class FakturyLogic:
             retained.append(dict(position))
         return retained + generated
 
+    def _get_archived_manual_positions(self, firma_id: int, miesiac: str) -> List[Dict[str, Any]]:
+        """Odtwarza ręczne pozycje ostatniej wycofanej faktury automatycznej.
+
+        Wpisy katalogowych usług dodatkowych (usluga_id) są już przechowywane
+        w osobnej ewidencji, dlatego nie wolno ich wczytywać drugi raz.
+        """
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT pozycje_json FROM faktury_archiwum
+                WHERE firma_id = %s AND miesiac = %s AND restore_manual = 1
+                ORDER BY id DESC LIMIT 1
+                """, (firma_id, miesiac),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return []
+        try:
+            positions = json.loads(row["pozycje_json"] or "[]")
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(positions, list):
+            return []
+        return [
+            dict(p, generated=False)
+            for p in positions
+            if isinstance(p, dict) and not p.get("generated")
+               and not p.get("usluga_id") and (p.get("nazwa") or p.get("opis"))
+        ]
+
     # ---------------- SAVE SINGLE ----------------
     def generate_and_save_invoice(self, firma_id: int, miesiac: str) -> Dict[str, Any]:
         generated_positions = self.generate_invoice_positions(firma_id, miesiac)
 
         existing = get_invoice_for_company_month(firma_id, miesiac)
+        if not existing:
+            generated_positions.extend(self._get_archived_manual_positions(firma_id, miesiac))
         if not existing and not generated_positions:
             return {"id": None, "created": False, "skipped": True, "firma_id": firma_id,
                     "miesiac": miesiac, "pozycje": [], "kwota_netto": 0.0, "kwota_brutto": 0.0}
@@ -503,11 +537,13 @@ class FakturyLogic:
 
                         filtered.append(p)
 
+                    existing = get_invoice_for_company_month(fid, miesiac)
+                    if not existing:
+                        filtered.extend(self._get_archived_manual_positions(fid, miesiac))
                     if not filtered:
                         processed += 1
                         continue
 
-                    existing = get_invoice_for_company_month(fid, miesiac)
                     if existing:
                         try:
                             existing_positions = json.loads(existing.get("pozycje_json") or "[]")

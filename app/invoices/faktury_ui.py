@@ -123,14 +123,17 @@ class FakturyPage(QWidget):
         layout.addLayout(self._build_filters())
 
         self.tabs = QTabWidget()
-        self.tab_robocze = QWidget()
         self.tab_wystawione = QWidget()
-        self.tabs.addTab(self.tab_robocze, "Faktury robocze")
+        self.tab_robocze = QWidget()
+        self.tab_dodatkowe = QWidget()
         self.tabs.addTab(self.tab_wystawione, "Faktury wystawione")
+        self.tabs.addTab(self.tab_robocze, "Faktury robocze")
+        self.tabs.addTab(self.tab_dodatkowe, "Czynności dodatkowe")
         layout.addWidget(self.tabs)
 
-        self._build_tab_robocze()
         self._build_tab_wystawione()
+        self._build_tab_robocze()
+        self._build_tab_dodatkowe()
         self.tabs.setCurrentWidget(self.tab_wystawione)
         self.refresh()
 
@@ -242,6 +245,36 @@ class FakturyPage(QWidget):
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
         self.issued_table.cellDoubleClicked.connect(self._on_issued_double_click)
         layout.addWidget(self.issued_table)
+
+    def _build_tab_dodatkowe(self):
+        layout = QVBoxLayout(self.tab_dodatkowe)
+        buttons = QHBoxLayout()
+        self.btn_edit = QPushButton("Edytuj pozycje")
+        self.btn_edit.clicked.connect(self._edit_selected_draft)
+        self.btn_delete = QPushButton("Usuń")
+        self.btn_delete.clicked.connect(self._delete_selected)
+        for button in (self.btn_edit, self.btn_delete):
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+        self.draft_table = _make_table(self.DRAFT_HEADERS, multi=True)
+        self.draft_table.itemSelectionChanged.connect(self._show_draft_positions)
+        self.draft_table.cellDoubleClicked.connect(lambda *_: self._edit_selected_draft())
+        layout.addWidget(self.draft_table)
+
+        layout.addWidget(QLabel("Pozycje faktury"))
+        self.positions_table = _make_table(["Nazwa", "Ilość", "Jednostka", "Netto", "VAT", "Kategoria"])
+        quantity_delegate = QuantityDelegate(self.positions_table)
+        quantity_delegate.committed.connect(self._on_draft_position_changed)
+        self.positions_table.setItemDelegateForColumn(1, quantity_delegate)
+        self.positions_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self._shown_draft_id = None
+        layout.addWidget(self.positions_table)
 
     def _download_from_ksef(self):
         if not ksef_configured():
@@ -589,6 +622,26 @@ class FakturyPage(QWidget):
             if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
                 try:
                     delete_draft_invoice(invoice_id)
+                except InvoiceLockedError as exc:
+                    QMessageBox.warning(self, "Faktura", str(exc))
+        self.refresh()
+
+    def _delete_dodatkowe(self):
+        ids = self._selected_ids(self.draft_table)
+        if not ids:
+            QMessageBox.information(self, "Faktura", "Zaznacz usługę dodatkową do usunięcia.")
+            return
+        if QMessageBox.question(
+            self, "Usuwanie",
+            f"Usunąć zaznaczone usługi dodatkowe ({len(ids)})?\n",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        for invoice_id in ids:
+            invoice = get_invoice_by_id(invoice_id)
+            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+                try:
+                    delete_dodatkowe(invoice_id)
                 except InvoiceLockedError as exc:
                     QMessageBox.warning(self, "Faktura", str(exc))
         self.refresh()

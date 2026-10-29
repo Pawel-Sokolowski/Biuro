@@ -573,10 +573,10 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
 
-        self.table_ks.setItemDelegateForColumn(11, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
-        self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
+        self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
+        self.table_ks.setItemDelegateForColumn(9, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
         self.table_ks.setItemDelegateForColumn(10, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
-        self.table_ks.setItemDelegateForColumn(9, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
+        self.table_ks.setItemDelegateForColumn(11, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
         self.notes_delegate_ks = ScrollableNotesDelegate(self.table_ks)
         self.table_ks.setItemDelegateForColumn(self.NOTE_COL_KS, self.notes_delegate_ks)
 

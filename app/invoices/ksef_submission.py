@@ -108,8 +108,30 @@ def send_invoice_xml(invoice_id: int, xml_path: str, actor_id: int) -> dict:
         expected_buyer = "".join(c for c in str((firm["nip"] if firm else "") or "") if c.isdigit())
         if expected_buyer and expected_buyer != "".join(c for c in metadata["buyer_nip"] if c.isdigit()):
             raise KsefError("NIP nabywcy z XML nie zgadza się z firmą przypisaną do faktury.")
-    _update_attempt(invoice_id, "wysylanie")
     client = client_from_settings()
+    # Atomowo rezerwujemy dokument przed pierwszym wywołaniem HTTP do KSeF.
+    # Dwie jednoczesne akcje użytkowników nie mogą wysłać tej samej faktury.
+    conn = get_conn()
+    try:
+        updated = conn.execute(
+            """
+            UPDATE faktury SET ksef_status = 'wysylanie'
+            WHERE id = %s
+              AND NULLIF(BTRIM(COALESCE(ksef_numer, '')), '') IS NULL
+              AND COALESCE(ksef_status, '') NOT IN
+                  ('wysylanie', 'oczekuje', 'do_sprawdzenia', 'przyjeta')
+            RETURNING id
+            """,
+            (invoice_id,),
+        ).fetchone()
+        if not updated:
+            raise KsefError("Faktura jest już wysyłana lub została przyjęta w KSeF.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     try:
         response = client.send_fa3_xml(
             xml,

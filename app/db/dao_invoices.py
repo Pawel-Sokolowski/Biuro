@@ -987,3 +987,5 @@ def set_invoice_number(invoice_id: int, numer: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+

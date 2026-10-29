@@ -99,18 +99,120 @@ def _digits(value: Optional[str]) -> str:
     return "".join(ch for ch in (value or "") if ch.isdigit())
 
 
-def _take_match(candidates: List[Dict[str, Any]], meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Faktura z bazy o tym samym NIP-ie nabywcy i kwocie brutto; każda pasuje tylko raz."""
-    buyer_nip = _digits(((meta.get("buyer") or {}).get("identifier") or {}).get("value"))
-    gross = round(float(meta.get("grossAmount") or 0), 2)
-    if not buyer_nip:
-        return None
-    for invoice in candidates:
-        if _digits(invoice.get("firma_nip")) == buyer_nip and round(float(invoice.get("kwota_brutto") or 0), 2) == gross:
-            candidates.remove(invoice)
-            return invoice
-    return None
+def _take_match(
+    candidates: List[Dict[str, Any]],
+    meta: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
 
+    buyer_nip = _digits(
+        (
+            (meta.get("buyer") or {})
+            .get("identifier") or {}
+        ).get("value")
+    )
+
+    invoice_number = str(
+        meta.get("invoiceNumber") or ""
+    ).strip()
+
+    gross = round(
+        float(meta.get("grossAmount") or 0),
+        2,
+    )
+
+    logger.warning(
+        "KSEF invoice=%s nip=%s gross=%s",
+        invoice_number,
+        buyer_nip,
+        gross,
+    )
+
+    #
+    # 1. numer faktury
+    #
+
+    for invoice in candidates:
+
+        number = str(
+            invoice.get("numer") or ""
+        ).strip()
+
+        if (
+            number
+            and invoice_number
+            and number.upper() == invoice_number.upper()
+        ):
+            candidates.remove(invoice)
+
+            logger.warning(
+                "MATCH NUMBER %s",
+                number,
+            )
+
+            return invoice
+
+    #
+    # 2. NIP + kwota
+    #
+
+    for invoice in candidates:
+
+        local_nip = _digits(
+            invoice.get("firma_nip")
+        )
+
+        local_gross = round(
+            float(
+                invoice.get("kwota_brutto") or 0
+            ),
+            2,
+        )
+
+        if (
+            local_nip == buyer_nip
+            and local_gross == gross
+        ):
+            candidates.remove(invoice)
+
+            logger.warning(
+                "MATCH NIP %s",
+                buyer_nip,
+            )
+
+            return invoice
+
+    #
+    # 3. sam NIP
+    #
+
+    matches = [
+        x
+        for x in candidates
+        if _digits(
+            x.get("firma_nip")
+        ) == buyer_nip
+    ]
+
+    if len(matches) == 1:
+
+        candidates.remove(
+            matches[0]
+        )
+
+        logger.warning(
+            "MATCH UNIQUE NIP %s",
+            buyer_nip,
+        )
+
+        return matches[0]
+
+    logger.warning(
+        "NO MATCH invoice=%s nip=%s",
+        invoice_number,
+        buyer_nip,
+    )
+
+    return None
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None) -> Dict[str, Any]:
     """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""
     start = datetime.strptime(miesiac, "%Y-%m").replace(tzinfo=timezone.utc)

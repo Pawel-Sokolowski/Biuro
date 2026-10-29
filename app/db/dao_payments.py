@@ -27,80 +27,283 @@ def _money(text: str) -> Decimal:
     except InvalidOperation as exc:
         raise PaymentError(f"Nieprawidłowa kwota przelewu: {text}") from exc
 
+def _extract_invoice_number(text: str) -> str:
+    patterns = (
+        r"(FV[/\-][A-Z0-9/\-]+)",
+        r"(FS[/\-][A-Z0-9/\-]+)",
+        r"(FA[/\-][A-Z0-9/\-]+)",
+    )
+
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    return ""
 
 def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
-    """SWIFT MT940: :25:, :28C:, :61:, :86: i wieloliniowe opisy ING.
 
-    Parsowanie nie oznacza rozliczenia. Operacje D są importowane, ale nie
-    można ich wykorzystać jako dodatniej zapłaty za fakturę sprzedaży.
-    """
-    try:
-        source = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        source = raw.decode("cp1250")
-    source = source.replace("\r\n", "\n").replace("\r", "\n")
-    # MT940 bywa umieszczany w blokach SWIFT {4: ... -}.
-    lines = source.splitlines()
-    result: list[dict[str, Any]] = []
+    source = None
+
+    for encoding in (
+        "cp1250",
+        "iso-8859-2",
+        "cp852",
+        "cp1252",
+        "utf-8-sig",
+        "utf-8",
+    ):
+        try:
+            source = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if source is None:
+        source = raw.decode(
+            "cp1250",
+            errors="replace"
+        )
+
+    source = (
+        source
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+
     account = ""
     statement = ""
+
+    result: list[dict[str, Any]] = []
+
     current = None
     active_tag = ""
 
     def flush():
-        nonlocal current
-        if current is not None:
-            current["title"] = " ".join(current.pop("description", [])).strip()
-            raw_id = "|".join((
-                account, statement, str(current["ordinal"]), current["date"],
-                str(current["amount"]), current["currency"], current["reference"],
-                current["title"],
-            ))
-            current["hash"] = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
-            result.append(current)
-            current = None
 
-    for line in lines:
-        tag = re.match(r"^:(20|25|28C|61|86):?(.*)$", line)
-        if tag:
-            code, text = tag.groups()
-            active_tag = code
-            if code == "25":
+        nonlocal current
+
+        if current is None:
+            return
+
+        raw_lines = current.pop(
+            "description",
+            [],
+        )
+
+        raw_text = " ".join(raw_lines)
+
+        invoice_number = _extract_invoice_number(
+            raw_text
+        )
+
+        contractor = ""
+
+        contractor_match = re.search(
+            r"~32(.*?)(?:~33|~34|~35|~36|~37|~38|$)",
+            raw_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        if contractor_match:
+
+            contractor = re.sub(
+                r"\s+",
+                " ",
+                contractor_match.group(1)
+            ).strip()
+
+            contractor = re.sub(
+                r"\bUL\.$",
+                "",
+                contractor,
+                flags=re.IGNORECASE,
+            ).strip()
+
+        if invoice_number:
+
+            title = invoice_number
+
+        else:
+
+            title = re.sub(
+                r"~\d{2}",
+                " ",
+                raw_text,
+            )
+
+            title = re.sub(
+                r"\b\d{3}\b",
+                " ",
+                title,
+            )
+
+            title = re.sub(
+                r"\s+",
+                " ",
+                title,
+            ).strip()
+
+        current["title"] = title
+        current["invoice_number"] = invoice_number
+        current["contractor"] = contractor
+
+        raw_id = "|".join([
+            str(account),
+            str(statement),
+            str(current["ordinal"]),
+            str(current["date"]),
+            str(current["amount"]),
+            str(current["currency"]),
+            str(current["reference"]),
+            str(current["title"]),
+        ])
+
+        current["hash"] = hashlib.sha256(
+            raw_id.encode("utf-8")
+        ).hexdigest()
+
+        result.append(current)
+
+        current = None
+
+    for raw_line in source.splitlines():
+
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("{1:"):
+            continue
+
+        if line.startswith("{2:"):
+            continue
+
+        if line == "{4:":
+            continue
+
+        if line in ("-}", "}"):
+            continue
+
+        tag_match = re.match(
+            r"^:(20|25|28|28C|60F|60M|61|86|62F|62M):(.*)$",
+            line,
+        )
+
+        if tag_match:
+
+            tag, text = tag_match.groups()
+
+            active_tag = tag
+
+            if tag == "25":
+
                 account = text.strip()
-            elif code == "28C":
+                continue
+
+            if tag in ("28", "28C"):
+
                 statement = text.strip()
-            elif code == "61":
+                continue
+
+            if tag == "61":
+
                 flush()
-                # YYMMDD value date, optional MMDD booking date, C/D or reversal
-                # and then amount with comma as decimal separator.
-                m = re.match(r"^(\d{6})(?:\d{4})?([RC]{0,1}[CD])([A-Z])?(\d+(?:,\d{0,2})?)", text.strip())
+
+                m = re.match(
+                    r"^"
+                    r"(\d{6})"
+                    r"(?:\d{4})?"
+                    r"(RC|RD|EC|ED|C|D)"
+                    r"([A-Z])?"
+                    r"(\d+(?:,\d{0,2})?)"
+                    r"(.*)$",
+                    text.strip(),
+                )
+
                 if not m:
-                    raise PaymentError(f"Niepoprawny rekord :61: w wyciągu: {text[:90]}")
-                raw_date, direction, _, raw_amount = m.groups()
+
+                    raise PaymentError(
+                        f"Niepoprawny rekord :61: → {text}"
+                    )
+
+                (
+                    raw_date,
+                    direction,
+                    _,
+                    raw_amount,
+                    reference,
+                ) = m.groups()
+
                 yy = int(raw_date[:2])
-                year = 2000 + yy if yy <= 79 else 1900 + yy
-                try:
-                    day = date(year, int(raw_date[2:4]), int(raw_date[4:6])).isoformat()
-                except ValueError as exc:
-                    raise PaymentError(f"Niepoprawna data operacji MT940: {raw_date}") from exc
+
+                year = (
+                    2000 + yy
+                    if yy <= 79
+                    else 1900 + yy
+                )
+
+                operation_date = date(
+                    year,
+                    int(raw_date[2:4]),
+                    int(raw_date[4:6]),
+                ).isoformat()
+
                 amount = _money(raw_amount)
-                if direction in ("D", "RC"):
+
+                direction = direction.upper()
+
+                if direction in (
+                    "D",
+                    "RD",
+                    "ED",
+                ):
                     amount = -amount
+
                 current = {
-                    "ordinal": len(result) + 1, "date": day,
-                    "amount": amount, "currency": "PLN",
-                    "account": account, "reference": text[m.end():].strip(),
+                    "ordinal": len(result) + 1,
+                    "date": operation_date,
+                    "amount": amount,
+                    "currency": "PLN",
+                    "account": account,
+                    "reference": reference.strip(),
                     "description": [],
                 }
-            elif code == "86" and current is not None:
-                current["description"].append(text.strip())
-        elif current is not None and active_tag == "86" and line.strip() and line.strip() not in ("-", "}"):
-            current["description"].append(line.strip())
-    flush()
-    if not result:
-        raise PaymentError("Plik nie zawiera transakcji MT940 (:61:).")
-    return result
 
+                continue
+
+            if tag == "86" and current is not None:
+
+                current["description"].append(
+                    text.strip()
+                )
+
+                continue
+
+        elif current is not None:
+
+            if active_tag == "86":
+
+                current["description"].append(
+                    line
+                )
+
+            elif active_tag == "61":
+
+                current["reference"] += (
+                    " " + line
+                )
+
+    flush()
+
+    if not result:
+
+        raise PaymentError(
+            "Plik nie zawiera transakcji MT940 (:61:)."
+        )
+
+    return result
 
 def import_mt940_file(path: str, actor_id: int) -> dict[str, int]:
     if not _allowed(actor_id):
@@ -120,8 +323,16 @@ def import_mt940_file(path: str, actor_id: int) -> dict[str, int]:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(hash) DO NOTHING RETURNING id
                 """,
-                (entry["hash"], entry["account"], entry["date"], entry["amount"],
-                 entry["currency"], "", entry["title"], entry["reference"]),
+                (
+                    entry["hash"],
+                    entry["account"],
+                    entry["date"],
+                    entry["amount"],
+                    entry["currency"],
+                    entry.get("contractor", ""),
+                    entry["title"],
+                    entry["reference"],
+                )
             )
             if cur.fetchone():
                 inserted += 1
@@ -156,63 +367,124 @@ def list_unsettled_transfers(actor_id: int) -> list[dict[str, Any]]:
     finally:
         conn.close()
 
+def list_invoice_choices(
+    actor_id: int,
+) -> list[dict[str, Any]]:
 
-def list_invoice_choices(actor_id: int) -> list[dict[str, Any]]:
     if not _allowed(actor_id):
-        raise PermissionError("Brak uprawnień do rozliczania faktur.")
+        raise PermissionError(
+            "Brak uprawnień do rozliczania faktur."
+        )
+
     conn = get_conn()
+
     try:
+
         rows = conn.execute(
             """
-            SELECT i.id, i.firma_id, i.numer, i.miesiac, i.kwota_brutto,
-                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
-                   COALESCE(f.nip, i.nabywca_nip, '') AS nip,
-                   i.kwota_brutto - COALESCE(p.paid, 0) AS balance
+            SELECT
+                i.id,
+                i.firma_id,
+                i.numer,
+                i.miesiac,
+                i.kwota_brutto,
+
+                COALESCE(
+                    NULLIF(f.nazwa_skrocona, ''),
+                    f.nazwa,
+                    i.nabywca_pelna,
+                    ''
+                ) AS buyer,
+
+                COALESCE(
+                    f.nip,
+                    i.nabywca_nip,
+                    ''
+                ) AS nip,
+
+                i.kwota_brutto
+                    - COALESCE(p.paid, 0)
+                    AS balance
+
             FROM faktury i
-            LEFT JOIN firmy f ON f.id = i.firma_id
+
+            LEFT JOIN firmy f
+                ON f.id = i.firma_id
+
             LEFT JOIN (
-                SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
-            ) p ON p.faktura_id = i.id
-            WHERE i.rodzaj = 'faktura' AND COALESCE(i.eksportowana, 0) = 1
-              AND i.kwota_brutto > COALESCE(p.paid, 0) + 0.009
-            ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
+                SELECT
+                    faktura_id,
+                    SUM(kwota) AS paid
+                FROM faktury_platnosci
+                GROUP BY faktura_id
+            ) p
+                ON p.faktura_id = i.id
+
+            WHERE
+                i.rodzaj = 'faktura'
+                AND COALESCE(i.eksportowana, 0) = 1
+                AND i.kwota_brutto >
+                    COALESCE(p.paid, 0) + 0.009
+                AND i.miesiac =
+                    TO_CHAR(CURRENT_DATE, 'YYYY-MM')
+
+            ORDER BY
+                buyer,
+                i.id DESC
             """
         ).fetchall()
-        return [dict(row) for row in rows if can_access_invoice(actor_id, row["firma_id"])]
+
+        return [
+            dict(row)
+            for row in rows
+            if can_access_invoice(
+                actor_id,
+                row["firma_id"]
+            )
+        ]
+
     finally:
         conn.close()
 
+def suggested_invoice_ids(
+    transaction: dict[str, Any],
+    invoices: list[dict[str, Any]],
+) -> list[int]:
 
-def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
-    """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.
+    def normalize(value: str) -> str:
+        return re.sub(
+            r"[^A-Z0-9]",
+            "",
+            str(value).upper(),
+        )
 
-    Kwota, numer czy NIP same w sobie nie stanowią dowodu zapłaty.
-    """
-    title = re.sub(r"\s+", "", str(transaction.get("tytul") or "")).casefold()
-    numeric_title = re.sub(r"\D", "", title)
-    amount = _money(str(transaction.get("remaining") or transaction.get("kwota") or 0))
-    results = []
-    for inv in invoices:
-        number = re.sub(r"\s+", "", str(inv.get("numer") or "")).casefold()
-        nip = re.sub(r"\D", "", str(inv.get("nip") or ""))
-        balance = _money(str(inv["balance"]))
-        invoice_in_title = bool(number and len(number) >= 5 and number in title)
-        nip_in_title = bool(len(nip) == 10 and nip in numeric_title)
-        exact_amount = balance == amount
-        if invoice_in_title and nip_in_title and exact_amount:
-            score = 0
-        elif invoice_in_title and exact_amount:
-            score = 1
-        elif invoice_in_title:
-            score = 2
-        elif nip_in_title and exact_amount:
-            score = 3
-        else:
-            continue
-        results.append((score, int(inv["id"])))
-    results.sort()
-    return [invoice_id for _, invoice_id in results]
+    title = str(
+        transaction.get("tytul") or ""
+    )
 
+    invoice_match = re.search(
+        r"(FV[/\-][A-Z0-9/\-]+)",
+        title,
+        re.IGNORECASE,
+    )
+
+    if invoice_match:
+
+        invoice_number = normalize(
+            invoice_match.group(1)
+        )
+
+        for inv in invoices:
+
+            number = normalize(
+                inv.get("numer") or ""
+            )
+
+            if number and number == invoice_number:
+
+                return [int(inv["id"])]
+
+    return []
 
 def _check_date(value: str) -> date:
     try:
@@ -294,5 +566,56 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+def delete_bank_transaction(
+    transaction_id: int,
+    actor_id: int,
+) -> None:
+
+    if not _allowed(actor_id):
+        raise PermissionError(
+            "Brak uprawnień."
+        )
+
+    conn = get_conn()
+
+    try:
+
+        payment = conn.execute(
+            """
+            SELECT 1
+            FROM faktury_platnosci
+            WHERE transakcja_id = %s
+            LIMIT 1
+            """,
+            (transaction_id,),
+        ).fetchone()
+
+        if payment:
+            raise PaymentError(
+                "Przelew jest już użyty w rozliczeniu faktury."
+            )
+
+        row = conn.execute(
+            """
+            DELETE FROM bank_transakcje
+            WHERE id = %s
+            RETURNING id
+            """,
+            (transaction_id,),
+        ).fetchone()
+
+        if not row:
+            raise PaymentError(
+                "Nie znaleziono przelewu."
+            )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
     finally:
         conn.close()

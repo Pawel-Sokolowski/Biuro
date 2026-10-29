@@ -425,9 +425,28 @@ class FakturyPage(QWidget):
         KontrahenciDialog(self).exec()
 
     def refresh(self):
+
         firma_id = self.firma_combo.currentData()
-        self._fill_drafts(list_invoices(self.pracownik_id, False, self._current_month(), firma_id))
-        self._fill_issued(list_invoices(self.pracownik_id, True, None, firma_id))
+
+        miesiac = self._current_month()
+
+        self._fill_drafts(
+            list_invoices(
+                self.pracownik_id,
+                False,
+                miesiac,
+                firma_id,
+            )
+        )
+
+        self._fill_issued(
+            list_invoices(
+                self.pracownik_id,
+                True,
+                miesiac,
+                firma_id,
+            )
+        )
 
     def _fill_drafts(self, invoices):
         self.draft_table.setRowCount(0)

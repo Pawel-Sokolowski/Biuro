@@ -38,17 +38,18 @@ def is_configured() -> bool:
 
 def client_from_settings() -> KsefClient:
     if not is_configured():
-        raise KsefError("KSeF nie jest skonfigurowany (NIP oraz certyfikat lub token).")
+        raise KsefError("Skonfiguruj NIP oraz certyfikat KSeF z kluczem prywatnym. Token KSeF nie jest używany.")
     from app.invoices.ksef_credentials import load_credentials
 
-    cred = load_credentials() or {}
-    token = decrypt_password(get_setting(TOKEN_KEY)) if get_setting(TOKEN_KEY) else ""
+    cred = load_credentials()
+    if not cred:
+        raise KsefError("Brak certyfikatu i klucza prywatnego KSeF.")
     return KsefClient(
         get_setting(NIP_KEY),
-        token,
+        "",
         get_setting(ENV_KEY) or "prod",
-        certificate=cred.get("certificate"),
-        private_key=cred.get("private_key"),
+        certificate=cred["certificate"],
+        private_key=cred["private_key"],
     )
 
 

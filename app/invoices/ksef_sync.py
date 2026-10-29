@@ -100,10 +100,19 @@ def _digits(value: Optional[str]) -> str:
     return "".join(ch for ch in (value or "") if ch.isdigit())
 
 
-def _take_match(candidates: List[Dict[str, Any]], meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Preferuje numer faktury; niejednoznaczne NIP/kwota pozostają niedopasowane."""
+def _take_match(
+    candidates: List[Dict[str, Any]],
+    meta: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Porównuje numer bez rozróżniania wielkości liter, NIP i kwotę.
+
+    Brak numeru wymaga jednoznacznego wyniku w odpowiednim miesiącu;
+    sam NIP nie wystarcza do przypisania numeru KSeF.
+    """
     buyer_nip = _digits(((meta.get("buyer") or {}).get("identifier") or {}).get("value"))
+    invoice_number = str(meta.get("invoiceNumber") or "").strip()
     if not buyer_nip or (meta.get("currency") or "PLN") != "PLN":
+        logger.warning("NO MATCH invoice=%s nip=%s", invoice_number, buyer_nip)
         return None
     try:
         gross = Decimal(str(meta.get("grossAmount"))).quantize(Decimal("0.01"))
@@ -111,20 +120,28 @@ def _take_match(candidates: List[Dict[str, Any]], meta: Dict[str, Any]) -> Optio
                    if _digits(invoice.get("firma_nip")) == buyer_nip
                    and Decimal(str(invoice.get("kwota_brutto"))).quantize(Decimal("0.01")) == gross]
     except (InvalidOperation, TypeError, ValueError):
+        logger.warning("NO MATCH invoice=%s nip=%s: nieprawidłowa kwota", invoice_number, buyer_nip)
         return None
-    number = str(meta.get("invoiceNumber") or "").strip()
-    exact = [invoice for invoice in matches if number and str(invoice.get("numer") or "").strip() == number]
+    logger.warning("KSEF invoice=%s nip=%s gross=%s", invoice_number, buyer_nip, gross)
+    exact = [invoice for invoice in matches
+             if invoice_number and str(invoice.get("numer") or "").strip().casefold() == invoice_number.casefold()]
     if exact:
         matches = exact
     else:
+        # Nie zastępuj innego istniejącego numeru ani nie przypisuj faktury
+        # tylko po NIP: klient może mieć wiele faktur o tej samej kwocie.
         matches = [invoice for invoice in matches if not str(invoice.get("numer") or "").strip()]
         issue_month = str(meta.get("issueDate") or "")[:7]
         if issue_month:
             matches = [invoice for invoice in matches if invoice.get("miesiac") == issue_month]
     if len(matches) != 1:
+        logger.warning("NO MATCH invoice=%s nip=%s", invoice_number, buyer_nip)
         return None
     candidates.remove(matches[0])
+    logger.warning("MATCH NUMBER %s" if exact else "MATCH NIP %s",
+                   matches[0].get("numer") if exact else buyer_nip)
     return matches[0]
+
 
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None) -> Dict[str, Any]:
     """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""

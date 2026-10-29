@@ -126,14 +126,17 @@ class FakturyPage(QWidget):
         layout.addLayout(self._build_filters())
 
         self.tabs = QTabWidget()
-        self.tab_robocze = QWidget()
         self.tab_wystawione = QWidget()
-        self.tabs.addTab(self.tab_robocze, "Faktury robocze")
+        self.tab_robocze = QWidget()
+        self.tab_dodatkowe = QWidget()
         self.tabs.addTab(self.tab_wystawione, "Faktury wystawione")
+        self.tabs.addTab(self.tab_robocze, "Faktury robocze")
+        self.tabs.addTab(self.tab_dodatkowe, "Czynności dodatkowe")
         layout.addWidget(self.tabs)
 
-        self._build_tab_robocze()
         self._build_tab_wystawione()
+        self._build_tab_robocze()
+        self._build_tab_dodatkowe()
         self.tabs.setCurrentWidget(self.tab_wystawione)
         self.refresh()
 
@@ -161,7 +164,7 @@ class FakturyPage(QWidget):
 
         self.month_button = QPushButton(datetime.now().strftime("%m-%Y"))
         self.month_button.clicked.connect(self._open_month_dialog)
-        controls.addWidget(QLabel("Miesiąc (faktury robocze):"))
+        controls.addWidget(QLabel("Miesiąc:"))
         controls.addWidget(self.month_button)
 
         self.btn_manual = QPushButton("Wystaw faktur\u0119")
@@ -252,6 +255,34 @@ class FakturyPage(QWidget):
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
         self.issued_table.cellDoubleClicked.connect(self._on_issued_double_click)
         layout.addWidget(self.issued_table)
+
+    def _build_tab_dodatkowe(self):
+        from app.db.dao_companies import list_companies
+        from app.db.dao_employees import list_employees
+        from app.tasks.extra_activities_ui import ExtraActivitiesPage
+
+        layout = QVBoxLayout(self.tab_dodatkowe)
+        self.extra_activities = ExtraActivitiesPage(
+            self.pracownik_id, list_companies(self.pracownik_id), list_employees(), self.tab_dodatkowe,
+        )
+        self.extra_activities.month.setCurrentText(self._current_month())
+        self.extra_activities.refresh()
+        self.extra_activities.activities_changed.connect(self.refresh)
+        self.extra_activities.open_task.connect(self._open_extra_task)
+        layout.addWidget(self.extra_activities)
+
+    def _open_extra_task(self, task_id):
+        from app.db.dao_companies import list_companies
+        from app.db.dao_employees import list_employees
+        from app.db.dao_tasks import list_tasks
+        from app.tasks.tasks_ui import TaskDialog
+
+        task = next((row for row in list_tasks(viewer_id=self.pracownik_id) if row["id"] == task_id), None)
+        if task is None:
+            QMessageBox.warning(self, "Zadanie", "Powiązane zadanie nie jest dostępne.")
+            return
+        TaskDialog(self, self.pracownik_id, list_companies(self.pracownik_id), list_employees(), task).exec()
+        self.extra_activities.refresh()
 
     def _download_from_ksef(self):
         if not ksef_configured():
@@ -405,6 +436,8 @@ class FakturyPage(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             year, month = dialog.selected().split("-")
             self.month_button.setText(f"{month}-{year}")
+            self.extra_activities.month.setCurrentText(dialog.selected())
+            self.extra_activities.refresh()
             self.refresh()
 
     # ---------------- generowanie ----------------
@@ -455,9 +488,28 @@ class FakturyPage(QWidget):
         KontrahenciDialog(self).exec()
 
     def refresh(self):
+
         firma_id = self.firma_combo.currentData()
-        self._fill_drafts(list_invoices(self.pracownik_id, False, self._current_month(), firma_id))
-        self._fill_issued(list_invoices(self.pracownik_id, True, None, firma_id))
+
+        miesiac = self._current_month()
+
+        self._fill_drafts(
+            list_invoices(
+                self.pracownik_id,
+                False,
+                miesiac,
+                firma_id,
+            )
+        )
+
+        self._fill_issued(
+            list_invoices(
+                self.pracownik_id,
+                True,
+                miesiac,
+                firma_id,
+            )
+        )
 
     def _fill_drafts(self, invoices):
         self.draft_table.setRowCount(0)

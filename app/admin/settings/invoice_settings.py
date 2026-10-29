@@ -194,6 +194,7 @@ class InvoiceSettings(QWidget):
                 QMessageBox.warning(self, "Numer rachunku", "Podaj 26 cyfr rachunku lub prawidłowy format IBAN.")
                 return
             self.logic.set_setting("konto_bankowe_biura", account)
+            self.logic.set_setting("faktury_konto_bankowe", account)
 
         # metoda kasowa
         self._set_flag_value(

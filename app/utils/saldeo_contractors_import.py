@@ -34,7 +34,10 @@ def _nip(value: Any) -> str:
 def _csv_rows(path: Path) -> list[list[Any]]:
     data = path.read_bytes()
     text = None
-    for encoding in ("utf-8-sig", "utf-16", "cp1250"):
+    # Bez BOM nie próbujemy utf-16: dane CP1250 mogą się wówczas pozornie
+    # dekodować jako UTF-16, ale powstanie nieczytelny tekst.
+    encodings = ("utf-16", "utf-8-sig", "cp1250") if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "cp1250")
+    for encoding in encodings:
         try:
             text = data.decode(encoding)
             break

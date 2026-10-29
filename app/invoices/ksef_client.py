@@ -6,7 +6,7 @@ import base64
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 from cryptography import x509
@@ -168,7 +168,11 @@ class KsefClient:
         response = self._request("GET", f"/invoices/ksef/{ksef_number}", token=self._access())
         return response.content.decode("utf-8")
 
-    def send_fa3_xml(self, xml_bytes: bytes) -> Dict[str, Any]:
+    def send_fa3_xml(
+        self, xml_bytes: bytes, *,
+        on_session: Optional[Callable[[str], None]] = None,
+        on_invoice: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
         """Wysyła gotowy XML FA(3) do KSeF 2.0 z szyfrowaniem AES-256-CBC.
 
         Zwrócony numer referencyjny nie oznacza jeszcze przyjęcia faktury.
@@ -213,6 +217,8 @@ class KsefClient:
             },
         ).json()
         session_ref = session["referenceNumber"]
+        if on_session:
+            on_session(session_ref)
         padder = PKCS7(128).padder()
         padded = padder.update(xml_bytes) + padder.finalize()
         encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
@@ -235,6 +241,8 @@ class KsefClient:
                 },
             ).json()
             result["invoice_reference"] = sent["referenceNumber"]
+            if on_invoice:
+                on_invoice(result["invoice_reference"])
         finally:
             try:
                 self._request(

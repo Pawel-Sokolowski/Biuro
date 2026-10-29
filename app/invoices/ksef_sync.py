@@ -33,7 +33,7 @@ def save_ksef_credentials(nip: str, token: Optional[str], environment: str = "pr
 def is_configured() -> bool:
     from app.invoices.ksef_credentials import load_credentials
 
-    return bool(get_setting(NIP_KEY) and (get_setting(TOKEN_KEY) or load_credentials()))
+    return bool(get_setting(NIP_KEY) and load_credentials())
 
 
 def client_from_settings() -> KsefClient:

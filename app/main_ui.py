@@ -565,6 +565,7 @@ class OfficeManagerApp(QMainWindow):
         self.page_dashboard = DashboardPage(self.pracownik_id)
         self.page_companies = CompanyUI(self.pracownik_id, self)
         self.page_email = EmailPage(self.pracownik_id)
+        self.page_email.folder_visibility_changed.connect(self._update_email_badge)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_chat.unread_changed.connect(self._set_chat_badge)
         self.page_chat._refresh_unread_marks()

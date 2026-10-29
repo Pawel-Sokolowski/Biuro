@@ -54,6 +54,7 @@ from app.email.email_storage import (
     get_folder_id,
     get_folders_for_account,
     get_unread_counts,
+    filter_visible_unread_counts,
     refresh_email_list,
     search_messages,
 )
@@ -377,6 +378,7 @@ class FolderTree(QTreeWidget):
 
 
 class EmailPage(QWidget):
+    folder_visibility_changed = pyqtSignal()
     sync_finished = pyqtSignal(bool)
     headers_ready = pyqtSignal()
     sync_progress = pyqtSignal(object)
@@ -787,7 +789,11 @@ class EmailPage(QWidget):
 
             try:
                 folders = get_folders_for_account(konto_id)
-                unread = get_unread_counts(konto_id)
+                unread = filter_visible_unread_counts(
+                    folders,
+                    get_unread_counts(konto_id),
+                    self.hidden_folders.get(str(konto_id), set()),
+                )
             except Exception:
                 folders, unread = [], {}
 
@@ -2594,6 +2600,7 @@ class EmailPage(QWidget):
             self._clear_view()
         self._tree_signature = None
         self.load_folders_from_db()
+        self.folder_visibility_changed.emit()
         if current_will_be_hidden:
             self._select_first_visible_folder()
 

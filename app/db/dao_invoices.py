@@ -132,7 +132,7 @@ def _get_or_create_draft_invoice_for_company(
             return dict(row)["id"]
 
         today = _now_date()
-        termin = default_due_date().strftime(DATE_FMT)
+        termin = default_due_date(datetime.strptime(today, DATE_FMT).date()).strftime(DATE_FMT)
         cur.execute(
             """
             INSERT INTO faktury (
@@ -423,7 +423,7 @@ def create_or_update_invoice(
 
     pozycje_json = json.dumps(pozycje, ensure_ascii=False)
     today = _now_date()
-    termin = default_due_date().strftime(DATE_FMT)
+    termin = default_due_date(datetime.strptime(today, DATE_FMT).date()).strftime(DATE_FMT)
 
     try:
         if existing_invoice_id:
@@ -438,7 +438,6 @@ def create_or_update_invoice(
                 """
                 UPDATE faktury
                 SET kwota_netto = %s, kwota_brutto = %s, pozycje_json = %s,
-                    data_wystawienia = %s, data_sprzedazy = %s, termin_platnosci = %s,
                     updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = %s
             """,
@@ -446,9 +445,6 @@ def create_or_update_invoice(
                     round(kwota_netto, 2),
                     round(kwota_brutto, 2),
                     pozycje_json,
-                    today,
-                    today,
-                    termin,
                     existing_invoice_id,
                 ),
             )

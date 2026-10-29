@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.db.dao_conn import get_conn
+from app.utils.payment_terms import default_due_date
 from app.db.dao_kontrahenci import (
     delete_kontrahent, get_kontrahent, list_kontrahenci, save_kontrahent, search_kontrahenci,
 )
@@ -149,7 +150,11 @@ class ManualInvoiceDialog(QDialog):
         form.addRow("Wyniki:", self.results)
         self.selected_label = QLabel("Nie wybrano nabywcy")
         form.addRow("Wybrano:", self.selected_label)
-        self.date_issue, self.date_sale, self.date_due = self._date_widget(), self._date_widget(), self._date_widget(7)
+        self.date_issue, self.date_sale, self.date_due = self._date_widget(), self._date_widget(), self._date_widget()
+        # Wartość wyjściowa wynika z ustawień globalnych, nie jest na sztywno +7 dni.
+        self._suggested_due_date = None
+        self._on_issue_date_changed(self.date_issue.date())
+        self.date_issue.dateChanged.connect(self._on_issue_date_changed)
         form.addRow("Data wystawienia:", self.date_issue)
         form.addRow("Data sprzeda\u017Cy:", self.date_sale)
         form.addRow("Termin p\u0142atno\u015Bci:", self.date_due)
@@ -185,6 +190,15 @@ class ManualInvoiceDialog(QDialog):
         widget.setDisplayFormat("yyyy-MM-dd")
         widget.setDate(QDate.currentDate().addDays(days_from_today))
         return widget
+
+    def _on_issue_date_changed(self, issue_qdate):
+        # Jeżeli użytkownik ręcznie wybrał termin, nie nadpisujemy go
+        # podczas zmiany daty wystawienia.
+        due = default_due_date(issue_qdate.toPyDate())
+        next_due = QDate(due.year, due.month, due.day)
+        if self._suggested_due_date is None or self.date_due.date() == self._suggested_due_date:
+            self.date_due.setDate(next_due)
+        self._suggested_due_date = next_due
 
     def _search_buyers(self, text):
         self.buyer = None

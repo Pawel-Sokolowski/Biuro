@@ -88,6 +88,11 @@ class MonthlyViewLogic:
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    sm.data_dostarczenia AS data_dostarczenia,
                    COALESCE(NULLIF(sm.ilosc_dok, 0), doc.ilosc_dok, 0) AS ilosc_dok,
+                   inv.numer AS numer_faktury,
+                   CASE WHEN COALESCE(pay.kwota_razem, 0) >= COALESCE(inv.kwota_brutto, 0)
+                             AND COALESCE(inv.kwota_brutto, 0) > 0
+                        THEN TO_CHAR(pay.data_ostatniej, 'DD/MM/YYYY')
+                        ELSE '' END AS faktura_zaplacona,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
                    COALESCE(k.uop_ilosc, f.uop_ilosc, 0) AS uop,
@@ -108,8 +113,22 @@ class MonthlyViewLogic:
                 WHERE data_wyst >= %s AND data_wyst < %s
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
+            -- Jedna faktura za wybrany miesiąc rozliczeniowy; nie za miesiąc
+            -- przelewu. Preferowana jest faktura już wystawiona.
+            LEFT JOIN LATERAL (
+                SELECT i.id, i.numer, i.kwota_brutto
+                FROM faktury i
+                WHERE i.firma_id = f.id AND i.miesiac = %s
+                  AND i.rodzaj = 'faktura'
+                ORDER BY COALESCE(i.eksportowana, 0) DESC,
+                         COALESCE(i.reczna, 0) ASC, i.id DESC LIMIT 1
+            ) inv ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT SUM(p.kwota) AS kwota_razem, MAX(p.data_zaplaty) AS data_ostatniej
+                FROM faktury_platnosci p WHERE p.faktura_id = inv.id
+            ) pay ON TRUE
         """
-        params: List[Any] = [selected_month, selected_month, month_start, month_end]
+        params: List[Any] = [selected_month, selected_month, month_start, month_end, selected_month]
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]

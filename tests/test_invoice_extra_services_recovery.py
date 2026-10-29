@@ -131,6 +131,37 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
         recreated = self._generate()
         self.assertEqual(len(self._positions(recreated)), 2)
 
+    def test_manual_extra_line_survives_invoice_withdrawal(self):
+        # Pozycja wpisana ręcznie w edytorze nie ma identyfikatora katalogu.
+        # Powinna zostać odtworzona z archiwum, nie z faktury_pozycje.
+        invoice_id = create_or_update_invoice(
+            self.firma, self.MONTH,
+            [
+                {"nazwa": "Usługa księgowa", "ilosc": 1, "netto": 100,
+                 "brutto": 123, "vat": 23, "generated": True,
+                 "kategoria": "księgowość"},
+                {"nazwa": "Aktualizacja danych - ręcznie", "ilosc": 1,
+                 "netto": 75, "brutto": 92.25, "vat": 23,
+                 "generated": False, "kategoria": "dodatkowe"},
+            ],
+            175, 215.25,
+        )
+        mark_exported([invoice_id], 1)
+        delete_issued_invoice(invoice_id)
+
+        recreated = self._generate()
+        positions = self._positions(recreated)
+        manual = [p for p in positions if p["nazwa"] == "Aktualizacja danych - ręcznie"]
+        main = [p for p in positions if p["nazwa"] == "Usługa księgowa"]
+        self.assertEqual(len(manual), 1)
+        self.assertEqual(manual[0]["netto"], 75)
+        self.assertEqual(len(main), 1)
+        self.assertEqual(sum(p["netto"] for p in positions), 175)
+
+        delete_draft_invoice(recreated)
+        regenerated = self._generate()
+        self.assertEqual(len(self._positions(regenerated)), 2)
+
     def test_archival_delete_keeps_service(self):
         invoice_id = add_invoice_item_for_service(
             self.firma, self.service, 1, self.MONTH, cena_netto=60,

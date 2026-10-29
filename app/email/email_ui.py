@@ -54,6 +54,7 @@ from app.email.email_storage import (
     get_folder_id,
     get_folders_for_account,
     get_unread_counts,
+    filter_visible_unread_counts,
     refresh_email_list,
     search_messages,
 )
@@ -787,7 +788,11 @@ class EmailPage(QWidget):
 
             try:
                 folders = get_folders_for_account(konto_id)
-                unread = get_unread_counts(konto_id)
+                unread = filter_visible_unread_counts(
+                    folders,
+                    get_unread_counts(konto_id),
+                    self.hidden_folders.get(str(konto_id), set()),
+                )
             except Exception:
                 folders, unread = [], {}
 

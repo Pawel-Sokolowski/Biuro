@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_payments import (
     PaymentError, confirm_bank_payment, import_mt940_file, list_invoice_choices,
-    list_unsettled_transfers, record_cash_payment, suggested_invoice_ids,
+    list_unsettled_transfers, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,22 +41,23 @@ class BankPaymentReview(QDialog):
         self.invoices = []
         self.transactions = []
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
-        self.resize(1200, 650)
+        self.resize(1400, 700)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             "Wybierz przelew, sprawdź proponowaną fakturę i kwotę, "
             "a następnie zatwierdź rozliczenie. Żaden przelew nie jest przypisywany automatycznie."
         ))
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([
             "ID", "Data", "Wpływ / pozostało (PLN)", "Tytuł przelewu",
-            "Przypisz do faktury", "Kwota rozliczenia (PLN)",
+            "Przypisz do faktury", "Kwota rozliczenia (PLN)", "Kontrahent",
         ])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(3, 330)
         self.table.setColumnWidth(4, 330)
+        self.table.setColumnWidth(6, 230)
         layout.addWidget(self.table)
 
         buttons = QHBoxLayout()
@@ -66,6 +67,12 @@ class BankPaymentReview(QDialog):
         self.btn_confirm = QPushButton("Potwierdź rozliczenie wybranego przelewu")
         self.btn_confirm.clicked.connect(self._confirm)
         buttons.addWidget(self.btn_confirm)
+        self.btn_confirm_all = QPushButton("Rozlicz wybrane dopasowania")
+        self.btn_confirm_all.clicked.connect(self._confirm_all)
+        buttons.addWidget(self.btn_confirm_all)
+        self.btn_delete = QPushButton("Usuń przelew")
+        self.btn_delete.clicked.connect(self._delete_selected)
+        buttons.addWidget(self.btn_delete)
         refresh = QPushButton("Odśwież")
         refresh.clicked.connect(self.refresh)
         buttons.addWidget(refresh)
@@ -122,10 +129,17 @@ class BankPaymentReview(QDialog):
                 cell = QTableWidgetItem(str(value))
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(idx, col, cell)
+            self.table.setItem(idx, 6, QTableWidgetItem(entry.get("kontrahent") or ""))
             choices = QComboBox(self.table)
             choices.addItem("— Wybierz fakturę (wymagane potwierdzenie) —", None)
             suggestions = suggested_invoice_ids(entry, self.invoices)
-            ordering = suggestions + [i["id"] for i in self.invoices if i["id"] not in suggestions]
+            contractor = str(entry.get("kontrahent") or "").casefold().strip()
+            contractor_matches = [
+                inv["id"] for inv in self.invoices
+                if contractor and (buyer := str(inv.get("buyer") or "").casefold().strip())
+                and (contractor in buyer or buyer in contractor)
+            ]
+            ordering = list(dict.fromkeys(suggestions + contractor_matches + [i["id"] for i in self.invoices]))
             by_id = {i["id"]: i for i in self.invoices}
             for invoice_id in ordering:
                 invoice = by_id[invoice_id]
@@ -178,6 +192,7 @@ class BankPaymentReview(QDialog):
             f"Czy zatwierdzić przypisanie przelewu?\n\n"
             f"Data: {transfer['data_operacji']}\n"
             f"Tytuł: {transfer.get('tytul') or ''}\n"
+            f"Kontrahent: {transfer.get('kontrahent') or ''}\n"
             f"Faktura: {invoice['numer']} — {invoice['buyer']}\n"
             f"Kwota przypisania: {amount} PLN"
         )
@@ -197,6 +212,87 @@ class BankPaymentReview(QDialog):
             QMessageBox.warning(self, "Rozliczenie", "Nie udało się zapisać rozliczenia. Szczegóły w logach.")
             return
         QMessageBox.information(self, "Rozliczenie", "Płatność przypisana do faktury.")
+        self.refresh()
+
+    def _confirm_all(self):
+        operations = []
+        by_invoice = {invoice["id"]: invoice for invoice in self.invoices}
+        totals = {}
+        try:
+            for row, transfer in enumerate(self.transactions):
+                invoice_id = self.table.cellWidget(row, 4).currentData()
+                if invoice_id is None:
+                    continue
+                invoice = by_invoice.get(invoice_id)
+                if invoice is None:
+                    raise PaymentError("Faktura nie jest już dostępna. Odśwież listę.")
+                amount = _payment_amount(self.table.cellWidget(row, 5).text().strip())
+                if amount > Decimal(str(transfer["remaining"])):
+                    raise PaymentError(f"Kwota przekracza saldo przelewu #{transfer['id']}.")
+                totals[invoice_id] = totals.get(invoice_id, Decimal("0")) + amount
+                if totals[invoice_id] > Decimal(str(invoice["balance"])):
+                    raise PaymentError(f"Suma wybranych wpłat przekracza saldo faktury {invoice['numer']}.")
+                operations.append((transfer, invoice, amount))
+        except PaymentError as exc:
+            QMessageBox.warning(self, "Rozliczenie", str(exc))
+            return
+        if not operations:
+            QMessageBox.warning(self, "Rozliczenie", "Najpierw wybierz faktury dla przelewów do rozliczenia.")
+            return
+        details = "\n".join(
+            f"Przelew #{transfer['id']} ({transfer['data_operacji']}) → {invoice['numer']} — {invoice['buyer']}: {amount:.2f} PLN"
+            for transfer, invoice, amount in operations
+        )
+        if QMessageBox.question(
+            self, "Potwierdź rozliczenia", f"Zapisać {len(operations)} rozliczeń?\n\n{details}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        errors, saved = [], 0
+        for transfer, invoice, amount in operations:
+            try:
+                confirm_bank_payment(int(transfer["id"]), int(invoice["id"]), amount, self.actor_id)
+            except (PaymentError, PermissionError) as exc:
+                errors.append(f"Przelew #{transfer['id']}: {exc}")
+            except Exception:
+                logger.exception("Błąd zbiorczego rozliczenia przelewu %s", transfer["id"])
+                errors.append(f"Przelew #{transfer['id']}: błąd zapisu, szczegóły w logach.")
+            else:
+                saved += 1
+        message = f"Zapisano rozliczeń: {saved} z {len(operations)}."
+        if errors:
+            QMessageBox.warning(self, "Rozliczenie", message + "\n\n" + "\n".join(errors[:20]))
+        else:
+            QMessageBox.information(self, "Rozliczenie", message)
+        self.refresh()
+
+    def _delete_selected(self):
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if not rows:
+            QMessageBox.warning(self, "Usuwanie", "Nie wybrano przelewów.")
+            return
+        if QMessageBox.question(
+            self, "Usuń przelewy", f"Usunąć zaznaczone przelewy ({len(rows)})?\nRozliczone operacje nie zostaną usunięte.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        errors, deleted = [], 0
+        for row in rows:
+            transfer_id = int(self.transactions[row]["id"])
+            try:
+                delete_bank_transaction(transfer_id, self.actor_id)
+            except (PaymentError, PermissionError) as exc:
+                errors.append(f"Przelew #{transfer_id}: {exc}")
+            except Exception:
+                logger.exception("Błąd usunięcia przelewu %s", transfer_id)
+                errors.append(f"Przelew #{transfer_id}: błąd usuwania, szczegóły w logach.")
+            else:
+                deleted += 1
+        message = f"Usunięto przelewów: {deleted} z {len(rows)}."
+        if errors:
+            QMessageBox.warning(self, "Usuwanie", message + "\n\n" + "\n".join(errors[:20]))
+        else:
+            QMessageBox.information(self, "Usuwanie", message)
         self.refresh()
 
 

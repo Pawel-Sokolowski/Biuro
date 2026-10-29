@@ -1115,6 +1115,9 @@ def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) ->
     finally:
         conn.close()
 
+def _delete_dodatkowe(invoice_id: int, *, draft_only: bool) -> None:
+    _delete_invoice_preserving_services(invoice_id, draft_only=draft_only)
+
 
 def delete_issued_invoice(invoice_id: int) -> None:
     """Wycofuje dokument, pozostawiając wszystkie zarejestrowane usługi dodatkowe."""
@@ -1124,6 +1127,10 @@ def delete_issued_invoice(invoice_id: int) -> None:
 def delete_draft_invoice(invoice_id: int) -> None:
     """Usuwa roboczą fakturę bez usuwania ewidencji usług dodatkowych."""
     _delete_invoice_preserving_services(invoice_id, draft_only=True)
+
+def delete_dodatkowe(invoice_id: int) -> None:
+    """Usuwa roboczą fakturę bez usuwania ewidencji usług dodatkowych."""
+    _delete_dodatkowe(invoice_id, draft_only=True)
 
 
 def create_correction(invoice_id: int, przyczyna: str = "") -> int:

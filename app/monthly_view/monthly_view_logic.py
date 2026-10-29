@@ -87,7 +87,7 @@ class MonthlyViewLogic:
                    COALESCE(sm.etap_kadry, 'Brak') AS etap_kadry,
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    sm.data_dostarczenia AS data_dostarczenia,
-                   COALESCE(NULLIF(doc.ilosc_dok, 0), sm.ilosc_dok, 0) AS ilosc_dok,
+                   COALESCE(NULLIF(sm.ilosc_dok, 0), doc.ilosc_dok, 0) AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
                    COALESCE(k.uop_ilosc, f.uop_ilosc, 0) AS uop,

@@ -8,6 +8,7 @@ from PyQt6.QtCore import QDate
 from PyQt6.QtGui import QFont
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
+from app.security.authorization import is_administrator
 from app.utils.payment_terms import (
     DAY_OF_MONTH_KEY, DAYS_KEY, MODE_DAY_OF_MONTH, MODE_DAYS, MODE_KEY,
 )
@@ -25,9 +26,10 @@ class InvoiceSettings(QWidget):
     - Odnośnik do podglądu faktury w KSeF
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, pracownik_id=None):
         super().__init__(parent)
         self.logic = GlobalSettingsLogic()
+        self.pracownik_id = pracownik_id
 
         layout = QVBoxLayout(self)
 
@@ -138,6 +140,18 @@ class InvoiceSettings(QWidget):
         self.ksef_url = QLineEdit(self.logic.get_setting(URL_TEMPLATE_KEY) or DEFAULT_URL_TEMPLATE)
         layout.addWidget(self.ksef_url)
 
+        # Rachunek wystawcy wspólny dla wszystkich faktur eksportowanych do Saldeo.
+        # Edycję globalnego numeru rachunku udostępniamy wyłącznie administratorowi.
+        self.bank_account = None
+        if is_administrator(self.pracownik_id):
+            layout.addWidget(QLabel("Globalny numer konta bankowego do eksportu faktur (rachunek wystawcy):"))
+            self.bank_account = QLineEdit(
+                self.logic.get_setting("konto_bankowe_biura")
+                or self.logic.get_setting("faktury_konto_bankowe") or ""
+            )
+            self.bank_account.setPlaceholderText("26 cyfr rachunku lub numer IBAN")
+            layout.addWidget(self.bank_account)
+
         layout.addStretch()
 
         # -------------------------
@@ -172,6 +186,15 @@ class InvoiceSettings(QWidget):
     # ZAPIS USTAWIEŃ
     # ----------------------------------------------------
     def _save(self):
+        if self.bank_account is not None and is_administrator(self.pracownik_id):
+            import re
+            account = re.sub(r"\s+", "", self.bank_account.text().strip()).upper()
+            if account and not (re.fullmatch(r"\d{26}", account) or
+                                re.fullmatch(r"[A-Z]{2}[A-Z0-9]{13,32}", account)):
+                QMessageBox.warning(self, "Numer rachunku", "Podaj 26 cyfr rachunku lub prawidłowy format IBAN.")
+                return
+            self.logic.set_setting("konto_bankowe_biura", account)
+
         # metoda kasowa
         self._set_flag_value(
             self.cb_metoda_kasowa.isChecked(),

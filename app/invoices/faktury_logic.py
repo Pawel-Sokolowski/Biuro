@@ -50,7 +50,8 @@ class FakturyLogic:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.nazwa, u.kategoria, u.stawka_vat, uf.ilosc, uf.cena_netto
+            SELECT u.nazwa, u.kategoria, u.stawka_vat, uf.ilosc, uf.cena_netto,
+                   uf.id AS extra_service_row_id, uf.usluga_id, uf.jednostka
             FROM uslugi_dodatkowe_firma uf
             JOIN uslugi_dodatkowe u ON uf.usluga_id = u.id
             WHERE uf.firma_id = %s AND uf.miesiac = %s AND uf.fakturowac = 1
@@ -290,8 +291,8 @@ class FakturyLogic:
 
         # ---------------- Usługi dodatkowe (zawsze) ----------------
         for u in extra:
-            ilosc = int(u.get("ilosc") or 0)
-            if ilosc == 0:
+            ilosc = float(u.get("ilosc") or 0)
+            if ilosc <= 0:
                 continue
             cena_netto = self._to_float(u.get("cena_netto", 0.0))
             netto = round(cena_netto * ilosc, 2)
@@ -306,11 +307,14 @@ class FakturyLogic:
             pozycje.append({
                 "nazwa": u.get("nazwa"),
                 "ilosc": ilosc,
-                "jednostka": "szt.",
+                "jednostka": u.get("jednostka") or "szt.",
                 "netto": netto,
+                "cena_netto": cena_netto,
                 "vat": vat,
                 "brutto": brutto,
                 "kategoria": u.get("kategoria"),
+                "usluga_id": u.get("usluga_id"),
+                "extra_service_row_id": u.get("extra_service_row_id"),
                 "generated": True
             })
 
@@ -321,47 +325,53 @@ class FakturyLogic:
             existing_positions: List[Dict[str, Any]],
             generated_positions: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
+        """Odtwarza pozycje automatyczne i zachowuje ręczne bez dublowania usług.
 
-        result = [
-            dict(p)
-            for p in (existing_positions or [])
-            if not (
-                    p.get("generated")
-                    and (p.get("nazwa") or "").strip().lower()
-                    in self._NON_BILLABLE_TIME_LINES
-            )
-        ]
+        Usługi z ewidencji dodatkowej mogą być już widoczne jako ręcznie dodana
+        pozycja na fakturze. Zastępujemy wówczas tę kopię wersją z ewidencji.
+        """
+        from collections import Counter
 
-        for gp in generated_positions:
-            gp_copy = dict(gp)
-            gp_copy.setdefault("generated", True)
+        generated = [dict(position, generated=True) for position in generated_positions]
 
-            gname = (gp_copy.get("nazwa") or "").strip()
-            gnetto = round(self._to_float(gp_copy.get("netto")), 2)
-            gvat = int(gp_copy.get("vat") or 0)
-            gkat = (gp_copy.get("kategoria") or "").strip()
+        def signature(position):
+            service_id = position.get("usluga_id")
+            if not service_id:
+                return None
+            try:
+                return (
+                    int(service_id),
+                    round(float(position.get("ilosc") or 0), 2),
+                    round(self._to_float(position.get("netto")), 2),
+                )
+            except (ValueError, TypeError):
+                return None
 
-            generated_index = next(
-                (
-                    idx
-                    for idx, existing in enumerate(result)
-                    if existing.get("generated")
-                       and (existing.get("nazwa") or "").strip() == gname
-                       and round(
-                    self._to_float(existing.get("netto")), 2
-                ) == gnetto
-                       and int(existing.get("vat") or 0) == gvat
-                       and (existing.get("kategoria") or "").strip() == gkat
-                ),
-                None,
-            )
-
-            if generated_index is None:
-                result.append(gp_copy)
-            else:
-                result[generated_index] = gp_copy
-
-        return result
+        generated_services = Counter(
+            sig for position in generated
+            if position.get("extra_service_row_id")
+            for sig in [signature(position)] if sig is not None
+        )
+        generated_row_ids = {
+            position["extra_service_row_id"]
+            for position in generated if position.get("extra_service_row_id")
+        }
+        retained = []
+        for position in existing_positions or []:
+            if position.get("generated"):
+                # Zastąpione aktualnymi cennikami i ewidencją usług.
+                continue
+            if position.get("extra_service_row_id") in generated_row_ids:
+                sig = signature(position)
+                if sig is not None and generated_services[sig] > 0:
+                    generated_services[sig] -= 1
+                continue
+            sig = signature(position)
+            if sig is not None and generated_services[sig] > 0:
+                generated_services[sig] -= 1
+                continue
+            retained.append(dict(position))
+        return retained + generated
 
     # ---------------- SAVE SINGLE ----------------
     def generate_and_save_invoice(self, firma_id: int, miesiac: str) -> Dict[str, Any]:

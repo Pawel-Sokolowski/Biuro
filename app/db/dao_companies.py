@@ -446,6 +446,10 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
         for f in FIRMA_FIELDS
         if mapped.get(f) is not None or (f in GLOBAL_DEFAULT_FLAGS and f in mapped)
     }
+    # Pole Saldeo może zmieniać tylko administrator. Pozostałe importy systemowe
+    # (actor_id=None) korzystają z osobnych, zaufanych ścieżek.
+    if actor_id is not None and not is_administrator(actor_id):
+        data.pop("nazwa_saldeo", None)
     from app.companies.company_names import clean_company_name
 
     for name_field in ("nazwa", "nazwa_skrocona"):

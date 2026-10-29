@@ -233,7 +233,7 @@ class InvoiceSettings(QWidget):
 
         self.logic.set_setting(MODE_KEY, self.term_mode.currentData())
         self.logic.set_setting(DAYS_KEY, str(self.term_days.value()))
-        self.logic.set_setting(DAY_OF_MONTH_KEY, str(int(self.term_day_of_month.currentText())))
+        self.logic.set_setting(DAY_OF_MONTH_KEY, self.term_day_of_month.currentText())
 
         self.logic.set_setting(URL_TEMPLATE_KEY, self.ksef_url.text().strip() or DEFAULT_URL_TEMPLATE)
 

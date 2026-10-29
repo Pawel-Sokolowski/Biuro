@@ -332,7 +332,11 @@ class FakturyLogic:
         """
         from collections import Counter
 
-        generated = [dict(position, generated=True) for position in generated_positions]
+        generated = []
+        for position in generated_positions:
+            item = dict(position)
+            item.setdefault("generated", True)
+            generated.append(item)
 
         def signature(position):
             service_id = position.get("usluga_id")

@@ -497,7 +497,7 @@ class InlineExtraServiceWindow(QDialog):
 
 
 class MonthlyViewPage(QWidget):
-    NOTE_COL_KS = 6
+    NOTE_COL_KS = 8
     NOTE_COL_KADRY = 8
 
     def __init__(self, pracownik_id: int, parent=None):
@@ -573,9 +573,9 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
 
-        self.table_ks.setItemDelegateForColumn(5, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
+        self.table_ks.setItemDelegateForColumn(11, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
         self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
-        self.table_ks.setItemDelegateForColumn(8, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
+        self.table_ks.setItemDelegateForColumn(10, IconButtonDelegate(self.table_ks, "edit.png", "edit_ks"))
         self.table_ks.setItemDelegateForColumn(9, IconButtonDelegate(self.table_ks, "more.png", "more_ks"))
         self.notes_delegate_ks = ScrollableNotesDelegate(self.table_ks)
         self.table_ks.setItemDelegateForColumn(self.NOTE_COL_KS, self.notes_delegate_ks)
@@ -587,11 +587,11 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.setItemDelegateForColumn(self.NOTE_COL_KADRY, self.notes_delegate_kadry)
         self.docs_delegate_ks = DeliveredDateDelegate(self.table_ks)
         self.docs_delegate_kadry = DeliveredDateDelegate(self.table_kadry)
-        self.table_ks.setItemDelegateForColumn(1, self.docs_delegate_ks)
+        self.table_ks.setItemDelegateForColumn(3, self.docs_delegate_ks)
         self.table_kadry.setItemDelegateForColumn(1, self.docs_delegate_kadry)
         self.etap_delegate_ks = EtapComboDelegate(self.table_ks)
         self.etap_delegate_kadry = EtapComboDelegate(self.table_kadry)
-        self.table_ks.setItemDelegateForColumn(2, self.etap_delegate_ks)
+        self.table_ks.setItemDelegateForColumn(4, self.etap_delegate_ks)
         self.table_kadry.setItemDelegateForColumn(2, self.etap_delegate_kadry)
 
         self.table_ks.viewport().installEventFilter(self)
@@ -664,7 +664,7 @@ class MonthlyViewPage(QWidget):
                     if col in (0, note_col)
                     else QHeaderView.ResizeMode.ResizeToContents,
                 )
-            etap_col = table.model().COL_ETAP
+            etap_col = table.model()._etap_col()
             metrics = header.fontMetrics()
             etap_width = max(metrics.horizontalAdvance(text) for text in ETAP_CHOICES) + 40
             header.setSectionResizeMode(etap_col, QHeaderView.ResizeMode.Fixed)
@@ -767,7 +767,7 @@ class MonthlyViewPage(QWidget):
                         fid, "ksiegowosc", row.get("sekundy_ksiegowosc", 0)
                     )
                     row["czas_ks_str"] = TimerUtils.format_seconds(delta)
-                    idx = self.model_ks.index(row_idx, 4)
+                    idx = self.model_ks.index(row_idx, 6)
                     self.model_ks.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DisplayRole])
                     break
 

@@ -550,6 +550,83 @@ def archive_invoice_positions(conn: psycopg.Connection, invoice_row: Dict[str, A
     _new_id = cur.fetchone()[0]
 
 
+def _preserve_legacy_extra_services(conn: psycopg.Connection, invoice: Dict[str, Any]) -> None:
+    """Przenosi do ewidencji usługi historycznie przypisane tylko do faktury.
+
+    Nowe usługi są zapisywane bezpośrednio w uslugi_dodatkowe_firma.
+    Przy usunięciu starych faktur odzyskujemy pozycje z usluga_id, których
+    nie ma jeszcze w ewidencji. Nie kopiujemy zwykłych pozycji księgowych.
+    """
+    from collections import Counter
+
+    firma_id = invoice.get("firma_id")
+    miesiac = invoice.get("miesiac")
+    if not firma_id or not miesiac:
+        return
+
+    try:
+        positions = json.loads(invoice.get("pozycje_json") or "[]")
+    except (TypeError, ValueError):
+        positions = []
+    if not isinstance(positions, list):
+        positions = []
+
+    service_positions = [p for p in positions if isinstance(p, dict) and p.get("usluga_id")]
+    if not service_positions:
+        # Starsze wersje potrafiły przechowywać pozycję wyłącznie w faktury_pozycje.
+        rows = conn.execute(
+            """
+            SELECT usluga_id, ilosc, cena_netto, wartosc_netto, jednostka
+            FROM faktury_pozycje
+            WHERE (invoice_id = %s OR faktura_id = %s) AND usluga_id IS NOT NULL
+            """, (invoice["id"], invoice["id"]),
+        ).fetchall()
+        service_positions = [dict(row) for row in rows]
+
+    existing = conn.execute(
+        """
+        SELECT usluga_id, ilosc, cena_netto
+        FROM uslugi_dodatkowe_firma
+        WHERE firma_id = %s AND miesiac = %s AND fakturowac = 1
+        """, (firma_id, miesiac),
+    ).fetchall()
+
+    def key(usluga_id, quantity, unit_price):
+        return (int(usluga_id), round(float(quantity), 2), round(float(unit_price), 2))
+
+    stored = Counter(key(row["usluga_id"], row["ilosc"], row["cena_netto"]) for row in existing)
+    for item in service_positions:
+        try:
+            usluga_id = int(item["usluga_id"])
+            quantity = float(item.get("ilosc") or 0)
+            price = item.get("cena_netto")
+            if price is None or price == "":
+                price = float(item.get("netto") or item.get("wartosc_netto") or 0) / quantity
+            price = float(price)
+            if quantity <= 0:
+                continue
+            signature = key(usluga_id, quantity, price)
+        except (ValueError, TypeError, ZeroDivisionError):
+            continue
+
+        if stored[signature]:
+            stored[signature] -= 1
+            continue
+        # Sprawdzamy istniejący wpis w katalogu, nie tworzymy usług w ciemno.
+        if not conn.execute(
+            "SELECT 1 FROM uslugi_dodatkowe WHERE id = %s", (usluga_id,)
+        ).fetchone():
+            continue
+        conn.execute(
+            """
+            INSERT INTO uslugi_dodatkowe_firma
+                (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac, jednostka)
+            VALUES (%s, %s, %s, %s, %s, 1, %s)
+            """,
+            (firma_id, miesiac, usluga_id, quantity, price, item.get("jednostka") or "szt."),
+        )
+
+
 def delete_invoice_keep_positions(invoice_id: int) -> bool:
     conn = get_conn()
     cur = conn.cursor()
@@ -561,6 +638,7 @@ def delete_invoice_keep_positions(invoice_id: int) -> bool:
 
         invoice = dict(row)
         archive_invoice_positions(conn, invoice)
+        _preserve_legacy_extra_services(conn, invoice)
 
         cur.execute("DELETE FROM faktury_pozycje WHERE invoice_id = %s", (invoice_id,))
         cur.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
@@ -802,31 +880,35 @@ def update_invoice_draft(
     return netto, brutto
 
 
-def delete_issued_invoice(invoice_id: int) -> None:
-    """Trwale usuwa wystawioną (wyeksportowaną) fakturę."""
-    invoice = get_invoice_by_id(invoice_id)
-    if not invoice:
-        return
+def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) -> None:
     conn = get_conn()
     try:
+        row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
+        if not row:
+            return
+        invoice = dict(row)
+        if draft_only and invoice.get("eksportowana"):
+            raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
+        _preserve_legacy_extra_services(conn, invoice)
+        # Usunięcie nagłówka kasuje powiązane faktury_pozycje przez ON DELETE
+        # CASCADE, ale nie dotyka odrębnej ewidencji uslugi_dodatkowe_firma.
         conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+def delete_issued_invoice(invoice_id: int) -> None:
+    """Wycofuje dokument, pozostawiając wszystkie zarejestrowane usługi dodatkowe."""
+    _delete_invoice_preserving_services(invoice_id, draft_only=False)
 
 
 def delete_draft_invoice(invoice_id: int) -> None:
-    invoice = get_invoice_by_id(invoice_id)
-    if not invoice:
-        return
-    if invoice.get("eksportowana"):
-        raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
-    conn = get_conn()
-    try:
-        conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    """Usuwa roboczą fakturę bez usuwania ewidencji usług dodatkowych."""
+    _delete_invoice_preserving_services(invoice_id, draft_only=True)
 
 
 def create_correction(invoice_id: int, przyczyna: str = "") -> int:

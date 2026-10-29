@@ -100,6 +100,15 @@ class SaldeoContractorsImportTests(unittest.TestCase):
             self.assertEqual(records[0]["short_name"], "Skrót Saldeo")
             self.assertEqual(records[0]["email"], "test@example.com")
 
+    def test_csv_cp1250_encoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kontrahenci.csv"
+            path.write_bytes(
+                "Typ;Nazwa skrócona:;NIP:\nK/D;Żółta Spółka;1234563218\n".encode("cp1250")
+            )
+            records = saldeo.read_saldeo_contractors(str(path))
+            self.assertEqual(records[0]["short_name"], "Żółta Spółka")
+
     def test_requires_administrator(self):
         with patch.object(saldeo, "is_administrator", return_value=False):
             with self.assertRaises(PermissionError):

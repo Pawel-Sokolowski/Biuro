@@ -15,6 +15,7 @@ from app.db.dao_invoices import (
     InvoiceLockedError, can_access_invoice, create_correction, delete_draft_invoice,
     delete_issued_invoice, get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
     update_invoice_draft,
+    validate_invoice_extra_services_ready,
 )
 from app.invoices.positions import normalize_position
 from app.invoices.faktury_logic import FakturyLogic
@@ -26,7 +27,9 @@ from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
 from app.invoices.ksef_submission import send_invoice_xml, refresh_invoice_submission
 from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
 from app.security.authorization import can, is_administrator
-from app.utils.saldeo_exporter import export_saldeo_xlsx
+from app.utils.saldeo_exporter import (
+    SaldeoCorrectionExportError, SaldeoExportError, export_saldeo_xlsx, validate_saldeo_invoices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +188,9 @@ class FakturyPage(QWidget):
         self.btn_export.clicked.connect(self._export_selected_drafts)
         self.btn_delete = QPushButton("Usuń roboczą")
         self.btn_delete.clicked.connect(self._delete_selected_draft)
-        for button in (self.btn_edit, self.btn_export, self.btn_delete):
+        self.btn_saldeo_correction = QPushButton("Korekta w Saldeo...")
+        self.btn_saldeo_correction.clicked.connect(self._prepare_saldeo_correction)
+        for button in (self.btn_edit, self.btn_export, self.btn_saldeo_correction, self.btn_delete):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -617,10 +622,36 @@ class FakturyPage(QWidget):
         for invoice_id in ids:
             invoice = get_invoice_by_id(invoice_id)
             if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                delete_issued_invoice(invoice_id)
+                try:
+                    delete_issued_invoice(invoice_id)
+                except InvoiceLockedError as exc:
+                    QMessageBox.warning(self, "Faktura", str(exc))
         self.refresh()
 
     # ---------------- eksport ----------------
+    def _prepare_saldeo_correction(self, invoice_id=None):
+        if not self._can_export():
+            return
+        if not invoice_id:
+            ids = self._selected_ids(self.draft_table)
+            if len(ids) != 1:
+                QMessageBox.information(self, "Korekta", "Zaznacz jedną korektę roboczą.")
+                return
+            invoice_id = ids[0]
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+            QMessageBox.warning(self, "Korekta", "Brak dostępu do korekty.")
+            return
+        if invoice.get("rodzaj") != "korekta" or invoice.get("eksportowana"):
+            QMessageBox.warning(self, "Korekta", "Wybierz niewystawioną korektę faktury.")
+            return
+        from app.invoices.saldeo_correction_dialog import SaldeoCorrectionDialog
+        try:
+            SaldeoCorrectionDialog(invoice, self.pracownik_id, self).exec()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Korekta", str(exc))
+        self.refresh()
+
     def _can_export(self):
         if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data"):
             return True
@@ -656,6 +687,21 @@ class FakturyPage(QWidget):
                 ))
         if not invoices:
             QMessageBox.warning(self, "Eksport", "Brak faktur dostępnych do eksportu.")
+            return
+        try:
+            validate_saldeo_invoices(invoices)
+            validate_invoice_extra_services_ready([invoice["id"] for invoice in invoices])
+        except SaldeoCorrectionExportError as exc:
+            if len(invoices) == 1:
+                self._prepare_saldeo_correction(invoices[0]["id"])
+            else:
+                QMessageBox.warning(self, "Korekty Saldeo", str(exc))
+            return
+        except SaldeoExportError as exc:
+            QMessageBox.warning(self, "Eksport Saldeo", str(exc))
+            return
+        except ValueError as exc:
+            QMessageBox.warning(self, "Czynności dodatkowe", str(exc))
             return
         path, _ = QFileDialog.getSaveFileName(self, "Zapisz XLSX", "", "Excel (*.xlsx)")
         if not path:

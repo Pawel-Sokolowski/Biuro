@@ -105,6 +105,159 @@ def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, 
         conn.close()
 
 
+def _sync_extra_service_allocations(conn, invoice_id: int, positions: List[dict]) -> None:
+    """Rezerwuje wpis ewidencji na jednej fakturze; usunięcie szkicu zwalnia wpis."""
+    invoice = conn.execute("SELECT firma_id, miesiac, rodzaj FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
+    if not invoice or invoice["rodzaj"] != "faktura":
+        return
+    row_ids = [int(p["extra_service_row_id"]) for p in positions if p.get("extra_service_row_id")]
+    if len(row_ids) != len(set(row_ids)):
+        raise ValueError("Ta sama czynność dodatkowa występuje na fakturze więcej niż raz.")
+    conn.execute("DELETE FROM faktury_uslugi_dodatkowe WHERE invoice_id = %s", (invoice_id,))
+    for row_id in row_ids:
+        service = conn.execute(
+            "SELECT firma_id, miesiac FROM uslugi_dodatkowe_firma WHERE id = %s", (row_id,)
+        ).fetchone()
+        if not service or (service["firma_id"], service["miesiac"]) != (invoice["firma_id"], invoice["miesiac"]):
+            raise ValueError("Czynność dodatkowa nie należy do firmy i miesiąca faktury.")
+        other = conn.execute(
+            "SELECT invoice_id FROM faktury_uslugi_dodatkowe WHERE extra_service_row_id = %s", (row_id,)
+        ).fetchone()
+        if other:
+            raise ValueError("Czynność dodatkowa znajduje się już na innej fakturze.")
+        conn.execute(
+            "INSERT INTO faktury_uslugi_dodatkowe (extra_service_row_id, invoice_id) VALUES (%s, %s)",
+            (row_id, invoice_id),
+        )
+
+
+def _backfill_extra_service_allocations(conn, firma_id: int, miesiac: str) -> None:
+    """Rozpoznaje już zafakturowane wpisy również dla faktur sprzed migracji."""
+    ledger = [dict(row) for row in conn.execute(
+        "SELECT * FROM uslugi_dodatkowe_firma WHERE firma_id = %s AND miesiac = %s ORDER BY id",
+        (firma_id, miesiac),
+    ).fetchall()]
+    allocations = {row["extra_service_row_id"]: row["invoice_id"] for row in conn.execute(
+        "SELECT a.* FROM faktury_uslugi_dodatkowe a JOIN faktury f ON f.id = a.invoice_id "
+        "WHERE f.firma_id = %s AND f.miesiac = %s", (firma_id, miesiac),
+    ).fetchall()}
+    ledger_by_id = {row["id"]: row for row in ledger}
+    for invoice in conn.execute(
+        "SELECT id, pozycje_json FROM faktury WHERE firma_id = %s AND miesiac = %s "
+        "AND rodzaj = 'faktura' ORDER BY id", (firma_id, miesiac),
+    ).fetchall():
+        try:
+            positions = json.loads(invoice["pozycje_json"] or "[]")
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(positions, list):
+            continue
+        used = set()
+        for position in positions:
+            if not isinstance(position, dict) or not position.get("usluga_id"):
+                continue
+            row_id = position.get("extra_service_row_id")
+            if row_id in ledger_by_id:
+                matches = [ledger_by_id[row_id]]
+            else:
+                try:
+                    quantity = float(position.get("ilosc") or 0)
+                    price = position.get("cena_netto")
+                    if price in (None, ""):
+                        price = float(position.get("netto") or position.get("wartosc_netto") or 0) / quantity
+                    matches = [row for row in ledger if row["usluga_id"] == int(position["usluga_id"])
+                               and round(float(row["ilosc"]), 2) == round(quantity, 2)
+                               and round(float(row["cena_netto"]), 2) == round(float(price), 2)]
+                except (ValueError, TypeError, ZeroDivisionError):
+                    continue
+                matches.sort(key=lambda row: (allocations.get(row["id"]) != invoice["id"], row["id"]))
+            for row in matches:
+                service_id = row["id"]
+                if service_id in used or allocations.get(service_id) not in (None, invoice["id"]):
+                    continue
+                used.add(service_id)
+                if service_id not in allocations:
+                    conn.execute(
+                        "INSERT INTO faktury_uslugi_dodatkowe (extra_service_row_id, invoice_id) VALUES (%s, %s)",
+                        (service_id, invoice["id"]),
+                    )
+                    allocations[service_id] = invoice["id"]
+                break
+
+
+def generate_extra_services_invoice(firma_id: int, miesiac: str, actor_id: Optional[int] = None) -> dict:
+    """Dopisuje wyłącznie nowe wykonane czynności do osobnego szkicu faktury.
+
+    Wystawione faktury i ich pozycje pozostają bez zmian. Rezerwacje wpisów
+    ewidencji chronią przed podwójnym naliczeniem po ponownym generowaniu.
+    """
+    datetime.strptime(miesiac, "%Y-%m")
+    if actor_id is not None and not can_access_invoice(actor_id, firma_id):
+        raise PermissionError("Brak dostępu do faktur tej firmy.")
+    conn = get_conn()
+    try:
+        company = conn.execute("SELECT id FROM firmy WHERE id = %s FOR UPDATE", (firma_id,)).fetchone()
+        if not company:
+            raise ValueError("Nie znaleziono firmy.")
+        _backfill_extra_service_allocations(conn, firma_id, miesiac)
+        draft = conn.execute(
+            "SELECT * FROM faktury WHERE firma_id = %s AND miesiac = %s AND rodzaj = 'faktura' "
+            "AND dodatkowa = 1 AND COALESCE(eksportowana, 0) = 0 ORDER BY id LIMIT 1 FOR UPDATE",
+            (firma_id, miesiac),
+        ).fetchone()
+        rows = conn.execute("""
+            SELECT uf.*, u.nazwa, u.kategoria, u.stawka_vat
+            FROM uslugi_dodatkowe_firma uf
+            JOIN uslugi_dodatkowe u ON u.id = uf.usluga_id
+            LEFT JOIN zadania z ON z.id = uf.zadanie_id
+            LEFT JOIN faktury_uslugi_dodatkowe a ON a.extra_service_row_id = uf.id
+            WHERE uf.firma_id = %s AND uf.miesiac = %s AND uf.fakturowac = 1
+              AND uf.ilosc > 0 AND (uf.zadanie_id IS NULL OR z.status = 'Zakończone')
+              AND a.extra_service_row_id IS NULL
+            ORDER BY uf.id FOR UPDATE OF uf
+        """, (firma_id, miesiac)).fetchall()
+        if not rows:
+            conn.commit()  # utrwalamy także rezerwacje faktur historycznych
+            return {"id": draft["id"] if draft else None, "created": False, "skipped": not bool(draft),
+                    "unchanged": bool(draft), "dodatkowa": True, "firma_id": firma_id, "miesiac": miesiac}
+        positions = json.loads(draft["pozycje_json"]) if draft else []
+        for row in rows:
+            item = normalize_position({
+                "nazwa": row["nazwa"], "ilosc": row["ilosc"], "cena_netto": row["cena_netto"],
+                "vat": row["stawka_vat"], "jednostka": row["jednostka"] or "szt.",
+                "kategoria": row["kategoria"], "usluga_id": row["usluga_id"],
+                "extra_service_row_id": row["id"], "generated": True,
+            })
+            positions.append(item)
+        netto, brutto = totals(positions)
+        if draft:
+            invoice_id = draft["id"]
+            conn.execute(
+                "UPDATE faktury SET pozycje_json = %s, kwota_netto = %s, kwota_brutto = %s, "
+                "updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
+                (json.dumps(positions, ensure_ascii=False), netto, brutto, invoice_id),
+            )
+        else:
+            today = _now_date()
+            due = default_due_date(datetime.strptime(today, DATE_FMT).date()).strftime(DATE_FMT)
+            invoice_id = conn.execute(
+                "INSERT INTO faktury (firma_id, miesiac, reczna, dodatkowa, kwota_netto, kwota_brutto, "
+                "data_wystawienia, data_sprzedazy, termin_platnosci, pozycje_json, status, rodzaj) "
+                "VALUES (%s, %s, 1, 1, %s, %s, %s, %s, %s, %s, 'robocza', 'faktura') RETURNING id",
+                (firma_id, miesiac, netto, brutto, today, today, due, json.dumps(positions, ensure_ascii=False)),
+            ).fetchone()[0]
+        _sync_extra_service_allocations(conn, invoice_id, positions)
+        conn.commit()
+        return {"id": invoice_id, "created": not bool(draft), "skipped": False, "dodatkowa": True,
+                "firma_id": firma_id, "miesiac": miesiac, "pozycje": positions,
+                "kwota_netto": netto, "kwota_brutto": brutto}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _get_or_create_draft_invoice_for_company(
     firma_id: int, miesiac: str, pracownik_id: Optional[int] = None
 ) -> int:
@@ -181,6 +334,7 @@ def add_invoice_item_for_service(
     pracownik_id: Optional[int] = None,
     cena_netto: Optional[float] = None,
     jednostka: str = "godz.",
+    zadanie_id: Optional[int] = None,
 ) -> Optional[int]:
     if ilosc_hours is None or ilosc_hours <= 0:
         return None
@@ -203,6 +357,11 @@ def add_invoice_item_for_service(
         )
         nazwa = svc.get("nazwa") or "Usługa dodatkowa"
         stawka_vat = svc.get("stawka_vat") if svc.get("stawka_vat") is not None else "23"
+        task = None
+        if zadanie_id is not None:
+            task = cur.execute("SELECT firma_id, status FROM zadania WHERE id = %s", (zadanie_id,)).fetchone()
+            if not task or task["firma_id"] != firma_id:
+                raise ValueError("Zadanie czynności dodatkowej musi należeć do tej firmy.")
 
         ilosc_rounded = round(float(ilosc_hours), 2)
         if ilosc_rounded <= 0:
@@ -213,13 +372,15 @@ def add_invoice_item_for_service(
         cur.execute(
             """
             INSERT INTO uslugi_dodatkowe_firma
-                (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac, jednostka)
-            VALUES (%s, %s, %s, %s, %s, 1, %s) RETURNING id
+                (firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac, jednostka, zadanie_id)
+            VALUES (%s, %s, %s, %s, %s, 1, %s, %s) RETURNING id
             """,
-            (firma_id, miesiac, usluga_id, ilosc_rounded, cena_netto, jednostka),
+            (firma_id, miesiac, usluga_id, ilosc_rounded, cena_netto, jednostka, zadanie_id),
         )
         extra_service_row_id = cur.fetchone()[0]
         conn.commit()
+        if task and task["status"] != "Zakończone":
+            return None
 
         # Gdy faktura została już wystawiona, nie tworzymy drugiej faktury
         # za ten sam miesiąc: usługa poczeka w ewidencji na jej regenerację.
@@ -297,6 +458,7 @@ def add_invoice_item_for_service(
             ),
         )
 
+        _sync_extra_service_allocations(conn, invoice_id, positions)
         conn.commit()
         return invoice_id
 
@@ -426,6 +588,7 @@ def create_or_update_invoice(
     termin = default_due_date(datetime.strptime(today, DATE_FMT).date()).strftime(DATE_FMT)
 
     try:
+        cur.execute("SELECT id FROM firmy WHERE id = %s FOR UPDATE", (firma_id,))
         if existing_invoice_id:
             locked = cur.execute(
                 "SELECT COALESCE(eksportowana, 0) FROM faktury WHERE id = %s", (existing_invoice_id,)
@@ -479,6 +642,7 @@ def create_or_update_invoice(
 
             invoice_id = _new_id
 
+        _sync_extra_service_allocations(conn, invoice_id, pozycje)
         _safe_commit(conn)
         return invoice_id
 
@@ -500,6 +664,46 @@ def create_or_update_invoice(
         conn.close()
 
 
+def validate_invoice_extra_services_ready(invoice_ids: List[int], *, conn=None, lock: bool = False) -> None:
+    """Sprawdza wykonanie czynności przed tworzeniem pliku eksportu faktur.
+
+    Wystawianie powtarza kontrolę z blokadami w swojej transakcji. Preflight
+    pozwala odrzucić niegotowy szkic jeszcze przed zapisem pliku XLSX.
+    """
+    if not invoice_ids:
+        return
+    own_connection = conn is None
+    conn = conn or get_conn()
+    cur = conn.cursor()
+    try:
+        placeholders = ",".join(["%s"] * len(invoice_ids))
+        if lock:
+            cur.execute(
+                "SELECT uf.id FROM uslugi_dodatkowe_firma uf "
+                "JOIN faktury_uslugi_dodatkowe a ON a.extra_service_row_id = uf.id "
+                f"WHERE a.invoice_id IN ({placeholders}) ORDER BY uf.id FOR UPDATE OF uf", invoice_ids,
+            ).fetchall()
+            cur.execute(
+                "SELECT z.id FROM zadania z WHERE z.id IN ("
+                "SELECT uf.zadanie_id FROM uslugi_dodatkowe_firma uf "
+                "JOIN faktury_uslugi_dodatkowe a ON a.extra_service_row_id = uf.id "
+                f"WHERE a.invoice_id IN ({placeholders})) ORDER BY z.id FOR UPDATE", invoice_ids,
+            ).fetchall()
+        pending = cur.execute(
+            "SELECT 1 FROM faktury_uslugi_dodatkowe a "
+            "JOIN uslugi_dodatkowe_firma uf ON uf.id = a.extra_service_row_id "
+            "JOIN zadania z ON z.id = uf.zadanie_id "
+            "JOIN faktury f ON f.id = a.invoice_id "
+            f"WHERE a.invoice_id IN ({placeholders}) AND COALESCE(f.eksportowana, 0) = 0 "
+            "AND z.status != 'Zakończone' LIMIT 1", invoice_ids,
+        ).fetchone()
+        if pending:
+            raise ValueError("Najpierw zakończ zadania czynności dodatkowych umieszczonych na fakturze.")
+    finally:
+        if own_connection:
+            conn.close()
+
+
 def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     if not invoice_ids:
         return
@@ -507,6 +711,7 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     cur = conn.cursor()
     try:
         placeholders = ",".join(["%s"] * len(invoice_ids))
+        validate_invoice_extra_services_ready(invoice_ids, conn=conn, lock=True)
         params: List[Any] = list(invoice_ids)
         sql = (
             f"UPDATE faktury SET eksportowana = 1, status = 'wystawiona', data_eksportu = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') "
@@ -876,6 +1081,7 @@ def update_invoice_draft(
                 invoice_id,
             ),
         )
+        _sync_extra_service_allocations(conn, invoice_id, normalized)
         conn.commit()
     finally:
         conn.close()

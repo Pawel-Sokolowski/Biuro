@@ -9,6 +9,49 @@ from app.security.authorization import assigned_company_ids, is_administrator
 
 
 TASK_STATUSES = ("Nowe", "W toku", "Zakończone", "Anulowane")
+BILLED_ACTIVITY_TASK_ERROR = (
+    "Czynność została już rozliczona na wystawionej fakturze. "
+    "Nie można cofnąć jej wykonania; utwórz nowe zadanie lub skoryguj fakturę."
+)
+
+
+def _assert_task_status_change(conn, task_ids, status):
+    if status != "Zakończone" and task_ids and conn.execute(
+        "SELECT 1 FROM uslugi_dodatkowe_firma uf "
+        "JOIN faktury_uslugi_dodatkowe a ON a.extra_service_row_id = uf.id "
+        "JOIN faktury i ON i.id = a.invoice_id "
+        "WHERE uf.zadanie_id = ANY(%s) AND COALESCE(i.eksportowana, 0) = 1 LIMIT 1",
+        (task_ids,),
+    ).fetchone():
+        raise ValueError(BILLED_ACTIVITY_TASK_ERROR)
+
+
+def create_task_in_transaction(
+    conn, tytul: str, opis: str = "", status: str = "Nowe", termin: Optional[str] = None,
+    firma_id: Optional[int] = None, pracownik_id: Optional[int] = None,
+    created_by: Optional[int] = None, actor_id: Optional[int] = None,
+) -> int:
+    """Tworzy zadanie w transakcji wywołującego (np. razem z czynnością)."""
+    if not actor_id:
+        raise PermissionError("Identyfikator użytkownika jest wymagany.")
+    if not tytul.strip():
+        raise ValueError("Tytuł zadania nie może być pusty.")
+    if status not in TASK_STATUSES:
+        raise ValueError(f"Nieznany status zadania: {status}")
+    if not is_administrator(actor_id):
+        if pracownik_id not in (None, actor_id):
+            raise PermissionError("Tylko administrator może przypisać zadanie innemu pracownikowi.")
+        if firma_id is not None and firma_id not in assigned_company_ids(actor_id):
+            raise PermissionError("Nie można przypisać zadania do nieprzypisanej firmy.")
+        if created_by not in (None, actor_id):
+            raise PermissionError("Nie można utworzyć zadania w imieniu innego pracownika.")
+    cur = conn.execute(
+        "INSERT INTO zadania (tytul, opis, status, termin, firma_id, pracownik_id, created_by) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (tytul.strip(), opis.strip(), status, termin, firma_id, pracownik_id,
+         created_by if created_by is not None else actor_id),
+    )
+    return int(cur.fetchone()[0])
 
 
 def list_tasks_for_timer(
@@ -122,6 +165,7 @@ def save_task(
     conn = get_conn()
     try:
         if task_id:
+            conn.execute("SELECT id FROM zadania WHERE id = %s FOR UPDATE", (task_id,)).fetchone()
             if actor_id and not is_administrator(actor_id):
                 if pracownik_id not in (None, actor_id):
                     raise PermissionError(
@@ -149,6 +193,12 @@ def save_task(
                 ).fetchone()
                 if not allowed:
                     raise PermissionError("Brak uprawnień do edycji tego zadania.")
+            if conn.execute(
+                "SELECT 1 FROM uslugi_dodatkowe_firma WHERE zadanie_id = %s "
+                "AND firma_id IS DISTINCT FROM %s::integer LIMIT 1", (task_id, firma_id)
+            ).fetchone():
+                raise ValueError("Zadanie powiązane z czynnością dodatkową musi pozostać przy tej samej firmie.")
+            _assert_task_status_change(conn, [task_id], status)
             conn.execute(
                 """
                 UPDATE zadania
@@ -160,24 +210,9 @@ def save_task(
             )
             result = task_id
         else:
-            if actor_id and not is_administrator(actor_id):
-                if pracownik_id not in (None, actor_id):
-                    raise PermissionError(
-                        "Tylko administrator może przypisać zadanie innemu pracownikowi."
-                    )
-                if firma_id is not None and firma_id not in assigned_company_ids(actor_id):
-                    raise PermissionError(
-                        "Nie można przypisać zadania do nieprzypisanej firmy."
-                    )
-            cur = conn.execute(
-                """
-                INSERT INTO zadania (
-                    tytul, opis, status, termin, firma_id, pracownik_id, created_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
-                """,
-                (tytul.strip(), opis.strip(), status, termin, firma_id, pracownik_id, created_by),
+            result = create_task_in_transaction(
+                conn, tytul, opis, status, termin, firma_id, pracownik_id, created_by, actor_id
             )
-            result = int(cur.fetchone()[0])
         conn.commit()
         return result
     finally:
@@ -289,6 +324,11 @@ def delete_tasks(task_ids: List[int], actor_id: Optional[int] = None) -> int:
     try:
         ids = _allowed_task_ids(conn, task_ids, actor_id)
         if ids:
+            conn.execute("SELECT id FROM zadania WHERE id = ANY(%s) ORDER BY id FOR UPDATE", (ids,)).fetchall()
+            ids = [row[0] for row in conn.execute(
+                "SELECT z.id FROM zadania z WHERE z.id = ANY(%s) AND NOT EXISTS "
+                "(SELECT 1 FROM uslugi_dodatkowe_firma uf WHERE uf.zadanie_id = z.id)", (ids,)
+            ).fetchall()]
             conn.execute("DELETE FROM zadania WHERE id = ANY(%s)", (ids,))
             conn.commit()
         return len(ids)
@@ -306,6 +346,9 @@ def set_tasks_status(task_ids: List[int], status: str, actor_id: Optional[int] =
     try:
         ids = _allowed_task_ids(conn, task_ids, actor_id)
         if ids:
+            # Stabilizujemy stan wspólny z przypisywaniem czynności i wystawianiem faktury.
+            conn.execute("SELECT id FROM zadania WHERE id = ANY(%s) ORDER BY id FOR UPDATE", (ids,)).fetchall()
+            _assert_task_status_change(conn, ids, status)
             conn.execute(
                 """
                 UPDATE zadania SET status = %s,
@@ -325,6 +368,7 @@ def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
         raise PermissionError("Identyfikator użytkownika jest wymagany.")
     conn = get_conn()
     try:
+        conn.execute("SELECT id FROM zadania WHERE id = %s FOR UPDATE", (task_id,)).fetchone()
         if actor_id and not is_administrator(actor_id):
             allowed = conn.execute(
                 """
@@ -344,6 +388,8 @@ def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
             ).fetchone()
             if not allowed:
                 raise PermissionError("Brak uprawnień do usunięcia tego zadania.")
+        if conn.execute("SELECT 1 FROM uslugi_dodatkowe_firma WHERE zadanie_id = %s LIMIT 1", (task_id,)).fetchone():
+            raise ValueError("Zadanie jest powiązane z czynnością dodatkową. Zakończ je lub anuluj zamiast usuwać.")
         conn.execute("DELETE FROM zadania WHERE id = %s", (task_id,))
         conn.commit()
     finally:

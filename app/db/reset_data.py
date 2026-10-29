@@ -16,6 +16,7 @@ TABLES = [
     "czasomierze",
     "dokumenty_attachments",
     "dokumenty",
+    "faktury_uslugi_dodatkowe",
     "faktury_platnosci",
     "bank_transakcje",
     "faktury_pozycje",

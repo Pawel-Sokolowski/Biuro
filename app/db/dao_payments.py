@@ -184,19 +184,34 @@ def list_invoice_choices(actor_id: int) -> list[dict[str, Any]]:
 
 
 def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
-    """Sugeruje, lecz nigdy nie rozlicza bez potwierdzenia użytkownika."""
+    """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.
+
+    Kwota, numer czy NIP same w sobie nie stanowią dowodu zapłaty.
+    """
     title = re.sub(r"\s+", "", str(transaction.get("tytul") or "")).casefold()
+    numeric_title = re.sub(r"\D", "", title)
     amount = _money(str(transaction.get("remaining") or transaction.get("kwota") or 0))
     results = []
     for inv in invoices:
         number = re.sub(r"\s+", "", str(inv.get("numer") or "")).casefold()
-        if not number or number not in title:
-            continue
+        nip = re.sub(r"\D", "", str(inv.get("nip") or ""))
         balance = _money(str(inv["balance"]))
-        # Preferuj dokładne dopasowanie kwot, dopuszczając częściową zapłatę.
-        results.append((0 if balance == amount else 1, int(inv["id"])))
+        invoice_in_title = bool(number and len(number) >= 5 and number in title)
+        nip_in_title = bool(len(nip) == 10 and nip in numeric_title)
+        exact_amount = balance == amount
+        if invoice_in_title and nip_in_title and exact_amount:
+            score = 0
+        elif invoice_in_title and exact_amount:
+            score = 1
+        elif invoice_in_title:
+            score = 2
+        elif nip_in_title and exact_amount:
+            score = 3
+        else:
+            continue
+        results.append((score, int(inv["id"])))
     results.sort()
-    return [id for _, id in results]
+    return [invoice_id for _, invoice_id in results]
 
 
 def _check_date(value: str) -> date:

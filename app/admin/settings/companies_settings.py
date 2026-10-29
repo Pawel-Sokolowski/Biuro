@@ -10,6 +10,8 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.companies.company_form import CompanyForm
+from app.security.authorization import is_administrator
+from app.utils.saldeo_contractors_import import import_saldeo_contractors
 from app.companies.registry_enrichment import enrich_all_companies
 from app.utils.importers import (
     import_companies_from_excel_file_payloads,
@@ -76,9 +78,10 @@ class RegistryEnrichmentWorker(QThread):
 # COMPANIES SETTINGS — PANEL ADMINA
 # ============================================================
 class CompaniesSettings(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, pracownik_id=None):
         super().__init__(parent)
         self.logic = GlobalSettingsLogic()
+        self.pracownik_id = pracownik_id
 
         layout = QVBoxLayout(self)
 
@@ -118,6 +121,12 @@ class CompaniesSettings(QWidget):
         btn_fast_import = QPushButton("Importuj bez weryfikacji")
         btn_fast_import.clicked.connect(self._import_without_verification)
         btn_row.addWidget(btn_fast_import)
+
+        if is_administrator(self.pracownik_id):
+            btn_saldeo = QPushButton("Importuj nazwy Saldeo (CSV/XLSX)")
+            btn_saldeo.setToolTip("Tylko Typ K/D, dopasowanie po NIP; nie nadpisuje nazw rejestrowych")
+            btn_saldeo.clicked.connect(self._import_saldeo_contractors)
+            btn_row.addWidget(btn_saldeo)
 
         btn_roles = QPushButton("Importuj przypisania księgowych/kadrowych")
         btn_roles.clicked.connect(self._import_role_assignments)
@@ -331,6 +340,45 @@ class CompaniesSettings(QWidget):
         worker.start()
 
         self._current_worker = worker
+
+    def _import_saldeo_contractors(self):
+        if not is_administrator(self.pracownik_id):
+            QMessageBox.warning(self, "Saldeo", "Ta funkcja wymaga uprawnień administratora.")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Wybierz eksport kontrahentów Saldeo", "",
+            "Pliki Saldeo (*.csv *.xlsx)",
+        )
+        if not path:
+            return
+        confirm = QMessageBox.question(
+            self, "Import Saldeo",
+            "Dopasować firmy po NIP tylko dla typu K/D?\n"
+            "Zmieniona zostanie nazwa Saldeo, a pusty adres e-mail może zostać uzupełniony.\n"
+            "Nazwy firm używane w rejestrach pozostaną bez zmian.",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = import_saldeo_contractors(path, actor_id=self.pracownik_id)
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd importu Saldeo", str(exc))
+            return
+        summary = (
+            f"Wiersze: {result['total']}\n"
+            f"Typ K/D: {result['eligible']}\n"
+            f"Zaktualizowano nazwy Saldeo: {result['updated_names']}\n"
+            f"Uzupełniono e-maile: {result['filled_emails']}\n"
+            f"Nie znaleziono NIP: {result['missing_company']}\n"
+            f"Niejednoznaczne NIP: {result['ambiguous']}\n"
+            f"Pominięto inne typy: {result['skipped_type']}\n"
+            f"Nieprawidłowe NIP: {result['invalid_nip']}\n"
+            f"Duplikaty w pliku: {result['duplicates']}"
+        )
+        if result["warnings"]:
+            summary += "\n\nOstrzeżenia:\n" + "\n".join(result["warnings"][:15])
+        QMessageBox.information(self, "Import Saldeo", summary)
+        self._refresh()
 
     def _import_role_assignments(self):
         from app.utils.import_assignments import import_role_assignments_from_file

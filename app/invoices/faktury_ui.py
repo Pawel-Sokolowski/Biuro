@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QProgressDialog, QPushButton, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -24,7 +24,7 @@ from app.invoices.manual_invoice_dialog import ManualInvoiceDialog, KontrahenciD
 from app.invoices.ksef import ksef_url
 from app.invoices.invoice_preview import InvoicePreviewDialog
 from app.invoices.ksef_client import KsefError
-from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
+from app.invoices.ksef_sync import assign_downloaded_invoice, is_configured as ksef_configured, sync_month
 from app.invoices.ksef_submission import send_invoice_xml, refresh_invoice_submission
 from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
 from app.security.authorization import can, is_administrator
@@ -134,6 +134,89 @@ class KsefSyncWorker(QObject):
             self.failed.emit(str(exc), False)
             return
         self.finished.emit(result)
+
+
+class KsefUnmatchedDialog(QDialog):
+    """Ręczne przypisanie pobranych dokumentów KSeF do kartoteki firmy."""
+
+    def __init__(self, items, actor_id, parent=None):
+        super().__init__(parent)
+        self.items = list(items)
+        self.actor_id = actor_id
+        self.setWindowTitle("Niedopasowane faktury KSeF")
+        self.resize(1150, 560)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            "Wybierz właściwą firmę dla faktury. Możesz wpisać fragment nazwy lub NIP-u. "
+            "Przypisanie korzysta z już pobranego XML-a i nie wysyła kolejnego zapytania do KSeF."
+        ))
+        self.table = QTableWidget(0, 6, self)
+        self.table.setHorizontalHeaderLabels(["Nr faktury", "NIP nabywcy", "Nabywca z KSeF", "Powód", "Firma", ""])
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 150)
+        self.table.setColumnWidth(1, 120)
+        self.table.setColumnWidth(3, 220)
+        self.table.setColumnWidth(4, 300)
+        self.table.setColumnWidth(5, 100)
+        layout.addWidget(self.table)
+        conn = get_conn()
+        try:
+            companies = [dict(row) for row in conn.execute(
+                "SELECT id, nazwa, nazwa_skrocona, nip FROM firmy ORDER BY COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)"
+            ).fetchall()]
+        finally:
+            conn.close()
+        if not (is_administrator(actor_id) or can(actor_id, "can_view_finances")):
+            companies = [company for company in companies if can_access_invoice(actor_id, company["id"])]
+        self.companies = companies
+        for item in self.items:
+            self._add_row(item)
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        close.rejected.connect(self.accept)
+        layout.addWidget(close)
+
+    def _add_row(self, item):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        for column, value in enumerate((item["invoice_number"], item["buyer_nip"], item["buyer_name"], item["reason"])):
+            self.table.setItem(row, column, _cell(value))
+        company = QComboBox(self.table)
+        company.setEditable(True)
+        company.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        company.addItem("— Wybierz firmę —", None)
+        for candidate in self.companies:
+            name = candidate.get("nazwa_skrocona") or candidate["nazwa"]
+            company.addItem(f"{name} — NIP {candidate.get('nip') or 'brak'}", candidate["id"])
+        completer = company.completer()
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.table.setCellWidget(row, 4, company)
+        assign = QPushButton("Przypisz", self.table)
+        assign.clicked.connect(lambda _checked=False, current=row: self._assign(current))
+        self.table.setCellWidget(row, 5, assign)
+
+    def _assign(self, row):
+        company_id = self.table.cellWidget(row, 4).currentData()
+        if company_id is None:
+            QMessageBox.warning(self, "KSeF", "Wybierz firmę z listy.")
+            return
+        item = self.items[row]
+        try:
+            action, _invoice_id = assign_downloaded_invoice(item["data"], item["ksef_number"], int(company_id))
+        except Exception:
+            logger.exception("Błąd ręcznego przypisania faktury KSeF")
+            QMessageBox.warning(self, "KSeF", "Nie udało się przypisać faktury. Szczegóły zapisano w logach.")
+            return
+        if action not in ("utworzone", "zaktualizowane"):
+            QMessageBox.warning(self, "KSeF", f"Nie udało się jednoznacznie zapisać faktury: {action}.")
+            return
+        self.table.setItem(row, 3, _cell("Przypisano ręcznie"))
+        self.table.cellWidget(row, 4).setEnabled(False)
+        self.table.cellWidget(row, 5).setEnabled(False)
+        if self.parent():
+            self.parent().refresh()
 
 
 class FakturyPage(QWidget):
@@ -404,8 +487,11 @@ class FakturyPage(QWidget):
                    f"\nZaktualizowano z KSeF: {len(result.get('zaktualizowane', []))}"
                    f"\nNiedopasowano: {len(result['niedopasowane'])}")
         if result["niedopasowane"]:
-            message += "\n\nNiedopasowane faktury:\n" + "\n".join(result["niedopasowane"][:15])
+            message += "\n\nNiedopasowane faktury można przypisać ręcznie w następnym oknie."
         QMessageBox.information(self, "KSeF", message)
+        details = result.get("niedopasowane_szczegoly") or []
+        if details:
+            KsefUnmatchedDialog(details, self.pracownik_id, self).exec()
 
     def _selected_single_issued(self):
         ids = self._selected_ids(self.issued_table)

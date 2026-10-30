@@ -101,7 +101,9 @@ numerze faktury jest aktualizowany, a pojedynczy niezsynchronizowany dokument
 tej firmy i miesiąca może zostać zastąpiony. Gdy dokumentu nie ma, program go
 tworzy. Treść, daty, pozycje i kwoty pochodzą z KSeF; zapisane płatności
 pozostają przy dotychczasowym ID faktury. Niepewny NIP lub kilka pasujących
-faktur wymaga wyjaśnienia i nie powoduje automatycznego nadpisania.
+faktur wymaga wyjaśnienia i nie powoduje automatycznego nadpisania. Po
+synchronizacji program pokazuje takie dokumenty w osobnej tabeli. Firmę można
+wyszukać po nazwie lub NIP-ie i przypisać ręcznie bez ponownego pobierania XML-a.
 Synchronizacja najpierw pobiera i deduplikuje listę sprzedaży. XML-e już
 zapisanych numerów KSeF są pomijane, dlatego po przerwaniu kolejne uruchomienie
 wznawia pobieranie brakujących dokumentów. Przy ponad 10 brakujących
@@ -114,7 +116,8 @@ oraz przetworzonych faktur, więc nie blokuje okna programu.
 W tabeli wystawionych faktur numer faktury i przycisk **Podgląd** otwierają
 lokalny widok dokumentu z pełnymi danymi sprzedawcy i nabywcy, pozycjami,
 kodem QR oraz opcją **Zapisz PDF**. Dane sprzedawcy i logo ustawia się w
-**Ustawieniach faktur**. Techniczna kolumna ID jest ukryta. XSD FA(3)
+**Ustawieniach faktur**. Podgląd wypełnia szerokość okna, a zapis PDF korzysta
+z pionowej strony A4. Techniczna kolumna ID jest ukryta. XSD FA(3)
 służy do walidacji danych, a wygląd podglądu generuje program. Kliknięcie
 numeru KSeF otwiera urzędowy adres weryfikacyjny z NIP-em sprzedawcy, datą
 wystawienia i skrótem XML, jeżeli zostały zapisane podczas wysyłki lub pobrania.

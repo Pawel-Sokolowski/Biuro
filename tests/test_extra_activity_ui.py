@@ -129,6 +129,26 @@ class ExtraActivityUiTests(DbTestCase):
         self.assertIn("Brak uprawnień", warning.call_args.args[2])
         self.assertEqual(dao_services.list_extra_activities(1, miesiac="2026-09"), [])
 
+    def test_invoice_shortcut_has_activity_list_without_overwriting_draft_table(self):
+        from app.invoices.faktury_ui import FakturyPage
+        from app.invoices.faktury_logic import FakturyLogic
+        from app.db.dao_invoices import mark_exported
+        self.create_activity("Zakończone")
+        generated = FakturyLogic().generate_and_save_invoice(self.company_id, "2026-09")
+        with get_conn() as conn:
+            conn.execute("UPDATE faktury SET numer = 'DOD/09/2026' WHERE id = %s", (generated['id'],))
+        page = FakturyPage(1)
+        self.addCleanup(page.close)
+        page.extra_activities.month.setCurrentText("2026-09")
+        page.extra_activities.refresh()
+        page.tabs.setCurrentWidget(page.tab_dodatkowe)
+        self.assertIsNot(page.draft_table, page.extra_activities.table)
+        self.assertEqual(page.extra_activities.table.item(0, 9).text(), "100.00 PLN")
+        self.assertEqual(page.extra_activities.table.item(0, 11).text(), "DOD/09/2026 (robocza)")
+        mark_exported([generated['id']], 1)
+        page.extra_activities.refresh()
+        self.assertEqual(page.extra_activities.table.item(0, 11).text(), "DOD/09/2026")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-29.4"
+SCHEMA_VERSION = "2026-10-29.5"
 
 
 def _schema_hash() -> str:
@@ -1041,6 +1041,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_bank_transakcje_data ON bank_transakcje(data_operacji)")
     _safe_alter_add_column(cur, "bank_transakcje", "kierunek TEXT")
     _safe_alter_add_column(cur, "bank_transakcje", "data_waluty DATE")
+    _safe_alter_add_column(cur, "bank_transakcje", "kontrahent_nip TEXT")
+    _safe_alter_add_column(cur, "bank_transakcje", "kontrahent_rachunek TEXT")
+    _safe_alter_add_column(cur, "bank_transakcje", "opis_surowy TEXT")
     # Zachowujemy również istniejące rozliczenia: usunięcie faktury nie może
     # pozbawić wpłaty dokumentu ani bezpowrotnie zużyć salda przelewu.
     cur.execute("""

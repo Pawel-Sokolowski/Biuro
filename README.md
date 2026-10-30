@@ -95,6 +95,38 @@ FA(3) dla wybranej wystawionej faktury po sprawdzeniu jej danych i potwierdzeniu
 przetwarzanie i zapisuje numer dopiero po przyjęciu przez MF. Nieznany wynik
 wysyłki należy wyjaśnić przed jej ponowieniem, aby uniknąć duplikatu.
 
+## Czynności dodatkowe i kolejne faktury
+
+Zakładka **Czynności dodatkowe** w Zadaniach (dostępna także z Faktur) pokazuje
+czynności według klienta, miesiąca i stanu. Można utworzyć czynność razem
+z zadaniem albo powiązać ją z istniejącym zadaniem tej samej firmy. Wykonanie
+wynika ze statusu zadania; planowane i anulowane czynności nie są fakturowane.
+
+Zwykłe **Generuj faktury** po wystawieniu faktury podstawowej tworzy kolejną
+fakturę tylko za nowe, jeszcze nieujęte czynności dodatkowe. Działa to również
+po wystawieniu wcześniejszych faktur dodatkowych. Ponowne generowanie korzysta
+z istniejącego szkicu i nie nalicza ponownie tych samych czynności.
+
+Nowe pozycje kadrowe mają nazwy „Usługa kadrowo-płacowa – UZ”,
+„Usługa kadrowo-płacowa – UoP”, „Usługa płacowa – UZ” lub
+„Usługa płacowa – UoP”, zgodnie z wybranym zakresem cennika. Stała opłata
+ma nazwę „Usługa kadrowo-płacowa”. Wystawione dokumenty zachowują swoje nazwy.
+
+Korekty nie są eksportowane jako zwykłe faktury z ujemnymi pozycjami.
+Przycisk **Korekta w Saldeo** pokazuje dane faktury pierwotnej i zmiany
+do wprowadzenia w Saldeo. Po rzeczywistym wystawieniu korekty można zapisać
+jej numer w programie, potwierdzając ten fakt. Ta ścieżka nie importuje korekty
+automatycznie do Saldeo i nie zmienia znaków wartości.
+
+W imporcie ING pola opisu przelewu, nadawcy, referencji i rachunku są odrębne.
+Przy niepoprawnych polskich znakach wybierz kodowanie pliku (UTF-8,
+Windows-1250, ISO-8859-2 lub CP852); program pamięta wybór. Rozpoznany numer
+faktury, NIP, rachunek lub jednoznaczna nazwa kontrahenta zawęża jego faktury,
+również z wcześniejszych miesięcy. Opcja **Wszystkie faktury** pozwala wybrać
+inny dokument ręcznie. Samo dopasowanie nie zapisuje płatności.
+
+Przegląd możliwości użycia bibliotek: [docs/library-review.md](docs/library-review.md).
+
 ## Testy
 
 ```powershell

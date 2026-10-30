@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -47,7 +48,40 @@ def _extract_invoice_number(text: str) -> str:
 
     return ""
 
-def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
+
+def _normalize_account(value: Any) -> str:
+    value = re.sub(r"[\s-]", "", str(value or "")).upper().lstrip("/")
+    if value.startswith("PL"):
+        value = value[2:]
+    return value if re.fullmatch(r"\d{26}", value) else ""
+
+
+def _description_details(raw_text: str) -> dict[str, str]:
+    """Pola ING :86: (~, ? lub >); 20–25 to tytuł, 32 nazwa, 38 rachunek."""
+    fields: dict[str, list[str]] = {}
+    for match in re.finditer(r"[~?>](\d{2})(.*?)(?=[~?>]\d{2}|$)", raw_text, re.DOTALL):
+        fields.setdefault(match[1], []).append(" ".join(match[2].split()))
+    remittance = " ".join(part for code in ("20", "21", "22", "23", "24", "25", "26", "27", "28") for part in fields.get(code, []) if part)
+    title = remittance if fields else " ".join(raw_text.split())
+    if re.fullmatch(r"\d{3}", title):
+        title = ""
+    contractor = " ".join(fields.get("32", []))
+    if not contractor:
+        name = re.search(r"/(?:NAME|NAZWA)/(.+?)(?=/[A-Z]{2,8}/|$)", raw_text, re.IGNORECASE)
+        contractor = " ".join(name[1].split()) if name else ""
+    account = ""
+    for code in ("38", "29", "31"):
+        for candidate in fields.get(code, []):
+            account = _normalize_account(candidate)
+            if account:
+                break
+        if account:
+            break
+    nip_match = re.search(r"\bNIP\s*[:.]?\s*(?:PL\s*)?((?:\d[ \t-]?){9}\d)(?!\d)", raw_text, re.IGNORECASE)
+    return {"title": title, "contractor": contractor, "contractor_account": account,
+            "contractor_nip": re.sub(r"\D", "", nip_match[1]) if nip_match else ""}
+
+def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, Any]]:
     """Parser biblioteki mt-940; import zachowuje walutę i rodzaj operacji.
 
     Każdy komunikat :20: parsujemy osobno, aby metadane kolejnego wyciągu
@@ -55,12 +89,15 @@ def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
     datę księgowania (jeśli jest obecna); data waluty pozostaje w ewidencji.
     """
     source = None
-    for encoding in ("utf-8-sig", "cp1250", "iso-8859-2", "cp852", "cp1252"):
+    encodings = (encoding,) if encoding else ("utf-8-sig", "cp1250")
+    for selected_encoding in encodings:
         try:
-            source = raw.decode(encoding)
+            source = raw.decode(selected_encoding)
             break
         except UnicodeDecodeError:
             continue
+        except LookupError as exc:
+            raise PaymentError("Nieznane kodowanie wyciągu.") from exc
     if source is None:
         raise PaymentError("Nie można odczytać kodowania wyciągu MT940.")
     source = source.replace("\r\n", "\n").replace("\r", "\n")
@@ -69,7 +106,9 @@ def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
         if not re.search(r"^:61:", statement_source, flags=re.MULTILINE):
             continue
         try:
-            statement = mt940.parse(statement_source)
+            # Domyślny procesor biblioteki interpretuje '?' jako format niemiecki
+            # i usuwa surowe dane. Pola ING rozdzielamy dopiero poniżej.
+            statement = mt940.parse(statement_source, processors={"post_transaction_details": []})
             expected_count = len(re.findall(r"^:61:", statement_source, flags=re.MULTILINE))
             if len(statement) != expected_count:
                 raise PaymentError("Nie wszystkie operacje :61: zostały poprawnie odczytane.")
@@ -91,15 +130,7 @@ def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
                 booked_date = (data.get("entry_date") or data["date"]).isoformat()
                 title = " ".join(str(data.get("transaction_details") or "").split())
                 invoice_number = _extract_invoice_number(title)
-                display_title = invoice_number or " ".join(re.sub(
-                    r"(?:^\d{3}(?=[~?>]))|[~?>]\d{2}", " ", title
-                ).split())
-                contractor_match = re.search(
-                    r"[~?>]32(.*?)(?:[~?>](?:33|34|35|36|37|38)|$)", title,
-                    flags=re.IGNORECASE | re.DOTALL,
-                )
-                contractor = " ".join(contractor_match.group(1).split()) if contractor_match else ""
-                contractor = re.sub(r"\bUL\.$", "", contractor, flags=re.IGNORECASE).strip()
+                details = _description_details(str(data.get("transaction_details") or ""))
                 bank_reference = str(data.get("bank_reference") or "").strip()
                 reference = bank_reference or str(data.get("customer_reference") or "")
                 if bank_reference and bank_reference.upper().replace(" ", "") not in {"NONREF", "NOTPROVIDED", "N/A", "UNKNOWN"}:
@@ -111,14 +142,15 @@ def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
                     # samego wyciągu; identyczne rzeczywiste wpłaty zachowują osobne pozycje.
                     identity = [account, statement_id, sequence, ordinal,
                                 str(data.get("transaction_reference") or ""), value_date, booked_date,
-                                str(amount), currency, direction, reference, title]
+                                str(amount), currency, direction, reference]
                 digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
                 result.append({
                     "ordinal": ordinal, "date": booked_date, "value_date": value_date,
                     "amount": amount, "currency": currency, "direction": direction,
-                    "account": account, "reference": reference, "title": display_title, "hash": digest,
+                    "account": account, "reference": reference, "title": details["title"], "hash": digest,
                     "raw_title": title,
-                    "invoice_number": invoice_number, "contractor": contractor,
+                    "invoice_number": invoice_number, "contractor": details["contractor"],
+                    "contractor_account": details["contractor_account"], "contractor_nip": details["contractor_nip"],
                 })
         except PaymentError:
             raise
@@ -129,28 +161,38 @@ def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
     return result
 
 
-def import_mt940_file(path: str, actor_id: int) -> dict[str, int]:
+def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> dict[str, int]:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do importu operacji bankowych.")
     source = Path(path)
     if source.stat().st_size > 20 * 1024 * 1024:
         raise PaymentError("Wyciąg przekracza 20 MB.")
-    records = parse_ing_mt940(source.read_bytes())
+    records = parse_ing_mt940(source.read_bytes(), encoding=encoding)
     conn = get_conn()
     inserted = 0
     try:
         for entry in records:
+            # Rozliczenie również blokuje ten wiersz. Kolejne zapytanie widzi
+            # już zatwierdzone wpłaty po ewentualnym oczekiwaniu na ich commit.
+            conn.execute("SELECT id FROM bank_transakcje WHERE hash = %s FOR UPDATE", (entry["hash"],)).fetchone()
             cur = conn.execute(
                 """
                 INSERT INTO bank_transakcje
-                  (hash, rachunek, data_operacji, data_waluty, kwota, waluta, kierunek, kontrahent, tytul, referencja)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(hash) DO NOTHING RETURNING id
+                  (hash, rachunek, data_operacji, data_waluty, kwota, waluta, kierunek, kontrahent, tytul, referencja,
+                   kontrahent_nip, kontrahent_rachunek, opis_surowy)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(hash) DO UPDATE SET kontrahent = EXCLUDED.kontrahent, tytul = EXCLUDED.tytul,
+                    kontrahent_nip = EXCLUDED.kontrahent_nip, kontrahent_rachunek = EXCLUDED.kontrahent_rachunek,
+                    opis_surowy = EXCLUDED.opis_surowy
+                WHERE NOT EXISTS (SELECT 1 FROM faktury_platnosci p WHERE p.transakcja_id = bank_transakcje.id)
+                RETURNING (xmax = 0) AS inserted
                 """,
                 (entry["hash"], entry["account"], entry["date"], entry["value_date"], entry["amount"],
-                 entry["currency"], entry["direction"], entry.get("contractor", ""), entry["title"], entry["reference"]),
+                 entry["currency"], entry["direction"], entry.get("contractor", ""), entry["title"], entry["reference"],
+                 entry["contractor_nip"], entry["contractor_account"], entry["raw_title"]),
             )
-            if cur.fetchone():
+            outcome = cur.fetchone()
+            if outcome and outcome[0]:
                 inserted += 1
         conn.commit()
     except Exception:
@@ -199,9 +241,10 @@ def list_invoice_choices(
 
         rows = conn.execute(
             """
-            SELECT i.id, i.firma_id, i.numer, i.miesiac, i.kwota_brutto,
+            SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto,
                    COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
-                   COALESCE(f.nip, i.nabywca_nip, '') AS nip,
+                   COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, '') AS nip,
+                   f.nazwa AS buyer_full_name, f.konto_bankowe AS buyer_account,
                    CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i
 
@@ -228,6 +271,77 @@ def list_invoice_choices(
 
     finally:
         conn.close()
+
+def _contractor_key(invoice: dict) -> tuple:
+    if invoice.get("firma_id") is not None:
+        return ("firma", invoice["firma_id"])
+    if invoice.get("kontrahent_id") is not None:
+        return ("kontrahent", invoice["kontrahent_id"])
+    nip = re.sub(r"\D", "", str(invoice.get("nip") or ""))
+    if len(nip) == 10:
+        return ("nip", nip)
+    name = _normalize_contractor_name(invoice.get("buyer") or "")
+    return ("name", name) if name else ("invoice", invoice["id"])
+
+
+def _normalize_contractor_name(value) -> str:
+    value = str(value or "").upper().replace("Ł", "L")
+    value = "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))
+    value = " ".join(re.sub(r"[^A-Z0-9]", " ", value).split())
+    value = value.replace("SPOLKA Z OGRANICZONA ODPOWIEDZIALNOSCIA", "SP Z O O").replace("SPOLKA JAWNA", "SP J")
+    return value
+
+
+def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
+    """Rozpoznaje jednego nabywcę; nigdy nie zatwierdza zapłaty ani faktury."""
+    unresolved = {"company_key": None, "resolved_contractor": None, "confident": False,
+                  "reason": "Nie rozpoznano jednoznacznie kontrahenta; wybierz fakturę ręcznie."}
+    if not invoices:
+        return unresolved
+    grouped = {}
+    for invoice in invoices:
+        grouped.setdefault(_contractor_key(invoice), []).append(invoice)
+    raw = str(transaction.get("opis_surowy") or transaction.get("raw_title") or transaction.get("tytul") or transaction.get("title") or "")
+    text = raw + " " + str(transaction.get("tytul") or transaction.get("title") or "")
+    numbers = {re.sub(r"[^A-Z0-9]", "", value.upper()) for value in re.findall(
+        r"\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*", text, re.IGNORECASE
+    )}
+    invoice_keys = {_contractor_key(inv) for inv in invoices if numbers and re.sub(
+        r"[^A-Z0-9]", "", str(inv.get("numer") or "").upper()) in numbers}
+    details = _description_details(raw)
+    nip = re.sub(r"\D", "", str(transaction.get("kontrahent_nip") or transaction.get("contractor_nip") or details["contractor_nip"]))
+    nip_keys = {_contractor_key(inv) for inv in invoices if len(nip) == 10 and re.sub(r"\D", "", str(inv.get("nip") or "")) == nip}
+
+    def resolved(keys, reason):
+        if len(keys) != 1:
+            return dict(unresolved, reason="Dane wskazują kilku kontrahentów; sprawdź fakturę ręcznie.")
+        key = next(iter(keys))
+        return {"company_key": key, "resolved_contractor": grouped[key][0].get("buyer") or "Kontrahent",
+                "confident": True, "reason": reason}
+
+    if invoice_keys:
+        if len(invoice_keys) != 1:
+            return resolved(invoice_keys, "")
+        if len(nip) == 10 and (not nip_keys or not invoice_keys.issubset(nip_keys)):
+            return dict(unresolved, reason="Numer faktury i NIP wskazują różnych kontrahentów; sprawdź ręcznie.")
+        return resolved(invoice_keys, "Dopasowano nabywcę po numerze faktury w tytule przelewu.")
+    if len(nip) == 10:
+        return resolved(nip_keys, "Dopasowano kontrahenta po NIP.") if nip_keys else unresolved
+    account = _normalize_account(transaction.get("kontrahent_rachunek") or transaction.get("contractor_account") or details["contractor_account"])
+    account_keys = {_contractor_key(inv) for inv in invoices if account and _normalize_account(inv.get("buyer_account")) == account}
+    if account_keys:
+        return resolved(account_keys, "Dopasowano kontrahenta po rachunku nadawcy.")
+    name = _normalize_contractor_name(transaction.get("kontrahent") or transaction.get("contractor") or details["contractor"])
+    name_keys = {_contractor_key(inv) for inv in invoices if name and name in {
+        _normalize_contractor_name(inv.get("buyer")), _normalize_contractor_name(inv.get("buyer_full_name"))
+    }}
+    return resolved(name_keys, "Dopasowano kontrahenta po pełnej nazwie.") if name_keys else unresolved
+
+
+def invoice_choices_for_transaction(transaction: dict, invoices: list[dict]) -> list[dict]:
+    match = match_invoice_contractor(transaction, invoices)
+    return [inv for inv in invoices if _contractor_key(inv) == match["company_key"]] if match["confident"] else list(invoices)
+
 
 def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
     """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.

@@ -4,9 +4,9 @@ from __future__ import annotations
 import logging
 from decimal import Decimal, DecimalException
 
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, QSettings, Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from app.db.dao_payments import (
     PaymentError, confirm_bank_payment, import_mt940_file, list_invoice_choices,
     list_unsettled_transfers, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
+    invoice_choices_for_transaction, match_invoice_contractor,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,10 +48,10 @@ class BankPaymentReview(QDialog):
             "Wybierz przelew, sprawdź proponowaną fakturę i kwotę, "
             "a następnie zatwierdź rozliczenie. Żaden przelew nie jest przypisywany automatycznie."
         ))
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels([
             "ID", "Data", "Wpływ / pozostało (PLN)", "Tytuł przelewu",
-            "Przypisz do faktury", "Kwota rozliczenia (PLN)", "Kontrahent",
+            "Przypisz do faktury", "Kwota rozliczenia (PLN)", "Rozpoznany kontrahent", "Filtr faktur",
         ])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
@@ -64,6 +65,16 @@ class BankPaymentReview(QDialog):
         self.btn_import = QPushButton("Importuj ING MT940")
         self.btn_import.clicked.connect(self._import_file)
         buttons.addWidget(self.btn_import)
+        buttons.addWidget(QLabel("Kodowanie:"))
+        self.encoding = QComboBox(self)
+        for label, encoding in (("Auto (UTF-8 / Windows-1250)", ""), ("UTF-8", "utf-8-sig"),
+                                ("Windows-1250", "cp1250"), ("ISO-8859-2", "iso8859_2"), ("CP852", "cp852")):
+            self.encoding.addItem(label, encoding)
+        self.settings = QSettings("Biuro", "OfficeManager")
+        self.encoding.setCurrentIndex(max(0, self.encoding.findData(str(self.settings.value("mt940/encoding", "") or ""))))
+        self.encoding.currentIndexChanged.connect(self._remember_encoding)
+        self.encoding.setToolTip("Jeśli polskie znaki są błędne, wybierz kodowanie zgodne z eksportem ING.")
+        buttons.addWidget(self.encoding)
         self.btn_confirm = QPushButton("Potwierdź rozliczenie wybranego przelewu")
         self.btn_confirm.clicked.connect(self._confirm)
         buttons.addWidget(self.btn_confirm)
@@ -79,6 +90,10 @@ class BankPaymentReview(QDialog):
         layout.addLayout(buttons)
         self.refresh()
 
+    def _remember_encoding(self):
+        self.settings.setValue("mt940/encoding", self.encoding.currentData())
+        self.settings.sync()
+
     def _import_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Import wyciągu ING MT940", "",
@@ -87,7 +102,7 @@ class BankPaymentReview(QDialog):
         if not path:
             return
         try:
-            report = import_mt940_file(path, self.actor_id)
+            report = import_mt940_file(path, self.actor_id, encoding=self.encoding.currentData() or None)
         except (PaymentError, OSError, PermissionError) as exc:
             QMessageBox.warning(self, "Wyciąg MT940", str(exc))
             return
@@ -129,34 +144,53 @@ class BankPaymentReview(QDialog):
                 cell = QTableWidgetItem(str(value))
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(idx, col, cell)
-            self.table.setItem(idx, 6, QTableWidgetItem(entry.get("kontrahent") or ""))
+            match = match_invoice_contractor(entry, self.invoices)
+            contractor_item = QTableWidgetItem(match.get("resolved_contractor") or entry.get("kontrahent") or "Nie rozpoznano jednoznacznie")
+            contractor_item.setFlags(contractor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            contractor_item.setToolTip(match.get("reason") or "")
+            self.table.setItem(idx, 6, contractor_item)
             choices = QComboBox(self.table)
-            choices.addItem("— Wybierz fakturę (wymagane potwierdzenie) —", None)
-            suggestions = suggested_invoice_ids(entry, self.invoices)
-            contractor = str(entry.get("kontrahent") or "").casefold().strip()
-            contractor_matches = [
-                inv["id"] for inv in self.invoices
-                if contractor and (buyer := str(inv.get("buyer") or "").casefold().strip())
-                and (contractor in buyer or buyer in contractor)
-            ]
-            ordering = list(dict.fromkeys(suggestions + contractor_matches + [i["id"] for i in self.invoices]))
-            by_id = {i["id"]: i for i in self.invoices}
-            for invoice_id in ordering:
-                invoice = by_id[invoice_id]
-                prefix = "★ " if invoice_id in suggestions else ""
-                choices.addItem(
-                    f"{prefix}{invoice['numer'] or '(bez numeru)'} — "
-                    f"{invoice['buyer']} — saldo {money_text(invoice['balance'])} zł",
-                    invoice_id,
-                )
             # Sugestia jest tylko wizualna; nie wybieramy faktury automatycznie.
             self.table.setCellWidget(idx, 4, choices)
             amount = QLineEdit(money_text(entry["remaining"]), self.table)
             self.table.setCellWidget(idx, 5, amount)
+            override = QCheckBox("Wszystkie faktury", self.table)
+            override.setChecked(not match.get("confident"))
+            override.setEnabled(bool(match.get("confident")))
+            override.setToolTip(match.get("reason") or "Nie rozpoznano klienta — wybierz fakturę ręcznie.")
+            self.table.setCellWidget(idx, 7, override)
+            self._populate_invoice_choices(idx)
+            override.toggled.connect(lambda _checked, row=idx: self._override_filter_changed(row))
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, 5))
         if self.transactions:
             self.table.selectRow(0)
+
+    def _populate_invoice_choices(self, row):
+        entry = self.transactions[row]
+        combo = self.table.cellWidget(row, 4)
+        selected = combo.currentData()
+        invoices = (self.invoices if self.table.cellWidget(row, 7).isChecked()
+                    else invoice_choices_for_transaction(entry, self.invoices))
+        suggestions = suggested_invoice_ids(entry, invoices)
+        by_id = {invoice["id"]: invoice for invoice in invoices}
+        ordering = suggestions + [invoice["id"] for invoice in invoices if invoice["id"] not in suggestions]
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("— Wybierz fakturę (wymagane potwierdzenie) —", None)
+        for invoice_id in ordering:
+            invoice = by_id[invoice_id]
+            prefix = "★ " if invoice_id in suggestions else ""
+            combo.addItem(
+                f"{prefix}{invoice['numer'] or '(bez numeru)'} — {invoice['buyer']} — saldo {money_text(invoice['balance'])} zł",
+                invoice_id,
+            )
+        combo.setCurrentIndex(max(0, combo.findData(selected)))
+        combo.blockSignals(False)
+
+    def _override_filter_changed(self, row):
+        self._populate_invoice_choices(row)
+        self.table.setCurrentCell(row, 4)
 
     def _invoice_choice_changed(self, row):
         self.table.setCurrentCell(row, 4)

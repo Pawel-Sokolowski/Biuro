@@ -10,8 +10,21 @@ from cryptography.x509.oid import NameOID
 from app.db import dao_invoices
 from app.db.dao_app_settings import get_setting
 from app.db.dao_conn import get_conn
+from app.db.dao_payments import get_invoice_payment_summary, record_cash_payment
 from app.invoices import ksef_client, ksef_sync
 from tests.base import DbTestCase
+
+
+FA3_XML = '''<?xml version="1.0" encoding="UTF-8"?>
+<Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">
+  <Podmiot2><DaneIdentyfikacyjne><NIP>5252525252</NIP><Nazwa>Klient z KSeF SA</Nazwa></DaneIdentyfikacyjne>
+    <Adres><AdresPol><KodKraju>PL</KodKraju><AdresL1>Testowa 1</AdresL1><AdresL2>00-001 Warszawa</AdresL2></AdresPol></Adres></Podmiot2>
+  <Fa><KodWaluty>PLN</KodWaluty><P_1>2026-10-15</P_1><P_2>7/10/2026</P_2><P_6>2026-10-14</P_6>
+    <P_13_1>200.00</P_13_1><P_14_1>46.00</P_14_1><P_15>246.00</P_15>
+    <TerminPlatnosci><Termin>2026-10-29</Termin></TerminPlatnosci>
+    <FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>Usługa z KSeF</P_7><P_8A>szt.</P_8A><P_8B>2</P_8B><P_9A>100</P_9A><P_11>200</P_11><P_12>23</P_12><P_11A>246</P_11A></FaWiersz>
+  </Fa>
+</Faktura>'''
 
 
 def _make_cert():
@@ -60,7 +73,10 @@ class FakeSession:
             assert headers["Authorization"] == "Bearer acc"
             return FakeResponse({"hasMore": False, "invoices": self.invoices})
         if path.startswith("/invoices/ksef/"):
-            return FakeResponse(content="<Faktura/>".encode())
+            xml = FA3_XML
+            if "CCCCCC" in path:
+                xml = xml.replace("5252525252", "9999999999").replace("7/10/2026", "OBCA/1")
+            return FakeResponse(content=xml.encode())
         raise AssertionError(path)
 
 
@@ -85,6 +101,7 @@ class KsefTests(DbTestCase):
         conn.commit()
         conn.close()
         dao_invoices.mark_exported([invoice_id], 1)
+        record_cash_payment(invoice_id, "2026-10-20", "50.00", 1)
         session = FakeSession(der, [
             {"ksefNumber": "1234567890-20261015-AAAAAA-BB", "invoiceNumber": "7/10/2026", "grossAmount": 123.0,
              "buyer": {"identifier": {"type": "Nip", "value": "5252525252"}}},
@@ -94,11 +111,42 @@ class KsefTests(DbTestCase):
         client = ksef_client.KsefClient("123-456-78-90", "TOKEN", "test", session=session)
         result = ksef_sync.sync_issued_invoices(dt.datetime(2026, 10, 1), dt.datetime(2026, 10, 30), client=client)
         self.assertEqual(result["dopasowane"], ["1234567890-20261015-AAAAAA-BB"])
-        self.assertEqual(result["niedopasowane"], ["OBCA/1"])
+        self.assertEqual(result["niedopasowane"], ["OBCA/1 — brak firmy o NIP-ie nabywcy"])
         row = dao_invoices.get_invoice_by_id(invoice_id)
         self.assertEqual(row["ksef_numer"], "1234567890-20261015-AAAAAA-BB")
         self.assertEqual(row["numer"], "7/10/2026")
-        self.assertEqual(client.download_invoice_xml("X"), "<Faktura/>")
+        self.assertEqual(row["kwota_netto"], 200.0)
+        self.assertEqual(row["kwota_brutto"], 246.0)
+        self.assertEqual(row["nabywca_pelna"], "Klient z KSeF SA")
+        self.assertEqual(dao_invoices.get_invoice_positions(invoice_id)[0]["nazwa"], "Usługa z KSeF")
+        self.assertEqual(get_invoice_payment_summary(invoice_id, 1)["paid"], 50)
+        self.assertEqual(result["zaktualizowane"], ["1234567890-20261015-AAAAAA-BB"])
+        self.assertEqual(client.download_invoice_xml("X"), FA3_XML)
+
+    def test_sync_creates_invoice_for_company_matched_only_by_nip(self):
+        _key, der = _make_cert()
+        firma_id = self.make_company("Lokalna nazwa", nip="525-252-52-52")
+        session = FakeSession(der, [{
+            "ksefNumber": "1234567890-20261015-AAAAAA-BB", "invoiceNumber": "7/10/2026",
+            "buyer": {"identifier": {"type": "Nip", "value": "5252525252"}},
+        }])
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=session)
+        result = ksef_sync.sync_month("2026-10", client=client)
+        self.assertEqual(result["utworzone"], ["1234567890-20261015-AAAAAA-BB"])
+        rows = dao_invoices.list_invoices(1, True, "2026-10", firma_id)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["numer"], "7/10/2026")
+        self.assertEqual(rows[0]["kwota_brutto"], 246.0)
+
+    def test_sync_does_not_import_when_buyer_nip_is_not_a_unique_company(self):
+        _key, der = _make_cert()
+        self.make_company("Pierwsza", nip="5252525252")
+        self.make_company("Druga", nip="525-252-52-52")
+        session = FakeSession(der, [{"ksefNumber": "KSEF-1", "invoiceNumber": "7/10/2026"}])
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=session)
+        result = ksef_sync.sync_month("2026-10", client=client)
+        self.assertEqual(result["dopasowane"], [])
+        self.assertIn("kilka firm ma ten sam NIP", result["niedopasowane"][0])
 
     def test_credentials_are_stored_encrypted(self):
         ksef_sync.save_ksef_credentials("123-456-78-90", "SEKRET", "test")

@@ -104,9 +104,12 @@ pozostają przy dotychczasowym ID faktury. Niepewny NIP lub kilka pasujących
 faktur wymaga wyjaśnienia i nie powoduje automatycznego nadpisania.
 Synchronizacja najpierw pobiera i deduplikuje listę sprzedaży. XML-e już
 zapisanych numerów KSeF są pomijane, dlatego po przerwaniu kolejne uruchomienie
-wznawia pobieranie brakujących dokumentów. Pobieranie XML jest celowo
-ograniczone do około 19 dokumentów na minutę i respektuje pełny `Retry-After`
-z KSeF.
+wznawia pobieranie brakujących dokumentów. Przy ponad 10 brakujących
+dokumentach program korzysta z zalecanego przez MF eksportu paczkowego
+`/invoices/exports`, pobiera i weryfikuje skróty zaszyfrowanych części, a
+następnie odszyfrowuje paczkę lokalnie. Dla mniejszej liczby respektuje pełny
+`Retry-After` KSeF. Synchronizacja działa w tle i pokazuje liczbę znalezionych
+oraz przetworzonych faktur, więc nie blokuje okna programu.
 
 W tabeli wystawionych faktur numer faktury i przycisk **Podgląd** otwierają
 lokalny widok dokumentu z pozycjami oraz opcją **Zapisz PDF**. XSD FA(3)

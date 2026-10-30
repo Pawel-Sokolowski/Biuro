@@ -28,7 +28,7 @@ FA3_XML = '''<?xml version="1.0" encoding="UTF-8"?>
   <Podmiot1><DaneIdentyfikacyjne><NIP>1234567890</NIP><Nazwa>Biuro Testowe</Nazwa></DaneIdentyfikacyjne></Podmiot1>
   <Podmiot2><DaneIdentyfikacyjne><NIP>5252525252</NIP><Nazwa>Klient z KSeF SA</Nazwa></DaneIdentyfikacyjne>
     <Adres><AdresPol><KodKraju>PL</KodKraju><AdresL1>Testowa 1</AdresL1><AdresL2>00-001 Warszawa</AdresL2></AdresPol></Adres></Podmiot2>
-  <Fa><KodWaluty>PLN</KodWaluty><P_1>2026-10-15</P_1><P_2>7/10/2026</P_2><P_6>2026-10-14</P_6>
+  <Fa><KodWaluty>PLN</KodWaluty><P_1>2026-10-15</P_1><P_2>7/10/2026</P_2><P_6>2026-10-14</P_6><RodzajFaktury>VAT</RodzajFaktury>
     <P_13_1>200.00</P_13_1><P_14_1>46.00</P_14_1><P_15>246.00</P_15>
     <TerminPlatnosci><Termin>2026-10-29</Termin></TerminPlatnosci>
     <FaWiersz><NrWierszaFa>1</NrWierszaFa><P_7>Usługa z KSeF</P_7><P_8A>szt.</P_8A><P_8B>2</P_8B><P_9A>100</P_9A><P_11>200</P_11><P_12>23</P_12><P_11A>246</P_11A></FaWiersz>
@@ -304,6 +304,52 @@ class KsefTests(DbTestCase):
         self.assertEqual(result["utworzone"], ["1234567890-20261015-AAAAAA-BB"])
         self.assertFalse(any(path.startswith("/invoices/ksef/") for _method, path in session.calls))
         self.assertEqual(dao_invoices.list_invoices(1, True, "2026-10", firma_id)[0]["numer"], "7/10/2026")
+
+    def test_imports_correction_and_links_it_to_original_invoice(self):
+        firma_id = self.make_company("Klient korekty", nip="5252525252")
+        original_id = dao_invoices.create_or_update_invoice(
+            firma_id, "2026-09",
+            [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100, "vat": 23}], 100, 123,
+        )
+        conn = get_conn()
+        conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", ("FV/09/2026", original_id))
+        conn.commit()
+        conn.close()
+        correction_xml = (FA3_XML
+            .replace("7/10/2026", "KOR/1/10/2026")
+            .replace("<RodzajFaktury>VAT</RodzajFaktury>",
+                     "<RodzajFaktury>KOR</RodzajFaktury><PrzyczynaKorekty>Rabat</PrzyczynaKorekty>"
+                     "<DaneFaKorygowanej><NrFaKorygowanej>FV/09/2026</NrFaKorygowanej></DaneFaKorygowanej>"))
+        data = ksef_sync.parse_fa3_invoice(correction_xml)
+        data["invoice_hash"] = base64.b64encode(hashlib.sha256(correction_xml.encode()).digest()).decode()
+        action, correction_id = ksef_sync._upsert_downloaded_invoice(data, "1234567890-20261015-KOREKTA-AA")
+        self.assertEqual(action, "utworzone")
+        correction = dao_invoices.get_invoice_by_id(correction_id)
+        self.assertEqual(correction["rodzaj"], "korekta")
+        self.assertEqual(correction["korygowana_faktura_id"], original_id)
+        self.assertEqual(correction["przyczyna_korekty"], "Rabat")
+
+    def test_nan_ksef_number_is_cleared_instead_of_matching_another_invoice(self):
+        firma_id = self.make_company("Klient NaN", nip="5252525252")
+        invoice_id = dao_invoices.create_or_update_invoice(
+            firma_id, "2026-10", [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 10, "vat": 23}], 10, 12.3,
+        )
+        dao_invoices.set_ksef_number(invoice_id, "NaN")
+        self.assertIsNone(dao_invoices.get_invoice_by_id(invoice_id)["ksef_numer"])
+        self.assertEqual(ksef_sync._valid_ksef_number(float("nan")), "")
+
+    def test_imports_multiple_ksef_invoices_for_one_company_and_month(self):
+        firma_id = self.make_company("Klient wielu faktur", nip="5252525252")
+        for suffix in ("AA", "BB"):
+            xml = FA3_XML.replace("7/10/2026", f"FV/{suffix}/10/2026")
+            data = ksef_sync.parse_fa3_invoice(xml)
+            data["invoice_hash"] = base64.b64encode(hashlib.sha256(xml.encode()).digest()).decode()
+            action, _invoice_id = ksef_sync._upsert_downloaded_invoice(
+                data, f"1234567890-20261015-{suffix}AAAA-BB",
+            )
+            self.assertEqual(action, "utworzone")
+        rows = dao_invoices.list_invoices(1, True, "2026-10", firma_id)
+        self.assertEqual({row["numer"] for row in rows}, {"FV/AA/10/2026", "FV/BB/10/2026"})
 
     def test_credentials_are_stored_encrypted(self):
         ksef_sync.save_ksef_credentials("123-456-78-90", "SEKRET", "test")

@@ -1,8 +1,11 @@
 # app/admin/settings/invoice_settings.py
 
+import base64
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QCheckBox, QComboBox,
-    QPushButton, QMessageBox, QHBoxLayout, QLineEdit, QSpinBox
+    QPushButton, QMessageBox, QHBoxLayout, QLineEdit, QSpinBox, QFileDialog, QFormLayout
 )
 from PyQt6.QtGui import QFont
 
@@ -133,6 +136,36 @@ class InvoiceSettings(QWidget):
         layout.addLayout(row)
         self._sync_term_widgets()
         # -------------------------
+        # Dane sprzedawcy i logo na podglądzie/PDF
+        # -------------------------
+        seller_form = QFormLayout()
+        self.seller_fields = {}
+        for label, key in (
+            ("Nazwa sprzedawcy:", "faktury_sprzedawca_nazwa"),
+            ("NIP sprzedawcy:", "faktury_sprzedawca_nip"),
+            ("Adres sprzedawcy:", "faktury_sprzedawca_adres"),
+            ("Kod pocztowy:", "faktury_sprzedawca_kod"),
+            ("Miejscowość:", "faktury_sprzedawca_miasto"),
+            ("Kraj:", "faktury_sprzedawca_kraj"),
+        ):
+            field = QLineEdit(self.logic.get_setting(key) or "")
+            self.seller_fields[key] = field
+            seller_form.addRow(label, field)
+        layout.addWidget(QLabel("Dane sprzedawcy na fakturze i PDF:"))
+        layout.addLayout(seller_form)
+        self.logo_data = self.logic.get_setting("faktury_logo_data") or ""
+        logo_row = QHBoxLayout()
+        self.logo_status = QLabel("Logo zapisane" if self.logo_data else "Brak logo")
+        choose_logo = QPushButton("Wgraj logo…")
+        choose_logo.clicked.connect(self._choose_logo)
+        clear_logo = QPushButton("Usuń logo")
+        clear_logo.clicked.connect(self._clear_logo)
+        logo_row.addWidget(self.logo_status)
+        logo_row.addWidget(choose_logo)
+        logo_row.addWidget(clear_logo)
+        logo_row.addStretch()
+        layout.addLayout(logo_row)
+        # -------------------------
         # KSeF - odnośnik do podglądu faktury
         # -------------------------
         layout.addWidget(QLabel(
@@ -170,6 +203,22 @@ class InvoiceSettings(QWidget):
         by_day = self.term_mode.currentData() == MODE_DAY_OF_MONTH
         self.term_days.setVisible(not by_day)
         self.term_day_of_month.setVisible(by_day)
+
+    def _choose_logo(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Wybierz logo", "", "Obrazy (*.png *.jpg *.jpeg)")
+        if not path:
+            return
+        source = Path(path)
+        if source.stat().st_size > 2 * 1024 * 1024:
+            QMessageBox.warning(self, "Logo", "Plik logo nie może przekraczać 2 MB.")
+            return
+        mime = "image/png" if source.suffix.lower() == ".png" else "image/jpeg"
+        self.logo_data = f"data:{mime};base64," + base64.b64encode(source.read_bytes()).decode("ascii")
+        self.logo_status.setText(f"Logo: {source.name}")
+
+    def _clear_logo(self):
+        self.logo_data = ""
+        self.logo_status.setText("Brak logo")
 
     def _get_flag_value(self, *keys: str) -> str:
         for key in keys:
@@ -239,5 +288,8 @@ class InvoiceSettings(QWidget):
         self.logic.set_setting(DAY_OF_MONTH_KEY, self.term_day_of_month.currentText())
 
         self.logic.set_setting(URL_TEMPLATE_KEY, self.ksef_url.text().strip() or DEFAULT_URL_TEMPLATE)
+        for key, field in self.seller_fields.items():
+            self.logic.set_setting(key, field.text().strip())
+        self.logic.set_setting("faktury_logo_data", self.logo_data)
 
         QMessageBox.information(self, "OK", "Ustawienia faktur zapisane.")

@@ -1173,6 +1173,8 @@ def create_correction(invoice_id: int, przyczyna: str = "") -> int:
 
 def set_ksef_number(invoice_id: int, ksef_numer: str) -> None:
     ksef_numer = (ksef_numer or "").strip()
+    if ksef_numer.casefold() in {"nan", "none", "null", "<na>", "n/a"}:
+        ksef_numer = ""
     conn = get_conn()
     try:
         conn.execute(

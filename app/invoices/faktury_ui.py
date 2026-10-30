@@ -2,7 +2,7 @@ import logging
 import math
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
@@ -230,6 +230,7 @@ class FakturyPage(QWidget):
         layout.addLayout(buttons)
 
         self.draft_table = _make_table(self.DRAFT_HEADERS, multi=True)
+        self.draft_table.setColumnHidden(0, True)
         self.draft_table.itemSelectionChanged.connect(self._show_draft_positions)
         self.draft_table.cellDoubleClicked.connect(lambda *_: self._edit_selected_draft())
         layout.addWidget(self.draft_table)
@@ -283,6 +284,7 @@ class FakturyPage(QWidget):
         layout.addLayout(settlement_buttons)
 
         self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
+        self.issued_table.setColumnHidden(0, True)
         self._configure_issued_columns()
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
         self.issued_table.cellDoubleClicked.connect(self._on_issued_double_click)

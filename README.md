@@ -95,7 +95,7 @@ FA(3) dla wybranej wystawionej faktury po sprawdzeniu jej danych i potwierdzeniu
 przetwarzanie i zapisuje numer dopiero po przyjęciu przez MF. Nieznany wynik
 wysyłki należy wyjaśnić przed jej ponowieniem, aby uniknąć duplikatu.
 
-**Pobierz z KSeF** pobiera sprzedażowe faktury VAT FA(3) z wybranego miesiąca.
+**Pobierz z KSeF** pobiera sprzedażowe faktury VAT oraz korekty FA(3) z wybranego miesiąca.
 Nabywca jest łączony z firmą po NIP-ie. Dokument o tym samym numerze KSeF lub
 numerze faktury jest aktualizowany, a pojedynczy niezsynchronizowany dokument
 tej firmy i miesiąca może zostać zastąpiony. Gdy dokumentu nie ma, program go
@@ -112,7 +112,9 @@ następnie odszyfrowuje paczkę lokalnie. Dla mniejszej liczby respektuje pełny
 oraz przetworzonych faktur, więc nie blokuje okna programu.
 
 W tabeli wystawionych faktur numer faktury i przycisk **Podgląd** otwierają
-lokalny widok dokumentu z pozycjami oraz opcją **Zapisz PDF**. XSD FA(3)
+lokalny widok dokumentu z pełnymi danymi sprzedawcy i nabywcy, pozycjami,
+kodem QR oraz opcją **Zapisz PDF**. Dane sprzedawcy i logo ustawia się w
+**Ustawieniach faktur**. Techniczna kolumna ID jest ukryta. XSD FA(3)
 służy do walidacji danych, a wygląd podglądu generuje program. Kliknięcie
 numeru KSeF otwiera urzędowy adres weryfikacyjny z NIP-em sprzedawcy, datą
 wystawienia i skrótem XML, jeżeli zostały zapisane podczas wysyłki lub pobrania.
@@ -139,8 +141,10 @@ ma nazwę „Usługa kadrowo-płacowa”. Wystawione dokumenty zachowują swoje 
 Korekty nie są eksportowane jako zwykłe faktury z ujemnymi pozycjami.
 Przycisk **Korekta w Saldeo** pokazuje dane faktury pierwotnej i zmiany
 do wprowadzenia w Saldeo. Po rzeczywistym wystawieniu korekty można zapisać
-jej numer w programie, potwierdzając ten fakt. Ta ścieżka nie importuje korekty
-automatycznie do Saldeo i nie zmienia znaków wartości.
+jej numer w programie, potwierdzając ten fakt. Korekty wystawione w KSeF są
+importowane przez **Pobierz z KSeF** i, gdy numer faktury pierwotnej jest
+jednoznaczny, zostają z nią powiązane. Ścieżka Saldeo nie importuje korekty
+automatycznie i nie zmienia znaków wartości.
 
 W imporcie ING pola opisu przelewu, nadawcy, referencji i rachunku są odrębne.
 Przy niepoprawnych polskich znakach wybierz kodowanie pliku (UTF-8,

@@ -110,6 +110,22 @@ class ContractorMatchingTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in invoice_choices_for_transaction({"kontrahent": "Zolc spolka z ograniczona odpowiedzialnoscia"}, rows)], [1])
         self.assertFalse(match_invoice_contractor({"kontrahent": "Żółć"}, rows)["confident"])
 
+    def test_person_name_matches_in_any_order_with_an_extra_middle_name(self):
+        rows = [invoice(1, 10, "FV/001/09/2026", "Sosiw Krystian"),
+                invoice(2, 20, "FV/002/09/2026", "Inny Krystian")]
+        transaction = {"kontrahent": "KRYSTIAN RYSZARD SOSIW BART"}
+        match = match_invoice_contractor(transaction, rows)
+        self.assertTrue(match["confident"])
+        self.assertEqual(match["resolved_contractor"], "Sosiw Krystian")
+        self.assertEqual([row["id"] for row in invoice_choices_for_transaction(transaction, rows)], [1])
+
+    def test_partial_person_name_must_still_identify_only_one_contractor(self):
+        rows = [invoice(1, 10, "FV/001/09/2026", "Sosiw Krystian"),
+                invoice(2, 20, "FV/002/09/2026", "Krystian Sosiw")]
+        self.assertFalse(match_invoice_contractor(
+            {"kontrahent": "KRYSTIAN RYSZARD SOSIW"}, rows,
+        )["confident"])
+
     def test_manual_invoices_with_null_company_are_grouped_by_counterparty_id(self):
         rows = [invoice(1, None, "FV/001/09/2026", "ALFA", kontrahent_id=100),
                 invoice(2, None, "FV/002/09/2026", "BETA", kontrahent_id=200),

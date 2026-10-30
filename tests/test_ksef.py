@@ -110,6 +110,10 @@ class KsefRateLimitTests(unittest.TestCase):
         self.assertEqual(client.http.calls, 2)
         self.assertTrue(any(call.args == (2.0,) for call in client._sleep.call_args_list))
 
+    def test_retry_after_is_not_truncated_to_thirty_seconds(self):
+        response = FakeResponse(status=429, headers={"Retry-After": "56"})
+        self.assertEqual(ksef_client.KsefClient._retry_after_seconds(response, 0), 56.0)
+
     def test_metadata_query_retries_429_but_invoice_submission_does_not(self):
         client = self.client([
             FakeResponse(status=429),
@@ -182,6 +186,20 @@ class KsefTests(DbTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["numer"], "7/10/2026")
         self.assertEqual(rows[0]["kwota_brutto"], 246.0)
+
+        # Ponowne uruchomienie pobiera listę, ale nie pobiera ponownie XML-a
+        # dokumentu już zapisanego lokalnie. Powtórzona metadana także jest
+        # deduplikowana po numerze KSeF.
+        repeated = [{
+            "ksefNumber": "1234567890-20261015-AAAAAA-BB", "invoiceNumber": "7/10/2026",
+            "buyer": {"identifier": {"type": "Nip", "value": "5252525252"}},
+        }] * 2
+        session = FakeSession(der, repeated)
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=session)
+        resumed = ksef_sync.sync_month("2026-10", client=client)
+        self.assertEqual(resumed["znalezione"], 1)
+        self.assertEqual(resumed["pominiete"], ["1234567890-20261015-AAAAAA-BB"])
+        self.assertFalse(any(path.startswith("/invoices/ksef/") for _method, path in session.calls))
 
     def test_sync_does_not_import_when_buyer_nip_is_not_a_unique_company(self):
         _key, der = _make_cert()

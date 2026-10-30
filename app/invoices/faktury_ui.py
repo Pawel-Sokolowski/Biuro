@@ -312,7 +312,9 @@ class FakturyPage(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
         self.refresh()
-        message = (f"Miesiąc {month}\nUtworzono: {len(result.get('utworzone', []))}"
+        message = (f"Miesiąc {month}\nZnaleziono w KSeF: {result.get('znalezione', len(result.get('dopasowane', [])))}"
+                   f"\nJuż zapisane lokalnie: {len(result.get('pominiete', []))}"
+                   f"\nUtworzono: {len(result.get('utworzone', []))}"
                    f"\nZaktualizowano z KSeF: {len(result.get('zaktualizowane', []))}"
                    f"\nNiedopasowano: {len(result['niedopasowane'])}")
         if result["niedopasowane"]:

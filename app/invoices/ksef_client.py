@@ -22,8 +22,10 @@ ENVIRONMENTS = {
 }
 TIMEOUT = 30
 MIN_REQUEST_INTERVAL = 0.25
+INVOICE_DOWNLOAD_INTERVAL = 3.1
 RATE_LIMIT_ATTEMPTS = 6
 RATE_LIMIT_MAX_WAIT = 30.0
+RATE_LIMIT_MAX_RETRY_AFTER = 300.0
 AUTH_POLL_SECONDS = 1.0
 AUTH_POLL_ATTEMPTS = 30
 PAGE_SIZE = 100
@@ -81,8 +83,9 @@ class KsefClient:
         if not self._can_retry_rate_limit(method, path):
             return
         now = self._clock()
+        interval = INVOICE_DOWNLOAD_INTERVAL if path.startswith("/invoices/ksef/") else MIN_REQUEST_INTERVAL
         if self._last_read_request_at is not None:
-            wait = MIN_REQUEST_INTERVAL - (now - self._last_read_request_at)
+            wait = interval - (now - self._last_read_request_at)
             if wait > 0:
                 self._sleep(wait)
         self._last_read_request_at = self._clock()
@@ -91,7 +94,9 @@ class KsefClient:
     def _retry_after_seconds(response: requests.Response, attempt: int) -> float:
         value = str(getattr(response, "headers", {}).get("Retry-After", "")).strip()
         try:
-            return min(RATE_LIMIT_MAX_WAIT, max(0.0, float(value)))
+            # Retry-After z KSeF bywa dłuższy niż 30 s. Jego obcięcie
+            # powodowało przedwczesne ponowienie (np. 56 s -> 30 s, potem 26 s).
+            return min(RATE_LIMIT_MAX_RETRY_AFTER, max(0.0, float(value)))
         except ValueError:
             # Jeżeli KSeF nie poda liczby sekund (lub nagłówka wcale),
             # stosujemy ograniczony backoff: 1, 2, 4, 8, 16, 30 s.

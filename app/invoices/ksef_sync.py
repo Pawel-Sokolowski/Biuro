@@ -214,6 +214,39 @@ def _windows(start: datetime, end: datetime):
         cursor += timedelta(days=WINDOW_DAYS)
 
 
+def _already_imported_ksef_numbers(numbers: List[str]) -> set[str]:
+    if not numbers:
+        return set()
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT ksef_numer FROM faktury WHERE ksef_numer = ANY(%s)", (numbers,),
+        ).fetchall()
+        return {row["ksef_numer"] for row in rows if row["ksef_numer"]}
+    finally:
+        conn.close()
+
+
+def _company_count_for_nips(nips: set[str]) -> Dict[str, int]:
+    if not nips:
+        return {}
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g') AS nip, COUNT(*) AS amount "
+            "FROM firmy WHERE regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g') = ANY(%s) "
+            "GROUP BY regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g')",
+            (list(nips),),
+        ).fetchall()
+        return {row["nip"]: int(row["amount"]) for row in rows}
+    finally:
+        conn.close()
+
+
+def _metadata_buyer_nip(meta: Dict[str, Any]) -> str:
+    return _digits(((meta.get("buyer") or {}).get("identifier") or {}).get("value"))
+
+
 def sync_issued_invoices(
     date_from: datetime,
     date_to: Optional[datetime] = None,
@@ -228,45 +261,65 @@ def sync_issued_invoices(
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
 
+    # Najpierw pobieramy całą listę. KSeF potrafi zwrócić ten sam
+    # dokument na granicy stron/okien, więc numer KSeF jest kluczem deduplikacji.
+    metadata: Dict[str, Dict[str, Any]] = {}
+    missing_number: List[str] = []
+    for window_start, window_end in _windows(date_from, end):
+        for meta in client.query_invoices(window_start, window_end):
+            ksef_number = str(meta.get("ksefNumber") or "").strip()
+            if not ksef_number:
+                missing_number.append(meta.get("invoiceNumber") or "(bez numeru)")
+                continue
+            metadata.setdefault(ksef_number, meta)
+
+    existing_numbers = _already_imported_ksef_numbers(list(metadata))
+    buyer_nips = {_metadata_buyer_nip(meta) for meta in metadata.values()} - {""}
+    company_counts = _company_count_for_nips(buyer_nips)
     matched: List[str] = []
     unmatched: List[str] = []
     created: List[str] = []
     updated: List[str] = []
-    for window_start, window_end in _windows(date_from, end):
-        for meta in client.query_invoices(window_start, window_end):
-            ksef_number = meta.get("ksefNumber")
-            label = meta.get("invoiceNumber") or ksef_number or "(bez numeru)"
-            if not ksef_number:
-                unmatched.append(label)
-                continue
-            xml = client.download_invoice_xml(ksef_number)
-            try:
-                data = parse_fa3_invoice(xml)
-            except KsefError as exc:
-                unmatched.append(f"{label} — {exc}")
-                continue
-            if data["currency"] != "PLN":
-                unmatched.append(f"{label} — waluta {data['currency']} nie jest obsługiwana przez lokalną ewidencję")
-                continue
-            if data["kind"] != "VAT":
-                unmatched.append(f"{label} — typ KSeF {data['kind']} wymaga osobnego importu")
-                continue
-            action, _invoice_id = _upsert_downloaded_invoice(data, ksef_number)
-            if action not in ("utworzone", "zaktualizowane"):
-                reason = {
-                    "brak_firmy": "brak firmy o NIP-ie nabywcy",
-                    "niejednoznaczna_firma": "kilka firm ma ten sam NIP",
-                    "niejednoznaczna_faktura": "kilka lokalnych faktur ma ten sam numer",
-                }.get(action, action)
-                unmatched.append(f"{label} — {reason}")
-                continue
-            matched.append(ksef_number)
-            (created if action == "utworzone" else updated).append(ksef_number)
-            if xml_dir:
-                xml_dir.mkdir(parents=True, exist_ok=True)
-                (xml_dir / f"{ksef_number}.xml").write_text(xml, encoding="utf-8")
+    skipped: List[str] = []
+    unmatched.extend(missing_number)
+    for ksef_number, meta in metadata.items():
+        label = meta.get("invoiceNumber") or ksef_number
+        if ksef_number in existing_numbers:
+            skipped.append(ksef_number)
+            continue
+        buyer_nip = _metadata_buyer_nip(meta)
+        if buyer_nip and company_counts.get(buyer_nip, 0) != 1:
+            reason = "brak firmy o NIP-ie nabywcy" if not company_counts.get(buyer_nip) else "kilka firm ma ten sam NIP"
+            unmatched.append(f"{label} — {reason}")
+            continue
+        xml = client.download_invoice_xml(ksef_number)
+        try:
+            data = parse_fa3_invoice(xml)
+        except KsefError as exc:
+            unmatched.append(f"{label} — {exc}")
+            continue
+        if data["currency"] != "PLN":
+            unmatched.append(f"{label} — waluta {data['currency']} nie jest obsługiwana przez lokalną ewidencję")
+            continue
+        if data["kind"] != "VAT":
+            unmatched.append(f"{label} — typ KSeF {data['kind']} wymaga osobnego importu")
+            continue
+        action, _invoice_id = _upsert_downloaded_invoice(data, ksef_number)
+        if action not in ("utworzone", "zaktualizowane"):
+            reason = {
+                "brak_firmy": "brak firmy o NIP-ie nabywcy",
+                "niejednoznaczna_firma": "kilka firm ma ten sam NIP",
+                "niejednoznaczna_faktura": "kilka lokalnych faktur ma ten sam numer",
+            }.get(action, action)
+            unmatched.append(f"{label} — {reason}")
+            continue
+        matched.append(ksef_number)
+        (created if action == "utworzone" else updated).append(ksef_number)
+        if xml_dir:
+            xml_dir.mkdir(parents=True, exist_ok=True)
+            (xml_dir / f"{ksef_number}.xml").write_text(xml, encoding="utf-8")
     return {"dopasowane": matched, "utworzone": created, "zaktualizowane": updated,
-            "niedopasowane": unmatched}
+            "pominiete": skipped, "niedopasowane": unmatched, "znalezione": len(metadata)}
 
 
 def _digits(value: Optional[str]) -> str:

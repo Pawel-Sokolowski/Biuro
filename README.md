@@ -102,6 +102,11 @@ tej firmy i miesiąca może zostać zastąpiony. Gdy dokumentu nie ma, program g
 tworzy. Treść, daty, pozycje i kwoty pochodzą z KSeF; zapisane płatności
 pozostają przy dotychczasowym ID faktury. Niepewny NIP lub kilka pasujących
 faktur wymaga wyjaśnienia i nie powoduje automatycznego nadpisania.
+Synchronizacja najpierw pobiera i deduplikuje listę sprzedaży. XML-e już
+zapisanych numerów KSeF są pomijane, dlatego po przerwaniu kolejne uruchomienie
+wznawia pobieranie brakujących dokumentów. Pobieranie XML jest celowo
+ograniczone do około 19 dokumentów na minutę i respektuje pełny `Retry-After`
+z KSeF.
 
 ## Czynności dodatkowe i kolejne faktury
 

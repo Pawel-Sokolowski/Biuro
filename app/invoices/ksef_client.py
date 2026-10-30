@@ -21,6 +21,9 @@ ENVIRONMENTS = {
     "test": "https://api-test.ksef.mf.gov.pl/v2",
 }
 TIMEOUT = 30
+MIN_REQUEST_INTERVAL = 0.25
+RATE_LIMIT_ATTEMPTS = 6
+RATE_LIMIT_MAX_WAIT = 30.0
 AUTH_POLL_SECONDS = 1.0
 AUTH_POLL_ATTEMPTS = 30
 PAGE_SIZE = 100
@@ -63,17 +66,58 @@ class KsefClient:
         self.http = session or requests.Session()
         self._access_token: Optional[str] = None
         self._access_valid_until: Optional[datetime] = None
+        self._last_read_request_at: Optional[float] = None
+        self._sleep = time.sleep
+        self._clock = time.monotonic
+
+    @staticmethod
+    def _can_retry_rate_limit(method: str, path: str) -> bool:
+        # Odczyty oraz zapytanie o metadane są idempotentne. Wysyłki faktury
+        # nie ponawiamy automatycznie, bo po utracie odpowiedzi mogłaby powstać
+        # druga faktura.
+        return method.upper() == "GET" or path == "/invoices/query/metadata"
+
+    def _throttle_read(self, method: str, path: str) -> None:
+        if not self._can_retry_rate_limit(method, path):
+            return
+        now = self._clock()
+        if self._last_read_request_at is not None:
+            wait = MIN_REQUEST_INTERVAL - (now - self._last_read_request_at)
+            if wait > 0:
+                self._sleep(wait)
+        self._last_read_request_at = self._clock()
+
+    @staticmethod
+    def _retry_after_seconds(response: requests.Response, attempt: int) -> float:
+        value = str(getattr(response, "headers", {}).get("Retry-After", "")).strip()
+        try:
+            return min(RATE_LIMIT_MAX_WAIT, max(0.0, float(value)))
+        except ValueError:
+            # Jeżeli KSeF nie poda liczby sekund (lub nagłówka wcale),
+            # stosujemy ograniczony backoff: 1, 2, 4, 8, 16, 30 s.
+            return min(RATE_LIMIT_MAX_WAIT, float(2 ** attempt))
 
     def _request(self, method: str, path: str, *, token: Optional[str] = None, **kwargs) -> requests.Response:
         headers = kwargs.pop("headers", {})
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        try:
-            response = self.http.request(method, self.base_url + path, headers=headers, timeout=TIMEOUT, **kwargs)
-        except requests.RequestException as exc:
-            raise KsefError(f"Błąd połączenia z KSeF: {exc}") from exc
-        if response.status_code == 429:
-            raise KsefError("KSeF: przekroczono limit zapytań, spróbuj za chwilę.")
+        response = None
+        for attempt in range(RATE_LIMIT_ATTEMPTS):
+            self._throttle_read(method, path)
+            try:
+                response = self.http.request(method, self.base_url + path, headers=headers, timeout=TIMEOUT, **kwargs)
+            except requests.RequestException as exc:
+                raise KsefError(f"Błąd połączenia z KSeF: {exc}") from exc
+            if response.status_code != 429:
+                break
+            if not self._can_retry_rate_limit(method, path):
+                raise KsefError("KSeF ograniczył zapytania podczas operacji zapisu. Sprawdź stan przed ponowieniem.")
+            if attempt + 1 >= RATE_LIMIT_ATTEMPTS:
+                raise KsefError("KSeF nadal ogranicza zapytania po automatycznych ponowieniach. Spróbuj ponownie później.")
+            wait = self._retry_after_seconds(response, attempt)
+            logger.warning("KSeF HTTP 429 dla %s %s; ponowienie za %.1f s", method, path, wait)
+            self._sleep(wait)
+        assert response is not None
         if not response.ok:
             raise KsefError(f"KSeF {method} {path}: HTTP {response.status_code} {response.text[:300]}")
         return response

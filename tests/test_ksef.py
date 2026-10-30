@@ -1,6 +1,7 @@
 import base64
 import datetime as dt
 import unittest
+from unittest import mock
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -39,8 +40,10 @@ def _make_cert():
 
 
 class FakeResponse:
-    def __init__(self, data=None, content=b""):
-        self._data, self.content, self.ok, self.status_code, self.text = data, content, True, 200, ""
+    def __init__(self, data=None, content=b"", status=200, headers=None):
+        self._data, self.content = data, content
+        self.status_code, self.ok, self.text = status, status < 400, ""
+        self.headers = headers or {}
 
     def json(self):
         return self._data
@@ -78,6 +81,48 @@ class FakeSession:
                 xml = xml.replace("5252525252", "9999999999").replace("7/10/2026", "OBCA/1")
             return FakeResponse(content=xml.encode())
         raise AssertionError(path)
+
+
+class RateLimitedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def request(self, *args, **kwargs):
+        self.calls += 1
+        return self.responses.pop(0)
+
+
+class KsefRateLimitTests(unittest.TestCase):
+    def client(self, responses):
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=RateLimitedSession(responses))
+        client._access_token = "access"
+        client._access_valid_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+        client._sleep = mock.Mock()
+        return client
+
+    def test_download_retries_429_using_retry_after_without_reauthenticating(self):
+        client = self.client([
+            FakeResponse(status=429, headers={"Retry-After": "2"}),
+            FakeResponse(content=b"<Faktura/>")
+        ])
+        self.assertEqual(client.download_invoice_xml("KSEF-1"), "<Faktura/>")
+        self.assertEqual(client.http.calls, 2)
+        self.assertTrue(any(call.args == (2.0,) for call in client._sleep.call_args_list))
+
+    def test_metadata_query_retries_429_but_invoice_submission_does_not(self):
+        client = self.client([
+            FakeResponse(status=429),
+            FakeResponse(data={"hasMore": False, "invoices": []}),
+        ])
+        self.assertEqual(list(client.query_invoices(dt.datetime(2026, 10, 1))), [])
+        self.assertEqual(client.http.calls, 2)
+        self.assertTrue(any(call.args == (1.0,) for call in client._sleep.call_args_list))
+
+        client = self.client([FakeResponse(status=429)])
+        with self.assertRaisesRegex(ksef_client.KsefError, "operacji zapisu"):
+            client._request("POST", "/sessions/online/X/invoices", token="access", json={})
+        self.assertEqual(client.http.calls, 1)
 
 
 class KsefTests(DbTestCase):

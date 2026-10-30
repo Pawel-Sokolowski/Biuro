@@ -40,9 +40,9 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.addCleanup(self.dialog.close)
 
     def test_editing_invoice_selects_its_transfer_and_caps_split_amount(self):
-        self.dialog.table.cellWidget(1, 4).setCurrentIndex(1)
+        self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)
         self.assertEqual(self.dialog.table.currentRow(), 1)
-        self.assertEqual(self.dialog.table.cellWidget(1, 5).text(), "40.00")
+        self.assertEqual(self.dialog.table.cellWidget(1, 6).text(), "40.00")
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
              patch.object(QMessageBox, "information"):
@@ -51,10 +51,19 @@ class BankReviewSafetyTests(unittest.TestCase):
 
     def test_editing_amount_selects_its_transfer(self):
         self.dialog.table.setCurrentCell(0, 0)
-        editor = self.dialog.table.cellWidget(1, 5)
+        editor = self.dialog.table.cellWidget(1, 6)
         editor.clear()
         QTest.keyClicks(editor, "20")
         self.assertEqual(self.dialog.table.currentRow(), 1)
+
+    def test_bank_sender_is_shown_before_title_and_technical_id_is_hidden(self):
+        self.transfers[0].update(kontrahent="NADAWCA Z BANKU", tytul="TYTUŁ PRZELEWU")
+        self.dialog.refresh()
+        self.assertTrue(self.dialog.table.isColumnHidden(0))
+        self.assertEqual(self.dialog.table.horizontalHeaderItem(3).text(), "Nadawca z wyciągu")
+        self.assertEqual(self.dialog.table.item(0, 3).text(), "NADAWCA Z BANKU")
+        self.assertEqual(self.dialog.table.item(0, 4).text(), "TYTUŁ PRZELEWU")
+        self.assertEqual(self.dialog.table.horizontalHeaderItem(7).text(), "Wybrany kontrahent")
 
     def test_explicit_encoding_is_remembered_and_passed_to_import(self):
         self.dialog.settings = Mock()
@@ -71,17 +80,17 @@ class BankReviewSafetyTests(unittest.TestCase):
              patch.object(QMessageBox, "warning"):
             self.dialog._confirm()
             confirm.assert_not_called()
-        self.dialog.table.cellWidget(0, 4).setCurrentIndex(1)
+        self.dialog.table.cellWidget(0, 5).setCurrentIndex(1)
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
             self.dialog._confirm()
             confirm.assert_not_called()
 
     def test_invalid_amounts_are_rejected_before_confirmation(self):
-        self.dialog.table.cellWidget(0, 4).setCurrentIndex(1)
+        self.dialog.table.cellWidget(0, 5).setCurrentIndex(1)
         for amount in ("NaN", "Infinity", "0", "-1", "1.001", "41.00"):
             with self.subTest(amount=amount):
-                self.dialog.table.cellWidget(0, 5).setText(amount)
+                self.dialog.table.cellWidget(0, 6).setText(amount)
                 with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
                      patch.object(QMessageBox, "question") as question, \
                      patch.object(QMessageBox, "warning") as warning:
@@ -98,26 +107,26 @@ class BankReviewSafetyTests(unittest.TestCase):
         ])
         self.transfers[1]["tytul"] = "FV/2/2026"
         self.dialog.refresh()
-        first, second = (self.dialog.table.cellWidget(row, 4) for row in (0, 1))
+        first, second = (self.dialog.table.cellWidget(row, 5) for row in (0, 1))
         self.assertEqual({first.itemData(i) for i in range(1, first.count())}, {11, 13})
         self.assertEqual({second.itemData(i) for i in range(1, second.count())}, {12})
         self.assertIsNone(first.currentData())
-        override = self.dialog.table.cellWidget(0, 7)
+        override = self.dialog.table.cellWidget(0, 8)
         self.assertFalse(override.isChecked())
         override.setChecked(True)
         self.assertEqual({first.itemData(i) for i in range(1, first.count())}, {11, 12, 13})
         first.setCurrentIndex(first.findData(12))
         override.setChecked(False)
         self.assertIsNone(first.currentData())
-        contractor = self.dialog.table.cellWidget(0, 6)
+        contractor = self.dialog.table.cellWidget(0, 7)
         self.assertTrue(contractor.isEditable())
         contractor.setCurrentIndex(contractor.findData("firma:202"))
         self.assertEqual({first.itemData(i) for i in range(1, first.count())}, {12})
         self.assertEqual(contractor.currentText(), "Klient B")
 
     def test_bulk_confirmation_cannot_overallocate_same_invoice(self):
-        self.dialog.table.cellWidget(0, 4).setCurrentIndex(1)
-        self.dialog.table.cellWidget(1, 4).setCurrentIndex(1)
+        self.dialog.table.cellWidget(0, 5).setCurrentIndex(1)
+        self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "question") as question, \
              patch.object(QMessageBox, "warning"):
@@ -130,8 +139,8 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.invoices.append({"id": 12, "firma_id": 202, "numer": "FV/2/2026", "buyer": "Klient", "balance": Decimal("40")})
         self.transfers[0].update(tytul="Zapłata", kontrahent="Klient")
         self.dialog.refresh()
-        override = self.dialog.table.cellWidget(0, 7)
-        combo = self.dialog.table.cellWidget(0, 4)
+        override = self.dialog.table.cellWidget(0, 8)
+        combo = self.dialog.table.cellWidget(0, 5)
         self.assertTrue(override.isChecked())
         self.assertTrue(override.isEnabled())
         self.assertEqual({combo.itemData(i) for i in range(1, combo.count())}, {11, 12})
@@ -161,16 +170,16 @@ class BankReviewSafetyTests(unittest.TestCase):
             tytul="FV/0091/09/2026 FIRMA SP.J.", kontrahent="IMIE NAZWISKO",
         )
         self.dialog.refresh()
-        combo = self.dialog.table.cellWidget(0, 4)
+        combo = self.dialog.table.cellWidget(0, 5)
         self.assertEqual({combo.itemData(i) for i in range(1, combo.count())}, {11})
         self.assertIn("FV/0091/09/2026", combo.itemText(1))
-        self.assertEqual(self.dialog.table.cellWidget(0, 6).currentText(), "FIRMA SP.J.")
+        self.assertEqual(self.dialog.table.cellWidget(0, 7).currentText(), "FIRMA SP.J.")
         self.assertIsNone(combo.currentData())
 
     def test_bulk_confirmation_lists_invoice_allocations_before_saving(self):
         for row in (0, 1):
-            self.dialog.table.cellWidget(row, 4).setCurrentIndex(1)
-            self.dialog.table.cellWidget(row, 5).setText("20.00")
+            self.dialog.table.cellWidget(row, 5).setCurrentIndex(1)
+            self.dialog.table.cellWidget(row, 6).setText("20.00")
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as question:
             self.dialog._confirm_all()
@@ -219,7 +228,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         from app.invoices.faktury_ui import FakturyPage
         page = FakturyPage(1)
         self.addCleanup(page.close)
-        page.month_button.setText("09-2026")
+        page.month_button.setCurrentText("2026-09")
         page.refresh()
         page.issued_table.selectRow(0)
         return page
@@ -243,7 +252,10 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         show_form.assert_not_called()
 
     def test_issued_is_default_and_correction_opens_drafts_by_widget(self):
+        from app.monthly_view.month_picker import MonthPicker
         page = self.page()
+        self.assertIsInstance(page.month_button, MonthPicker)
+        self.assertEqual(page.month_button.currentText(), "2026-09")
         self.assertIs(page.tabs.currentWidget(), page.tab_wystawione)
         self.assertEqual(page.issued_table.horizontalHeaderItem(5).text(), "Podgląd")
         self.assertTrue(page.issued_table.isColumnHidden(0))

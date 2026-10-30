@@ -43,6 +43,16 @@ def _payment_amount(text: str) -> Decimal:
 
 class BankPaymentReview(QDialog):
     """Bez automatycznych księgowań — użytkownik zatwierdza każdą alokację."""
+    COL_ID = 0
+    COL_DATE = 1
+    COL_AMOUNT = 2
+    COL_BANK_CONTRACTOR = 3
+    COL_TITLE = 4
+    COL_INVOICE = 5
+    COL_SETTLEMENT = 6
+    COL_CONTRACTOR = 7
+    COL_FILTER = 8
+
     def __init__(self, actor_id: int, parent=None):
         super().__init__(parent)
         self.actor_id = actor_id
@@ -55,17 +65,19 @@ class BankPaymentReview(QDialog):
             "Wybierz przelew, sprawdź proponowaną fakturę i kwotę, "
             "a następnie zatwierdź rozliczenie. Żaden przelew nie jest przypisywany automatycznie."
         ))
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Data", "Wpływ / pozostało (PLN)", "Tytuł przelewu",
-            "Przypisz do faktury", "Kwota rozliczenia (PLN)", "Rozpoznany kontrahent", "Filtr faktur",
+            "ID", "Data", "Wpływ / pozostało (PLN)", "Nadawca z wyciągu", "Tytuł przelewu",
+            "Przypisz do faktury", "Kwota rozliczenia (PLN)", "Wybrany kontrahent", "Filtr faktur",
         ])
+        self.table.setColumnHidden(self.COL_ID, True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(3, 330)
-        self.table.setColumnWidth(4, 330)
-        self.table.setColumnWidth(6, 230)
+        self.table.setColumnWidth(self.COL_BANK_CONTRACTOR, 240)
+        self.table.setColumnWidth(self.COL_TITLE, 330)
+        self.table.setColumnWidth(self.COL_INVOICE, 330)
+        self.table.setColumnWidth(self.COL_CONTRACTOR, 250)
         layout.addWidget(self.table)
 
         buttons = QHBoxLayout()
@@ -145,6 +157,7 @@ class BankPaymentReview(QDialog):
             values = (
                 entry["id"], entry["data_operacji"],
                 f"{money_text(entry['kwota'])} / {money_text(entry['remaining'])}",
+                entry.get("kontrahent") or "(brak nazwy nadawcy)",
                 entry.get("tytul") or entry.get("referencja") or "",
             )
             for col, value in enumerate(values):
@@ -173,31 +186,31 @@ class BankPaymentReview(QDialog):
             completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             completer.setFilterMode(Qt.MatchFlag.MatchContains)
             completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-            self.table.setCellWidget(idx, 6, contractor)
+            self.table.setCellWidget(idx, self.COL_CONTRACTOR, contractor)
             choices = QComboBox(self.table)
             # Sugestia jest tylko wizualna; nie wybieramy faktury automatycznie.
-            self.table.setCellWidget(idx, 4, choices)
+            self.table.setCellWidget(idx, self.COL_INVOICE, choices)
             amount = QLineEdit(money_text(entry["remaining"]), self.table)
-            self.table.setCellWidget(idx, 5, amount)
+            self.table.setCellWidget(idx, self.COL_SETTLEMENT, amount)
             override = QCheckBox("Wszystkie faktury", self.table)
             override.setChecked(not match.get("confident"))
             override.setEnabled(True)
             override.setToolTip(match.get("reason") or "Nie rozpoznano klienta — wybierz fakturę ręcznie.")
-            self.table.setCellWidget(idx, 7, override)
+            self.table.setCellWidget(idx, self.COL_FILTER, override)
             self._populate_invoice_choices(idx)
             override.toggled.connect(lambda _checked, row=idx: self._override_filter_changed(row))
             contractor.currentIndexChanged.connect(lambda _index, row=idx: self._contractor_changed(row))
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
-            amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, 5))
+            amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, self.COL_SETTLEMENT))
         if self.transactions:
             self.table.selectRow(0)
 
     def _populate_invoice_choices(self, row):
         entry = self.transactions[row]
-        combo = self.table.cellWidget(row, 4)
+        combo = self.table.cellWidget(row, self.COL_INVOICE)
         selected = combo.currentData()
-        contractor_key = self.table.cellWidget(row, 6).currentData()
-        if self.table.cellWidget(row, 7).isChecked():
+        contractor_key = self.table.cellWidget(row, self.COL_CONTRACTOR).currentData()
+        if self.table.cellWidget(row, self.COL_FILTER).isChecked():
             invoices = self.invoices
         elif contractor_key is not None:
             invoices = [item for item in self.invoices if _contractor_data(item) == contractor_key]
@@ -221,22 +234,22 @@ class BankPaymentReview(QDialog):
 
     def _override_filter_changed(self, row):
         self._populate_invoice_choices(row)
-        self.table.setCurrentCell(row, 4)
+        self.table.setCurrentCell(row, self.COL_INVOICE)
 
     def _contractor_changed(self, row):
-        override = self.table.cellWidget(row, 7)
-        if self.table.cellWidget(row, 6).currentData() is not None:
+        override = self.table.cellWidget(row, self.COL_FILTER)
+        if self.table.cellWidget(row, self.COL_CONTRACTOR).currentData() is not None:
             override.setChecked(False)
         self._populate_invoice_choices(row)
-        self.table.setCurrentCell(row, 6)
+        self.table.setCurrentCell(row, self.COL_CONTRACTOR)
 
     def _invoice_choice_changed(self, row):
-        self.table.setCurrentCell(row, 4)
-        invoice_id = self.table.cellWidget(row, 4).currentData()
+        self.table.setCurrentCell(row, self.COL_INVOICE)
+        invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
         invoice = next((item for item in self.invoices if item["id"] == invoice_id), None)
         if invoice is not None:
             amount = min(Decimal(str(self.transactions[row]["remaining"])), Decimal(str(invoice["balance"])))
-            self.table.cellWidget(row, 5).setText(money_text(amount))
+            self.table.cellWidget(row, self.COL_SETTLEMENT).setText(money_text(amount))
 
     def _confirm(self):
         selected = self.table.currentRow()
@@ -244,7 +257,7 @@ class BankPaymentReview(QDialog):
             QMessageBox.warning(self, "Rozliczenie", "Wybierz przelew.")
             return
         transfer = self.transactions[selected]
-        combo = self.table.cellWidget(selected, 4)
+        combo = self.table.cellWidget(selected, self.COL_INVOICE)
         invoice_id = combo.currentData()
         if invoice_id is None:
             QMessageBox.warning(self, "Rozliczenie", "Wybierz konkretną fakturę.")
@@ -254,7 +267,7 @@ class BankPaymentReview(QDialog):
             QMessageBox.warning(self, "Rozliczenie", "Faktura nie jest już dostępna. Odśwież listę.")
             return
         try:
-            amount = _payment_amount(self.table.cellWidget(selected, 5).text().strip())
+            amount = _payment_amount(self.table.cellWidget(selected, self.COL_SETTLEMENT).text().strip())
             if amount > min(Decimal(str(transfer["remaining"])), Decimal(str(invoice["balance"]))):
                 raise PaymentError("Kwota przekracza pozostałe saldo faktury lub przelewu.")
         except PaymentError as exc:
@@ -292,13 +305,13 @@ class BankPaymentReview(QDialog):
         totals = {}
         try:
             for row, transfer in enumerate(self.transactions):
-                invoice_id = self.table.cellWidget(row, 4).currentData()
+                invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
                 if invoice_id is None:
                     continue
                 invoice = by_invoice.get(invoice_id)
                 if invoice is None:
                     raise PaymentError("Faktura nie jest już dostępna. Odśwież listę.")
-                amount = _payment_amount(self.table.cellWidget(row, 5).text().strip())
+                amount = _payment_amount(self.table.cellWidget(row, self.COL_SETTLEMENT).text().strip())
                 if amount > Decimal(str(transfer["remaining"])):
                     raise PaymentError(f"Kwota przekracza saldo przelewu #{transfer['id']}.")
                 totals[invoice_id] = totals.get(invoice_id, Decimal("0")) + amount

@@ -1,6 +1,6 @@
-PyQt6
-PyQt6-WebEngine
-PyQt6-Charts
+PyQt6==6.11.0
+PyQt6-WebEngine==6.11.0
+PyQt6-Charts==6.11.0
 bcrypt
 cryptography
 openpyxl

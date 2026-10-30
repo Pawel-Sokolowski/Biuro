@@ -172,6 +172,7 @@ class KsefClient:
         self, xml_bytes: bytes, *,
         on_session: Optional[Callable[[str], None]] = None,
         on_invoice: Optional[Callable[[str], None]] = None,
+        on_upload: Optional[Callable[[], None]] = None,
     ) -> Dict[str, Any]:
         """Wysyła gotowy XML FA(3) do KSeF 2.0 z szyfrowaniem AES-256-CBC.
 
@@ -189,10 +190,15 @@ class KsefClient:
             raise KsefError("Plik XML jest pusty lub przekracza 10 MB.")
 
         response = self._request("GET", "/security/public-key-certificates").json()
-        certificate = next(
-            (item for item in response if "SymmetricKeyEncryption" in (item.get("usage") or [])),
-            None,
-        )
+        certificate = None
+        now = datetime.now(timezone.utc)
+        for item in response:
+            if "SymmetricKeyEncryption" not in (item.get("usage") or []):
+                continue
+            parsed = x509.load_der_x509_certificate(base64.b64decode(item["certificate"]))
+            if parsed.not_valid_before_utc <= now <= parsed.not_valid_after_utc:
+                certificate = item
+                break
         if not certificate:
             raise KsefError("KSeF nie udostępnił klucza do szyfrowania faktur.")
         public_key = x509.load_der_x509_certificate(
@@ -217,8 +223,6 @@ class KsefClient:
             },
         ).json()
         session_ref = session["referenceNumber"]
-        if on_session:
-            on_session(session_ref)
         padder = PKCS7(128).padder()
         padded = padder.update(xml_bytes) + padder.finalize()
         encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
@@ -229,8 +233,15 @@ class KsefClient:
             "close_error": None,
         }
         try:
+            if on_session:
+                on_session(session_ref)
+            # Odświeżenie uwierzytelnienia może się nie udać przed wysłaniem
+            # dokumentu; callback oznacza wyłącznie rozpoczęcie jego HTTP POST.
+            upload_access = self._access()
+            if on_upload:
+                on_upload()
             sent = self._request(
-                "POST", f"/sessions/online/{session_ref}/invoices", token=self._access(),
+                "POST", f"/sessions/online/{session_ref}/invoices", token=upload_access,
                 json={
                     "invoiceHash": b64(hashlib.sha256(xml_bytes).digest()),
                     "invoiceSize": len(xml_bytes),
@@ -264,6 +275,22 @@ class KsefClient:
             "GET", f"/sessions/{session_reference}/invoices/{invoice_reference}",
             token=self._access(),
         ).json()
+
+    def find_submission_by_hash(self, session_reference: str, invoice_hash: str) -> Optional[dict]:
+        """Odzyskuje referencję po utracie odpowiedzi HTTP 202, bez ponownej wysyłki."""
+        continuation = None
+        while True:
+            response = self._request(
+                "GET", f"/sessions/{session_reference}/invoices", token=self._access(),
+                params={"pageSize": 100},
+                headers={"x-continuation-token": continuation} if continuation else {},
+            ).json()
+            for item in response.get("invoices", []):
+                if item.get("invoiceHash") == invoice_hash:
+                    return item
+            continuation = response.get("continuationToken")
+            if not continuation:
+                return None
 
     def list_invoices(self, date_from: datetime, date_to: Optional[datetime] = None, **kwargs) -> List[Dict[str, Any]]:
         return list(self.query_invoices(date_from, date_to, **kwargs))

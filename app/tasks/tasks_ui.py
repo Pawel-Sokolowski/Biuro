@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -33,10 +34,20 @@ class TasksPage(QWidget):
         self.pracownik_id = pracownik_id
         self._build_ui()
         self._load_reference_data()
+        from app.tasks.extra_activities_ui import ExtraActivitiesPage
+        self.extra_activities = ExtraActivitiesPage(self.pracownik_id, self.companies, self.employees, self)
+        self.extra_activities.open_task.connect(self._open_task)
+        self.extra_activities.activities_changed.connect(self._refresh)
+        self.tabs.addTab(self.extra_activities, "Czynności dodatkowe")
         self._refresh()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        self.tabs = QTabWidget(self)
+        layout.addWidget(self.tabs)
+        tasks_tab = QWidget(self.tabs)
+        self.tabs.addTab(tasks_tab, "Zadania")
+        layout = QVBoxLayout(tasks_tab)
         layout.addWidget(QLabel("<b>Zadania</b>"))
 
         filters = QHBoxLayout()
@@ -117,6 +128,8 @@ class TasksPage(QWidget):
             ]
             for col, value in enumerate(values):
                 self.table.setItem(row, col, QTableWidgetItem(str(value)))
+        if hasattr(self, "extra_activities"):
+            self.extra_activities.refresh()
 
     def _selected_id(self) -> Optional[int]:
         row = self.table.currentRow()
@@ -159,6 +172,9 @@ class TasksPage(QWidget):
         task_id = self._selected_id()
         if not task_id:
             return
+        self._open_task(task_id)
+
+    def _open_task(self, task_id):
         task = next(
             (t for t in list_tasks(viewer_id=self.pracownik_id) if t["id"] == task_id),
             None,
@@ -172,6 +188,8 @@ class TasksPage(QWidget):
                 task,
             ).exec()
             self._refresh()
+        else:
+            QMessageBox.warning(self, "Zadanie", "Nie masz dostępu do powiązanego zadania lub zostało ono usunięte.")
 
     def _delete_selected(self):
         ids = self._selected_ids()
@@ -187,8 +205,8 @@ class TasksPage(QWidget):
                 QMessageBox.warning(
                     self, "Usuwanie", f"Usunięto {deleted} z {len(ids)} zadań (reszta bez uprawnień)."
                 )
-        except PermissionError as exc:
-            QMessageBox.warning(self, "Brak uprawnień", str(exc))
+        except (PermissionError, ValueError) as exc:
+            QMessageBox.warning(self, "Usuwanie zadania", str(exc))
 
 
 class TaskDialog(QDialog):
@@ -251,7 +269,7 @@ class TaskDialog(QDialog):
                 self.task.get("id"),
                 actor_id=self.created_by,
             )
-        except ValueError as exc:
+        except (ValueError, PermissionError) as exc:
             QMessageBox.warning(self, "Błąd", str(exc))
             return
         self.accept()

@@ -1,5 +1,6 @@
 PyQt6
 PyQt6-WebEngine
+PyQt6-Charts
 bcrypt
 cryptography
 openpyxl
@@ -9,3 +10,4 @@ xlsxwriter
 python-dateutil
 caldav
 psycopg[binary]
+mt-940==5.1.3

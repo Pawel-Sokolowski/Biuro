@@ -27,9 +27,11 @@ class Mt940ParserTests(unittest.TestCase):
     def test_ing_multiline_credits_debits_and_dedupe_hash(self):
         raw = (
             ":20:STATEMENT\n:25:PL44105000997603123456789123\n:28C:2026/10\n"
+            ":60F:C261001PLN0,00\n"
             ":61:2610071007C123,45NTRFABC\n"
             ":86:?00Przelew FV/001/09/2026\n?20NIP 1234567890\n"
             ":61:261008D20,00NTRFDEF\n:86:Oplata bankowa\n"
+            ":62F:C261008PLN103,45\n"
         ).encode("cp1250")
         records = parse_ing_mt940(raw)
         self.assertEqual(len(records), 2)

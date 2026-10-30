@@ -15,6 +15,7 @@ from app.db.dao_invoices import (
     InvoiceLockedError, can_access_invoice, create_correction, delete_draft_invoice,
     delete_issued_invoice, get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
     update_invoice_draft,
+    validate_invoice_extra_services_ready,
 )
 from app.invoices.positions import normalize_position
 from app.invoices.faktury_logic import FakturyLogic
@@ -26,7 +27,9 @@ from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
 from app.invoices.ksef_submission import send_invoice_xml, refresh_invoice_submission
 from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
 from app.security.authorization import can, is_administrator
-from app.utils.saldeo_exporter import export_saldeo_xlsx
+from app.utils.saldeo_exporter import (
+    SaldeoCorrectionExportError, SaldeoExportError, export_saldeo_xlsx, validate_saldeo_invoices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +164,7 @@ class FakturyPage(QWidget):
 
         self.month_button = QPushButton(datetime.now().strftime("%m-%Y"))
         self.month_button.clicked.connect(self._open_month_dialog)
-        controls.addWidget(QLabel("Miesiąc (faktury robocze):"))
+        controls.addWidget(QLabel("Miesiąc:"))
         controls.addWidget(self.month_button)
 
         self.btn_manual = QPushButton("Wystaw faktur\u0119")
@@ -188,7 +191,9 @@ class FakturyPage(QWidget):
         self.btn_export.clicked.connect(self._export_selected_drafts)
         self.btn_delete = QPushButton("Usuń roboczą")
         self.btn_delete.clicked.connect(self._delete_selected_draft)
-        for button in (self.btn_edit, self.btn_export, self.btn_delete):
+        self.btn_saldeo_correction = QPushButton("Korekta w Saldeo...")
+        self.btn_saldeo_correction.clicked.connect(self._prepare_saldeo_correction)
+        for button in (self.btn_edit, self.btn_export, self.btn_saldeo_correction, self.btn_delete):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -235,11 +240,16 @@ class FakturyPage(QWidget):
         self.btn_delete_issued = QPushButton("Usuń wystawioną")
         self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
         for button in (self.btn_view, self.btn_reexport, self.btn_correction, self.btn_ksef,
-                       self.btn_ksef_download, self.btn_send_ksef, self.btn_status_ksef,
-                       self.btn_bank, self.btn_cash, self.btn_delete_issued):
+                       self.btn_delete_issued):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
+        settlement_buttons = QHBoxLayout()
+        for button in (self.btn_ksef_download, self.btn_send_ksef, self.btn_status_ksef,
+                       self.btn_bank, self.btn_cash):
+            settlement_buttons.addWidget(button)
+        settlement_buttons.addStretch()
+        layout.addLayout(settlement_buttons)
 
         self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
@@ -247,34 +257,32 @@ class FakturyPage(QWidget):
         layout.addWidget(self.issued_table)
 
     def _build_tab_dodatkowe(self):
+        from app.db.dao_companies import list_companies
+        from app.db.dao_employees import list_employees
+        from app.tasks.extra_activities_ui import ExtraActivitiesPage
+
         layout = QVBoxLayout(self.tab_dodatkowe)
-        buttons = QHBoxLayout()
-        self.btn_edit = QPushButton("Edytuj pozycje")
-        self.btn_edit.clicked.connect(self._edit_selected_draft)
-        self.btn_delete = QPushButton("Usuń")
-        self.btn_delete.clicked.connect(self._delete_selected)
-        for button in (self.btn_edit, self.btn_delete):
-            buttons.addWidget(button)
-        buttons.addStretch()
-        layout.addLayout(buttons)
-
-        self.draft_table = _make_table(self.DRAFT_HEADERS, multi=True)
-        self.draft_table.itemSelectionChanged.connect(self._show_draft_positions)
-        self.draft_table.cellDoubleClicked.connect(lambda *_: self._edit_selected_draft())
-        layout.addWidget(self.draft_table)
-
-        layout.addWidget(QLabel("Pozycje faktury"))
-        self.positions_table = _make_table(["Nazwa", "Ilość", "Jednostka", "Netto", "VAT", "Kategoria"])
-        quantity_delegate = QuantityDelegate(self.positions_table)
-        quantity_delegate.committed.connect(self._on_draft_position_changed)
-        self.positions_table.setItemDelegateForColumn(1, quantity_delegate)
-        self.positions_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-            | QAbstractItemView.EditTrigger.SelectedClicked
+        self.extra_activities = ExtraActivitiesPage(
+            self.pracownik_id, list_companies(self.pracownik_id), list_employees(), self.tab_dodatkowe,
         )
-        self._shown_draft_id = None
-        layout.addWidget(self.positions_table)
+        self.extra_activities.month.setCurrentText(self._current_month())
+        self.extra_activities.refresh()
+        self.extra_activities.activities_changed.connect(self.refresh)
+        self.extra_activities.open_task.connect(self._open_extra_task)
+        layout.addWidget(self.extra_activities)
+
+    def _open_extra_task(self, task_id):
+        from app.db.dao_companies import list_companies
+        from app.db.dao_employees import list_employees
+        from app.db.dao_tasks import list_tasks
+        from app.tasks.tasks_ui import TaskDialog
+
+        task = next((row for row in list_tasks(viewer_id=self.pracownik_id) if row["id"] == task_id), None)
+        if task is None:
+            QMessageBox.warning(self, "Zadanie", "Powiązane zadanie nie jest dostępne.")
+            return
+        TaskDialog(self, self.pracownik_id, list_companies(self.pracownik_id), list_employees(), task).exec()
+        self.extra_activities.refresh()
 
     def _download_from_ksef(self):
         if not ksef_configured():
@@ -308,9 +316,20 @@ class FakturyPage(QWidget):
         if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
             QMessageBox.warning(self, "Faktura", "Brak dostępu do wskazanej faktury.")
             return None
+        if not invoice.get("eksportowana"):
+            QMessageBox.warning(self, "Faktura", "Wybrany dokument nie jest już fakturą wystawioną. Odśwież listę.")
+            return None
         return invoice
 
+    def _can_manage_payments(self):
+        if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_view_finances"):
+            return True
+        QMessageBox.warning(self, "Brak uprawnień", "Nie masz uprawnień do rozliczania płatności.")
+        return False
+
     def _open_bank_payments(self):
+        if not self._can_manage_payments():
+            return
         try:
             dialog = BankPaymentReview(self.pracownik_id, self)
             dialog.exec()
@@ -320,12 +339,16 @@ class FakturyPage(QWidget):
         self.refresh()
 
     def _mark_cash_payment(self):
+        if not self._can_manage_payments():
+            return
         invoice = self._selected_single_issued()
         if invoice and record_cash_in_dialog(invoice, self.pracownik_id, self):
             QMessageBox.information(self, "Gotówka", "Zapisano zapłatę gotówką.")
             self.refresh()
 
     def _send_selected_to_ksef(self):
+        if not self._can_export():
+            return
         invoice = self._selected_single_issued()
         if invoice is None:
             return
@@ -340,14 +363,17 @@ class FakturyPage(QWidget):
         )
         if not path:
             return
-        env = __import__("app.db.dao_app_settings", fromlist=["get_setting"]).get_setting("ksef_srodowisko") or "prod"
+        from app.db.dao_app_settings import get_setting
+        env = get_setting("ksef_srodowisko") or "prod"
+        environment_label = {"prod": "PRODUKCYJNE", "test": "testowe", "demo": "demo"}.get(env, env)
         confirm = QMessageBox.question(
             self, "Wyślij fakturę do KSeF",
-            f"Wysłać fakturę {invoice['numer']} do środowiska {env.upper()} KSeF?\n"
+            f"Wysłać fakturę {invoice['numer']} do środowiska {environment_label} KSeF?\n"
             "Źródłem jest wybrany plik XML FA(3).\n"
             "Faktura zostanie przyjęta dopiero po nadaniu numeru KSeF.\n"
             "Tej wysyłki nie można cofnąć.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
@@ -372,6 +398,8 @@ class FakturyPage(QWidget):
         )
 
     def _check_ksef_submission(self):
+        if not self._can_export():
+            return
         invoice = self._selected_single_issued()
         if invoice is None:
             return
@@ -408,6 +436,8 @@ class FakturyPage(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             year, month = dialog.selected().split("-")
             self.month_button.setText(f"{month}-{year}")
+            self.extra_activities.month.setCurrentText(dialog.selected())
+            self.extra_activities.refresh()
             self.refresh()
 
     # ---------------- generowanie ----------------
@@ -626,26 +656,6 @@ class FakturyPage(QWidget):
                     QMessageBox.warning(self, "Faktura", str(exc))
         self.refresh()
 
-    def _delete_dodatkowe(self):
-        ids = self._selected_ids(self.draft_table)
-        if not ids:
-            QMessageBox.information(self, "Faktura", "Zaznacz usługę dodatkową do usunięcia.")
-            return
-        if QMessageBox.question(
-            self, "Usuwanie",
-            f"Usunąć zaznaczone usługi dodatkowe ({len(ids)})?\n",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        ) != QMessageBox.StandardButton.Yes:
-            return
-        for invoice_id in ids:
-            invoice = get_invoice_by_id(invoice_id)
-            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                try:
-                    delete_dodatkowe(invoice_id)
-                except InvoiceLockedError as exc:
-                    QMessageBox.warning(self, "Faktura", str(exc))
-        self.refresh()
-
     def _delete_selected_issued(self):
         ids = self._selected_ids(self.issued_table)
         if not ids:
@@ -664,10 +674,36 @@ class FakturyPage(QWidget):
         for invoice_id in ids:
             invoice = get_invoice_by_id(invoice_id)
             if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                delete_issued_invoice(invoice_id)
+                try:
+                    delete_issued_invoice(invoice_id)
+                except InvoiceLockedError as exc:
+                    QMessageBox.warning(self, "Faktura", str(exc))
         self.refresh()
 
     # ---------------- eksport ----------------
+    def _prepare_saldeo_correction(self, invoice_id=None):
+        if not self._can_export():
+            return
+        if not invoice_id:
+            ids = self._selected_ids(self.draft_table)
+            if len(ids) != 1:
+                QMessageBox.information(self, "Korekta", "Zaznacz jedną korektę roboczą.")
+                return
+            invoice_id = ids[0]
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice["firma_id"]):
+            QMessageBox.warning(self, "Korekta", "Brak dostępu do korekty.")
+            return
+        if invoice.get("rodzaj") != "korekta" or invoice.get("eksportowana"):
+            QMessageBox.warning(self, "Korekta", "Wybierz niewystawioną korektę faktury.")
+            return
+        from app.invoices.saldeo_correction_dialog import SaldeoCorrectionDialog
+        try:
+            SaldeoCorrectionDialog(invoice, self.pracownik_id, self).exec()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Korekta", str(exc))
+        self.refresh()
+
     def _can_export(self):
         if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data"):
             return True
@@ -703,6 +739,21 @@ class FakturyPage(QWidget):
                 ))
         if not invoices:
             QMessageBox.warning(self, "Eksport", "Brak faktur dostępnych do eksportu.")
+            return
+        try:
+            validate_saldeo_invoices(invoices)
+            validate_invoice_extra_services_ready([invoice["id"] for invoice in invoices])
+        except SaldeoCorrectionExportError as exc:
+            if len(invoices) == 1:
+                self._prepare_saldeo_correction(invoices[0]["id"])
+            else:
+                QMessageBox.warning(self, "Korekty Saldeo", str(exc))
+            return
+        except SaldeoExportError as exc:
+            QMessageBox.warning(self, "Eksport Saldeo", str(exc))
+            return
+        except ValueError as exc:
+            QMessageBox.warning(self, "Czynności dodatkowe", str(exc))
             return
         path, _ = QFileDialog.getSaveFileName(self, "Zapisz XLSX", "", "Excel (*.xlsx)")
         if not path:

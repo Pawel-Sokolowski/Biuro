@@ -225,6 +225,10 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertIs(page.tabs.currentWidget(), page.tab_wystawione)
         self.assertEqual(page.issued_table.horizontalHeaderItem(5).text(), "Podgląd")
         self.assertIsNotNone(page.issued_table.cellWidget(0, 5))
+        self.assertEqual(page.issued_table.columnWidth(3), 72)
+        self.assertEqual(page.issued_table.columnWidth(6), 88)
+        self.assertEqual(page.issued_table.columnWidth(7), 88)
+        self.assertEqual(page.issued_table.columnWidth(page.ISSUED_KSEF_COLUMN), 360)
         with patch("app.invoices.faktury_ui.QInputDialog.getText", return_value=("Korekta", True)), \
              patch.object(page, "_open_editor") as open_editor:
             page._create_correction()

@@ -5,6 +5,7 @@ import logging
 from decimal import Decimal, DecimalException
 
 from PyQt6.QtCore import QDate, QSettings, Qt
+from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -15,9 +16,15 @@ from app.db.dao_payments import (
     PaymentError, confirm_bank_payment, import_mt940_file, list_invoice_choices,
     list_unsettled_transfers, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
     invoice_choices_for_transaction, match_invoice_contractor,
+    invoice_contractor_key,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _contractor_data(invoice: dict) -> str:
+    kind, value = invoice_contractor_key(invoice)
+    return f"{kind}:{value}"
 
 
 def money_text(value) -> str:
@@ -145,10 +152,28 @@ class BankPaymentReview(QDialog):
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(idx, col, cell)
             match = match_invoice_contractor(entry, self.invoices)
-            contractor_item = QTableWidgetItem(match.get("resolved_contractor") or entry.get("kontrahent") or "Nie rozpoznano jednoznacznie")
-            contractor_item.setFlags(contractor_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            contractor_item.setToolTip(match.get("reason") or "")
-            self.table.setItem(idx, 6, contractor_item)
+            contractor = QComboBox(self.table)
+            contractor.setEditable(True)
+            contractor.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            contractor.setToolTip((match.get("reason") or "") + " Wybór można zmienić ręcznie.")
+            contractor.addItem("Wszyscy kontrahenci", None)
+            seen = set()
+            for invoice in sorted(self.invoices, key=lambda item: str(item.get("buyer") or "").casefold()):
+                key = invoice_contractor_key(invoice)
+                if key in seen:
+                    continue
+                seen.add(key)
+                contractor.addItem(invoice.get("buyer") or "(bez nazwy)", _contractor_data(invoice))
+            if match.get("confident"):
+                kind, value = match["company_key"]
+                contractor.setCurrentIndex(max(0, contractor.findData(f"{kind}:{value}")))
+            else:
+                contractor.setCurrentText(entry.get("kontrahent") or "Wszyscy kontrahenci")
+            completer = contractor.completer()
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            self.table.setCellWidget(idx, 6, contractor)
             choices = QComboBox(self.table)
             # Sugestia jest tylko wizualna; nie wybieramy faktury automatycznie.
             self.table.setCellWidget(idx, 4, choices)
@@ -156,11 +181,12 @@ class BankPaymentReview(QDialog):
             self.table.setCellWidget(idx, 5, amount)
             override = QCheckBox("Wszystkie faktury", self.table)
             override.setChecked(not match.get("confident"))
-            override.setEnabled(bool(match.get("confident")))
+            override.setEnabled(True)
             override.setToolTip(match.get("reason") or "Nie rozpoznano klienta — wybierz fakturę ręcznie.")
             self.table.setCellWidget(idx, 7, override)
             self._populate_invoice_choices(idx)
             override.toggled.connect(lambda _checked, row=idx: self._override_filter_changed(row))
+            contractor.currentIndexChanged.connect(lambda _index, row=idx: self._contractor_changed(row))
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, 5))
         if self.transactions:
@@ -170,8 +196,13 @@ class BankPaymentReview(QDialog):
         entry = self.transactions[row]
         combo = self.table.cellWidget(row, 4)
         selected = combo.currentData()
-        invoices = (self.invoices if self.table.cellWidget(row, 7).isChecked()
-                    else invoice_choices_for_transaction(entry, self.invoices))
+        contractor_key = self.table.cellWidget(row, 6).currentData()
+        if self.table.cellWidget(row, 7).isChecked():
+            invoices = self.invoices
+        elif contractor_key is not None:
+            invoices = [item for item in self.invoices if _contractor_data(item) == contractor_key]
+        else:
+            invoices = invoice_choices_for_transaction(entry, self.invoices)
         suggestions = suggested_invoice_ids(entry, invoices)
         by_id = {invoice["id"]: invoice for invoice in invoices}
         ordering = suggestions + [invoice["id"] for invoice in invoices if invoice["id"] not in suggestions]
@@ -191,6 +222,13 @@ class BankPaymentReview(QDialog):
     def _override_filter_changed(self, row):
         self._populate_invoice_choices(row)
         self.table.setCurrentCell(row, 4)
+
+    def _contractor_changed(self, row):
+        override = self.table.cellWidget(row, 7)
+        if self.table.cellWidget(row, 6).currentData() is not None:
+            override.setChecked(False)
+        self._populate_invoice_choices(row)
+        self.table.setCurrentCell(row, 6)
 
     def _invoice_choice_changed(self, row):
         self.table.setCurrentCell(row, 4)

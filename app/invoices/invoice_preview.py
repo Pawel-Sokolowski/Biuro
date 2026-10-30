@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import base64
 import io
+import logging
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -15,10 +16,42 @@ from PyQt6.QtWidgets import (
 )
 
 from app.db.dao_app_settings import get_setting, get_setting_first
+from app.db.dao_companies import get_company
 from app.db.dao_invoices import get_invoice_positions
+from app.db.dao_kontrahenci import get_kontrahent
 from app.invoices.ksef import ksef_url
 
-import qrcode
+logger = logging.getLogger(__name__)
+
+
+def _with_buyer_data(invoice: dict) -> dict:
+    result = dict(invoice)
+    buyer = None
+    source = {}
+    if result.get("firma_id"):
+        buyer = get_company(int(result["firma_id"]))
+        if buyer:
+            source = {
+                "nabywca_pelna": buyer.get("nazwa"),
+                "nabywca_skrocona": buyer.get("nazwa_skrocona") or buyer.get("nazwa"),
+                "nabywca_adres": " ".join(filter(None, (buyer.get("ulica"), buyer.get("adres_budynek"), buyer.get("adres_lokal")))),
+                "nabywca_kod": buyer.get("kod_pocztowy"), "nabywca_miasto": buyer.get("miasto"),
+                "nabywca_nip": buyer.get("nip"), "nabywca_regon": buyer.get("regon"),
+                "nabywca_kraj": buyer.get("kraj") or "Polska", "nabywca_email": buyer.get("adres_email"),
+            }
+    elif result.get("kontrahent_id"):
+        buyer = get_kontrahent(int(result["kontrahent_id"]))
+        source = ({
+            "nabywca_pelna": buyer.get("nazwa"), "nabywca_skrocona": buyer.get("nazwa"),
+            "nabywca_adres": buyer.get("adres"), "nabywca_kod": buyer.get("kod"),
+            "nabywca_miasto": buyer.get("miasto"), "nabywca_nip": buyer.get("nip"),
+            "nabywca_regon": buyer.get("regon"), "nabywca_kraj": buyer.get("kraj") or "Polska",
+            "nabywca_email": buyer.get("email"),
+        } if buyer else {})
+    for key, value in source.items():
+        if not result.get(key) and value:
+            result[key] = value
+    return result
 
 
 def _escape(value) -> str:
@@ -35,10 +68,21 @@ def _money(value) -> str:
 def _qr_data_url(invoice: dict) -> str:
     if not invoice.get("ksef_numer"):
         return ""
-    image = qrcode.make(ksef_url(invoice.get("ksef_numer"), invoice=invoice))
-    output = io.BytesIO()
-    image.save(output, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+    try:
+        # Jawne API działa także wtedy, gdy pakiet nie eksportuje skrótu
+        # qrcode.make na najwyższym poziomie.
+        from qrcode.constants import ERROR_CORRECT_M
+        from qrcode.main import QRCode
+        code = QRCode(version=None, error_correction=ERROR_CORRECT_M, box_size=6, border=2)
+        code.add_data(ksef_url(invoice.get("ksef_numer"), invoice=invoice))
+        code.make(fit=True)
+        image = code.make_image(fill_color="black", back_color="white")
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        logger.exception("Nie udało się wygenerować kodu QR KSeF")
+        return ""
 
 
 def invoice_html(invoice: dict, positions: list[dict]) -> str:
@@ -53,57 +97,83 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
     logo = get_setting("faktury_logo_data") or ""
     logo_html = f'<img src="{_escape(logo)}" width="180"><br>' if logo.startswith("data:image/") else ""
     qr = _qr_data_url(invoice)
-    qr_html = (f'<div class="qr"><img src="{_escape(qr)}" width="145" height="145"><br>'
-               f'{_escape(invoice.get("ksef_numer"))}</div>') if qr else ""
+    qr_html = (f'<img src="{_escape(qr)}" width="120" height="120"><br>' if qr else
+               '<span style="color:#8b98a5">Kod QR niedostępny</span><br>')
     buyer_address = " ".join(filter(None, (
         invoice.get("nabywca_adres"), invoice.get("nabywca_kod"), invoice.get("nabywca_miasto"),
     )))
     rows = []
     for index, item in enumerate(positions, 1):
+        quantity = item.get("ilosc") or 0
+        unit_net = item.get("cena_netto")
+        if unit_net in (None, "", 0, 0.0) and quantity:
+            try:
+                unit_net = Decimal(str(item.get("netto", item.get("wartosc_netto")) or 0)) / Decimal(str(quantity))
+            except (InvalidOperation, ZeroDivisionError):
+                unit_net = 0
         rows.append(
             "<tr>"
             f"<td>{index}</td><td>{_escape(item.get('nazwa') or item.get('opis'))}</td>"
-            f"<td class='num'>{_escape(item.get('ilosc'))}</td><td>{_escape(item.get('jednostka') or 'szt.')}</td>"
-            f"<td class='num'>{_money(item.get('cena_netto'))}</td>"
+            f"<td class='num'>{_escape(quantity)}</td><td>{_escape(item.get('jednostka') or 'szt.')}</td>"
+            f"<td class='num'>{_money(unit_net)}</td>"
             f"<td class='num'>{_escape(item.get('vat', item.get('stawka_vat', '')))}</td>"
             f"<td class='num'>{_money(item.get('netto', item.get('wartosc_netto')))}</td>"
             f"<td class='num'>{_money(item.get('brutto', item.get('wartosc_brutto')))}</td>"
             "</tr>"
         )
+    document_title = "FAKTURA KORYGUJĄCA" if invoice.get("rodzaj") == "korekta" else "FAKTURA VAT"
+    document_number = invoice.get("numer") or "Dokument KSeF"
     return f"""
     <html><head><style>
-      body {{ font-family: 'Arial'; font-size: 10pt; color: #202020; }}
-      h1 {{ font-size: 20pt; margin-bottom: 2px; }} .header {{ width: 100%; }}
-      .header td {{ vertical-align: top; }} .title {{ text-align: right; }}
-      .muted {{ color: #666; }} .parties {{ width: 100%; margin: 18px 0; }}
-      .parties td {{ width: 50%; vertical-align: top; padding-right: 18px; }}
-      table.items {{ border-collapse: collapse; width: 100%; }}
-      .items th, .items td {{ border: 1px solid #aaa; padding: 5px; }}
-      .items th {{ background: #e9f2f9; }} .num {{ text-align: right; white-space: nowrap; }}
-      .totals {{ margin-top: 16px; text-align: right; font-size: 12pt; }}
-      .ksef {{ margin-top: 22px; font-size: 8pt; color: #555; }}
-      .qr {{ margin-top: 16px; text-align: right; font-size: 7pt; }}
+      body {{ font-family: 'Arial'; font-size: 9.5pt; color: #25313c; margin: 18px; }}
+      table {{ border-collapse: collapse; }}
+      .top {{ width: 100%; background: #1769aa; color: white; }}
+      .top td {{ padding: 16px; vertical-align: middle; }}
+      .doc-title {{ font-size: 20pt; font-weight: bold; text-align: right; }}
+      .doc-number {{ font-size: 12pt; text-align: right; }}
+      .meta {{ width: 100%; margin-top: 12px; background: #edf3f8; }}
+      .meta td {{ padding: 8px; text-align: center; }}
+      .label {{ color: #607383; font-size: 8pt; }}
+      .parties {{ width: 100%; margin-top: 14px; }}
+      .parties td {{ width: 50%; vertical-align: top; padding: 12px; border: 1px solid #cbd6df; }}
+      .party-title {{ color: #1769aa; font-size: 9pt; font-weight: bold; }}
+      .party-name {{ font-size: 11pt; font-weight: bold; }}
+      .items {{ width: 100%; margin-top: 18px; }}
+      .items th {{ background: #1769aa; color: white; padding: 7px 5px; }}
+      .items td {{ border-bottom: 1px solid #d7e0e7; padding: 7px 5px; }}
+      .items tr:nth-child(even) {{ background: #f5f8fa; }}
+      .num {{ text-align: right; white-space: nowrap; }}
+      .summary {{ width: 43%; margin-top: 16px; margin-left: 57%; }}
+      .summary td {{ padding: 7px; border-bottom: 1px solid #d7e0e7; }}
+      .summary .grand td {{ background: #1769aa; color: white; font-size: 12pt; font-weight: bold; }}
+      .footer {{ width: 100%; margin-top: 20px; border-top: 2px solid #1769aa; }}
+      .footer td {{ vertical-align: top; padding-top: 10px; }}
+      .ksef-number {{ font-family: monospace; font-size: 8pt; color: #455a64; }}
     </style></head><body>
-      <table class="header"><tr><td>{logo_html}</td><td class="title"><h1>{'Korekta' if invoice.get('rodzaj') == 'korekta' else 'Faktura'}<br>{_escape(invoice.get('numer') or '(bez numeru)')}</h1></td></tr></table>
-      <div class="muted">Data wystawienia: {_escape(invoice.get('data_wystawienia'))}
-      &nbsp;&nbsp; Data sprzedaży: {_escape(invoice.get('data_sprzedazy'))}
-      &nbsp;&nbsp; Termin płatności: {_escape(invoice.get('termin_platnosci'))}</div>
+      <table class="top"><tr><td>{logo_html}<b>{_escape(seller)}</b></td>
+      <td><div class="doc-title">{document_title}</div><div class="doc-number">nr {_escape(document_number)}</div></td></tr></table>
+      <table class="meta"><tr>
+        <td><span class="label">DATA WYSTAWIENIA</span><br><b>{_escape(invoice.get('data_wystawienia'))}</b></td>
+        <td><span class="label">DATA SPRZEDAŻY</span><br><b>{_escape(invoice.get('data_sprzedazy'))}</b></td>
+        <td><span class="label">TERMIN PŁATNOŚCI</span><br><b>{_escape(invoice.get('termin_platnosci'))}</b></td>
+      </tr></table>
       <table class="parties"><tr>
-        <td><b>Sprzedawca</b><br><b>{_escape(seller)}</b><br>NIP: {_escape(seller_nip)}<br>{_escape(seller_address)}<br>
+        <td><span class="party-title">SPRZEDAWCA</span><br><span class="party-name">{_escape(seller)}</span><br>
+        {_escape(seller_address)}<br>NIP: <b>{_escape(seller_nip)}</b><br>
         Rachunek: {_escape(invoice.get('konto_bankowe') or get_setting('konto_bankowe_biura'))}</td>
-        <td><b>Nabywca</b><br>{_escape(invoice.get('nabywca_pelna') or invoice.get('firma_nazwa'))}<br>
-        {_escape(buyer_address)}<br>NIP: {_escape(invoice.get('nabywca_nip'))}<br>
+        <td><span class="party-title">NABYWCA</span><br><span class="party-name">{_escape(invoice.get('nabywca_pelna') or invoice.get('firma_nazwa'))}</span><br>
+        {_escape(buyer_address)}<br>NIP: <b>{_escape(invoice.get('nabywca_nip'))}</b><br>
         REGON: {_escape(invoice.get('nabywca_regon'))}<br>Kraj: {_escape(invoice.get('nabywca_kraj'))}<br>
         E-mail: {_escape(invoice.get('nabywca_email'))}</td>
       </tr></table>
       <table class="items"><thead><tr><th>Lp.</th><th>Nazwa</th><th>Ilość</th><th>J.m.</th>
       <th>Cena netto</th><th>VAT %</th><th>Netto</th><th>Brutto</th></tr></thead>
       <tbody>{''.join(rows)}</tbody></table>
-      <div class="totals"><b>Razem netto: {_money(invoice.get('kwota_netto'))} PLN</b><br>
-      <b>Razem brutto: {_money(invoice.get('kwota_brutto'))} PLN</b></div>
+      <table class="summary"><tr><td>Razem netto</td><td class="num">{_money(invoice.get('kwota_netto'))} PLN</td></tr>
+      <tr class="grand"><td>DO ZAPŁATY</td><td class="num">{_money(invoice.get('kwota_brutto'))} PLN</td></tr></table>
       {f'<div><b>Faktura korygowana:</b> {_escape(invoice.get("korygowana_faktura_numer"))}<br><b>Przyczyna:</b> {_escape(invoice.get("przyczyna_korekty"))}</div>' if invoice.get('rodzaj') == 'korekta' else ''}
-      <div class="ksef">Numer KSeF: {_escape(invoice.get('ksef_numer') or '—')}</div>
-      {qr_html}
+      <table class="footer"><tr><td><b>Numer KSeF</b><br><span class="ksef-number">{_escape(invoice.get('ksef_numer') or '—')}</span></td>
+      <td style="text-align:right">{qr_html}</td></tr></table>
     </body></html>
     """
 
@@ -111,7 +181,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
 class InvoicePreviewDialog(QDialog):
     def __init__(self, invoice: dict, parent=None):
         super().__init__(parent)
-        self.invoice = dict(invoice)
+        self.invoice = _with_buyer_data(invoice)
         if self.invoice.get("korygowana_faktura_id"):
             from app.db.dao_invoices import get_invoice_by_id
             original = get_invoice_by_id(int(self.invoice["korygowana_faktura_id"]))

@@ -31,7 +31,6 @@ from app.admin.settings.pricing_kadry_settings import PricingKadrySettings
 from app.admin.settings.pricing_settings import PricingSettings
 from app.admin.settings.reset_calendar_settings import CalendarAndResetSettings
 from app.admin.settings.roles_settings import RolesSettings
-from app.admin.settings.system_settings import SystemSettings
 from app.admin.settings.user_settings import UsersSettings
 
 
@@ -93,7 +92,6 @@ class GlobalSettingsPage(QWidget):
             ("System", [
                 ("Import danych", ImportAllSettings, True),
                 ("Baza danych i kopie", DatabaseSettings, True),
-                ("System", SystemSettings, True),
                 ("Logi", LogsSettings, True),
                 ("Audyt i importy", AuditSettings, True),
             ]),

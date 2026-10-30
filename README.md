@@ -123,6 +123,9 @@ numeru KSeF otwiera urzędowy adres weryfikacyjny z NIP-em sprzedawcy, datą
 wystawienia i skrótem XML, jeżeli zostały zapisane podczas wysyłki lub pobrania.
 Starszy dokument bez tych danych zostanie uzupełniony przy kolejnej
 synchronizacji KSeF; do tego czasu otworzy się formularz wyszukiwania.
+Miesiąc dokumentu KSeF zawsze wynika z daty wystawienia; migracja naprawia też
+starsze wpisy zapisane w innym miesiącu. W Fakturach i Widoku miesięcznym miesiąc
+wybiera się tym samym małym kalendarzem z przyciskami miesięcy i zmianą roku.
 
 ## Czynności dodatkowe i kolejne faktury
 

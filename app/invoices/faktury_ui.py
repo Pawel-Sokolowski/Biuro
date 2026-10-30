@@ -5,8 +5,8 @@ from datetime import datetime
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QProgressDialog, QPushButton, QSpinBox,
+    QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QProgressDialog, QPushButton,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -27,6 +27,7 @@ from app.invoices.ksef_client import KsefError
 from app.invoices.ksef_sync import assign_downloaded_invoice, is_configured as ksef_configured, sync_month
 from app.invoices.ksef_submission import send_invoice_xml, refresh_invoice_submission
 from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
+from app.monthly_view.month_picker import MonthPicker
 from app.security.authorization import can, is_administrator
 from app.utils.saldeo_exporter import (
     SaldeoCorrectionExportError, SaldeoExportError, export_saldeo_xlsx, validate_saldeo_invoices,
@@ -34,48 +35,7 @@ from app.utils.saldeo_exporter import (
 
 logger = logging.getLogger(__name__)
 
-MONTHS = [
-    ("01", "Styczeń"), ("02", "Luty"), ("03", "Marzec"), ("04", "Kwiecień"),
-    ("05", "Maj"), ("06", "Czerwiec"), ("07", "Lipiec"), ("08", "Sierpień"),
-    ("09", "Wrzesień"), ("10", "Październik"), ("11", "Listopad"), ("12", "Grudzień"),
-]
 KSEF_LINK_COLOR = QColor("#1c70b7")
-
-
-class MonthYearDialog(QDialog):
-    def __init__(self, parent=None, initial_month=None, initial_year=None):
-        super().__init__(parent)
-        self.setWindowTitle("Wybierz miesiąc i rok")
-        self.setModal(True)
-        layout = QFormLayout(self)
-
-        self.month_cb = QComboBox()
-        for code, name in MONTHS:
-            self.month_cb.addItem(f"{code} - {name}", code)
-
-        self.year_sb = QSpinBox()
-        self.year_sb.setRange(2000, 2100)
-        self.year_sb.setValue(initial_year or datetime.now().year)
-
-        if initial_month and "-" in initial_month:
-            try:
-                first, second = initial_month.split("-")
-                year, month = (first, second) if len(first) == 4 else (second, first)
-                self.year_sb.setValue(int(year))
-                self.month_cb.setCurrentIndex(int(month) - 1)
-            except ValueError:
-                logger.warning("Niepoprawny miesiąc: %s", initial_month, exc_info=True)
-
-        layout.addRow("Miesiąc:", self.month_cb)
-        layout.addRow("Rok:", self.year_sb)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-
-    def selected(self):
-        return f"{self.year_sb.value()}-{self.month_cb.currentData()}"
 
 
 def _make_table(headers, multi=False):
@@ -276,8 +236,8 @@ class FakturyPage(QWidget):
         controls.addWidget(QLabel("Firma:"))
         controls.addWidget(self.firma_combo)
 
-        self.month_button = QPushButton(datetime.now().strftime("%m-%Y"))
-        self.month_button.clicked.connect(self._open_month_dialog)
+        self.month_button = MonthPicker(datetime.now().strftime("%Y-%m"))
+        self.month_button.monthChanged.connect(self._invoice_month_changed)
         controls.addWidget(QLabel("Miesiąc:"))
         controls.addWidget(self.month_button)
 
@@ -611,20 +571,13 @@ class FakturyPage(QWidget):
 
     # ---------------- filtry ----------------
     def _current_month(self):
-        try:
-            mm, yyyy = self.month_button.text().strip().split("-")
-            return f"{int(yyyy)}-{int(mm):02d}"
-        except ValueError:
-            return datetime.now().strftime("%Y-%m")
+        return self.month_button.currentText()
 
-    def _open_month_dialog(self):
-        dialog = MonthYearDialog(self, initial_month=self.month_button.text().strip())
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            year, month = dialog.selected().split("-")
-            self.month_button.setText(f"{month}-{year}")
-            self.extra_activities.month.setCurrentText(dialog.selected())
+    def _invoice_month_changed(self, month):
+        if hasattr(self, "extra_activities"):
+            self.extra_activities.month.setCurrentText(month)
             self.extra_activities.refresh()
-            self.refresh()
+        self.refresh()
 
     # ---------------- generowanie ----------------
     def _on_generate_clicked(self):
@@ -1009,14 +962,9 @@ class FakturyPage(QWidget):
             QMessageBox.warning(self, "Korekta", str(exc))
             return
         self.tabs.setCurrentWidget(self.tab_robocze)
-        self.month_button.setText(self._to_button_month(invoice["miesiac"]))
+        self.month_button.setCurrentText(invoice["miesiac"])
         self.refresh()
         self._open_editor(correction_id)
-
-    @staticmethod
-    def _to_button_month(miesiac):
-        year, month = miesiac.split("-")
-        return f"{month}-{year}"
 
     def _edit_ksef_number(self):
         ids = self._selected_ids(self.issued_table)

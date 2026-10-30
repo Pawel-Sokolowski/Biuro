@@ -75,6 +75,28 @@ class SchemaTests(DbTestCase):
         finally:
             conn.close()
 
+    def test_ksef_invoice_month_is_repaired_from_issue_date(self):
+        from app.db.schema import init_db
+        firma = self.make_company()
+        conn = get_conn()
+        try:
+            invoice_id = conn.execute(
+                "INSERT INTO faktury (firma_id, miesiac, reczna, rodzaj, data_wystawienia, ksef_numer, "
+                "kwota_netto, kwota_brutto, pozycje_json) "
+                "VALUES (%s, '2026-09', 0, 'faktura', '2026-10-28', 'KSEF-TEST', 0, 0, '[]') RETURNING id",
+                (firma,),
+            ).fetchone()[0]
+            conn.commit()
+        finally:
+            conn.close()
+        init_db()
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT miesiac, reczna FROM faktury WHERE id=%s", (invoice_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual((row["miesiac"], row["reczna"]), ("2026-10", 1))
+
 
 if __name__ == "__main__":
     unittest.main()

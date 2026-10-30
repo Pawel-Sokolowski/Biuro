@@ -192,6 +192,8 @@ def list_extra_activities(
         where = "WHERE " + " AND ".join(filters) if filters else ""
         rows = conn.execute(f"""
             SELECT uf.*, f.nazwa AS firma_nazwa, u.nazwa, u.stawka_vat,
+                   invoice.id AS invoice_id, invoice.numer AS invoice_number,
+                   invoice.eksportowana AS invoice_issued,
                    z.tytul AS task_title, z.status AS task_status,
                    z.pracownik_id AS task_employee_id, z.termin AS task_due,
                    p.imie || ' ' || p.nazwisko AS task_employee_name,
@@ -204,6 +206,8 @@ def list_extra_activities(
             JOIN uslugi_dodatkowe u ON u.id = uf.usluga_id
             LEFT JOIN zadania z ON z.id = uf.zadanie_id
             LEFT JOIN pracownicy p ON p.id = z.pracownik_id
+            LEFT JOIN faktury_uslugi_dodatkowe allocation ON allocation.extra_service_row_id = uf.id
+            LEFT JOIN faktury invoice ON invoice.id = allocation.invoice_id
             {where} ORDER BY uf.miesiac DESC, f.nazwa, uf.id DESC
         """, params).fetchall()
         return [dict(row) for row in rows if state is None or row["state"] == state]

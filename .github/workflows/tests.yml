@@ -3,7 +3,7 @@ name: Tests
 on:
   pull_request:
   push:
-    branches: [main, feature/monthly-payments-ing-mt940-ksef-certificate]
+    branches: [main, 'feature/**', 'fix/**']
 
 permissions:
   contents: read

@@ -22,6 +22,7 @@ from app.invoices.faktury_logic import FakturyLogic
 from app.invoices.invoice_editor import InvoiceEditorDialog
 from app.invoices.manual_invoice_dialog import ManualInvoiceDialog, KontrahenciDialog
 from app.invoices.ksef import ksef_url
+from app.invoices.invoice_preview import InvoicePreviewDialog
 from app.invoices.ksef_client import KsefError
 from app.invoices.ksef_sync import is_configured as ksef_configured, sync_month
 from app.invoices.ksef_submission import send_invoice_xml, refresh_invoice_submission
@@ -113,9 +114,11 @@ class QuantityDelegate(QStyledItemDelegate):
 class FakturyPage(QWidget):
     DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
-    ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
+    ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Podgląd", "Kwota netto", "Kwota brutto",
                       "Data eksportu", "Numer KSeF"]
-    ISSUED_KSEF_COLUMN = 8
+    ISSUED_NUMBER_COLUMN = 4
+    ISSUED_PREVIEW_COLUMN = 5
+    ISSUED_KSEF_COLUMN = 9
 
     def __init__(self, pracownik_id, parent=None):
         super().__init__(parent)
@@ -219,7 +222,7 @@ class FakturyPage(QWidget):
     def _build_tab_wystawione(self):
         layout = QVBoxLayout(self.tab_wystawione)
         buttons = QHBoxLayout()
-        self.btn_view = QPushButton("Podgląd pozycji")
+        self.btn_view = QPushButton("Podgląd faktury / PDF")
         self.btn_view.clicked.connect(self._view_selected_issued)
         self.btn_reexport = QPushButton("Eksportuj ponownie")
         self.btn_reexport.clicked.connect(self._reexport_selected)
@@ -542,18 +545,25 @@ class FakturyPage(QWidget):
         for inv in invoices:
             row = self.issued_table.rowCount()
             self.issued_table.insertRow(row)
-            values = [inv["id"], _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+            values = [inv["id"], _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                       f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                       inv["data_eksportu"], inv["ksef_numer"]]
             for column, value in enumerate(values):
-                self.issued_table.setItem(row, column, _cell(value, column in (5, 6)))
+                self.issued_table.setItem(row, column, _cell(value, column in (6, 7)))
+            preview = QPushButton("Podgląd", self.issued_table)
+            preview.setToolTip("Wyświetl fakturę i umożliw zapis do PDF")
+            preview.clicked.connect(lambda _checked=False, invoice_id=inv["id"]: self._open_invoice_preview(invoice_id))
+            self.issued_table.setCellWidget(row, self.ISSUED_PREVIEW_COLUMN, preview)
             ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
             if inv["ksef_numer"]:
                 font = ksef_item.font()
                 font.setUnderline(True)
                 ksef_item.setFont(font)
                 ksef_item.setForeground(KSEF_LINK_COLOR)
-                ksef_item.setToolTip("Kliknij, aby otworzyć KSeF (numer zostanie skopiowany do schowka)")
+                ksef_item.setToolTip(
+                    "Kliknij, aby otworzyć urzędową weryfikację KSeF "
+                    "(numer zostanie też skopiowany do schowka)"
+                )
 
     @staticmethod
     def _selected_ids(table):
@@ -797,10 +807,19 @@ class FakturyPage(QWidget):
         if len(ids) != 1:
             QMessageBox.information(self, "Faktura", "Zaznacz jedną fakturę.")
             return
-        self._open_editor(ids[0])
+        self._open_invoice_preview(ids[0])
+
+    def _open_invoice_preview(self, invoice_id):
+        invoice = get_invoice_by_id(int(invoice_id))
+        if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
+            QMessageBox.warning(self, "Faktura", "Nie znaleziono faktury lub brak uprawnień do podglądu.")
+            return
+        InvoicePreviewDialog(invoice, self).exec()
 
     def _on_issued_double_click(self, row, column):
-        if column != self.ISSUED_KSEF_COLUMN:
+        if column in (self.ISSUED_NUMBER_COLUMN, self.ISSUED_PREVIEW_COLUMN):
+            self._open_invoice_preview(int(self.issued_table.item(row, 0).text()))
+        elif column != self.ISSUED_KSEF_COLUMN:
             self._open_editor(int(self.issued_table.item(row, 0).text()))
 
     def _create_correction(self):
@@ -846,10 +865,14 @@ class FakturyPage(QWidget):
             self.refresh()
 
     def _on_issued_cell_clicked(self, row, column):
+        if column == self.ISSUED_NUMBER_COLUMN:
+            self._open_invoice_preview(int(self.issued_table.item(row, 0).text()))
+            return
         if column != self.ISSUED_KSEF_COLUMN:
             return
         numer = self.issued_table.item(row, column).text().strip()
         if not numer:
             return
         QGuiApplication.clipboard().setText(numer)
-        QDesktopServices.openUrl(QUrl(ksef_url(numer)))
+        invoice = get_invoice_by_id(int(self.issued_table.item(row, 0).text()))
+        QDesktopServices.openUrl(QUrl(ksef_url(numer, invoice=invoice)))

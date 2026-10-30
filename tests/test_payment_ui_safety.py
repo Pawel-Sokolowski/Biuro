@@ -1,7 +1,9 @@
 """Bezpieczne potwierdzanie rozliczeń i wybór właściwego wiersza w GUI."""
 import os
+import tempfile
 import unittest
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -221,11 +223,33 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
     def test_issued_is_default_and_correction_opens_drafts_by_widget(self):
         page = self.page()
         self.assertIs(page.tabs.currentWidget(), page.tab_wystawione)
+        self.assertEqual(page.issued_table.horizontalHeaderItem(5).text(), "Podgląd")
+        self.assertIsNotNone(page.issued_table.cellWidget(0, 5))
         with patch("app.invoices.faktury_ui.QInputDialog.getText", return_value=("Korekta", True)), \
              patch.object(page, "_open_editor") as open_editor:
             page._create_correction()
         self.assertIs(page.tabs.currentWidget(), page.tab_robocze)
         open_editor.assert_called_once()
+
+    def test_invoice_number_opens_local_pdf_preview(self):
+        page = self.page()
+        with patch("app.invoices.faktury_ui.InvoicePreviewDialog") as preview:
+            page._on_issued_cell_clicked(0, page.ISSUED_NUMBER_COLUMN)
+        preview.assert_called_once()
+        self.assertEqual(preview.call_args.args[0]["id"], self.invoice_id)
+        preview.return_value.exec.assert_called_once()
+
+    def test_invoice_preview_saves_a_real_pdf(self):
+        from app.invoices.invoice_preview import InvoicePreviewDialog
+        dialog = InvoicePreviewDialog(get_invoice_by_id(self.invoice_id))
+        self.addCleanup(dialog.close)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "faktura.pdf"
+            with patch("app.invoices.invoice_preview.QFileDialog.getSaveFileName",
+                       return_value=(str(destination), "PDF (*.pdf)")), \
+                 patch("app.invoices.invoice_preview.QMessageBox.information"):
+                dialog._save_pdf()
+            self.assertTrue(destination.read_bytes().startswith(b"%PDF"))
 
     def test_stale_draft_selection_cannot_trigger_cash_action(self):
         page = self.page()

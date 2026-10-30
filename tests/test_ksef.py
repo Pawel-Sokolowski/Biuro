@@ -220,6 +220,7 @@ class KsefTests(DbTestCase):
         result = ksef_sync.sync_issued_invoices(dt.datetime(2026, 10, 1), dt.datetime(2026, 10, 30), client=client)
         self.assertEqual(result["dopasowane"], ["1234567890-20261015-AAAAAA-BB"])
         self.assertEqual(result["niedopasowane"], ["OBCA/1 — brak firmy o NIP-ie nabywcy"])
+        self.assertEqual(result["niedopasowane_szczegoly"][0]["invoice_number"], "OBCA/1")
         row = dao_invoices.get_invoice_by_id(invoice_id)
         self.assertEqual(row["ksef_numer"], "1234567890-20261015-AAAAAA-BB")
         self.assertEqual(row["numer"], "7/10/2026")
@@ -239,6 +240,13 @@ class KsefTests(DbTestCase):
         self.assertEqual(get_invoice_payment_summary(invoice_id, 1)["paid"], 50)
         self.assertEqual(result["zaktualizowane"], ["1234567890-20261015-AAAAAA-BB"])
         self.assertEqual(client.download_invoice_xml("X"), FA3_XML)
+
+        action, manual_id = ksef_sync.assign_downloaded_invoice(
+            result["niedopasowane_szczegoly"][0]["data"],
+            result["niedopasowane_szczegoly"][0]["ksef_number"], firma_id,
+        )
+        self.assertEqual(action, "utworzone")
+        self.assertEqual(dao_invoices.get_invoice_by_id(manual_id)["firma_id"], firma_id)
 
     def test_sync_creates_invoice_for_company_matched_only_by_nip(self):
         _key, der = _make_cert()
@@ -350,6 +358,23 @@ class KsefTests(DbTestCase):
             self.assertEqual(action, "utworzone")
         rows = dao_invoices.list_invoices(1, True, "2026-10", firma_id)
         self.assertEqual({row["numer"] for row in rows}, {"FV/AA/10/2026", "FV/BB/10/2026"})
+
+    def test_exact_ksef_number_has_priority_over_another_local_invoice_number(self):
+        firma_id = self.make_company("Klient priorytetu", nip="5252525252")
+        positions = [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 10, "vat": 23}]
+        exact_id = dao_invoices.create_or_update_invoice(firma_id, "2026-09", positions, 10, 12.3)
+        other_id = dao_invoices.create_or_update_invoice(firma_id, "2026-10", positions, 10, 12.3)
+        conn = get_conn()
+        conn.execute("UPDATE faktury SET numer=%s, ksef_numer=%s WHERE id=%s",
+                     ("7/10/2026", "1234567890-20261015-PRIORYTET-AA", exact_id))
+        conn.execute("UPDATE faktury SET numer=%s WHERE id=%s", ("7/10/2026", other_id))
+        conn.commit()
+        conn.close()
+        data = ksef_sync.parse_fa3_invoice(FA3_XML)
+        action, updated_id = ksef_sync._upsert_downloaded_invoice(
+            data, "1234567890-20261015-PRIORYTET-AA",
+        )
+        self.assertEqual((action, updated_id), ("zaktualizowane", exact_id))
 
     def test_update_from_ksef_does_not_collide_with_automatic_invoice_for_target_month(self):
         firma_id = self.make_company("Klient zmiany miesiąca", nip="5252525252")

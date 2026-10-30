@@ -173,7 +173,7 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
         if existing:
             invoice_id = existing[0]["id"]
             conn.execute("""
-                UPDATE faktury SET firma_id=%s, miesiac=%s, kwota_netto=%s, kwota_brutto=%s,
+                UPDATE faktury SET firma_id=%s, reczna=1, miesiac=%s, kwota_netto=%s, kwota_brutto=%s,
                     data_wystawienia=%s, data_sprzedazy=%s, termin_platnosci=%s,
                     nabywca_skrocona=%s, nabywca_pelna=%s, nabywca_adres=%s,
                     nabywca_kod=%s, nabywca_miasto=%s, nabywca_nip=%s, nabywca_kraj=%s,

@@ -351,6 +351,27 @@ class KsefTests(DbTestCase):
         rows = dao_invoices.list_invoices(1, True, "2026-10", firma_id)
         self.assertEqual({row["numer"] for row in rows}, {"FV/AA/10/2026", "FV/BB/10/2026"})
 
+    def test_update_from_ksef_does_not_collide_with_automatic_invoice_for_target_month(self):
+        firma_id = self.make_company("Klient zmiany miesiąca", nip="5252525252")
+        positions = [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 10, "vat": 23}]
+        dao_invoices.create_or_update_invoice(firma_id, "2026-10", positions, 10, 12.3)
+        old_id = dao_invoices.create_or_update_invoice(firma_id, "2026-09", positions, 10, 12.3)
+        conn = get_conn()
+        conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", ("7/10/2026", old_id))
+        conn.commit()
+        conn.close()
+
+        data = ksef_sync.parse_fa3_invoice(FA3_XML)
+        data["invoice_hash"] = base64.b64encode(hashlib.sha256(FA3_XML.encode()).digest()).decode()
+        action, updated_id = ksef_sync._upsert_downloaded_invoice(
+            data, "1234567890-20261015-ZMIANAMIESIACA-AA",
+        )
+
+        self.assertEqual((action, updated_id), ("zaktualizowane", old_id))
+        updated = dao_invoices.get_invoice_by_id(old_id)
+        self.assertEqual(updated["miesiac"], "2026-10")
+        self.assertEqual(updated["reczna"], 1)
+
     def test_credentials_are_stored_encrypted(self):
         ksef_sync.save_ksef_credentials("123-456-78-90", "SEKRET", "test")
         self.assertFalse(ksef_sync.is_configured())  # token nie zastępuje wymaganego certyfikatu

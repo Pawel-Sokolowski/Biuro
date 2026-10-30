@@ -2,8 +2,8 @@ import logging
 import math
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread
-from PyQt6.QtGui import QColor, QDesktopServices, QGuiApplication
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex
+from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QProgressDialog, QPushButton, QSpinBox,
@@ -283,9 +283,24 @@ class FakturyPage(QWidget):
         layout.addLayout(settlement_buttons)
 
         self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
+        self._configure_issued_columns()
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
         self.issued_table.cellDoubleClicked.connect(self._on_issued_double_click)
         layout.addWidget(self.issued_table)
+
+    def _configure_issued_columns(self):
+        """Stałe, czytelne proporcje tabeli niezależne od długości danych."""
+        header = self.issued_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        for column in range(len(self.ISSUED_HEADERS)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # nabywca wypełnia wolne miejsce
+        widths = {
+            0: 52, 1: 72, 3: 72, 4: 155, self.ISSUED_PREVIEW_COLUMN: 82,
+            6: 88, 7: 88, 8: 142, self.ISSUED_KSEF_COLUMN: 360,
+        }
+        for column, width in widths.items():
+            self.issued_table.setColumnWidth(column, width)
 
     def _build_tab_dodatkowe(self):
         from app.db.dao_companies import list_companies
@@ -622,7 +637,7 @@ class FakturyPage(QWidget):
             self.issued_table.setCellWidget(row, self.ISSUED_PREVIEW_COLUMN, preview)
             ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
             if inv["ksef_numer"]:
-                font = ksef_item.font()
+                font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
                 font.setUnderline(True)
                 ksef_item.setFont(font)
                 ksef_item.setForeground(KSEF_LINK_COLOR)

@@ -63,6 +63,12 @@ def _description_details(raw_text: str) -> dict[str, str]:
         fields.setdefault(match[1], []).append(" ".join(match[2].split()))
     remittance = " ".join(part for code in ("20", "21", "22", "23", "24", "25", "26", "27", "28") for part in fields.get(code, []) if part)
     title = remittance if fields else " ".join(raw_text.split())
+    # Niektóre starsze eksporty ING umieszczają opis z numerem faktury
+    # w polu 00, a dalszą część tytułu w 20–28. Pole 00 zawierające
+    # wyłącznie kod operacji (np. XX20PRZELEW) pozostaje pominięte.
+    operation_text = " ".join(fields.get("00", []))
+    if operation_text and _extract_invoice_number(operation_text):
+        title = " ".join(part for part in (operation_text, remittance) if part)
     if re.fullmatch(r"\d{3}", title):
         title = ""
     contractor = " ".join(fields.get("32", []))

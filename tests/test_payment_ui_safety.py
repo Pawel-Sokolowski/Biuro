@@ -15,6 +15,7 @@ from app.db.dao_conn import get_conn
 from app.db.dao_invoices import create_or_update_invoice, get_invoice_by_id, mark_exported
 from app.db.dao_payments import record_cash_payment
 from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
+from app.invoices.faktury_ui import KsefUnmatchedDialog
 from tests.base import DbTestCase
 
 
@@ -198,6 +199,22 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
             conn.close()
         mark_exported([self.invoice_id], 1)
 
+    def test_unmatched_ksef_invoice_can_be_assigned_from_searchable_company_list(self):
+        item = {
+            "invoice_number": "FV/KSEF/1", "buyer_nip": "9999999999",
+            "buyer_name": "Nabywca z KSeF", "reason": "brak firmy o NIP-ie nabywcy",
+            "ksef_number": "KSEF-1", "data": {"number": "FV/KSEF/1"},
+        }
+        dialog = KsefUnmatchedDialog([item], 1)
+        self.addCleanup(dialog.close)
+        company = dialog.table.cellWidget(0, 4)
+        self.assertTrue(company.isEditable())
+        company.setCurrentIndex(company.findData(self.company_id))
+        with patch("app.invoices.faktury_ui.assign_downloaded_invoice", return_value=("utworzone", 99)) as assign:
+            dialog._assign(0)
+        assign.assert_called_once_with(item["data"], "KSEF-1", self.company_id)
+        self.assertFalse(company.isEnabled())
+
     def page(self):
         from app.invoices.faktury_ui import FakturyPage
         page = FakturyPage(1)
@@ -268,6 +285,8 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
                                            "vat": 23, "netto": 100, "brutto": 123}])
         self.assertIn("Biuro Pełne Dane sp. z o.o.", rendered)
         self.assertIn("data:image/png;base64,", rendered)  # kod QR
+        self.assertIn('<table width="100%"', rendered)
+        self.assertIn("Razem do zapłaty", rendered)
         dialog = InvoicePreviewDialog(invoice)
         self.addCleanup(dialog.close)
         self.assertEqual(dialog.invoice["nabywca_pelna"], "Klient UI")

@@ -9,7 +9,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from PyQt6.QtCore import QMarginsF, QSizeF
+from PyQt6.QtCore import QMarginsF
 from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QMessageBox, QPushButton, QTextBrowser, QVBoxLayout,
@@ -238,7 +238,9 @@ class InvoicePreviewDialog(QDialog):
             document = QTextDocument()
             document.setDocumentMargin(0)
             document.setHtml(self.html)
-            document.setPageSize(QSizeF(writer.pageLayout().paintRectPoints().size()))
+            # Ustal tylko szerokość składu. Nadanie dokumentowi pełnej wysokości
+            # A4 powoduje w QTextDocument sztuczne rozciąganie pionowych przerw.
+            document.setTextWidth(float(writer.pageLayout().paintRectPoints().width()))
             document.print(writer)
         except (OSError, RuntimeError) as exc:
             QMessageBox.warning(self, "PDF", f"Nie udało się zapisać pliku PDF: {exc}")

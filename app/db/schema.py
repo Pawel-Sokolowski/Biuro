@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-30.6"
+SCHEMA_VERSION = "2026-10-30.7"
 
 
 def _schema_hash() -> str:
@@ -1068,6 +1068,14 @@ def init_db():
     cur.execute(
         "UPDATE faktury SET ksef_numer = NULL WHERE lower(trim(COALESCE(ksef_numer, ''))) "
         "IN ('nan', 'none', 'null', '<na>', 'n/a')"
+    )
+    # Dokument KSeF należy do miesiąca wynikającego z daty wystawienia. Starsze
+    # importy mogły zachować miesiąc lokalnego szkicu, mimo październikowych dat.
+    cur.execute(
+        "UPDATE faktury SET reczna = 1, miesiac = substring(data_wystawienia FROM 1 FOR 7) "
+        "WHERE COALESCE(ksef_numer, '') <> '' "
+        "AND COALESCE(data_wystawienia, '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' "
+        "AND miesiac IS DISTINCT FROM substring(data_wystawienia FROM 1 FOR 7)"
     )
     _safe_alter_add_column(cur, "faktury", "dodatkowa INTEGER NOT NULL DEFAULT 0")
     cur.execute("""

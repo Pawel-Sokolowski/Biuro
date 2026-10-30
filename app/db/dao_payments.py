@@ -298,6 +298,24 @@ def _normalize_contractor_name(value) -> str:
     return value
 
 
+def _contractor_name_matches(bank_name: str, invoice_name: str) -> bool:
+    """Porównuje nazwę bez zależności od kolejności imienia i nazwiska.
+
+    Bank może dopisać drugie imię albo dalszy fragment nazwy. Dopasowanie
+    częściowe wymaga co najmniej dwóch pełnych członów, aby pojedyncze imię
+    lub popularne słowo nie ograniczyło listy do niewłaściwej firmy.
+    """
+    bank_name = _normalize_contractor_name(bank_name)
+    invoice_name = _normalize_contractor_name(invoice_name)
+    if not bank_name or not invoice_name:
+        return False
+    if bank_name == invoice_name:
+        return True
+    bank_tokens = {token for token in bank_name.split() if len(token) >= 2}
+    invoice_tokens = {token for token in invoice_name.split() if len(token) >= 2}
+    return len(invoice_tokens) >= 2 and invoice_tokens.issubset(bank_tokens)
+
+
 def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     """Rozpoznaje jednego nabywcę; nigdy nie zatwierdza zapłaty ani faktury."""
     unresolved = {"company_key": None, "resolved_contractor": None, "confident": False,
@@ -338,10 +356,11 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     if account_keys:
         return resolved(account_keys, "Dopasowano kontrahenta po rachunku nadawcy.")
     name = _normalize_contractor_name(transaction.get("kontrahent") or transaction.get("contractor") or details["contractor"])
-    name_keys = {_contractor_key(inv) for inv in invoices if name and name in {
-        _normalize_contractor_name(inv.get("buyer")), _normalize_contractor_name(inv.get("buyer_full_name"))
-    }}
-    return resolved(name_keys, "Dopasowano kontrahenta po pełnej nazwie.") if name_keys else unresolved
+    name_keys = {_contractor_key(inv) for inv in invoices if name and any(
+        _contractor_name_matches(name, candidate)
+        for candidate in (inv.get("buyer"), inv.get("buyer_full_name"))
+    )}
+    return resolved(name_keys, "Dopasowano kontrahenta po nazwie nadawcy.") if name_keys else unresolved
 
 
 def invoice_choices_for_transaction(transaction: dict, invoices: list[dict]) -> list[dict]:

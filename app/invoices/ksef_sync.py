@@ -27,6 +27,13 @@ ENV_KEY = "ksef_srodowisko"
 # API ogranicza zakres dat pojedynczego zapytania
 WINDOW_DAYS = 90
 BATCH_EXPORT_THRESHOLD = 10
+CORRECTION_KINDS = {"KOR", "KOR_ZAL", "KOR_ROZ"}
+SUPPORTED_KINDS = {"VAT"} | CORRECTION_KINDS
+
+
+def _valid_ksef_number(value: Any) -> str:
+    number = str(value or "").strip()
+    return "" if number.casefold() in {"nan", "none", "null", "<na>", "n/a"} else number
 
 
 def _local_name(element: ET.Element) -> str:
@@ -102,12 +109,17 @@ def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
         "buyer_address": _text(address_pol, "AdresL1"), "buyer_address_2": _text(address_pol, "AdresL2"),
         "net": total_net.quantize(Decimal("0.01")), "gross": total_gross,
         "positions": positions, "kind": _text(fa, "RodzajFaktury", "VAT"),
+        "correction_reason": _text(fa, "PrzyczynaKorekty"),
+        "corrected_number": _text(fa, "NrFaKorygowanej"),
         "currency": _text(fa, "KodWaluty", "PLN"),
     }
 
 
 def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[str, int]:
     """Zastępuje lokalną treść dokumentem KSeF, zachowując jego ID i płatności."""
+    ksef_number = _valid_ksef_number(ksef_number)
+    if not ksef_number:
+        raise KsefError("Faktura nie ma prawidłowego numeru KSeF.")
     conn = get_conn()
     try:
         companies = conn.execute(
@@ -118,6 +130,7 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
             conn.rollback()
             return ("brak_firmy" if not companies else "niejednoznaczna_firma", 0)
         company = dict(companies[0])
+        local_kind = "korekta" if data["kind"] in CORRECTION_KINDS else "faktura"
         existing = conn.execute(
             "SELECT * FROM faktury WHERE ksef_numer = %s OR (firma_id = %s AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s))) ORDER BY id FOR UPDATE",
             (ksef_number, company["id"], data["number"]),
@@ -128,8 +141,8 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
             # dokładnie jeden dokument, który nie był wcześniej zsynchronizowany.
             existing = conn.execute(
                 "SELECT * FROM faktury WHERE firma_id = %s AND miesiac = %s "
-                "AND rodzaj = 'faktura' AND COALESCE(ksef_numer, '') = '' ORDER BY id FOR UPDATE",
-                (company["id"], data["month"]),
+                "AND rodzaj = %s AND COALESCE(ksef_numer, '') = '' ORDER BY id FOR UPDATE",
+                (company["id"], data["month"], local_kind),
             ).fetchall()
         if len(existing) > 1:
             conn.rollback()
@@ -140,6 +153,14 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
         match = re.match(r"^\s*(\d{2}-\d{3})\s+(.+)$", city)
         if match:
             postal, city = match.groups()
+        corrected_invoice_id = None
+        if local_kind == "korekta" and data.get("corrected_number"):
+            corrected = conn.execute(
+                "SELECT id FROM faktury WHERE firma_id = %s AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
+                "ORDER BY id LIMIT 1",
+                (company["id"], data["corrected_number"]),
+            ).fetchone()
+            corrected_invoice_id = corrected["id"] if corrected else None
         values = (
             company["id"], data["month"], float(data["net"]), float(data["gross"]),
             data["issue_date"], data["sale_date"], data["due_date"],
@@ -147,6 +168,7 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
             postal, city, data["buyer_nip"], data["buyer_country"],
             json.dumps(data["positions"], ensure_ascii=False), data["number"], ksef_number,
             data.get("seller_nip") or None, data.get("invoice_hash") or None,
+            local_kind, corrected_invoice_id, data.get("correction_reason") or None,
         )
         if existing:
             invoice_id = existing[0]["id"]
@@ -156,6 +178,7 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
                     nabywca_skrocona=%s, nabywca_pelna=%s, nabywca_adres=%s,
                     nabywca_kod=%s, nabywca_miasto=%s, nabywca_nip=%s, nabywca_kraj=%s,
                     pozycje_json=%s, numer=%s, ksef_numer=%s, ksef_nip_wysylki=%s, ksef_hash_faktury=%s,
+                    rodzaj=%s, korygowana_faktura_id=%s, przyczyna_korekty=%s,
                     ksef_data=to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
                     eksportowana=1, status='wystawiona', data_eksportu=COALESCE(data_eksportu, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
                     updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=%s
@@ -167,11 +190,11 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
                     data_wystawienia, data_sprzedazy, termin_platnosci, nabywca_skrocona,
                     nabywca_pelna, nabywca_adres, nabywca_kod, nabywca_miasto, nabywca_nip,
                     nabywca_kraj, pozycje_json, numer, ksef_numer, ksef_nip_wysylki,
-                    ksef_hash_faktury, ksef_data, eksportowana,
-                    status, data_eksportu, rodzaj)
+                    ksef_hash_faktury, rodzaj, korygowana_faktura_id, przyczyna_korekty,
+                    ksef_data, eksportowana, status, data_eksportu)
                 VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 1, 'wystawiona',
-                    to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 'faktura') RETURNING id
+                    %s, %s, %s, %s, %s, %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 1,
+                    'wystawiona', to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
             """, values).fetchone()[0]
             action = "utworzone"
         conn.commit()
@@ -279,7 +302,7 @@ def sync_issued_invoices(
     missing_number: List[str] = []
     for window_start, window_end in _windows(date_from, end):
         for meta in client.query_invoices(window_start, window_end):
-            ksef_number = str(meta.get("ksefNumber") or "").strip()
+            ksef_number = _valid_ksef_number(meta.get("ksefNumber"))
             if not ksef_number:
                 missing_number.append(meta.get("invoiceNumber") or "(bez numeru)")
                 continue
@@ -354,7 +377,7 @@ def sync_issued_invoices(
             if progress:
                 progress(index, total, f"{label}: nieobsługiwana waluta")
             continue
-        if data["kind"] != "VAT":
+        if data["kind"] not in SUPPORTED_KINDS:
             unmatched.append(f"{label} — typ KSeF {data['kind']} wymaga osobnego importu")
             if progress:
                 progress(index, total, f"{label}: typ {data['kind']} pominięty")

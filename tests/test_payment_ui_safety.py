@@ -224,6 +224,8 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         page = self.page()
         self.assertIs(page.tabs.currentWidget(), page.tab_wystawione)
         self.assertEqual(page.issued_table.horizontalHeaderItem(5).text(), "Podgląd")
+        self.assertTrue(page.issued_table.isColumnHidden(0))
+        self.assertTrue(page.draft_table.isColumnHidden(0))
         self.assertIsNotNone(page.issued_table.cellWidget(0, 5))
         self.assertEqual(page.issued_table.columnWidth(3), 72)
         self.assertEqual(page.issued_table.columnWidth(6), 88)
@@ -244,8 +246,24 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         preview.return_value.exec.assert_called_once()
 
     def test_invoice_preview_saves_a_real_pdf(self):
-        from app.invoices.invoice_preview import InvoicePreviewDialog
-        dialog = InvoicePreviewDialog(get_invoice_by_id(self.invoice_id))
+        from app.db.dao_app_settings import set_setting
+        from app.invoices.invoice_preview import InvoicePreviewDialog, invoice_html
+        set_setting("faktury_sprzedawca_nazwa", "Biuro Pełne Dane sp. z o.o.")
+        set_setting("faktury_sprzedawca_nip", "1234567890")
+        set_setting("faktury_sprzedawca_adres", "Testowa 1")
+        conn = get_conn()
+        conn.execute(
+            "UPDATE faktury SET ksef_numer=%s, ksef_nip_wysylki=%s, ksef_hash_faktury=%s WHERE id=%s",
+            ("1234567890-20260907-AAAAAA-AA", "1234567890", "QUJDRA==", self.invoice_id),
+        )
+        conn.commit()
+        conn.close()
+        invoice = get_invoice_by_id(self.invoice_id)
+        rendered = invoice_html(invoice, [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100,
+                                           "vat": 23, "netto": 100, "brutto": 123}])
+        self.assertIn("Biuro Pełne Dane sp. z o.o.", rendered)
+        self.assertIn("data:image/png;base64,", rendered)  # kod QR
+        dialog = InvoicePreviewDialog(invoice)
         self.addCleanup(dialog.close)
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "faktura.pdf"

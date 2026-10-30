@@ -748,6 +748,9 @@ class MonthlyViewPage(QWidget):
         kadry_rows = [r for r in rows_prepared if self._row_in_tab(r, "kadrowa_id")]
         self.model_ks.set_rows(ks_rows)
         self.model_kadry.set_rows(kadry_rows)
+        for idx, row in enumerate(ks_rows):
+            lines = max(1, len(row.get("invoice_payments", [])))
+            self.table_ks.setRowHeight(idx, max(32, lines * (self.table_ks.fontMetrics().lineSpacing() + 4) + 8))
         total = sum(int(r.get("ilosc_dok") or 0) for r in ks_rows)
         self.activity_label.setText(f"Aktywność pracownika: {total}")
 

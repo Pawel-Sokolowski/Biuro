@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -103,116 +104,45 @@ def _take_match(
     candidates: List[Dict[str, Any]],
     meta: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
+    """Porównuje numer bez rozróżniania wielkości liter, NIP i kwotę.
 
-    buyer_nip = _digits(
-        (
-            (meta.get("buyer") or {})
-            .get("identifier") or {}
-        ).get("value")
-    )
+    Brak numeru wymaga jednoznacznego wyniku w odpowiednim miesiącu;
+    sam NIP nie wystarcza do przypisania numeru KSeF.
+    """
+    buyer_nip = _digits(((meta.get("buyer") or {}).get("identifier") or {}).get("value"))
+    invoice_number = str(meta.get("invoiceNumber") or "").strip()
+    if not buyer_nip or (meta.get("currency") or "PLN") != "PLN":
+        logger.warning("NO MATCH invoice=%s nip=%s", invoice_number, buyer_nip)
+        return None
+    try:
+        gross = Decimal(str(meta.get("grossAmount"))).quantize(Decimal("0.01"))
+        matches = [invoice for invoice in candidates
+                   if _digits(invoice.get("firma_nip")) == buyer_nip
+                   and Decimal(str(invoice.get("kwota_brutto"))).quantize(Decimal("0.01")) == gross]
+    except (InvalidOperation, TypeError, ValueError):
+        logger.warning("NO MATCH invoice=%s nip=%s: nieprawidłowa kwota", invoice_number, buyer_nip)
+        return None
+    logger.warning("KSEF invoice=%s nip=%s gross=%s", invoice_number, buyer_nip, gross)
+    exact = [invoice for invoice in matches
+             if invoice_number and str(invoice.get("numer") or "").strip().casefold() == invoice_number.casefold()]
+    if exact:
+        matches = exact
+    else:
+        # Nie zastępuj innego istniejącego numeru ani nie przypisuj faktury
+        # tylko po NIP: klient może mieć wiele faktur o tej samej kwocie.
+        matches = [invoice for invoice in matches if not str(invoice.get("numer") or "").strip()]
+        issue_month = str(meta.get("issueDate") or "")[:7]
+        if issue_month:
+            matches = [invoice for invoice in matches if invoice.get("miesiac") == issue_month]
+    if len(matches) != 1:
+        logger.warning("NO MATCH invoice=%s nip=%s", invoice_number, buyer_nip)
+        return None
+    candidates.remove(matches[0])
+    logger.warning("MATCH NUMBER %s" if exact else "MATCH NIP %s",
+                   matches[0].get("numer") if exact else buyer_nip)
+    return matches[0]
 
-    invoice_number = str(
-        meta.get("invoiceNumber") or ""
-    ).strip()
 
-    gross = round(
-        float(meta.get("grossAmount") or 0),
-        2,
-    )
-
-    logger.warning(
-        "KSEF invoice=%s nip=%s gross=%s",
-        invoice_number,
-        buyer_nip,
-        gross,
-    )
-
-    #
-    # 1. numer faktury
-    #
-
-    for invoice in candidates:
-
-        number = str(
-            invoice.get("numer") or ""
-        ).strip()
-
-        if (
-            number
-            and invoice_number
-            and number.upper() == invoice_number.upper()
-        ):
-            candidates.remove(invoice)
-
-            logger.warning(
-                "MATCH NUMBER %s",
-                number,
-            )
-
-            return invoice
-
-    #
-    # 2. NIP + kwota
-    #
-
-    for invoice in candidates:
-
-        local_nip = _digits(
-            invoice.get("firma_nip")
-        )
-
-        local_gross = round(
-            float(
-                invoice.get("kwota_brutto") or 0
-            ),
-            2,
-        )
-
-        if (
-            local_nip == buyer_nip
-            and local_gross == gross
-        ):
-            candidates.remove(invoice)
-
-            logger.warning(
-                "MATCH NIP %s",
-                buyer_nip,
-            )
-
-            return invoice
-
-    #
-    # 3. sam NIP
-    #
-
-    matches = [
-        x
-        for x in candidates
-        if _digits(
-            x.get("firma_nip")
-        ) == buyer_nip
-    ]
-
-    if len(matches) == 1:
-
-        candidates.remove(
-            matches[0]
-        )
-
-        logger.warning(
-            "MATCH UNIQUE NIP %s",
-            buyer_nip,
-        )
-
-        return matches[0]
-
-    logger.warning(
-        "NO MATCH invoice=%s nip=%s",
-        invoice_number,
-        buyer_nip,
-    )
-
-    return None
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None) -> Dict[str, Any]:
     """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""
     start = datetime.strptime(miesiac, "%Y-%m").replace(tzinfo=timezone.utc)

@@ -1,0 +1,66 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'feature/**', 'fix/**']
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: biuro
+          POSTGRES_PASSWORD: biuro
+          POSTGRES_DB: biuro_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U biuro -d biuro_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DB_URL: postgresql://biuro:biuro@localhost:5432/biuro_test
+      QT_QPA_PLATFORM: offscreen
+      QT_OPENGL: software
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 libnss3 libasound2t64 libxcb-cursor0
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt lxml
+      - name: Create an ephemeral test encryption key
+        run: |
+          python - <<'PY'
+          import os
+          from cryptography.fernet import Fernet
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('BIO_ENCRYPTION_KEY=' + Fernet.generate_key().decode() + '\n')
+          PY
+      - name: Check dependencies and schema migration
+        run: |
+          python -m pip check
+          python migrate_db.py
+          python migrate_db.py
+      - name: Run all test modules
+        run: python run_tests.py
+      - name: Retain test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: logs/tests/
+          if-no-files-found: ignore

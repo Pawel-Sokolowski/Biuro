@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+import mt940
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice
@@ -23,8 +27,11 @@ def _allowed(actor_id: int) -> bool:
 
 def _money(text: str) -> Decimal:
     try:
-        return Decimal(str(text).replace(" ", "").replace(",", ".")).quantize(Decimal("0.01"))
-    except InvalidOperation as exc:
+        amount = Decimal(str(text).replace(" ", "").replace(",", "."))
+        if not amount.is_finite() or amount != amount.quantize(Decimal("0.01")):
+            raise PaymentError("Kwota musi być skończoną liczbą z najwyżej dwoma miejscami po przecinku.")
+        return amount.quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError) as exc:
         raise PaymentError(f"Nieprawidłowa kwota przelewu: {text}") from exc
 
 def _extract_invoice_number(text: str) -> str:
@@ -41,300 +48,157 @@ def _extract_invoice_number(text: str) -> str:
 
     return ""
 
-def parse_ing_mt940(raw: bytes) -> list[dict[str, Any]]:
 
+def _normalize_account(value: Any) -> str:
+    value = re.sub(r"[\s-]", "", str(value or "")).upper().lstrip("/")
+    if value.startswith("PL"):
+        value = value[2:]
+    return value if re.fullmatch(r"\d{26}", value) else ""
+
+
+def _description_details(raw_text: str) -> dict[str, str]:
+    """Pola ING :86: (~, ? lub >); 20–25 to tytuł, 32 nazwa, 38 rachunek."""
+    fields: dict[str, list[str]] = {}
+    for match in re.finditer(r"[~?>](\d{2})(.*?)(?=[~?>]\d{2}|$)", raw_text, re.DOTALL):
+        fields.setdefault(match[1], []).append(" ".join(match[2].split()))
+    remittance = " ".join(part for code in ("20", "21", "22", "23", "24", "25", "26", "27", "28") for part in fields.get(code, []) if part)
+    title = remittance if fields else " ".join(raw_text.split())
+    # Niektóre starsze eksporty ING umieszczają opis z numerem faktury
+    # w polu 00, a dalszą część tytułu w 20–28. Pole 00 zawierające
+    # wyłącznie kod operacji (np. XX20PRZELEW) pozostaje pominięte.
+    operation_text = " ".join(fields.get("00", []))
+    if operation_text and _extract_invoice_number(operation_text):
+        title = " ".join(part for part in (operation_text, remittance) if part)
+    if re.fullmatch(r"\d{3}", title):
+        title = ""
+    contractor = " ".join(fields.get("32", []))
+    if not contractor:
+        name = re.search(r"/(?:NAME|NAZWA)/(.+?)(?=/[A-Z]{2,8}/|$)", raw_text, re.IGNORECASE)
+        contractor = " ".join(name[1].split()) if name else ""
+    account = ""
+    for code in ("38", "29", "31"):
+        for candidate in fields.get(code, []):
+            account = _normalize_account(candidate)
+            if account:
+                break
+        if account:
+            break
+    nip_match = re.search(r"\bNIP\s*[:.]?\s*(?:PL\s*)?((?:\d[ \t-]?){9}\d)(?!\d)", raw_text, re.IGNORECASE)
+    return {"title": title, "contractor": contractor, "contractor_account": account,
+            "contractor_nip": re.sub(r"\D", "", nip_match[1]) if nip_match else ""}
+
+def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, Any]]:
+    """Parser biblioteki mt-940; import zachowuje walutę i rodzaj operacji.
+
+    Każdy komunikat :20: parsujemy osobno, aby metadane kolejnego wyciągu
+    nie zmieniały identyfikatora poprzednich operacji. Zapłaty wykorzystują
+    datę księgowania (jeśli jest obecna); data waluty pozostaje w ewidencji.
+    """
     source = None
-
-    for encoding in (
-        "cp1250",
-        "iso-8859-2",
-        "cp852",
-        "cp1252",
-        "utf-8-sig",
-        "utf-8",
-    ):
+    encodings = (encoding,) if encoding else ("utf-8-sig", "cp1250")
+    for selected_encoding in encodings:
         try:
-            source = raw.decode(encoding)
+            source = raw.decode(selected_encoding)
             break
         except UnicodeDecodeError:
             continue
-
+        except LookupError as exc:
+            raise PaymentError("Nieznane kodowanie wyciągu.") from exc
     if source is None:
-        source = raw.decode(
-            "cp1250",
-            errors="replace"
-        )
-
-    source = (
-        source
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-    )
-
-    account = ""
-    statement = ""
-
+        raise PaymentError("Nie można odczytać kodowania wyciągu MT940.")
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
     result: list[dict[str, Any]] = []
-
-    current = None
-    active_tag = ""
-
-    def flush():
-
-        nonlocal current
-
-        if current is None:
-            return
-
-        raw_lines = current.pop(
-            "description",
-            [],
-        )
-
-        raw_text = " ".join(raw_lines)
-
-        invoice_number = _extract_invoice_number(
-            raw_text
-        )
-
-        contractor = ""
-
-        contractor_match = re.search(
-            r"~32(.*?)(?:~33|~34|~35|~36|~37|~38|$)",
-            raw_text,
-            re.IGNORECASE | re.DOTALL,
-        )
-
-        if contractor_match:
-
-            contractor = re.sub(
-                r"\s+",
-                " ",
-                contractor_match.group(1)
-            ).strip()
-
-            contractor = re.sub(
-                r"\bUL\.$",
-                "",
-                contractor,
-                flags=re.IGNORECASE,
-            ).strip()
-
-        if invoice_number:
-
-            title = invoice_number
-
-        else:
-
-            title = re.sub(
-                r"~\d{2}",
-                " ",
-                raw_text,
-            )
-
-            title = re.sub(
-                r"\b\d{3}\b",
-                " ",
-                title,
-            )
-
-            title = re.sub(
-                r"\s+",
-                " ",
-                title,
-            ).strip()
-
-        current["title"] = title
-        current["invoice_number"] = invoice_number
-        current["contractor"] = contractor
-
-        raw_id = "|".join([
-            str(account),
-            str(statement),
-            str(current["ordinal"]),
-            str(current["date"]),
-            str(current["amount"]),
-            str(current["currency"]),
-            str(current["reference"]),
-            str(current["title"]),
-        ])
-
-        current["hash"] = hashlib.sha256(
-            raw_id.encode("utf-8")
-        ).hexdigest()
-
-        result.append(current)
-
-        current = None
-
-    for raw_line in source.splitlines():
-
-        line = raw_line.strip()
-
-        if not line:
+    for statement_source in re.split(r"(?=^:20:)", source, flags=re.MULTILINE):
+        if not re.search(r"^:61:", statement_source, flags=re.MULTILINE):
             continue
-
-        if line.startswith("{1:"):
-            continue
-
-        if line.startswith("{2:"):
-            continue
-
-        if line == "{4:":
-            continue
-
-        if line in ("-}", "}"):
-            continue
-
-        tag_match = re.match(
-            r"^:(20|25|28|28C|60F|60M|61|86|62F|62M):(.*)$",
-            line,
-        )
-
-        if tag_match:
-
-            tag, text = tag_match.groups()
-
-            active_tag = tag
-
-            if tag == "25":
-
-                account = text.strip()
-                continue
-
-            if tag in ("28", "28C"):
-
-                statement = text.strip()
-                continue
-
-            if tag == "61":
-
-                flush()
-
-                m = re.match(
-                    r"^"
-                    r"(\d{6})"
-                    r"(?:\d{4})?"
-                    r"(RC|RD|EC|ED|C|D)"
-                    r"([A-Z])?"
-                    r"(\d+(?:,\d{0,2})?)"
-                    r"(.*)$",
-                    text.strip(),
-                )
-
-                if not m:
-
-                    raise PaymentError(
-                        f"Niepoprawny rekord :61: → {text}"
-                    )
-
-                (
-                    raw_date,
-                    direction,
-                    _,
-                    raw_amount,
-                    reference,
-                ) = m.groups()
-
-                yy = int(raw_date[:2])
-
-                year = (
-                    2000 + yy
-                    if yy <= 79
-                    else 1900 + yy
-                )
-
-                operation_date = date(
-                    year,
-                    int(raw_date[2:4]),
-                    int(raw_date[4:6]),
-                ).isoformat()
-
-                amount = _money(raw_amount)
-
-                direction = direction.upper()
-
-                if direction in (
-                    "D",
-                    "RD",
-                    "ED",
-                ):
+        try:
+            # Domyślny procesor biblioteki interpretuje '?' jako format niemiecki
+            # i usuwa surowe dane. Pola ING rozdzielamy dopiero poniżej.
+            statement = mt940.parse(statement_source, processors={"post_transaction_details": []})
+            expected_count = len(re.findall(r"^:61:", statement_source, flags=re.MULTILINE))
+            if len(statement) != expected_count:
+                raise PaymentError("Nie wszystkie operacje :61: zostały poprawnie odczytane.")
+            account = re.sub(r"\s+", "", str(statement.data.get("account_identification") or ""))
+            statement_id = str(statement.data.get("statement_number") or "")
+            sequence = str(statement.data.get("sequence_number") or "")
+            if not account or not statement_id:
+                raise PaymentError("Wyciąg wymaga rachunku :25: i numeru :28C:.")
+            for ordinal, transaction in enumerate(statement, 1):
+                data = transaction.data
+                currency = str(data.get("currency") or "").upper()
+                if not re.fullmatch(r"[A-Z]{3}", currency):
+                    raise PaymentError("Wyciąg nie określa waluty. Wymagane jest saldo :60F: lub :60M:.")
+                direction = data["status"]
+                amount = abs(_money(str(data["amount"].amount)))
+                if direction in ("D", "RC"):
                     amount = -amount
-
-                current = {
-                    "ordinal": len(result) + 1,
-                    "date": operation_date,
-                    "amount": amount,
-                    "currency": "PLN",
-                    "account": account,
-                    "reference": reference.strip(),
-                    "description": [],
-                }
-
-                continue
-
-            if tag == "86" and current is not None:
-
-                current["description"].append(
-                    text.strip()
-                )
-
-                continue
-
-        elif current is not None:
-
-            if active_tag == "86":
-
-                current["description"].append(
-                    line
-                )
-
-            elif active_tag == "61":
-
-                current["reference"] += (
-                    " " + line
-                )
-
-    flush()
-
+                value_date = data["date"].isoformat()
+                booked_date = (data.get("entry_date") or data["date"]).isoformat()
+                title = " ".join(str(data.get("transaction_details") or "").split())
+                invoice_number = _extract_invoice_number(title)
+                details = _description_details(str(data.get("transaction_details") or ""))
+                bank_reference = str(data.get("bank_reference") or "").strip()
+                reference = bank_reference or str(data.get("customer_reference") or "")
+                if bank_reference and bank_reference.upper().replace(" ", "") not in {"NONREF", "NOTPROVIDED", "N/A", "UNKNOWN"}:
+                    # Referencja banku identyfikuje operację także w eksportach
+                    # o innych numerach wyciągu i kolejności wierszy.
+                    identity = [account, bank_reference, value_date, booked_date, str(amount), currency, direction]
+                else:
+                    # Bez unikalnej referencji banku deduplikacja dotyczy tego
+                    # samego wyciągu; identyczne rzeczywiste wpłaty zachowują osobne pozycje.
+                    identity = [account, statement_id, sequence, ordinal,
+                                str(data.get("transaction_reference") or ""), value_date, booked_date,
+                                str(amount), currency, direction, reference]
+                digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+                result.append({
+                    "ordinal": ordinal, "date": booked_date, "value_date": value_date,
+                    "amount": amount, "currency": currency, "direction": direction,
+                    "account": account, "reference": reference, "title": details["title"], "hash": digest,
+                    "raw_title": title,
+                    "invoice_number": invoice_number, "contractor": details["contractor"],
+                    "contractor_account": details["contractor_account"], "contractor_nip": details["contractor_nip"],
+                })
+        except PaymentError:
+            raise
+        except (ValueError, KeyError, TypeError, InvalidOperation, RuntimeError) as exc:
+            raise PaymentError(f"Niepoprawny wyciąg MT940: {exc}") from exc
     if not result:
-
-        raise PaymentError(
-            "Plik nie zawiera transakcji MT940 (:61:)."
-        )
-
+        raise PaymentError("Plik nie zawiera transakcji MT940 (:61:).")
     return result
 
-def import_mt940_file(path: str, actor_id: int) -> dict[str, int]:
+
+def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> dict[str, int]:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do importu operacji bankowych.")
     source = Path(path)
     if source.stat().st_size > 20 * 1024 * 1024:
         raise PaymentError("Wyciąg przekracza 20 MB.")
-    records = parse_ing_mt940(source.read_bytes())
+    records = parse_ing_mt940(source.read_bytes(), encoding=encoding)
     conn = get_conn()
     inserted = 0
     try:
         for entry in records:
+            # Rozliczenie również blokuje ten wiersz. Kolejne zapytanie widzi
+            # już zatwierdzone wpłaty po ewentualnym oczekiwaniu na ich commit.
+            conn.execute("SELECT id FROM bank_transakcje WHERE hash = %s FOR UPDATE", (entry["hash"],)).fetchone()
             cur = conn.execute(
                 """
                 INSERT INTO bank_transakcje
-                  (hash, rachunek, data_operacji, kwota, waluta, kontrahent, tytul, referencja)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(hash) DO NOTHING RETURNING id
+                  (hash, rachunek, data_operacji, data_waluty, kwota, waluta, kierunek, kontrahent, tytul, referencja,
+                   kontrahent_nip, kontrahent_rachunek, opis_surowy)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(hash) DO UPDATE SET kontrahent = EXCLUDED.kontrahent, tytul = EXCLUDED.tytul,
+                    kontrahent_nip = EXCLUDED.kontrahent_nip, kontrahent_rachunek = EXCLUDED.kontrahent_rachunek,
+                    opis_surowy = EXCLUDED.opis_surowy
+                WHERE NOT EXISTS (SELECT 1 FROM faktury_platnosci p WHERE p.transakcja_id = bank_transakcje.id)
+                RETURNING (xmax = 0) AS inserted
                 """,
-                (
-                    entry["hash"],
-                    entry["account"],
-                    entry["date"],
-                    entry["amount"],
-                    entry["currency"],
-                    entry.get("contractor", ""),
-                    entry["title"],
-                    entry["reference"],
-                )
+                (entry["hash"], entry["account"], entry["date"], entry["value_date"], entry["amount"],
+                 entry["currency"], entry["direction"], entry.get("contractor", ""), entry["title"], entry["reference"],
+                 entry["contractor_nip"], entry["contractor_account"], entry["raw_title"]),
             )
-            if cur.fetchone():
+            outcome = cur.fetchone()
+            if outcome and outcome[0]:
                 inserted += 1
         conn.commit()
     except Exception:
@@ -358,7 +222,8 @@ def list_unsettled_transfers(actor_id: int) -> list[dict[str, Any]]:
                 SELECT transakcja_id, SUM(kwota) AS used FROM faktury_platnosci
                 WHERE transakcja_id IS NOT NULL GROUP BY transakcja_id
             ) p ON p.transakcja_id = b.id
-            WHERE b.kwota > 0 AND b.kwota - COALESCE(p.used, 0) > 0.009
+            WHERE b.kwota > 0 AND b.waluta = 'PLN' AND b.kierunek = 'C'
+              AND b.kwota - COALESCE(p.used, 0) > 0.009
             ORDER BY b.data_operacji DESC, b.id DESC
             LIMIT 1000
             """
@@ -382,55 +247,22 @@ def list_invoice_choices(
 
         rows = conn.execute(
             """
-            SELECT
-                i.id,
-                i.firma_id,
-                i.numer,
-                i.miesiac,
-                i.kwota_brutto,
-
-                COALESCE(
-                    NULLIF(f.nazwa_skrocona, ''),
-                    f.nazwa,
-                    i.nabywca_pelna,
-                    ''
-                ) AS buyer,
-
-                COALESCE(
-                    f.nip,
-                    i.nabywca_nip,
-                    ''
-                ) AS nip,
-
-                i.kwota_brutto
-                    - COALESCE(p.paid, 0)
-                    AS balance
-
+            SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto,
+                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
+                   COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, '') AS nip,
+                   f.nazwa AS buyer_full_name, f.konto_bankowe AS buyer_account,
+                   CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i
 
             LEFT JOIN firmy f
                 ON f.id = i.firma_id
 
             LEFT JOIN (
-                SELECT
-                    faktura_id,
-                    SUM(kwota) AS paid
-                FROM faktury_platnosci
-                GROUP BY faktura_id
-            ) p
-                ON p.faktura_id = i.id
-
-            WHERE
-                i.rodzaj = 'faktura'
-                AND COALESCE(i.eksportowana, 0) = 1
-                AND i.kwota_brutto >
-                    COALESCE(p.paid, 0) + 0.009
-                AND i.miesiac =
-                    TO_CHAR(CURRENT_DATE, 'YYYY-MM')
-
-            ORDER BY
-                buyer,
-                i.id DESC
+                SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
+            ) p ON p.faktura_id = i.id
+            WHERE i.rodzaj = 'faktura' AND COALESCE(i.eksportowana, 0) = 1
+              AND CAST(i.kwota_brutto AS NUMERIC(14,2)) > COALESCE(p.paid, 0)
+            ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
             """
         ).fetchall()
 
@@ -446,51 +278,173 @@ def list_invoice_choices(
     finally:
         conn.close()
 
-def suggested_invoice_ids(
-    transaction: dict[str, Any],
-    invoices: list[dict[str, Any]],
-) -> list[int]:
+def _contractor_key(invoice: dict) -> tuple:
+    if invoice.get("firma_id") is not None:
+        return ("firma", invoice["firma_id"])
+    if invoice.get("kontrahent_id") is not None:
+        return ("kontrahent", invoice["kontrahent_id"])
+    nip = re.sub(r"\D", "", str(invoice.get("nip") or ""))
+    if len(nip) == 10:
+        return ("nip", nip)
+    name = _normalize_contractor_name(invoice.get("buyer") or "")
+    return ("name", name) if name else ("invoice", invoice["id"])
 
-    def normalize(value: str) -> str:
-        return re.sub(
-            r"[^A-Z0-9]",
-            "",
-            str(value).upper(),
-        )
 
-    title = str(
-        transaction.get("tytul") or ""
-    )
+def _normalize_contractor_name(value) -> str:
+    value = str(value or "").upper().replace("Ł", "L")
+    value = "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))
+    value = " ".join(re.sub(r"[^A-Z0-9]", " ", value).split())
+    value = value.replace("SPOLKA Z OGRANICZONA ODPOWIEDZIALNOSCIA", "SP Z O O").replace("SPOLKA JAWNA", "SP J")
+    return value
 
-    invoice_match = re.search(
-        r"(FV[/\-][A-Z0-9/\-]+)",
-        title,
-        re.IGNORECASE,
-    )
 
-    if invoice_match:
+def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
+    """Rozpoznaje jednego nabywcę; nigdy nie zatwierdza zapłaty ani faktury."""
+    unresolved = {"company_key": None, "resolved_contractor": None, "confident": False,
+                  "reason": "Nie rozpoznano jednoznacznie kontrahenta; wybierz fakturę ręcznie."}
+    if not invoices:
+        return unresolved
+    grouped = {}
+    for invoice in invoices:
+        grouped.setdefault(_contractor_key(invoice), []).append(invoice)
+    raw = str(transaction.get("opis_surowy") or transaction.get("raw_title") or transaction.get("tytul") or transaction.get("title") or "")
+    text = raw + " " + str(transaction.get("tytul") or transaction.get("title") or "")
+    numbers = {re.sub(r"[^A-Z0-9]", "", value.upper()) for value in re.findall(
+        r"\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*", text, re.IGNORECASE
+    )}
+    invoice_keys = {_contractor_key(inv) for inv in invoices if numbers and re.sub(
+        r"[^A-Z0-9]", "", str(inv.get("numer") or "").upper()) in numbers}
+    details = _description_details(raw)
+    nip = re.sub(r"\D", "", str(transaction.get("kontrahent_nip") or transaction.get("contractor_nip") or details["contractor_nip"]))
+    nip_keys = {_contractor_key(inv) for inv in invoices if len(nip) == 10 and re.sub(r"\D", "", str(inv.get("nip") or "")) == nip}
 
-        invoice_number = normalize(
-            invoice_match.group(1)
-        )
+    def resolved(keys, reason):
+        if len(keys) != 1:
+            return dict(unresolved, reason="Dane wskazują kilku kontrahentów; sprawdź fakturę ręcznie.")
+        key = next(iter(keys))
+        return {"company_key": key, "resolved_contractor": grouped[key][0].get("buyer") or "Kontrahent",
+                "confident": True, "reason": reason}
 
-        for inv in invoices:
+    if invoice_keys:
+        if len(invoice_keys) != 1:
+            return resolved(invoice_keys, "")
+        if len(nip) == 10 and (not nip_keys or not invoice_keys.issubset(nip_keys)):
+            return dict(unresolved, reason="Numer faktury i NIP wskazują różnych kontrahentów; sprawdź ręcznie.")
+        return resolved(invoice_keys, "Dopasowano nabywcę po numerze faktury w tytule przelewu.")
+    if len(nip) == 10:
+        return resolved(nip_keys, "Dopasowano kontrahenta po NIP.") if nip_keys else unresolved
+    account = _normalize_account(transaction.get("kontrahent_rachunek") or transaction.get("contractor_account") or details["contractor_account"])
+    account_keys = {_contractor_key(inv) for inv in invoices if account and _normalize_account(inv.get("buyer_account")) == account}
+    if account_keys:
+        return resolved(account_keys, "Dopasowano kontrahenta po rachunku nadawcy.")
+    name = _normalize_contractor_name(transaction.get("kontrahent") or transaction.get("contractor") or details["contractor"])
+    name_keys = {_contractor_key(inv) for inv in invoices if name and name in {
+        _normalize_contractor_name(inv.get("buyer")), _normalize_contractor_name(inv.get("buyer_full_name"))
+    }}
+    return resolved(name_keys, "Dopasowano kontrahenta po pełnej nazwie.") if name_keys else unresolved
 
-            number = normalize(
-                inv.get("numer") or ""
-            )
 
-            if number and number == invoice_number:
+def invoice_choices_for_transaction(transaction: dict, invoices: list[dict]) -> list[dict]:
+    match = match_invoice_contractor(transaction, invoices)
+    return [inv for inv in invoices if _contractor_key(inv) == match["company_key"]] if match["confident"] else list(invoices)
 
-                return [int(inv["id"])]
 
-    return []
+def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
+    """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.
+
+    Kwota, numer czy NIP same w sobie nie stanowią dowodu zapłaty.
+    """
+    title = re.sub(r"\s+", "", str(transaction.get("tytul") or "")).casefold()
+    numeric_title = re.sub(r"\D", "", title)
+    amount = _money(str(transaction.get("remaining") or transaction.get("kwota") or 0))
+    normalized_number = re.sub(r"[^A-Z0-9]", "", _extract_invoice_number(title).upper())
+    results = []
+    for inv in invoices:
+        number = re.sub(r"\s+", "", str(inv.get("numer") or "")).casefold()
+        nip = re.sub(r"\D", "", str(inv.get("nip") or ""))
+        balance = _money(str(inv["balance"]))
+        normalized_invoice = re.sub(r"[^A-Z0-9]", "", number.upper())
+        invoice_in_title = bool(number and len(number) >= 5 and (
+            number in title or (normalized_number and normalized_invoice == normalized_number)
+        ))
+        nip_in_title = bool(len(nip) == 10 and nip in numeric_title)
+        exact_amount = balance == amount
+        if invoice_in_title and nip_in_title and exact_amount:
+            score = 0
+        elif invoice_in_title and exact_amount:
+            score = 1
+        elif invoice_in_title:
+            score = 2
+        elif nip_in_title and exact_amount:
+            score = 3
+        else:
+            continue
+        results.append((score, int(inv["id"])))
+    results.sort()
+    return [invoice_id for _, invoice_id in results]
+
 
 def _check_date(value: str) -> date:
     try:
         return date.fromisoformat(str(value))
     except (ValueError, TypeError) as exc:
         raise PaymentError("Podaj datę w formacie RRRR-MM-DD.") from exc
+
+
+def get_invoice_payment_summary(invoice_id: int, actor_id: int) -> dict[str, Any]:
+    if not _allowed(actor_id):
+        raise PermissionError("Brak uprawnień do przeglądania rozliczeń.")
+    conn = get_conn()
+    try:
+        invoice = conn.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
+        if not invoice or not can_access_invoice(actor_id, invoice["firma_id"]):
+            raise PaymentError("Nie znaleziono dostępnej faktury.")
+        if invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
+            raise PaymentError("Rozliczać można tylko wystawione faktury.")
+        payments = [dict(row) for row in conn.execute(
+            "SELECT * FROM faktury_platnosci WHERE faktura_id = %s ORDER BY data_zaplaty, id",
+            (invoice_id,),
+        ).fetchall()]
+        total = _money(str(invoice["kwota_brutto"]))
+        paid = sum((row["kwota"] for row in payments), Decimal("0.00"))
+        last_date = max((row["data_zaplaty"] for row in payments), default=None)
+        return {"total": total, "paid": paid, "balance": total - paid, "payments": payments,
+                "paid_on": last_date.isoformat() if last_date and total > 0 and paid >= total else None}
+    finally:
+        conn.close()
+
+
+def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
+    """Wszystkie faktury wystawione za miesiąc, wraz z historią wpłat."""
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT i.id, i.firma_id, i.numer, i.kwota_brutto,
+                   p.id AS payment_id, p.kwota, p.data_zaplaty, p.sposob
+            FROM faktury i LEFT JOIN faktury_platnosci p ON p.faktura_id = i.id
+            WHERE i.miesiac = %s AND i.rodzaj = 'faktura'
+              AND COALESCE(i.eksportowana, 0) = 1 AND i.firma_id IS NOT NULL
+            ORDER BY i.id, p.data_zaplaty, p.id
+        """, (month,)).fetchall()
+        invoices = {}
+        for row in rows:
+            invoice = invoices.setdefault(row["id"], {
+                "id": row["id"], "firma_id": row["firma_id"], "numer": row["numer"] or "—",
+                "total": _money(str(row["kwota_brutto"])), "payments": [],
+            })
+            if row["payment_id"] is not None:
+                invoice["payments"].append({"kwota": row["kwota"], "data_zaplaty": row["data_zaplaty"], "sposob": row["sposob"]})
+        companies = {}
+        for invoice in invoices.values():
+            paid = sum((p["kwota"] for p in invoice["payments"]), Decimal("0.00"))
+            last_date = max((p["data_zaplaty"] for p in invoice["payments"]), default=None)
+            invoice["paid"] = paid
+            invoice["balance"] = invoice["total"] - paid
+            invoice["paid_on"] = last_date if last_date and invoice["total"] > 0 and paid >= invoice["total"] else None
+            companies.setdefault(invoice["firma_id"], []).append(invoice)
+        return companies
+    finally:
+        conn.close()
 
 
 def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, actor_id: int) -> None:
@@ -507,7 +461,11 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
             raise PaymentError("Nie znaleziono operacji bankowej lub faktury.")
         if not can_access_invoice(actor_id, invoice["firma_id"]):
             raise PermissionError("Brak dostępu do wskazanej faktury.")
-        if transfer["kwota"] <= 0 or invoice["rodzaj"] != "faktura":
+        if transfer["waluta"] != "PLN":
+            raise PaymentError("Do faktury w PLN można przypisać wyłącznie przelew w PLN.")
+        if transfer["kierunek"] != "C":
+            raise PaymentError("Rozliczać można tylko zwykły wpływ, bez storna i zwrotów.")
+        if transfer["kwota"] <= 0 or invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
             raise PaymentError("Można rozliczyć tylko wpływ na właściwą fakturę.")
         already_transfer = conn.execute(
             "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE transakcja_id = %s",
@@ -549,6 +507,8 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
         inv = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not inv or inv["rodzaj"] != "faktura" or not can_access_invoice(actor_id, inv["firma_id"]):
             raise PaymentError("Nie znaleziono dostępnej faktury.")
+        if not inv["eksportowana"]:
+            raise PaymentError("Rozliczać można tylko wystawione faktury.")
         paid = conn.execute(
             "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s",
             (invoice_id,),
@@ -581,6 +541,8 @@ def delete_bank_transaction(
     conn = get_conn()
 
     try:
+        if not conn.execute("SELECT id FROM bank_transakcje WHERE id = %s FOR UPDATE", (transaction_id,)).fetchone():
+            raise PaymentError("Nie znaleziono przelewu.")
 
         payment = conn.execute(
             """

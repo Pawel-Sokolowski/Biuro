@@ -24,8 +24,8 @@ class KadryInvoiceNamesTests(unittest.TestCase):
         self.assertEqual(
             [(p["nazwa"], p["ilosc"], p["netto"]) for p in result],
             [
-                ("Usługa kadrowo-płacowa - UoP", 2, 200),
-                ("Usługa płacowa - UZ", 3, 90),
+                ("Usługa kadrowo-płacowa – UoP", 2, 200),
+                ("Usługa płacowa – UZ", 3, 90),
             ],
         )
         self.assertEqual(cur.execute.call_count, 2)
@@ -39,7 +39,7 @@ class KadryInvoiceNamesTests(unittest.TestCase):
             positions = FakturyLogic()._kadry_positions(
                 {"uop_ilosc": 1, "uop_cennik": "UOP_40"}, 0
             )
-        self.assertEqual(positions[0]["nazwa"], "Usługa kadrowo-płacowa - Umowa o pracę")
+        self.assertEqual(positions[0]["nazwa"], "Usługa kadrowo-płacowa – UoP")
 
     def test_fixed_monthly_fee_name(self):
         with patch.object(FakturyLogic, "_kadry_vat", return_value=23):

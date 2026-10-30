@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-10-29.5"
+SCHEMA_VERSION = "2026-10-30.6"
 
 
 def _schema_hash() -> str:
@@ -1063,6 +1063,12 @@ def init_db():
     _safe_alter_add_column(cur, "faktury", "ksef_srodowisko_wysylki TEXT")
     _safe_alter_add_column(cur, "faktury", "ksef_nip_wysylki TEXT")
     _safe_alter_add_column(cur, "faktury", "ksef_hash_faktury TEXT")
+    # Wartości z arkuszy/pandas bywały zapisywane jako tekst "NaN". Taki
+    # pseudo-numer łączył niezależne faktury podczas synchronizacji KSeF.
+    cur.execute(
+        "UPDATE faktury SET ksef_numer = NULL WHERE lower(trim(COALESCE(ksef_numer, ''))) "
+        "IN ('nan', 'none', 'null', '<na>', 'n/a')"
+    )
     _safe_alter_add_column(cur, "faktury", "dodatkowa INTEGER NOT NULL DEFAULT 0")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS faktury_uslugi_dodatkowe (

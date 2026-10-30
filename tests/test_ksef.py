@@ -13,11 +13,13 @@ from app.db.dao_app_settings import get_setting
 from app.db.dao_conn import get_conn
 from app.db.dao_payments import get_invoice_payment_summary, record_cash_payment
 from app.invoices import ksef_client, ksef_sync
+from app.invoices.ksef import ksef_url
 from tests.base import DbTestCase
 
 
 FA3_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">
+  <Podmiot1><DaneIdentyfikacyjne><NIP>1234567890</NIP><Nazwa>Biuro Testowe</Nazwa></DaneIdentyfikacyjne></Podmiot1>
   <Podmiot2><DaneIdentyfikacyjne><NIP>5252525252</NIP><Nazwa>Klient z KSeF SA</Nazwa></DaneIdentyfikacyjne>
     <Adres><AdresPol><KodKraju>PL</KodKraju><AdresL1>Testowa 1</AdresL1><AdresL2>00-001 Warszawa</AdresL2></AdresPol></Adres></Podmiot2>
   <Fa><KodWaluty>PLN</KodWaluty><P_1>2026-10-15</P_1><P_2>7/10/2026</P_2><P_6>2026-10-14</P_6>
@@ -167,6 +169,11 @@ class KsefTests(DbTestCase):
         self.assertEqual(row["kwota_netto"], 200.0)
         self.assertEqual(row["kwota_brutto"], 246.0)
         self.assertEqual(row["nabywca_pelna"], "Klient z KSeF SA")
+        self.assertEqual(row["ksef_nip_wysylki"], "1234567890")
+        self.assertTrue(row["ksef_hash_faktury"])
+        self.assertTrue(ksef_url(row["ksef_numer"], invoice=row).startswith(
+            "https://qr.ksef.mf.gov.pl/invoice/1234567890/2026-10-15/"
+        ))
         self.assertEqual(dao_invoices.get_invoice_positions(invoice_id)[0]["nazwa"], "Usługa z KSeF")
         self.assertEqual(get_invoice_payment_summary(invoice_id, 1)["paid"], 50)
         self.assertEqual(result["zaktualizowane"], ["1234567890-20261015-AAAAAA-BB"])

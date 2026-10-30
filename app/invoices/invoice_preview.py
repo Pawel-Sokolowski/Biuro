@@ -9,8 +9,8 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from PyQt6.QtCore import QMarginsF
-from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter
+from PyQt6.QtCore import QMarginsF, QSizeF
+from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QMessageBox, QPushButton, QTextBrowser, QVBoxLayout,
 )
@@ -123,57 +123,67 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
         )
     document_title = "FAKTURA KORYGUJĄCA" if invoice.get("rodzaj") == "korekta" else "FAKTURA VAT"
     document_number = invoice.get("numer") or "Dokument KSeF"
+    payment_method = invoice.get("sposob_zaplaty") or "Przelew"
+    account = invoice.get("konto_bankowe") or get_setting("konto_bankowe_biura") or ""
+    ksef_date = str(invoice.get("ksef_data") or "")[:10]
     return f"""
     <html><head><style>
-      body {{ font-family: 'Arial'; font-size: 9.5pt; color: #25313c; margin: 18px; }}
+      body {{ font-family: 'Arial'; font-size: 9.5pt; color: #111; margin: 10px; }}
       table {{ border-collapse: collapse; }}
-      .top {{ width: 100%; background: #1769aa; color: white; }}
-      .top td {{ padding: 16px; vertical-align: middle; }}
-      .doc-title {{ font-size: 20pt; font-weight: bold; text-align: right; }}
-      .doc-number {{ font-size: 12pt; text-align: right; }}
-      .meta {{ width: 100%; margin-top: 12px; background: #edf3f8; }}
-      .meta td {{ padding: 8px; text-align: center; }}
-      .label {{ color: #607383; font-size: 8pt; }}
-      .parties {{ width: 100%; margin-top: 14px; }}
-      .parties td {{ width: 50%; vertical-align: top; padding: 12px; border: 1px solid #cbd6df; }}
-      .party-title {{ color: #1769aa; font-size: 9pt; font-weight: bold; }}
-      .party-name {{ font-size: 11pt; font-weight: bold; }}
-      .items {{ width: 100%; margin-top: 18px; }}
-      .items th {{ background: #1769aa; color: white; padding: 7px 5px; }}
-      .items td {{ border-bottom: 1px solid #d7e0e7; padding: 7px 5px; }}
-      .items tr:nth-child(even) {{ background: #f5f8fa; }}
+      td {{ vertical-align: top; }}
+      .doc-title {{ font-size: 12pt; font-weight: bold; text-align: right; }}
+      .doc-number {{ font-size: 15pt; font-weight: bold; text-align: right; }}
+      .ksef-head {{ color: #d71920; font-size: 10pt; font-weight: bold; text-align: right; }}
+      .label {{ color: #444; font-size: 8pt; }}
+      .party-name {{ font-size: 10pt; font-weight: bold; }}
+      .items th {{ background: #eeeeee; padding: 6px 4px; }}
+      .items td {{ padding: 7px 4px; }}
       .num {{ text-align: right; white-space: nowrap; }}
-      .summary {{ width: 43%; margin-top: 16px; margin-left: 57%; }}
-      .summary td {{ padding: 7px; border-bottom: 1px solid #d7e0e7; }}
-      .summary .grand td {{ background: #1769aa; color: white; font-size: 12pt; font-weight: bold; }}
-      .footer {{ width: 100%; margin-top: 20px; border-top: 2px solid #1769aa; }}
-      .footer td {{ vertical-align: top; padding-top: 10px; }}
-      .ksef-number {{ font-family: monospace; font-size: 8pt; color: #455a64; }}
+      .grand {{ font-size: 15pt; font-weight: bold; }}
+      .ksef-number {{ font-family: monospace; font-size: 8pt; color: #333; }}
     </style></head><body>
-      <table class="top"><tr><td>{logo_html}<b>{_escape(seller)}</b></td>
-      <td><div class="doc-title">{document_title}</div><div class="doc-number">nr {_escape(document_number)}</div></td></tr></table>
-      <table class="meta"><tr>
-        <td><span class="label">DATA WYSTAWIENIA</span><br><b>{_escape(invoice.get('data_wystawienia'))}</b></td>
-        <td><span class="label">DATA SPRZEDAŻY</span><br><b>{_escape(invoice.get('data_sprzedazy'))}</b></td>
-        <td><span class="label">TERMIN PŁATNOŚCI</span><br><b>{_escape(invoice.get('termin_platnosci'))}</b></td>
+      <table width="100%" border="0" cellspacing="0" cellpadding="8"><tr>
+        <td width="45%">{logo_html}</td>
+        <td width="55%" align="right"><div class="doc-title">{document_title} nr</div>
+        <div class="doc-number">{_escape(document_number)}</div><br>
+        <b>Nr KSeF:</b><br><span class="ksef-head">{_escape(invoice.get('ksef_numer') or '—')}</span><br>
+        <span class="label">Data przyjęcia do KSeF:</span><br><b>{_escape(ksef_date or '—')}</b><br><br>
+        <span class="label">Data wystawienia:</span> <b>{_escape(invoice.get('data_wystawienia'))}</b><br>
+        <span class="label">Data sprzedaży:</span> <b>{_escape(invoice.get('data_sprzedazy'))}</b></td>
       </tr></table>
-      <table class="parties"><tr>
-        <td><span class="party-title">SPRZEDAWCA</span><br><span class="party-name">{_escape(seller)}</span><br>
+      <br>
+      <table width="100%" border="1" cellspacing="0" cellpadding="8">
+        <tr bgcolor="#eeeeee"><th width="50%" align="left">Sprzedawca</th><th width="50%" align="left">Nabywca</th></tr>
+        <tr><td><span class="party-name">{_escape(seller)}</span><br>
         {_escape(seller_address)}<br>NIP: <b>{_escape(seller_nip)}</b><br>
-        Rachunek: {_escape(invoice.get('konto_bankowe') or get_setting('konto_bankowe_biura'))}</td>
-        <td><span class="party-title">NABYWCA</span><br><span class="party-name">{_escape(invoice.get('nabywca_pelna') or invoice.get('firma_nazwa'))}</span><br>
+        </td><td><span class="party-name">{_escape(invoice.get('nabywca_pelna') or invoice.get('firma_nazwa'))}</span><br>
         {_escape(buyer_address)}<br>NIP: <b>{_escape(invoice.get('nabywca_nip'))}</b><br>
         REGON: {_escape(invoice.get('nabywca_regon'))}<br>Kraj: {_escape(invoice.get('nabywca_kraj'))}<br>
         E-mail: {_escape(invoice.get('nabywca_email'))}</td>
       </tr></table>
-      <table class="items"><thead><tr><th>Lp.</th><th>Nazwa</th><th>Ilość</th><th>J.m.</th>
+      <br><br>
+      <table class="items" width="100%" border="1" cellspacing="0" cellpadding="4"><thead><tr>
+      <th width="5%">Lp.</th><th width="35%">Nazwa towaru lub usługi</th><th width="8%">Ilość</th><th width="7%">J.m.</th>
       <th>Cena netto</th><th>VAT %</th><th>Netto</th><th>Brutto</th></tr></thead>
       <tbody>{''.join(rows)}</tbody></table>
-      <table class="summary"><tr><td>Razem netto</td><td class="num">{_money(invoice.get('kwota_netto'))} PLN</td></tr>
-      <tr class="grand"><td>DO ZAPŁATY</td><td class="num">{_money(invoice.get('kwota_brutto'))} PLN</td></tr></table>
+      <br>
+      <table width="100%" border="0" cellspacing="0" cellpadding="5"><tr>
+        <td width="55%"></td><td width="25%" align="right"><b>Razem netto</b></td>
+        <td width="20%" align="right">{_money(invoice.get('kwota_netto'))} PLN</td></tr>
+        <tr><td></td><td align="right" class="grand">Razem do zapłaty</td>
+        <td align="right" class="grand">{_money(invoice.get('kwota_brutto'))} PLN</td></tr>
+      </table>
       {f'<div><b>Faktura korygowana:</b> {_escape(invoice.get("korygowana_faktura_numer"))}<br><b>Przyczyna:</b> {_escape(invoice.get("przyczyna_korekty"))}</div>' if invoice.get('rodzaj') == 'korekta' else ''}
-      <table class="footer"><tr><td><b>Numer KSeF</b><br><span class="ksef-number">{_escape(invoice.get('ksef_numer') or '—')}</span></td>
-      <td style="text-align:right">{qr_html}</td></tr></table>
+      <br>
+      <table width="100%" border="0" cellspacing="0" cellpadding="6"><tr>
+        <td width="70%"><table border="0" cellspacing="0" cellpadding="3">
+          <tr><td><b>Sposób zapłaty</b></td><td>{_escape(payment_method)}</td></tr>
+          <tr><td><b>Termin zapłaty</b></td><td>{_escape(invoice.get('termin_platnosci'))}</td></tr>
+          <tr><td><b>Numer rachunku</b></td><td>{_escape(account)}</td></tr>
+          <tr><td><b>Numer KSeF</b></td><td><span class="ksef-number">{_escape(invoice.get('ksef_numer') or '—')}</span></td></tr>
+        </table></td>
+        <td width="30%" align="center">{qr_html}<span class="label">Zeskanuj kod, aby zweryfikować fakturę w KSeF</span></td>
+      </tr></table>
     </body></html>
     """
 
@@ -187,10 +197,12 @@ class InvoicePreviewDialog(QDialog):
             original = get_invoice_by_id(int(self.invoice["korygowana_faktura_id"]))
             self.invoice["korygowana_faktura_numer"] = (original or {}).get("numer")
         self.setWindowTitle(f"Podgląd faktury {invoice.get('numer') or invoice.get('id')}")
-        self.resize(1050, 760)
+        self.resize(1150, 840)
         layout = QVBoxLayout(self)
         self.preview = QTextBrowser(self)
-        self.preview.setHtml(invoice_html(self.invoice, get_invoice_positions(int(self.invoice["id"]))))
+        self.html = invoice_html(self.invoice, get_invoice_positions(int(self.invoice["id"])))
+        self.preview.setHtml(self.html)
+        self.preview.document().setDocumentMargin(8)
         layout.addWidget(self.preview)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
         save = QPushButton("Zapisz PDF…", self)
@@ -198,6 +210,13 @@ class InvoicePreviewDialog(QDialog):
         buttons.addButton(save, QDialogButtonBox.ButtonRole.ActionRole)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "preview"):
+            # Podgląd wykorzystuje całą szerokość okna. Wysokość wynika z
+            # proporcji i kolejnych stron A4, a eksport ma osobny układ strony.
+            self.preview.document().setTextWidth(max(560, self.preview.viewport().width() - 20))
 
     def _default_name(self) -> str:
         number = re.sub(r"[^A-Za-z0-9._-]+", "_", str(self.invoice.get("numer") or self.invoice["id"]))
@@ -216,7 +235,11 @@ class InvoicePreviewDialog(QDialog):
                 QPageSize(QPageSize.PageSizeId.A4), QPageLayout.Orientation.Portrait,
                 QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter,
             ))
-            self.preview.document().print(writer)
+            document = QTextDocument()
+            document.setDocumentMargin(0)
+            document.setHtml(self.html)
+            document.setPageSize(QSizeF(writer.pageLayout().paintRectPoints().size()))
+            document.print(writer)
         except (OSError, RuntimeError) as exc:
             QMessageBox.warning(self, "PDF", f"Nie udało się zapisać pliku PDF: {exc}")
             return

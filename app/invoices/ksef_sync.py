@@ -115,26 +115,44 @@ def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
     }
 
 
-def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[str, int]:
+def _upsert_downloaded_invoice(
+    data: Dict[str, Any], ksef_number: str, company_id: Optional[int] = None,
+) -> tuple[str, int]:
     """Zastępuje lokalną treść dokumentem KSeF, zachowując jego ID i płatności."""
     ksef_number = _valid_ksef_number(ksef_number)
     if not ksef_number:
         raise KsefError("Faktura nie ma prawidłowego numeru KSeF.")
     conn = get_conn()
     try:
-        companies = conn.execute(
-            "SELECT * FROM firmy WHERE regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g') = %s ORDER BY id FOR UPDATE",
-            (data["buyer_nip"],),
-        ).fetchall()
+        if company_id is not None:
+            companies = conn.execute("SELECT * FROM firmy WHERE id = %s FOR UPDATE", (company_id,)).fetchall()
+        else:
+            companies = conn.execute(
+                "SELECT * FROM firmy WHERE regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g') = %s ORDER BY id FOR UPDATE",
+                (data["buyer_nip"],),
+            ).fetchall()
         if len(companies) != 1:
             conn.rollback()
             return ("brak_firmy" if not companies else "niejednoznaczna_firma", 0)
         company = dict(companies[0])
         local_kind = "korekta" if data["kind"] in CORRECTION_KINDS else "faktura"
+        # Kryteria mają ścisły priorytet. Łączenie ich przez OR zwracało dwa
+        # różne rekordy: dokument już oznaczony numerem KSeF i lokalny dokument
+        # o tym samym numerze faktury.
         existing = conn.execute(
-            "SELECT * FROM faktury WHERE ksef_numer = %s OR (firma_id = %s AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s))) ORDER BY id FOR UPDATE",
-            (ksef_number, company["id"], data["number"]),
+            "SELECT * FROM faktury WHERE ksef_numer = %s ORDER BY id LIMIT 1 FOR UPDATE",
+            (ksef_number,),
         ).fetchall()
+        if not existing:
+            numbered = conn.execute(
+                "SELECT * FROM faktury WHERE firma_id = %s AND rodzaj = %s "
+                "AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
+                "ORDER BY (miesiac = %s) DESC, (COALESCE(ksef_numer, '') = '') DESC, id DESC FOR UPDATE",
+                (company["id"], local_kind, data["number"], data["month"]),
+            ).fetchall()
+            if numbered:
+                preferred = [row for row in numbered if row["miesiac"] == data["month"] and not row["ksef_numer"]]
+                existing = preferred[:1] if preferred else numbered[:1]
         if not existing:
             # Lokalna faktura może jeszcze nie mieć numeru z programu zewnętrznego.
             # Używamy NIP-u (firma_id) i miesiąca tylko wtedy, gdy pozostał
@@ -204,6 +222,11 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
         raise
     finally:
         conn.close()
+
+
+def assign_downloaded_invoice(data: Dict[str, Any], ksef_number: str, company_id: int) -> tuple[str, int]:
+    """Ręcznie przypisuje pobrany dokument KSeF do firmy wybranej przez użytkownika."""
+    return _upsert_downloaded_invoice(data, ksef_number, company_id=company_id)
 
 
 def save_ksef_credentials(nip: str, token: Optional[str], environment: str = "prod") -> None:
@@ -309,18 +332,16 @@ def sync_issued_invoices(
             metadata.setdefault(ksef_number, meta)
 
     existing_numbers = _already_imported_ksef_numbers(list(metadata))
-    buyer_nips = {_metadata_buyer_nip(meta) for meta in metadata.values()} - {""}
-    company_counts = _company_count_for_nips(buyer_nips)
     matched: List[str] = []
     unmatched: List[str] = []
     created: List[str] = []
     updated: List[str] = []
     skipped: List[str] = []
+    unmatched_details: List[Dict[str, Any]] = []
     unmatched.extend(missing_number)
     candidates_for_xml = [
         number for number, meta in metadata.items()
         if number not in existing_numbers
-        and (not _metadata_buyer_nip(meta) or company_counts.get(_metadata_buyer_nip(meta), 0) == 1)
     ]
     package_files: Optional[Dict[str, bytes]] = None
     if len(candidates_for_xml) > BATCH_EXPORT_THRESHOLD:
@@ -339,13 +360,6 @@ def sync_issued_invoices(
             skipped.append(ksef_number)
             if progress:
                 progress(index, total, f"{label}: już zapisano lokalnie")
-            continue
-        buyer_nip = _metadata_buyer_nip(meta)
-        if buyer_nip and company_counts.get(buyer_nip, 0) != 1:
-            reason = "brak firmy o NIP-ie nabywcy" if not company_counts.get(buyer_nip) else "kilka firm ma ten sam NIP"
-            unmatched.append(f"{label} — {reason}")
-            if progress:
-                progress(index, total, f"{label}: {reason}")
             continue
         if progress:
             progress(index - 1, total, f"Pobieranie {label}")
@@ -390,6 +404,12 @@ def sync_issued_invoices(
                 "niejednoznaczna_faktura": "kilka lokalnych faktur ma ten sam numer",
             }.get(action, action)
             unmatched.append(f"{label} — {reason}")
+            if action in ("brak_firmy", "niejednoznaczna_firma", "niejednoznaczna_faktura"):
+                unmatched_details.append({
+                    "ksef_number": ksef_number, "invoice_number": data["number"],
+                    "buyer_nip": data["buyer_nip"], "buyer_name": data["buyer_name"],
+                    "reason": reason, "data": data,
+                })
             if progress:
                 progress(index, total, f"{label}: {reason}")
             continue
@@ -401,7 +421,8 @@ def sync_issued_invoices(
         if progress:
             progress(index, total, f"{label}: zapisano")
     return {"dopasowane": matched, "utworzone": created, "zaktualizowane": updated,
-            "pominiete": skipped, "niedopasowane": unmatched, "znalezione": len(metadata)}
+            "pominiete": skipped, "niedopasowane": unmatched,
+            "niedopasowane_szczegoly": unmatched_details, "znalezione": len(metadata)}
 
 
 def _digits(value: Optional[str]) -> str:

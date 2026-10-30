@@ -95,6 +95,14 @@ FA(3) dla wybranej wystawionej faktury po sprawdzeniu jej danych i potwierdzeniu
 przetwarzanie i zapisuje numer dopiero po przyjęciu przez MF. Nieznany wynik
 wysyłki należy wyjaśnić przed jej ponowieniem, aby uniknąć duplikatu.
 
+**Pobierz z KSeF** pobiera sprzedażowe faktury VAT FA(3) z wybranego miesiąca.
+Nabywca jest łączony z firmą po NIP-ie. Dokument o tym samym numerze KSeF lub
+numerze faktury jest aktualizowany, a pojedynczy niezsynchronizowany dokument
+tej firmy i miesiąca może zostać zastąpiony. Gdy dokumentu nie ma, program go
+tworzy. Treść, daty, pozycje i kwoty pochodzą z KSeF; zapisane płatności
+pozostają przy dotychczasowym ID faktury. Niepewny NIP lub kilka pasujących
+faktur wymaga wyjaśnienia i nie powoduje automatycznego nadpisania.
+
 ## Czynności dodatkowe i kolejne faktury
 
 Zakładka **Czynności dodatkowe** w Zadaniach (dostępna także z Faktur) pokazuje

@@ -289,6 +289,16 @@ class FakturyPage(QWidget):
             QMessageBox.warning(self, "KSeF", "Skonfiguruj NIP oraz certyfikat z kluczem prywatnym w ustawieniach. Token nie jest używany.")
             return
         month = self._current_month()
+        answer = QMessageBox.question(
+            self, "Pobierz faktury sprzedaży z KSeF",
+            f"Pobrać faktury sprzedaży za {month}?\n\n"
+            "Firma zostanie dopasowana po NIP-ie. Dane istniejącej faktury o tym samym numerze "
+            "zostaną zastąpione treścią z KSeF. Historia płatności pozostanie bez zmian.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             result = sync_month(month)
@@ -302,7 +312,9 @@ class FakturyPage(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
         self.refresh()
-        message = f"Miesiąc {month}\nDopasowano: {len(result['dopasowane'])}\nNiedopasowano: {len(result['niedopasowane'])}"
+        message = (f"Miesiąc {month}\nUtworzono: {len(result.get('utworzone', []))}"
+                   f"\nZaktualizowano z KSeF: {len(result.get('zaktualizowane', []))}"
+                   f"\nNiedopasowano: {len(result['niedopasowane'])}")
         if result["niedopasowane"]:
             message += "\n\nNiedopasowane faktury:\n" + "\n".join(result["niedopasowane"][:15])
         QMessageBox.information(self, "KSeF", message)

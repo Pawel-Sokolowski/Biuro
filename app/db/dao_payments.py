@@ -290,6 +290,11 @@ def _contractor_key(invoice: dict) -> tuple:
     return ("name", name) if name else ("invoice", invoice["id"])
 
 
+def invoice_contractor_key(invoice: dict) -> tuple:
+    """Publiczny identyfikator nabywcy używany przez ręczny filtr płatności."""
+    return _contractor_key(invoice)
+
+
 def _normalize_contractor_name(value) -> str:
     value = str(value or "").upper().replace("Ł", "L")
     value = "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))

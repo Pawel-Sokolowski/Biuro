@@ -152,6 +152,9 @@ Windows-1250, ISO-8859-2 lub CP852); program pamięta wybór. Rozpoznany numer
 faktury, NIP, rachunek lub jednoznaczna nazwa kontrahenta zawęża jego faktury,
 również z wcześniejszych miesięcy. Opcja **Wszystkie faktury** pozwala wybrać
 inny dokument ręcznie. Samo dopasowanie nie zapisuje płatności.
+Pole rozpoznanego kontrahenta jest edytowalną listą: można wpisać fragment
+nazwy, wybrać właściwego klienta i ograniczyć listę faktur do niego. Automatyczne
+rozpoznanie pozostaje wyłącznie propozycją do ręcznego potwierdzenia.
 
 Przegląd możliwości użycia bibliotek: [docs/library-review.md](docs/library-review.md).
 

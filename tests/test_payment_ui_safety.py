@@ -108,6 +108,11 @@ class BankReviewSafetyTests(unittest.TestCase):
         first.setCurrentIndex(first.findData(12))
         override.setChecked(False)
         self.assertIsNone(first.currentData())
+        contractor = self.dialog.table.cellWidget(0, 6)
+        self.assertTrue(contractor.isEditable())
+        contractor.setCurrentIndex(contractor.findData("firma:202"))
+        self.assertEqual({first.itemData(i) for i in range(1, first.count())}, {12})
+        self.assertEqual(contractor.currentText(), "Klient B")
 
     def test_bulk_confirmation_cannot_overallocate_same_invoice(self):
         self.dialog.table.cellWidget(0, 4).setCurrentIndex(1)
@@ -127,7 +132,7 @@ class BankReviewSafetyTests(unittest.TestCase):
         override = self.dialog.table.cellWidget(0, 7)
         combo = self.dialog.table.cellWidget(0, 4)
         self.assertTrue(override.isChecked())
-        self.assertFalse(override.isEnabled())
+        self.assertTrue(override.isEnabled())
         self.assertEqual({combo.itemData(i) for i in range(1, combo.count())}, {11, 12})
         self.assertIsNone(combo.currentData())
 
@@ -158,7 +163,7 @@ class BankReviewSafetyTests(unittest.TestCase):
         combo = self.dialog.table.cellWidget(0, 4)
         self.assertEqual({combo.itemData(i) for i in range(1, combo.count())}, {11})
         self.assertIn("FV/0091/09/2026", combo.itemText(1))
-        self.assertEqual(self.dialog.table.item(0, 6).text(), "FIRMA SP.J.")
+        self.assertEqual(self.dialog.table.cellWidget(0, 6).currentText(), "FIRMA SP.J.")
         self.assertIsNone(combo.currentData())
 
     def test_bulk_confirmation_lists_invoice_allocations_before_saving(self):
@@ -265,6 +270,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertIn("data:image/png;base64,", rendered)  # kod QR
         dialog = InvoicePreviewDialog(invoice)
         self.addCleanup(dialog.close)
+        self.assertEqual(dialog.invoice["nabywca_pelna"], "Klient UI")
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "faktura.pdf"
             with patch("app.invoices.invoice_preview.QFileDialog.getSaveFileName",

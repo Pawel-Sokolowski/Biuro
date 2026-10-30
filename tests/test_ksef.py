@@ -1,11 +1,17 @@
 import base64
 import datetime as dt
+import hashlib
+import io
+import json
 import unittest
+import zipfile
 from unittest import mock
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.x509.oid import NameOID
 
 from app.db import dao_invoices
@@ -130,6 +136,57 @@ class KsefRateLimitTests(unittest.TestCase):
             client._request("POST", "/sessions/online/X/invoices", token="access", json={})
         self.assertEqual(client.http.calls, 1)
 
+    def test_batch_export_decrypts_and_verifies_zip_package(self):
+        _private, der = _make_cert()
+        key, iv = b"K" * 32, b"I" * 16
+        archive_buffer = io.BytesIO()
+        metadata = {"invoices": [{"ksefNumber": "KSEF-1"}]}
+        with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("KSEF-1.xml", FA3_XML.encode("utf-8"))
+            archive.writestr("_metadata.json", json.dumps(metadata).encode("utf-8"))
+        raw = archive_buffer.getvalue()
+        padder = PKCS7(128).padder()
+        padded = padder.update(raw) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+        encrypted = encryptor.update(padded) + encryptor.finalize()
+        part = {
+            "ordinalNumber": 1, "partName": "part.zip.aes", "method": "GET",
+            "url": "https://storage.test/part", "partSize": len(raw),
+            "partHash": base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii"),
+            "encryptedPartSize": len(encrypted),
+            "encryptedPartHash": base64.b64encode(hashlib.sha256(encrypted).digest()).decode("ascii"),
+            "expirationDate": "2026-10-30T12:00:00Z",
+        }
+
+        class ExportSession:
+            def request(self, method, url, **kwargs):
+                if url.endswith("/security/public-key-certificates"):
+                    return FakeResponse([{
+                        "certificate": base64.b64encode(der).decode("ascii"),
+                        "usage": ["SymmetricKeyEncryption"], "publicKeyId": "KEY-1",
+                    }])
+                if url.endswith("/invoices/exports") and method == "POST":
+                    return FakeResponse({"referenceNumber": "EXPORT-1"}, status=201)
+                if url.endswith("/invoices/exports/EXPORT-1"):
+                    return FakeResponse({"status": {"code": 200}, "package": {
+                        "invoiceCount": 1, "size": len(raw), "parts": [part],
+                        "isTruncated": False, "compressionType": "Zip",
+                    }})
+                if url == "https://storage.test/part":
+                    return FakeResponse(content=encrypted)
+                raise AssertionError((method, url))
+
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=ExportSession())
+        client._access_token = "access"
+        client._access_valid_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+        with mock.patch("app.invoices.ksef_client.os.urandom", side_effect=[key, iv]):
+            result = client.export_invoice_package(
+                dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc),
+                dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc),
+            )
+        self.assertEqual(result["files"]["KSEF-1"], FA3_XML.encode("utf-8"))
+        self.assertEqual(result["metadata"], metadata["invoices"])
+
 
 class KsefTests(DbTestCase):
     def test_token_encryption_roundtrip(self):
@@ -171,8 +228,12 @@ class KsefTests(DbTestCase):
         self.assertEqual(row["nabywca_pelna"], "Klient z KSeF SA")
         self.assertEqual(row["ksef_nip_wysylki"], "1234567890")
         self.assertTrue(row["ksef_hash_faktury"])
+        self.assertEqual(
+            row["ksef_hash_faktury"],
+            base64.b64encode(hashlib.sha256(FA3_XML.encode("utf-8")).digest()).decode("ascii"),
+        )
         self.assertTrue(ksef_url(row["ksef_numer"], invoice=row).startswith(
-            "https://qr.ksef.mf.gov.pl/invoice/1234567890/2026-10-15/"
+            "https://qr.ksef.mf.gov.pl/invoice/1234567890/15-10-2026/"
         ))
         self.assertEqual(dao_invoices.get_invoice_positions(invoice_id)[0]["nazwa"], "Usługa z KSeF")
         self.assertEqual(get_invoice_payment_summary(invoice_id, 1)["paid"], 50)
@@ -187,8 +248,14 @@ class KsefTests(DbTestCase):
             "buyer": {"identifier": {"type": "Nip", "value": "5252525252"}},
         }])
         client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=session)
-        result = ksef_sync.sync_month("2026-10", client=client)
+        progress = []
+        result = ksef_sync.sync_month(
+            "2026-10", client=client,
+            progress=lambda done, total, text: progress.append((done, total, text)),
+        )
         self.assertEqual(result["utworzone"], ["1234567890-20261015-AAAAAA-BB"])
+        self.assertIn((0, 1, "Znaleziono 1 faktur sprzedaży w KSeF"), progress)
+        self.assertEqual(progress[-1][:2], (1, 1))
         rows = dao_invoices.list_invoices(1, True, "2026-10", firma_id)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["numer"], "7/10/2026")
@@ -217,6 +284,26 @@ class KsefTests(DbTestCase):
         result = ksef_sync.sync_month("2026-10", client=client)
         self.assertEqual(result["dopasowane"], [])
         self.assertIn("kilka firm ma ten sam NIP", result["niedopasowane"][0])
+
+    def test_sync_uses_one_export_package_for_a_larger_set(self):
+        _key, der = _make_cert()
+        firma_id = self.make_company("Lokalna nazwa", nip="5252525252")
+        metadata = [{
+            "ksefNumber": "1234567890-20261015-AAAAAA-BB", "invoiceNumber": "7/10/2026",
+            "buyer": {"identifier": {"type": "Nip", "value": "5252525252"}},
+        }]
+        session = FakeSession(der, metadata)
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=session)
+        with mock.patch.object(ksef_sync, "BATCH_EXPORT_THRESHOLD", 0), \
+             mock.patch.object(client, "export_invoice_package", return_value={
+                 "files": {"1234567890-20261015-AAAAAA-BB": FA3_XML.encode("utf-8")},
+                 "metadata": metadata, "reference": "EXPORT-1",
+             }) as export:
+            result = ksef_sync.sync_month("2026-10", client=client)
+        export.assert_called_once()
+        self.assertEqual(result["utworzone"], ["1234567890-20261015-AAAAAA-BB"])
+        self.assertFalse(any(path.startswith("/invoices/ksef/") for _method, path in session.calls))
+        self.assertEqual(dao_invoices.list_invoices(1, True, "2026-10", firma_id)[0]["numer"], "7/10/2026")
 
     def test_credentials_are_stored_encrypted(self):
         ksef_sync.save_ksef_credentials("123-456-78-90", "SEKRET", "test")

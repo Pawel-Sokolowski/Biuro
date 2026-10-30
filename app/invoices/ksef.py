@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 from urllib.parse import quote
+from datetime import datetime
 
 from app.db.dao_app_settings import get_setting
 
@@ -18,6 +19,10 @@ def ksef_url(ksef_numer: Optional[str], invoice: Optional[dict] = None) -> str:
     number = (ksef_numer or "").strip()
     nip = "".join(ch for ch in str(invoice.get("ksef_nip_wysylki") or "") if ch.isdigit())
     issue_date = str(invoice.get("data_wystawienia") or "")[:10]
+    try:
+        issue_date = datetime.strptime(issue_date, "%Y-%m-%d").strftime("%d-%m-%Y")
+    except ValueError:
+        issue_date = ""
     document_hash = str(invoice.get("ksef_hash_faktury") or "").strip()
     # Skrót w linku weryfikacyjnym ma postać Base64URL bez dopełnienia.
     url_hash = document_hash.rstrip("=").replace("+", "-").replace("/", "_")

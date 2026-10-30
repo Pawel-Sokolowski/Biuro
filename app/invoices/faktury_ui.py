@@ -2,11 +2,11 @@ import logging
 import math
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread
 from PyQt6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QPushButton, QSpinBox,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QProgressDialog, QPushButton, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -111,6 +111,31 @@ class QuantityDelegate(QStyledItemDelegate):
         self.committed.emit(index)
 
 
+class KsefSyncWorker(QObject):
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str, bool)
+
+    def __init__(self, month):
+        super().__init__()
+        self.month = month
+
+    def run(self):
+        try:
+            result = sync_month(
+                self.month,
+                progress=lambda done, total, text: self.progress.emit(done, total, text),
+            )
+        except KsefError as exc:
+            self.failed.emit(str(exc), True)
+            return
+        except Exception as exc:
+            logger.exception("Błąd pobierania z KSeF")
+            self.failed.emit(str(exc), False)
+            return
+        self.finished.emit(result)
+
+
 class FakturyPage(QWidget):
     DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
@@ -124,6 +149,9 @@ class FakturyPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.logic = FakturyLogic()
+        self._ksef_thread = None
+        self._ksef_worker = None
+        self._ksef_progress = None
 
         layout = QVBoxLayout(self)
         layout.addLayout(self._build_filters())
@@ -302,18 +330,56 @@ class FakturyPage(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            result = sync_month(month)
-        except KsefError as exc:
-            QMessageBox.critical(self, "KSeF", str(exc))
+        if self._ksef_thread is not None:
+            QMessageBox.information(self, "KSeF", "Synchronizacja KSeF już trwa.")
             return
-        except Exception:
-            logger.exception("Błąd pobierania z KSeF")
+        self.btn_ksef_download.setEnabled(False)
+        self._ksef_progress = QProgressDialog("Pobieranie listy faktur sprzedaży z KSeF…", "", 0, 0, self)
+        self._ksef_progress.setWindowTitle("Synchronizacja KSeF")
+        self._ksef_progress.setWindowModality(Qt.WindowModality.NonModal)
+        self._ksef_progress.setCancelButton(None)
+        self._ksef_progress.setAutoClose(False)
+        self._ksef_progress.setMinimumDuration(0)
+        self._ksef_progress.show()
+        self._ksef_thread = QThread(self)
+        self._ksef_worker = KsefSyncWorker(month)
+        self._ksef_worker.moveToThread(self._ksef_thread)
+        self._ksef_thread.started.connect(self._ksef_worker.run)
+        self._ksef_worker.progress.connect(self._update_ksef_progress)
+        self._ksef_worker.finished.connect(lambda result: self._ksef_sync_finished(month, result))
+        self._ksef_worker.failed.connect(self._ksef_sync_failed)
+        self._ksef_worker.finished.connect(self._ksef_thread.quit)
+        self._ksef_worker.failed.connect(self._ksef_thread.quit)
+        self._ksef_worker.finished.connect(self._ksef_worker.deleteLater)
+        self._ksef_worker.failed.connect(self._ksef_worker.deleteLater)
+        self._ksef_thread.finished.connect(self._cleanup_ksef_sync)
+        self._ksef_thread.start()
+
+    def _update_ksef_progress(self, done, total, text):
+        if not self._ksef_progress:
+            return
+        self._ksef_progress.setRange(0, max(total, 0))
+        self._ksef_progress.setValue(min(done, total) if total else 0)
+        self._ksef_progress.setLabelText(text)
+
+    def _ksef_sync_failed(self, message, expected):
+        if expected:
+            QMessageBox.critical(self, "KSeF", message)
+        else:
             QMessageBox.critical(self, "KSeF", "Nie udało się pobrać faktur z KSeF. Szczegóły w logach.")
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
+
+    def _cleanup_ksef_sync(self):
+        if self._ksef_progress:
+            self._ksef_progress.close()
+            self._ksef_progress.deleteLater()
+        if self._ksef_thread:
+            self._ksef_thread.deleteLater()
+        self._ksef_progress = None
+        self._ksef_worker = None
+        self._ksef_thread = None
+        self.btn_ksef_download.setEnabled(True)
+
+    def _ksef_sync_finished(self, month, result):
         self.refresh()
         message = (f"Miesiąc {month}\nZnaleziono w KSeF: {result.get('znalezione', len(result.get('dopasowane', [])))}"
                    f"\nJuż zapisane lokalnie: {len(result.get('pominiete', []))}"

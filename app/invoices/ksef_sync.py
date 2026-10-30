@@ -26,6 +26,7 @@ TOKEN_KEY = "ksef_token_enc"
 ENV_KEY = "ksef_srodowisko"
 # API ogranicza zakres dat pojedynczego zapytania
 WINDOW_DAYS = 90
+BATCH_EXPORT_THRESHOLD = 10
 
 
 def _local_name(element: ET.Element) -> str:
@@ -262,6 +263,7 @@ def sync_issued_invoices(
     date_to: Optional[datetime] = None,
     client: Optional[KsefClient] = None,
     xml_dir: Optional[Path] = None,
+    progress=None,
 ) -> Dict[str, Any]:
     """Pobiera sprzedaż z KSeF i zastępuje lokalne faktury treścią FA(3)."""
     client = client or client_from_settings()
@@ -292,28 +294,70 @@ def sync_issued_invoices(
     updated: List[str] = []
     skipped: List[str] = []
     unmatched.extend(missing_number)
-    for ksef_number, meta in metadata.items():
+    candidates_for_xml = [
+        number for number, meta in metadata.items()
+        if number not in existing_numbers
+        and (not _metadata_buyer_nip(meta) or company_counts.get(_metadata_buyer_nip(meta), 0) == 1)
+    ]
+    package_files: Optional[Dict[str, bytes]] = None
+    if len(candidates_for_xml) > BATCH_EXPORT_THRESHOLD:
+        exported = client.export_invoice_package(
+            date_from, end, progress=(lambda text: progress(0, len(metadata), text)) if progress else None,
+        )
+        package_files = exported["files"]
+        if progress:
+            progress(0, len(metadata), f"Pobrano paczkę: {len(package_files)} faktur XML")
+    total = len(metadata)
+    if progress:
+        progress(0, total, f"Znaleziono {total} faktur sprzedaży w KSeF")
+    for index, (ksef_number, meta) in enumerate(metadata.items(), 1):
         label = meta.get("invoiceNumber") or ksef_number
         if ksef_number in existing_numbers:
             skipped.append(ksef_number)
+            if progress:
+                progress(index, total, f"{label}: już zapisano lokalnie")
             continue
         buyer_nip = _metadata_buyer_nip(meta)
         if buyer_nip and company_counts.get(buyer_nip, 0) != 1:
             reason = "brak firmy o NIP-ie nabywcy" if not company_counts.get(buyer_nip) else "kilka firm ma ten sam NIP"
             unmatched.append(f"{label} — {reason}")
+            if progress:
+                progress(index, total, f"{label}: {reason}")
             continue
-        xml = client.download_invoice_xml(ksef_number)
+        if progress:
+            progress(index - 1, total, f"Pobieranie {label}")
+        if package_files is not None:
+            xml_bytes = package_files.get(ksef_number)
+            if xml_bytes is None:
+                unmatched.append(f"{label} — brak XML-a w paczce eksportu KSeF")
+                if progress:
+                    progress(index, total, f"{label}: brak w paczce KSeF")
+                continue
+        else:
+            xml_bytes = client.download_invoice_bytes(ksef_number)
         try:
+            xml = xml_bytes.decode("utf-8-sig")
             data = parse_fa3_invoice(xml)
         except KsefError as exc:
             unmatched.append(f"{label} — {exc}")
+            if progress:
+                progress(index, total, f"{label}: błąd XML")
             continue
-        data["invoice_hash"] = base64.b64encode(hashlib.sha256(xml.encode("utf-8")).digest()).decode("ascii")
+        except UnicodeDecodeError:
+            unmatched.append(f"{label} — KSeF zwrócił XML w nieobsługiwanym kodowaniu")
+            if progress:
+                progress(index, total, f"{label}: błędne kodowanie XML")
+            continue
+        data["invoice_hash"] = base64.b64encode(hashlib.sha256(xml_bytes).digest()).decode("ascii")
         if data["currency"] != "PLN":
             unmatched.append(f"{label} — waluta {data['currency']} nie jest obsługiwana przez lokalną ewidencję")
+            if progress:
+                progress(index, total, f"{label}: nieobsługiwana waluta")
             continue
         if data["kind"] != "VAT":
             unmatched.append(f"{label} — typ KSeF {data['kind']} wymaga osobnego importu")
+            if progress:
+                progress(index, total, f"{label}: typ {data['kind']} pominięty")
             continue
         action, _invoice_id = _upsert_downloaded_invoice(data, ksef_number)
         if action not in ("utworzone", "zaktualizowane"):
@@ -323,12 +367,16 @@ def sync_issued_invoices(
                 "niejednoznaczna_faktura": "kilka lokalnych faktur ma ten sam numer",
             }.get(action, action)
             unmatched.append(f"{label} — {reason}")
+            if progress:
+                progress(index, total, f"{label}: {reason}")
             continue
         matched.append(ksef_number)
         (created if action == "utworzone" else updated).append(ksef_number)
         if xml_dir:
             xml_dir.mkdir(parents=True, exist_ok=True)
-            (xml_dir / f"{ksef_number}.xml").write_text(xml, encoding="utf-8")
+            (xml_dir / f"{ksef_number}.xml").write_bytes(xml_bytes)
+        if progress:
+            progress(index, total, f"{label}: zapisano")
     return {"dopasowane": matched, "utworzone": created, "zaktualizowane": updated,
             "pominiete": skipped, "niedopasowane": unmatched, "znalezione": len(metadata)}
 
@@ -380,8 +428,10 @@ def _take_match(
     return matches[0]
 
 
-def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None) -> Dict[str, Any]:
+def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None,
+               progress=None) -> Dict[str, Any]:
     """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""
     start = datetime.strptime(miesiac, "%Y-%m").replace(tzinfo=timezone.utc)
     end = (start + timedelta(days=32)).replace(day=1)
-    return sync_issued_invoices(start, end - timedelta(seconds=1), client=client, xml_dir=xml_dir)
+    return sync_issued_invoices(start, end - timedelta(seconds=1), client=client, xml_dir=xml_dir,
+                                progress=progress)

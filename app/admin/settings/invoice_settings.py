@@ -135,7 +135,10 @@ class InvoiceSettings(QWidget):
         # -------------------------
         # KSeF - odnośnik do podglądu faktury
         # -------------------------
-        layout.addWidget(QLabel("Adres otwierany po kliknięciu numeru KSeF (można użyć {numer}):"))
+        layout.addWidget(QLabel(
+            "Adres otwierany po kliknięciu numeru KSeF "
+            "(pola: {numer}, {nip}, {data}, {hash}):"
+        ))
         self.ksef_url = QLineEdit(self.logic.get_setting(URL_TEMPLATE_KEY) or DEFAULT_URL_TEMPLATE)
         layout.addWidget(self.ksef_url)
 

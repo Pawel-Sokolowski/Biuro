@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import base64
+import hashlib
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -56,6 +58,7 @@ def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
         raise KsefError("KSeF zwrócił nieprawidłowy XML faktury.") from exc
     fa = _child(root, "Fa")
     buyer = _child(root, "Podmiot2")
+    seller = _child(root, "Podmiot1")
     identity = _child(buyer, "DaneIdentyfikacyjne")
     number = _text(fa, "P_2")
     issue_date = _text(fa, "P_1")[:10]
@@ -93,6 +96,7 @@ def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
         "number": number, "issue_date": issue_date, "sale_date": (_text(fa, "P_6") or issue_date)[:10],
         "due_date": due[:10] if due else issue_date, "month": issue_date[:7],
         "buyer_nip": buyer_nip, "buyer_name": _text(identity, "Nazwa"),
+        "seller_nip": _digits(_text(_child(seller, "DaneIdentyfikacyjne"), "NIP")),
         "buyer_country": _text(address_pol, "KodKraju", "PL"),
         "buyer_address": _text(address_pol, "AdresL1"), "buyer_address_2": _text(address_pol, "AdresL2"),
         "net": total_net.quantize(Decimal("0.01")), "gross": total_gross,
@@ -141,6 +145,7 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
             company.get("nazwa_skrocona") or data["buyer_name"], data["buyer_name"], address,
             postal, city, data["buyer_nip"], data["buyer_country"],
             json.dumps(data["positions"], ensure_ascii=False), data["number"], ksef_number,
+            data.get("seller_nip") or None, data.get("invoice_hash") or None,
         )
         if existing:
             invoice_id = existing[0]["id"]
@@ -149,7 +154,8 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
                     data_wystawienia=%s, data_sprzedazy=%s, termin_platnosci=%s,
                     nabywca_skrocona=%s, nabywca_pelna=%s, nabywca_adres=%s,
                     nabywca_kod=%s, nabywca_miasto=%s, nabywca_nip=%s, nabywca_kraj=%s,
-                    pozycje_json=%s, numer=%s, ksef_numer=%s, ksef_data=to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+                    pozycje_json=%s, numer=%s, ksef_numer=%s, ksef_nip_wysylki=%s, ksef_hash_faktury=%s,
+                    ksef_data=to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
                     eksportowana=1, status='wystawiona', data_eksportu=COALESCE(data_eksportu, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
                     updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=%s
             """, values + (invoice_id,))
@@ -159,10 +165,11 @@ def _upsert_downloaded_invoice(data: Dict[str, Any], ksef_number: str) -> tuple[
                 INSERT INTO faktury (firma_id, reczna, miesiac, kwota_netto, kwota_brutto,
                     data_wystawienia, data_sprzedazy, termin_platnosci, nabywca_skrocona,
                     nabywca_pelna, nabywca_adres, nabywca_kod, nabywca_miasto, nabywca_nip,
-                    nabywca_kraj, pozycje_json, numer, ksef_numer, ksef_data, eksportowana,
+                    nabywca_kraj, pozycje_json, numer, ksef_numer, ksef_nip_wysylki,
+                    ksef_hash_faktury, ksef_data, eksportowana,
                     status, data_eksportu, rodzaj)
                 VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 1, 'wystawiona',
+                    %s, %s, %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 1, 'wystawiona',
                     to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 'faktura') RETURNING id
             """, values).fetchone()[0]
             action = "utworzone"
@@ -220,7 +227,10 @@ def _already_imported_ksef_numbers(numbers: List[str]) -> set[str]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT ksef_numer FROM faktury WHERE ksef_numer = ANY(%s)", (numbers,),
+            "SELECT ksef_numer FROM faktury WHERE ksef_numer = ANY(%s) "
+            "AND COALESCE(ksef_hash_faktury, '') <> '' AND COALESCE(ksef_nip_wysylki, '') <> '' "
+            "AND COALESCE(data_wystawienia, '') <> ''",
+            (numbers,),
         ).fetchall()
         return {row["ksef_numer"] for row in rows if row["ksef_numer"]}
     finally:
@@ -298,6 +308,7 @@ def sync_issued_invoices(
         except KsefError as exc:
             unmatched.append(f"{label} — {exc}")
             continue
+        data["invoice_hash"] = base64.b64encode(hashlib.sha256(xml.encode("utf-8")).digest()).decode("ascii")
         if data["currency"] != "PLN":
             unmatched.append(f"{label} — waluta {data['currency']} nie jest obsługiwana przez lokalną ewidencję")
             continue

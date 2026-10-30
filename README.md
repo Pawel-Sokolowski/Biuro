@@ -108,6 +108,14 @@ wznawia pobieranie brakujących dokumentów. Pobieranie XML jest celowo
 ograniczone do około 19 dokumentów na minutę i respektuje pełny `Retry-After`
 z KSeF.
 
+W tabeli wystawionych faktur numer faktury i przycisk **Podgląd** otwierają
+lokalny widok dokumentu z pozycjami oraz opcją **Zapisz PDF**. XSD FA(3)
+służy do walidacji danych, a wygląd podglądu generuje program. Kliknięcie
+numeru KSeF otwiera urzędowy adres weryfikacyjny z NIP-em sprzedawcy, datą
+wystawienia i skrótem XML, jeżeli zostały zapisane podczas wysyłki lub pobrania.
+Starszy dokument bez tych danych zostanie uzupełniony przy kolejnej
+synchronizacji KSeF; do tego czasu otworzy się formularz wyszukiwania.
+
 ## Czynności dodatkowe i kolejne faktury
 
 Zakładka **Czynności dodatkowe** w Zadaniach (dostępna także z Faktur) pokazuje

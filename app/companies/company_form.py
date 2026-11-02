@@ -72,7 +72,12 @@ class _NoWheelFilter(QObject):
     def eventFilter(self, obj, event):
         if event.type() != QEvent.Type.Wheel:
             return False
-        QApplication.sendEvent(self._scroll.viewport(), event)
+        parent = obj.parentWidget() if hasattr(obj, "parentWidget") else None
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if parent is None:
+            return False
+        QApplication.sendEvent(parent.viewport(), event)
         return True
 
 
@@ -502,9 +507,10 @@ class CompanyForm(QDialog):
         metoda_kasowa = QCheckBox()
         metoda_kasowa.setChecked(self._checkbox_default("metoda_kasowa"))
         wliczac_zdrowotna = QCheckBox()
+        wliczac_zdrowotna.setToolTip("Zaznaczone: zdrowotna jest już w cenie usługi księgowej — bez osobnej pozycji i bez dopłaty.")
 
         add_cennik_row(
-            ["Wysyłać do KSeF:", "Wysyłać do kontrahenta:", "Metoda kasowa:", "Uwzględniać zdrowotną:"],
+            ["Wysyłać do KSeF:", "Wysyłać do kontrahenta:", "Metoda kasowa:", "Zdrowotna wliczona do ceny:"],
             [wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa, wliczac_zdrowotna]
         )
 
@@ -850,7 +856,39 @@ class CompanyForm(QDialog):
         btn_bottom.addWidget(btn_save)
         btn_bottom.addWidget(btn_cancel)
 
-        main_layout.addLayout(btn_bottom)
+        # Each section has its own scroll position; Save/Cancel remain visible.
+        self.section_tabs = QTabWidget(self)
+        self.section_tabs.setUsesScrollButtons(True)
+        root_layout.removeWidget(scroll)
+        root_layout.addWidget(self.section_tabs)
+        billing_box = QWidget()
+        billing_layout = QVBoxLayout(billing_box)
+        billing_layout.addWidget(QLabel("Adres e-mail do wysyłki faktur"))
+        self.inputs["email_faktury"] = QLineEdit()
+        self.inputs["email_faktury"].setPlaceholderText("np. invoices@firma.com")
+        self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy.")
+        billing_layout.addWidget(self.inputs["email_faktury"])
+        for label, sections in (
+            ("Firma", [dane_box]), ("Adresy", [adresy_box]),
+            ("Faktury i ceny", [billing_box, cenniki_box]), ("Kadry", [kadry_box]),
+            ("Kontakty", [kontakty_box]), ("Pełnomocnictwa", [pel_box]),
+            ("Filtry poczty", [email_box]), ("Wspólnicy", [wsp_box]), ("Notatki", [not_box]),
+        ):
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            for section in sections:
+                main_layout.removeWidget(section)
+                page_layout.addWidget(section)
+            page_layout.addStretch()
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setFrameShape(QScrollArea.Shape.NoFrame)
+            area.setWidget(page)
+            self.section_tabs.addTab(area, label)
+        scroll.takeWidget()
+        content.deleteLater()
+        scroll.deleteLater()
+        root_layout.addLayout(btn_bottom)
 
         # ============================================================
         # LOGIKA PRZYCISKÓW
@@ -870,7 +908,7 @@ class CompanyForm(QDialog):
         btn_add_note.clicked.connect(self._add_note)
 
         # Kółko myszy przewija formularz, a nie zmienia wartości pól
-        self._wheel_filter = _NoWheelFilter(scroll)
+        self._wheel_filter = _NoWheelFilter(self)
         for widget in self.findChildren((QAbstractSpinBox, QComboBox)):
             widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             widget.installEventFilter(self._wheel_filter)
@@ -968,6 +1006,13 @@ class CompanyForm(QDialog):
         return any(forma.startswith(f.lower()) for f in FORMY_OSOBY_FIZYCZNEJ)
 
     def _validate(self) -> Optional[str]:
+        invoice_email = self.inputs["email_faktury"].text().strip()
+        if invoice_email:
+            from app.invoices.invoice_delivery import parse_recipients
+            try:
+                parse_recipients(invoice_email)
+            except ValueError as exc:
+                return str(exc)
         if not self.inputs["nazwa"].text().strip():
             return "Podaj nazwę firmy."
         if self._is_natural_person():

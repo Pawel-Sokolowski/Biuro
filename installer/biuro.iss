@@ -2,6 +2,11 @@
 #define MyAppVersion "1.3.4"
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
+#define MyBuildDir SourcePath + "..\dist\Biuro"
+
+#ifnexist MyBuildDir + "\Biuro.exe"
+  #error "Build dist\Biuro first: python -m PyInstaller --clean --noconfirm packaging\biuro.spec"
+#endif
 
 [Languages]
 Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
@@ -20,10 +25,12 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
+CloseApplications=yes
+RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\dist\Biuro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Szablon konfiguracji w folderze uzytkownika (nie nadpisuje istniejacego, zostaje po odinstalowaniu)
 Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.example"; Flags: onlyifdoesntexist uninsneveruninstall
 

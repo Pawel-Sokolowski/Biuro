@@ -58,7 +58,7 @@ def _decimal(value: Any, field: str) -> Decimal:
         raise KsefError(f"Faktura KSeF ma nieprawidłową wartość pola {field}.") from exc
 
 
-def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
+def parse_fa3_invoice(xml: str, *, allow_buyer_without_nip=False) -> Dict[str, Any]:
     """Odczytuje dane faktury FA(3) potrzebne do lokalnej ewidencji."""
     try:
         root = ET.fromstring(xml)
@@ -71,7 +71,7 @@ def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
     number = _text(fa, "P_2")
     issue_date = _text(fa, "P_1")[:10]
     buyer_nip = _digits(_text(identity, "NIP"))
-    if not number or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", issue_date) or len(buyer_nip) != 10:
+    if not number or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", issue_date) or (len(buyer_nip) != 10 and not (allow_buyer_without_nip and _text(identity, "BrakID") == "1")):
         raise KsefError("Faktura KSeF nie zawiera numeru, daty wystawienia lub NIP-u nabywcy.")
     positions: List[Dict[str, Any]] = []
     for row in (item for item in fa.iter() if _local_name(item) == "FaWiersz"):
@@ -99,12 +99,17 @@ def parse_fa3_invoice(xml: str) -> Dict[str, Any]:
     total_gross = _decimal(_text(fa, "P_15", sum(Decimal(str(item["brutto"])) for item in positions)), "P_15")
     address = _child(buyer, "Adres")
     address_pol = _child(address, "AdresPol")
+    if address_pol is None:
+        address_pol = address
     due = _text(_child(fa, "TerminPlatnosci"), "Termin")
     return {
         "number": number, "issue_date": issue_date, "sale_date": (_text(fa, "P_6") or issue_date)[:10],
         "due_date": due[:10] if due else issue_date, "month": issue_date[:7],
         "buyer_nip": buyer_nip, "buyer_name": _text(identity, "Nazwa"),
         "seller_nip": _digits(_text(_child(seller, "DaneIdentyfikacyjne"), "NIP")),
+        "seller_name": _text(_child(seller, "DaneIdentyfikacyjne"), "Nazwa"),
+        "seller_address": " ".join(filter(None, (_text(_child(seller, "Adres"), "AdresL1"), _text(_child(seller, "Adres"), "AdresL2")))),
+        "account": _text(_child(fa, "RachunekBankowy"), "NrRB"),
         "buyer_country": _text(address_pol, "KodKraju", "PL"),
         "buyer_address": _text(address_pol, "AdresL1"), "buyer_address_2": _text(address_pol, "AdresL2"),
         "net": total_net.quantize(Decimal("0.01")), "gross": total_gross,

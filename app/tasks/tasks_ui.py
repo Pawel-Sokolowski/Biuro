@@ -131,6 +131,26 @@ class TasksPage(QWidget):
         if hasattr(self, "extra_activities"):
             self.extra_activities.refresh()
 
+    def show_assignment_notification(self, task_id):
+        self.tabs.setCurrentIndex(0)
+        self.status_filter.blockSignals(True)
+        self.assignee_filter.blockSignals(True)
+        self.status_filter.setCurrentIndex(0)
+        self.assignee_filter.setCurrentIndex(max(0, self.assignee_filter.findData(self.pracownik_id)))
+        self.status_filter.blockSignals(False)
+        self.assignee_filter.blockSignals(False)
+        self._refresh()
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 6)
+            if item and item.text() == str(task_id):
+                self.table.setCurrentCell(row, 0)
+                self.table.selectRow(row)
+                self.table.scrollToItem(self.table.item(row, 0))
+                self.table.setFocus()
+                return True
+        QMessageBox.information(self, "Powiadomienie", "Zadanie nie jest już Tobie przypisane lub zostało usunięte.")
+        return False
+
     def _selected_id(self) -> Optional[int]:
         row = self.table.currentRow()
         if row < 0:

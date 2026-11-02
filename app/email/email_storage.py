@@ -719,6 +719,22 @@ def save_raw_message(
     finally:
         conn.close()
 
+def get_message_cache_states(konto_id: int, folder_id: int, uids: List[str]):
+    """Inspect cached bodies in one query without transferring attachment blobs."""
+    if not uids:
+        return {}
+    conn = get_conn()
+    try:
+        rows = conn.execute("""SELECT we.uid, we.id, COALESCE(raw.size_bytes,0) > 0 AS cached
+                               FROM wiadomosci_email we
+                               LEFT JOIN email_raw_messages raw ON raw.wiadomosc_id=we.id
+                               WHERE we.konto_id=%s AND we.folder_id=%s AND we.uid=ANY(%s)""",
+                            (konto_id,folder_id,[str(uid) for uid in uids])).fetchall()
+        return {str(row[0]):(int(row[1]),bool(row[2])) for row in rows}
+    finally:
+        conn.close()
+
+
 def load_raw_message(
     message_row_id: int,
 ) -> Optional[bytes]:
@@ -1223,6 +1239,27 @@ def count_assigned_by_employee(konto_id: int) -> Dict[int, int]:
         conn.close()
 
 
+def count_unread_assigned_by_employee(konto_id: int) -> Dict[int, int]:
+    """Unread assigned messages across folders; copied Message-IDs count once."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT a.employee_id,
+                   COUNT(DISTINCT CASE WHEN NULLIF(we.message_id, '') IS NULL THEN 'row:' || we.id::text ELSE 'msg:' || we.message_id END) AS unread
+            FROM wiadomosci_email we
+            JOIN wiadomosci_email w2 ON w2.konto_id = we.konto_id AND {_SAME_MESSAGE}
+            JOIN email_message_assignments a ON a.message_id = w2.id
+            WHERE we.konto_id = %s AND COALESCE(we.usunieta, 0) = 0
+              AND COALESCE(we.przeczytana, 0) = 0 AND a.employee_id IS NOT NULL
+            GROUP BY a.employee_id
+            """, (konto_id,),
+        ).fetchall()
+        return {int(row[0]): int(row[1]) for row in rows}
+    finally:
+        conn.close()
+
+
 def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -1325,5 +1362,33 @@ def rename_folder_local(konto_id: int, old: str, new: str) -> int:
             changed += 1
         conn.commit()
         return changed
+    finally:
+        conn.close()
+
+
+def resolve_assigned_message(actor_id: int, target: dict):
+    """Revalidate account access and follow an assignment after an IMAP move."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            f"""
+            SELECT we.*, fe.server_name
+            FROM wiadomosci_email we
+            JOIN foldery_email fe ON fe.id = we.folder_id
+            JOIN konta_email ke ON ke.id = we.konto_id
+            JOIN pracownik_konto_email pke ON pke.konto_id = ke.id AND pke.pracownik_id = %s
+            WHERE we.konto_id = %s AND COALESCE(we.usunieta, 0) = 0
+              AND COALESCE(ke.aktywne, 1) = 1 AND COALESCE(ke.systemowe, 0) = 0
+              AND (we.id = %s OR (NULLIF(%s, '') IS NOT NULL AND we.message_id = %s))
+              AND EXISTS (
+                  SELECT 1 FROM wiadomosci_email w2
+                  JOIN email_message_assignments a ON a.message_id = w2.id AND a.employee_id = %s
+                  WHERE w2.konto_id = we.konto_id AND {_SAME_MESSAGE})
+            ORDER BY (we.id = %s) DESC, we.id DESC LIMIT 1
+            """,
+            (actor_id, target['account_id'], target.get('row_id'), target.get('message_id'),
+             target.get('message_id'), actor_id, target.get('row_id')),
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()

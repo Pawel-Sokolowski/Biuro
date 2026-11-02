@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_invoices import get_invoice_positions, update_invoice_draft
 from app.invoices.positions import normalize_position, totals
+from app.invoices.service_picker import choose_service
+from app.invoices.vat_summary import VatSummary
 from app.utils.parsing import to_float
 
 COL_NAZWA, COL_ILOSC, COL_JEDN, COL_CENA, COL_VAT, COL_NETTO, COL_BRUTTO = range(7)
@@ -74,6 +76,8 @@ class InvoiceEditorDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         layout.addWidget(self.table)
+        self.vat_summary = VatSummary()
+        layout.addWidget(self.vat_summary)
 
         row_buttons = QHBoxLayout()
         self.btn_add = QPushButton("Dodaj pozycję")
@@ -82,6 +86,9 @@ class InvoiceEditorDialog(QDialog):
         self.btn_remove.clicked.connect(self._remove_row)
         row_buttons.addWidget(self.btn_add)
         row_buttons.addWidget(self.btn_remove)
+        self.btn_catalogue = QPushButton("Dodaj z katalogu usług")
+        self.btn_catalogue.clicked.connect(self._add_catalogue_service)
+        row_buttons.addWidget(self.btn_catalogue)
         row_buttons.addStretch()
         self.lbl_total = QLabel()
         row_buttons.addWidget(self.lbl_total)
@@ -106,6 +113,15 @@ class InvoiceEditorDialog(QDialog):
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.btn_add.setEnabled(False)
             self.btn_remove.setEnabled(False)
+            self.btn_catalogue.setEnabled(False)
+
+    def _add_catalogue_service(self):
+        if self.read_only:
+            return
+        position = choose_service(self)
+        if position is not None:
+            self._add_row(position)
+            self._recalculate_total()
 
     def _add_row(self, position: Dict[str, Any]):
         item = normalize_position(position)
@@ -114,7 +130,7 @@ class InvoiceEditorDialog(QDialog):
         self.table.insertRow(row)
         values = {
             COL_NAZWA: item["nazwa"], COL_ILOSC: f"{item['ilosc']:g}", COL_JEDN: item.get("jednostka", ""),
-            COL_CENA: f"{item['cena_netto']:.2f}", COL_VAT: f"{item['vat']:g}",
+            COL_CENA: f"{item['cena_netto']:.2f}", COL_VAT: item.get("vat_code") or f"{item['vat']:g}",
             COL_NETTO: f"{item['netto']:.2f}", COL_BRUTTO: f"{item['brutto']:.2f}",
         }
         for column, text in values.items():
@@ -142,10 +158,11 @@ class InvoiceEditorDialog(QDialog):
         base = dict(self.table.item(row, COL_NAZWA).data(Qt.ItemDataRole.UserRole) or {})
         base.pop("netto", None)
         base.pop("brutto", None)
+        base.pop("vat_code", None)
         base.update({
             "nazwa": text(COL_NAZWA), "ilosc": to_float(text(COL_ILOSC), 1.0),
             "jednostka": text(COL_JEDN), "cena_netto": to_float(text(COL_CENA)),
-            "vat": to_float(text(COL_VAT), 23.0),
+            "vat": text(COL_VAT) or 23,
         })
         return normalize_position(base)
 
@@ -164,6 +181,7 @@ class InvoiceEditorDialog(QDialog):
         self._recalculate_total()
 
     def _recalculate_total(self):
+        self.vat_summary.set_positions(self.positions())
         netto, brutto = totals(self.positions())
         self.lbl_total.setText(f"Razem netto: {netto:.2f} zł    brutto: {brutto:.2f} zł")
 

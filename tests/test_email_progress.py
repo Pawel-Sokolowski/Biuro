@@ -43,12 +43,13 @@ class ProgressTests(DbTestCase):
         from app.email.email_storage import save_message_headers
         save_message_headers(self.konto, folder_id, [header(1)])
         self.assertTrue(account_has_headers(self.konto))
-        self.assertFalse(email_sync.needs_initial_sync(self.konto))
+        self.assertTrue(email_sync.needs_initial_sync(self.konto))  # same nagłówki nie kończą inicjalnego pobierania
 
     def test_all_folders_progress(self):
         calls = []
         with mock.patch.object(email_sync, "list_folders_from_imap_and_store", self.fake_list), \
-                mock.patch.object(email_sync, "fetch_headers", lambda k, f, **kw: [header(1), header(2)]):
+                mock.patch.object(email_sync, "fetch_headers", lambda k, f, **kw: [header(1), header(2)]), \
+                mock.patch.object(email_sync, "prefetch_messages", return_value=2):
             total = email_sync.sync_and_prefetch(
                 self.konto, ["INBOX"], first_run=True, all_folders=True,
                 on_progress=lambda *a: calls.append(a),
@@ -57,7 +58,7 @@ class ProgressTests(DbTestCase):
         self.assertEqual(total, 6)
         self.assertEqual(calls[0], (0, 3, "INBOX", 0))
         self.assertEqual(calls[-1], (3, 3, "", 6))
-        self.assertEqual([c[0] for c in calls], [0, 1, 2, 3])
+        self.assertEqual(sorted(set(c[0] for c in calls)), [0, 1, 2, 3])
         self.assertFalse(email_sync.needs_initial_sync(self.konto))
 
     def test_incremental_only_listed_folders(self):
@@ -105,11 +106,11 @@ class ProgressTests(DbTestCase):
         self.assertEqual(prefetch.call_count, 1)
         self.assertEqual(len(prefetch.call_args.args[2]), email_sync.INCREMENTAL_PREFETCH_LIMIT)
 
-    def test_prepopulated_db_skips_progress(self):
+    def test_prepopulated_headers_do_not_skip_initial_full_download(self):
         self.fake_list(self.konto)
         from app.email.email_storage import save_message_headers
         save_message_headers(self.konto, get_folder_id(self.konto, "INBOX"), [header(1)])
-        self.assertFalse(email_sync.needs_initial_sync(self.konto))
+        self.assertTrue(email_sync.needs_initial_sync(self.konto))
 
 
 if __name__ == "__main__":

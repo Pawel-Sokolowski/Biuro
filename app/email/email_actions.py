@@ -159,6 +159,7 @@ def send_email_smtp(
     references: Optional[str] = None,
     save_copy: bool = False,
     copy_folder: Optional[str] = None,
+    require_attachments: bool = False,
 ) -> Tuple[bool, str]:
     """Wysyła wiadomość. Przy `save_copy` kopia trafia do `copy_folder` (np. folder oryginału,
     folder z reguły filtra), a gdy go brak - do folderu Wysłane."""
@@ -181,6 +182,9 @@ def send_email_smtp(
         references,
     )
 
+    if require_attachments and len(list(msg.iter_attachments())) != len(attachments or []):
+        raise ValueError("Nie udało się dołączyć wszystkich wymaganych załączników. Wiadomość nie została wysłana.")
+
     recipients = (
         list(to_addrs or [])
         + list(cc or [])
@@ -191,7 +195,7 @@ def send_email_smtp(
         with open_smtp(
             cfg["host"], cfg["port"], cfg["ssl"], cfg["user"], cfg["password"], timeout
         ) as smtp:
-            smtp.send_message(
+            refused = smtp.send_message(
                 msg,
                 from_addr=cfg["user"],
                 to_addrs=recipients,
@@ -199,6 +203,8 @@ def send_email_smtp(
 
         if save_copy:
             store_sent_copy(konto_id, msg, copy_folder)
+        if isinstance(refused, dict) and refused:
+            return False, "SMTP odrzucił część odbiorców: " + ", ".join(refused)
         return True, "OK"
 
     except Exception as exc:

@@ -19,6 +19,7 @@ from app.reports.reports_ui import ReportsPage
 from app.admin.settings.settings_ui import GlobalSettingsPage
 from app.invoices.faktury_ui import FakturyPage
 from app.tasks.tasks_ui import TasksPage
+from app.notifications import NotificationCenter
 from app.kalendarz.calendar_ui import CalendarPage
 from app.dashboard.dashboard_ui import DashboardPage
 
@@ -417,51 +418,8 @@ class OfficeManagerApp(QMainWindow):
         return None
 
     def _build_ui(self):
-        self.setStyleSheet("""
-            QWidget { background-color: #eae0d5; font-family: Arial; }
-            QLabel { color: #2c3e50; }
-            QPushButton {
-                background-color: #1c70b7;
-                color: white;
-                padding: 8px 14px;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #155a8a; }
-            QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit {
-                background-color: white;
-                border: 1px solid #b8b1a8;
-                border-radius: 4px;
-                padding: 4px 6px;
-            }
-            QComboBox { padding: 4px 6px; min-height: 22px; }
-            QTableView, QTreeView, QListView {
-                background-color: white;
-                alternate-background-color: #f6f2ed;
-                border: 1px solid #d0c7bd;
-                selection-background-color: #cfe3f5;
-                selection-color: #1c1c1c;
-            }
-            QHeaderView::section {
-                background-color: #f1e9e0;
-                color: #2c3e50;
-                font-weight: bold;
-                padding: 6px 8px;
-                border: none;
-                border-bottom: 2px solid #d0c7bd;
-            }
-            QTabBar::tab {
-                background: #f1e9e0;
-                padding: 8px 18px;
-                border: 1px solid #d0c7bd;
-                border-bottom: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected { background: white; font-weight: bold; }
-            QGroupBox { border: 1px solid #d0c7bd; border-radius: 6px; margin-top: 10px; padding-top: 8px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-        """)
+        from app.preferences.appearance import apply_appearance
+        apply_appearance(self.pracownik_id)
 
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -470,17 +428,7 @@ class OfficeManagerApp(QMainWindow):
 
         self.sidebar = QListWidget()
         self.sidebar.setFixedWidth(240)
-        self.sidebar.setStyleSheet("""
-            QListWidget {
-                background-color: #1c70b7;
-                color: white;
-                border: none;
-                font-size: 16px;
-            }
-            QListWidget::item { padding: 18px; }
-            QListWidget::item:selected { background-color: #155a8a; font-weight: bold; }
-            QListWidget::item:hover { background-color: #1668a3; }
-        """)
+        self.sidebar.setObjectName("mainSidebar")
 
         self.sidebar.setItemDelegate(BadgeDelegate(self.sidebar))
         self.sidebar.addItems([
@@ -517,7 +465,7 @@ class OfficeManagerApp(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
 
         header = QWidget()
-        header.setStyleSheet("background-color: #ffffff; border-bottom: 2px solid #d0c7bd;")
+        header.setObjectName("appHeader")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(20, 12, 20, 12)
 
@@ -549,6 +497,8 @@ class OfficeManagerApp(QMainWindow):
 
         header_layout.addStretch()
         header_layout.addWidget(live_container)
+        self.notification_center = NotificationCenter(self.pracownik_id, self._open_assignment_notification, header)
+        header_layout.addWidget(self.notification_center)
         minimize_button = QPushButton("—")
         minimize_button.setFixedSize(34, 28)
         minimize_button.setToolTip("Minimalizuj okno")
@@ -608,6 +558,7 @@ class OfficeManagerApp(QMainWindow):
 
         try:
             allowed = set(allowed_tabs(self.pracownik_id))
+            allowed.add("Ustawienia")
         except Exception:
             logger.warning("Nie udało się odczytać uprawnień do zakładek", exc_info=True)
             return
@@ -621,6 +572,23 @@ class OfficeManagerApp(QMainWindow):
         if first_visible >= 0:
             self.sidebar.setCurrentRow(first_visible)
             self.pages.setCurrentIndex(first_visible)
+
+    def _open_assignment_notification(self, target):
+        from app.security.authorization import allowed_tabs
+        kind = target.get("kind")
+        tab_name = {"email": "E-mail", "task": "Zadania"}.get(kind)
+        if not tab_name or tab_name not in allowed_tabs(self.pracownik_id):
+            QMessageBox.warning(self, "Powiadomienie", "Nie masz dostępu do tego modułu.")
+            return False
+        row = next((row for row in range(self.sidebar.count())
+                    if self.sidebar.item(row).data(Qt.ItemDataRole.UserRole) == tab_name), -1)
+        if row < 0:
+            return False
+        self.sidebar.setCurrentRow(row)
+        self.pages.setCurrentIndex(row)
+        if kind == "email":
+            return self.page_email.open_assignment_notification(target)
+        return self.page_tasks.show_assignment_notification(target["task_id"])
 
     def _set_chat_badge(self, count: int):
         self._set_badge("Czat", count)
@@ -703,7 +671,7 @@ class OfficeManagerApp(QMainWindow):
     def _refresh_current_page(self, index: int):
         """Odświeża dane widoku po przełączeniu, żeby zmiany z innych widoków były widoczne."""
         page = self.pages.widget(index)
-        for name in ("_reload_rows", "_refresh", "refresh", "_refresh_all"):
+        for name in ("_reload_rows", "_refresh", "refresh", "_refresh_all", "refresh_all"):
             action = getattr(page, name, None)
             if callable(action):
                 try:
@@ -727,6 +695,13 @@ class OfficeManagerApp(QMainWindow):
             self.show()
 
     def closeEvent(self, event):
+        from app.preferences.mail_sync import MailSyncSettings
+        for sync_page in self.findChildren(MailSyncSettings):
+            sync_page.stop()
+        if hasattr(self, "page_email"):
+            self.page_email.stop_background_sync()
+        if hasattr(self, "notification_center"):
+            self.notification_center.timer.stop()
         settings = QSettings("Biuro", "OfficeManager")
         settings.setValue("window/maximized", self.isMaximized())
         if not self.isMaximized():

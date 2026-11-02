@@ -17,6 +17,8 @@ def _scrollable(factory: Callable[[], QWidget]) -> Callable[[], QWidget]:
         return area
     return build
 
+from app.preferences.appearance import AppearanceSettings
+from app.preferences.mail_sync import MailSyncSettings
 from app.admin.global_settings_logic import GlobalSettingsLogic
 from app.admin.settings.audit_settings import AuditSettings
 from app.admin.settings.companies_settings import CompaniesSettings
@@ -43,18 +45,15 @@ class GlobalSettingsPage(QWidget):
         self.is_admin = is_admin
         self.logic = GlobalSettingsLogic()
 
-        self.setWindowTitle("Panel administratora – ustawienia globalne")
+        self.setWindowTitle("Ustawienia")
         self.resize(1100, 800)
 
         main_layout = QVBoxLayout(self)
-        title = QLabel("Panel administratora – ustawienia globalne systemu")
+        title = QLabel("Ustawienia")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         main_layout.addWidget(title)
 
         perms = self.logic.get_user_permissions(self.pracownik_id)
-        if not perms.get("can_access_admin_settings"):
-            main_layout.addWidget(QLabel("Brak uprawnień administratora."))
-            return
 
         body = QHBoxLayout()
         main_layout.addLayout(body)
@@ -68,6 +67,10 @@ class GlobalSettingsPage(QWidget):
 
         self._factories: List[Optional[Callable[[], QWidget]]] = []
         self._built: List[Optional[QWidget]] = []
+
+        self._add_section("Moje ustawienia")
+        self._add_page("Wygląd", lambda: AppearanceSettings(self.pracownik_id))
+        self._add_page("Synchronizacja poczty", lambda: MailSyncSettings(self.pracownik_id))
 
         can_view_invoices = perms.get("can_view_invoices") or perms.get("can_access_admin_settings")
         sections: List[Tuple[str, List[Tuple[str, Callable[[], QWidget], bool]]]] = [
@@ -96,6 +99,8 @@ class GlobalSettingsPage(QWidget):
                 ("Audyt i importy", AuditSettings, True),
             ]),
         ]
+        if not perms.get("can_access_admin_settings"):
+            sections = []
         for section, pages in sections:
             visible = [page for page in pages if page[2]]
             if not visible:

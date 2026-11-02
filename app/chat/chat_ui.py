@@ -321,7 +321,7 @@ class ChatPage(QWidget):
             if date_header != last_date:
                 date_label = QLabel(date_header)
                 date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                date_label.setStyleSheet("color: #666; font-weight: bold; margin: 8px 0;")
+                date_label.setStyleSheet("color: palette(text); font-weight: bold; margin: 8px 0;")
                 self.messages_layout.addWidget(date_label)
                 last_date = date_header
                 # reset sender grouping on date change
@@ -351,7 +351,7 @@ class ChatPage(QWidget):
 
                 header_text = f"{sender_name}" + (f"  {time_str}" if time_str else "")
                 header = QLabel(header_text)
-                header.setStyleSheet("font-weight: 600; color: #222; margin-bottom: 4px;")
+                header.setStyleSheet("font-weight: 600; color: palette(text); margin-bottom: 4px;")
                 group_vlayout.addWidget(header)
 
                 self.messages_layout.addWidget(group_frame)
@@ -364,7 +364,7 @@ class ChatPage(QWidget):
             text_label.setWordWrap(True)
             text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             text_label.setStyleSheet("""
-                background: #f1f1f1;
+                background: palette(alternate-base);
                 border-radius: 8px;
                 padding: 8px;
                 margin-bottom: 4px;

@@ -12,7 +12,7 @@ def vat_percent(value: Any, default: float = 23.0) -> float:
     if value in (None, ""):
         return default
     text = str(value).replace("%", "").strip().lower()
-    if text in ("zw", "np", "oo"):
+    if text in ("zw", "np", "np i", "np ii", "oo", "0 kr", "0 wdt", "0 ex"):
         return 0.0
     return to_float(text, default)
 
@@ -28,6 +28,11 @@ def normalize_position(position: Dict[str, Any]) -> Dict[str, Any]:
     else:
         cena = to_float(result.get("netto")) / ilosc if ilosc else 0.0
 
+    raw_vat = str(result.get("vat", result.get("stawka_vat", ""))).strip().lower()
+    if raw_vat in ("zw", "np", "np i", "np ii", "oo", "0 kr", "0 wdt", "0 ex"):
+        result["vat_code"] = raw_vat
+    elif result.get("vat_code") and vat != 0:
+        result.pop("vat_code", None)
     netto = round(cena * ilosc, 2)
     result.update({
         "nazwa": result.get("nazwa") or result.get("opis") or "",

@@ -74,7 +74,65 @@ python main.py
 
 `migrate_db.py` kończy się sukcesem tylko wtedy, gdy schemat jest aktualny (`SCHEMA_VERSION` w `app\db\schema.py`). Zmiana struktury bazy wymaga podbicia tej wersji.
 
+## Poczta i powiadomienia
+
+Pełne pobieranie uruchamia się **wyłącznie ręcznie** w **Ustawienia → Moje
+ustawienia → Synchronizacja poczty**. Wybierz jedno konto albo **Wszystkie
+dostępne konta** i użyj **Pobierz pełne wiadomości z 2 lat**. Każdy użytkownik
+może pobierać swoje przypisane konta; administrator ma dostęp do wszystkich
+kont. Opcja jest także dostępna dla wybranego konta w administracyjnych
+ustawieniach poczty.
+
+Pobieranie działa w tle i zapisuje pełne wiadomości wraz z załącznikami z
+ostatnich 730 dni ze wszystkich wybieralnych folderów. Można pracować w innych
+modułach lub zminimalizować okno. Po przerwaniu uruchom opcję w ustawieniach
+ponownie — zapisane już wiadomości zostaną pominięte. Otwarcie aplikacji ani
+nieukończona poprzednia synchronizacja nie uruchamiają pełnego pobierania.
+Postęp pokazuje folder, liczbę sprawdzonych wiadomości i czas działania.
+
+Później program sprawdza nowe wiadomości co dwie minuty we wszystkich folderach.
+Różne konta synchronizują się niezależnie; operacje jednego konta są kolejkowane,
+a nie uruchamiane równocześnie. Nieudane odświeżenie folderów nie usuwa lokalnej
+poczty. Obok pełnego nazwiska pracownika jest liczba przypisanych mu
+nieprzeczytanych wiadomości na wybranym koncie. Liczniki przypisań są odświeżane
+co 15 sekund oraz po odczytaniu/przypisaniu wiadomości.
+
+Przycisk **Powiadomienia** w nagłówku pokazuje przypisane e-maile i otwarte
+zadania. Kliknięcie przenosi do wiadomości lub zaznacza zadanie na liście.
+Stan odczytania powiadomień jest zapisywany dla użytkownika na tym komputerze;
+oznaczenie powiadomienia jako odczytane nie kończy zadania ani nie oznacza
+wiadomości e-mail jako przeczytanej.
+
 ## Rozliczenia i KSeF
+
+### Wygląd i katalog usług
+
+Każdy użytkownik ma dostęp do **Ustawienia → Moje ustawienia → Wygląd**.
+Można wybrać jasny lub ciemny motyw oraz kolor akcentu. Zmiany działają od razu
+i są zapisywane osobno dla każdego konta na danym komputerze. Ustawienia
+administracyjne nadal wymagają odpowiednich uprawnień.
+
+Podczas wystawiania faktury przycisk **Dodaj z katalogu usług** otwiera
+wyszukiwalną listę usług dodatkowych. W zakładce roboczych faktur pozycje
+edytuje się bezpośrednio w dolnej tabeli: nazwa, ilość, jednostka, cena netto,
+VAT i kategoria. Zmiany zapisują się automatycznie, a wartości netto i brutto
+są przeliczane. Obok tabeli można wybrać usługę z katalogu i jej ilość,
+dodać nową pozycję lub usunąć wybraną.
+Wybierz usługę i ilość; nazwa, cena netto i VAT są pobierane z katalogu.
+Po dodaniu można edytować pozycję. Katalog jest zarządzany przez administratora
+w **Ustawienia → Usługi dodatkowe**. Dodanie pozycji z katalogu nie tworzy
+wpisu w ewidencji wykonanych czynności.
+
+W formularzu nowego kontrahenta przycisk **Pobierz dane po NIP (GUS / CEIDG)**
+uzupełnia dane firmy z rejestrów. Pobieranie działa w tle, wymaga konfiguracji
+źródeł danych i nie zapisuje kontrahenta automatycznie. Dane można sprawdzić
+i poprawić przed zapisaniem.
+
+Pole **Zdrowotna wliczona do ceny** oznacza, że opłata jest już zawarta w cenie
+księgowości: nie zwiększa ceny i nie tworzy osobnej pozycji zdrowotnej na fakturze.
+Gdy pole jest odznaczone, zdrowotna jest naliczana osobno według konfiguracji.
+
+### Uzgadnianie płatności
 
 W **Fakturach wystawionych** przycisk **Rozlicz ING MT940** importuje wyciąg
 do kolejki uzgodnień. Wybierz przelew, fakturę i kwotę, a następnie potwierdź
@@ -88,12 +146,41 @@ datę otrzymania pieniędzy. Księgowy widok miesięczny pokazuje numer faktury
 i datę pełnego rozliczenia przed „Kompletem”, dla faktur dotyczących wybranego
 miesiąca. Szczegóły częściowych wpłat są dostępne w podpowiedzi komórki.
 
+Pod pozycjami faktury oraz w PDF znajduje się podsumowanie według stawek VAT:
+netto, podatek i brutto, z osobnym wierszem sumy.
+
 Pobieranie i wysyłka KSeF wymagają certyfikatu i klucza prywatnego w ustawieniach;
-token nie zastępuje certyfikatu. **Wyślij XML do KSeF** wysyła przygotowany plik
-FA(3) dla wybranej wystawionej faktury po sprawdzeniu jej danych i potwierdzeniu
-środowiska. Program nie generuje tego pliku. **Status wysyłki KSeF** sprawdza
-przetwarzanie i zapisuje numer dopiero po przyjęciu przez MF. Nieznany wynik
-wysyłki należy wyjaśnić przed jej ponowieniem, aby uniknąć duplikatu.
+token nie zastępuje certyfikatu. Zaznacz dokumenty i użyj **Wyślij zaznaczone do
+KSeF** (wystawione) lub **Wystaw i wyślij do KSeF** (robocze). Numer faktury
+można wcześniej uzupełnić i zapisać nad tabelą pozycji. Program generuje FA(3)
+z danych faktury i sprawdza go lokalnie z dołączonym schematem XSD.
+Po potwierdzeniu środowiska wysyłka i sprawdzanie przyjęcia działają w tle.
+Po przyjęciu numer pojawia się w tabeli oraz podglądzie/PDF; przyjęty XML jest
+pobierany do katalogu danych aplikacji `ksef/<środowisko>/<NIP>/<numer>.xml`.
+Ponowne sprawdzanie i pobieranie nie wysyła faktury drugi raz. Stan niepewnej
+wysyłki jest zachowywany również po zamknięciu programu. **Status wysyłki KSeF**
+pozwala wznowić sprawdzanie, gdy automatyczne próby się zakończą.
+Generator obsługuje krajowe faktury PLN oraz korekty, ze stawkami 23/22, 8/7,
+5 i 0%; zwolnienie wymaga podania podstawy prawnej. Nieobsługiwane procedury
+lub brakujące dane zatrzymują wysyłkę z komunikatem.
+
+### Wysyłka PDF do klienta
+
+W formularzu firmy sekcja **Faktury i ceny → Adres e-mail do wysyłki faktur**
+pozwala wskazać adres rozliczeniowy, np. `invoices@firma.com`. Ma on pierwszeństwo
+przed ogólnym adresem kontaktowym. Formularz firmy jest podzielony na zakładki,
+a przyciski zapisu pozostają widoczne poza przewijaną treścią.
+
+Zaznacz **Po przyjęciu w KSeF wyślij PDF do klienta** przed wysyłką dokumentów.
+Program pokaże nadawcę i odbiorców do zatwierdzenia. Kolejność jest następująca:
+przyjęcie w KSeF, nadanie numeru, pobranie i sprawdzenie XML, wygenerowanie PDF
+z numerem i urzędowym QR, wysyłka z zatwierdzonego konta pocztowego. PDF powstaje
+na podstawie przyjętego XML, a nie późniejszych zmian w kartotece. Adresaci są
+utrwalani w kolejce. Przycisk **Wyślij PDF e-mailem** umożliwia wysyłkę również
+faktur mających już numer KSeF. Stan wysyłki jest widoczny w tabeli faktur.
+Niepewny wynik SMTP wymaga sprawdzenia; program nie ponawia automatycznie
+wiadomości, która mogła już dotrzeć. Nowa wersja wymaga jednokrotnego uruchomienia
+**Biuro – aktualizacja bazy** po instalacji.
 
 **Pobierz z KSeF** pobiera sprzedażowe faktury VAT oraz korekty FA(3) z wybranego miesiąca.
 Nabywca jest łączony z firmą po NIP-ie. Dokument o tym samym numerze KSeF lub

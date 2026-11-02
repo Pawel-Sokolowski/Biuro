@@ -260,7 +260,7 @@ def list_invoice_choices(
             LEFT JOIN (
                 SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
             ) p ON p.faktura_id = i.id
-            WHERE i.rodzaj = 'faktura' AND COALESCE(i.eksportowana, 0) = 1
+            WHERE i.rodzaj = 'faktura' AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
               AND CAST(i.kwota_brutto AS NUMERIC(14,2)) > COALESCE(p.paid, 0)
             ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
             """
@@ -447,7 +447,7 @@ def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
                    p.id AS payment_id, p.kwota, p.data_zaplaty, p.sposob
             FROM faktury i LEFT JOIN faktury_platnosci p ON p.faktura_id = i.id
             WHERE i.miesiac = %s AND i.rodzaj = 'faktura'
-              AND COALESCE(i.eksportowana, 0) = 1 AND i.firma_id IS NOT NULL
+              AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL AND i.firma_id IS NOT NULL
             ORDER BY i.id, p.data_zaplaty, p.id
         """, (month,)).fetchall()
         invoices = {}
@@ -489,6 +489,8 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
             raise PaymentError("Do faktury w PLN można przypisać wyłącznie przelew w PLN.")
         if transfer["kierunek"] != "C":
             raise PaymentError("Rozliczać można tylko zwykły wpływ, bez storna i zwrotów.")
+        if invoice["cancelled_at"]:
+            raise PaymentError("Faktura jest anulowana.")
         if transfer["kwota"] <= 0 or invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
             raise PaymentError("Można rozliczyć tylko wpływ na właściwą fakturę.")
         already_transfer = conn.execute(
@@ -531,6 +533,8 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
         inv = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not inv or inv["rodzaj"] != "faktura" or not can_access_invoice(actor_id, inv["firma_id"]):
             raise PaymentError("Nie znaleziono dostępnej faktury.")
+        if inv["cancelled_at"]:
+            raise PaymentError("Faktura jest anulowana.")
         if not inv["eksportowana"]:
             raise PaymentError("Rozliczać można tylko wystawione faktury.")
         paid = conn.execute(

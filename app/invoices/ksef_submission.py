@@ -137,6 +137,8 @@ def _authorized_invoice(invoice_id: int, actor_id: int):
         row = conn.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
         if not row or not can_access_invoice(actor_id, row["firma_id"]):
             raise PermissionError("Brak dostępu do wybranej faktury.")
+        if row["cancelled_at"]:
+            raise KsefError("Anulowanej faktury nie można wysłać do KSeF.")
         return dict(row)
     finally:
         conn.close()

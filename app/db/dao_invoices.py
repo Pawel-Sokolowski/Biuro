@@ -586,6 +586,8 @@ def create_or_update_invoice(
     conn = get_conn()
     cur = conn.cursor()
 
+    pozycje = [normalize_position(p) for p in pozycje]
+    kwota_netto, kwota_brutto = totals(pozycje)
     pozycje_json = json.dumps(pozycje, ensure_ascii=False)
     today = _now_date()
     termin = default_due_date(datetime.strptime(today, DATE_FMT).date()).strftime(DATE_FMT)
@@ -710,25 +712,26 @@ def validate_invoice_extra_services_ready(invoice_ids: List[int], *, conn=None, 
 def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     if not invoice_ids:
         return
+    if pracownik_id is not None and not can(pracownik_id, "can_export_data"):
+        raise PermissionError("Brak uprawnień do wystawiania faktur.")
     conn = get_conn()
     cur = conn.cursor()
     try:
+        cur.execute("SELECT pg_advisory_xact_lock(748202)")
         placeholders = ",".join(["%s"] * len(invoice_ids))
         # Use the same invoice -> allocation lock order as draft editing.
         cur.execute(f"SELECT id FROM faktury WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE", invoice_ids)
         validate_invoice_extra_services_ready(invoice_ids, conn=conn, lock=True)
+        for invoice_id in sorted(set(invoice_ids)):
+            row = conn.execute("SELECT cancelled_at FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
+            if not row or row[0]:
+                raise InvoiceLockedError("Brak faktury lub faktura jest anulowana.")
+            _assign_invoice_number(conn, invoice_id)
         params: List[Any] = list(invoice_ids)
         sql = (
             f"UPDATE faktury SET eksportowana = 1, status = 'wystawiona', data_eksportu = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') "
             f"WHERE id IN ({placeholders})"
         )
-        if pracownik_id and not (
-            is_administrator(pracownik_id) or can(pracownik_id, "can_export_data")
-        ):
-            sql += (
-                " AND EXISTS (SELECT 1 FROM pracownicy p WHERE p.id = %s)"
-            )
-            params.append(pracownik_id)
         cur.execute(sql, params)
         conn.commit()
     finally:
@@ -741,8 +744,8 @@ def archive_invoice_positions(conn: psycopg.Connection, invoice_row: Dict[str, A
         """
         INSERT INTO faktury_archiwum (
             faktura_id, firma_id, miesiac, pozycje_json, kwota_netto,
-            kwota_brutto, archived_at, restore_manual
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            kwota_brutto, archived_at, restore_manual, document_json
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
     """,
         (
             invoice_row.get("id"),
@@ -757,6 +760,7 @@ def archive_invoice_positions(conn: psycopg.Connection, invoice_row: Dict[str, A
                 and invoice_row.get("rodzaj", "faktura") == "faktura"
                 and not invoice_row.get("reczna")
             ),
+            json.dumps(dict(invoice_row), ensure_ascii=False, default=str),
         ),
     )
     _new_id = cur.fetchone()[0]
@@ -983,7 +987,7 @@ INVOICE_LIST_SQL = """
            COALESCE(NULLIF(f.nabywca_pelna, ''), c.nazwa, k.nazwa, '?') AS firma_nazwa,
            COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?') AS nazwa_skrocona,
            f.miesiac, f.rodzaj, f.numer, f.status,
-           f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
+           f.status, f.cancelled_at, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
            f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer, f.ksef_status, f.ksef_srodowisko_wysylki, f.ksef_nip_wysylki, f.invoice_email_status,
            f.korygowana_faktura_id, f.przyczyna_korekty
     FROM faktury f
@@ -1076,6 +1080,8 @@ def update_invoice_draft(
     netto, brutto = totals(normalized)
     conn = get_conn()
     try:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
+        _reserve_number(conn, invoice_id, (numer or "").strip())
         # Row lock and guarded UPDATE serialize edits with issuance.
         locked = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not locked or locked["eksportowana"]:
@@ -1142,7 +1148,13 @@ def _delete_dodatkowe(invoice_id: int, *, draft_only: bool) -> None:
 
 def delete_issued_invoice(invoice_id: int) -> None:
     """Wycofuje dokument, pozostawiając wszystkie zarejestrowane usługi dodatkowe."""
-    _delete_invoice_preserving_services(invoice_id, draft_only=False)
+    invoice = get_invoice_by_id(invoice_id)
+    if invoice and (invoice.get("ksef_numer") or invoice.get("ksef_status") in ("wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta")):
+        raise InvoiceLockedError("Faktura KSeF wymaga korekty.")
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s", (invoice_id,)).fetchone():
+            raise InvoiceLockedError("Faktura ma historię płatności; nie można jej usunąć.")
+    raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Użyj anulowania lub korekty.")
 
 
 def delete_draft_invoice(invoice_id: int) -> None:
@@ -1161,6 +1173,8 @@ def create_correction(invoice_id: int, przyczyna: str = "") -> int:
         raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
     if not original.get("eksportowana"):
         raise ValueError("Korektę można wystawić tylko do wystawionej faktury. Roboczą fakturę po prostu edytuj.")
+    if original.get("cancelled_at"):
+        raise InvoiceLockedError("Anulowana faktura nie wymaga korekty.")
     positions = reverse_positions(get_invoice_positions(invoice_id))
     netto, brutto = totals(positions)
     today = _now_date()
@@ -1222,47 +1236,67 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
         conn.close()
 
 
-def assign_invoice_number(invoice_id: int) -> Optional[str]:
-    """Nadaje kolejny numer FV/NNNN/MM/RRRR (KFV dla korekt), jeśli faktura go nie ma."""
+def _assign_invoice_number(conn, invoice_id: int) -> str:
     import re
-    conn = get_conn()
-    try:
-        conn.execute("SELECT pg_advisory_xact_lock(748202)")
-        row = conn.execute(
-            "SELECT numer, rodzaj, data_wystawienia FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)
-        ).fetchone()
-        if row is None:
-            conn.rollback()
-            return None
-        if (row["numer"] or "").strip():
-            conn.rollback()
-            return row["numer"].strip()
-        try:
-            issued = datetime.strptime(str(row["data_wystawienia"])[:10], DATE_FMT)
-        except ValueError:
-            issued = datetime.now()
+    conn.execute("SELECT pg_advisory_xact_lock(748202)")
+    row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
+    if row is None:
+        raise ValueError("Nie znaleziono faktury.")
+    numer = (row["numer"] or "").strip()
+    if not numer:
+        issued = datetime.strptime(str(row["data_wystawienia"] or _now_date())[:10], DATE_FMT)
         prefix = "KFV" if row["rodzaj"] == "korekta" else "FV"
-        month, year = f"{issued.month:02d}", str(issued.year)
-        pattern = re.compile(rf"^{prefix}/(\d+)/{month}/{year}$")
-        existing = conn.execute(
-            "SELECT numer FROM faktury WHERE numer LIKE %s", (f"{prefix}/%/{month}/{year}",)
-        ).fetchall()
-        used = [int(m.group(1)) for r in existing if (m := pattern.match(r["numer"] or ""))]
-        numer = f"{prefix}/{max(used, default=0) + 1:04d}/{month}/{year}"
-        conn.execute(
-            "UPDATE faktury SET numer = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
-            (numer, invoice_id),
-        )
-        conn.commit()
-        return numer
-    finally:
-        conn.close()
+        suffix = f"/{issued.month:02d}/{issued.year}"
+        pattern = re.compile(rf"^{prefix}/(\d+){suffix}$")
+        existing = conn.execute("SELECT numer FROM invoice_number_ledger UNION SELECT numer FROM faktury").fetchall()
+        used = [int(m.group(1)) for r in existing if (m := pattern.match(r[0] or ""))]
+        numer = f"{prefix}/{max(used, default=0) + 1:04d}{suffix}"
+    _reserve_number(conn, invoice_id, numer)
+    conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", (numer, invoice_id))
+    return numer
+
+
+def _reserve_number(conn, invoice_id, numer):
+    if not numer:
+        return
+    conn.execute("SELECT pg_advisory_xact_lock(748202)")
+    existing = conn.execute("SELECT invoice_id FROM invoice_number_ledger WHERE numer = %s", (numer,)).fetchone()
+    duplicate = conn.execute("SELECT id FROM faktury WHERE numer = %s AND id <> %s", (numer, invoice_id)).fetchone()
+    if duplicate or (existing and existing[0] != invoice_id):
+        raise ValueError("Ten numer faktury jest już zajęty lub był używany wcześniej.")
+    conn.execute("INSERT INTO invoice_number_ledger(numer, invoice_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (numer, invoice_id))
+
+
+def assign_invoice_number(invoice_id: int) -> Optional[str]:
+    with get_conn() as conn:
+        return _assign_invoice_number(conn, invoice_id)
 
 
 def set_invoice_number(invoice_id: int, numer: str) -> None:
-    conn = get_conn()
-    try:
-        conn.execute("UPDATE faktury SET numer = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s", (numer, invoice_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with get_conn() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
+        row = conn.execute("SELECT eksportowana FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
+        if not row or row[0]:
+            raise InvoiceLockedError("Numer wystawionej faktury jest zablokowany.")
+        _reserve_number(conn, invoice_id, numer.strip())
+        conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", (numer.strip() or None, invoice_id))
+
+
+def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
+    if not can(actor_id, "can_export_data"):
+        raise PermissionError("Brak uprawnień do anulowania faktur.")
+    if not reason.strip():
+        raise ValueError("Podaj przyczynę anulowania.")
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
+        if not row or not row["eksportowana"]:
+            raise InvoiceLockedError("Wybierz wystawioną fakturę.")
+        if row["cancelled_at"]:
+            raise InvoiceLockedError("Faktura jest już anulowana.")
+        if row["ksef_numer"] or row["ksef_status"] in ("wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta"):
+            raise InvoiceLockedError("Dokument KSeF wymaga korekty.")
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s", (invoice_id,)).fetchone():
+            raise InvoiceLockedError("Faktura ma historię płatności. Użyj korekty.")
+        archive_invoice_positions(conn, dict(row))
+        conn.execute("UPDATE faktury SET status = 'anulowana', cancelled_reason = %s, cancelled_by = %s, cancelled_at = now() WHERE id = %s", (reason.strip(), actor_id, invoice_id))
+        conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('faktury', %s, 'anulowanie', %s, %s)", (invoice_id, actor_id, reason.strip()))

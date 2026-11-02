@@ -147,6 +147,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       .grand {{ font-size: 12pt; font-weight: bold; }}
       .ksef-number {{ font-family: monospace; font-size: 8pt; color: #333; }}
     </style></head><body>
+    {('<h1>ANULOWANA</h1><p>' + _escape(invoice.get('cancelled_reason')) + '</p>') if invoice.get('cancelled_at') else ''}
       <table width="100%" border="0" cellspacing="0" cellpadding="8"><tr>
         <td width="45%">{logo_html}</td>
         <td width="55%" align="right"><div class="doc-title">{document_title} nr</div>

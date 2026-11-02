@@ -69,6 +69,18 @@ def list_year_end(year: int) -> List[Dict]:
     return result
 
 
+def set_company_declarations(firma_id: int, main: str, extra: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE firmy SET rozliczenie_roczne = %s, deklaracje_dodatkowe = %s WHERE id = %s",
+            (main or "", extra or "", firma_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def save_declaration(actor_id: int, firma_id: int, year: int, code: str, *,
                      filed: bool, filed_date: Optional[str] = None,
                      amount: Optional[float] = None, upo: str = "", notes: str = "") -> None:

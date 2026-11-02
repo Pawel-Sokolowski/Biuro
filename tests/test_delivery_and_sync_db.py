@@ -56,6 +56,67 @@ class DeliveryAndSyncDbTests(DbTestCase):
         self.assertTrue(any(result['status']=='sent' for result in results))
         with self.assertRaises(ValueError):queue_deliveries(plans,1,self.account)
 
+    def test_replaced_delivery_plan_cannot_be_claimed_by_stale_renderer(self):
+        from app.invoices import invoice_delivery as delivery
+        plans = delivery_plan([self.invoice], 1)
+        queue_deliveries(plans, 1, self.account)
+        other_account = add_email_account_for_employee(1, 'other@example.com', 'imap.invalid', 993, 'smtp.invalid', 465, 'test-only')
+        conn = get_conn()
+        try:
+            conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (%s,%s)', (1, other_account))
+            conn.commit()
+        finally:
+            conn.close()
+        for replacement_account, recipient in ((self.account, 'new@client.com'), (other_account, 'invoices@client.com')):
+            with self.subTest(sender=replacement_account, recipient=recipient):
+                conn = get_conn()
+                try:
+                    conn.execute("UPDATE faktury SET invoice_email_status='failed_before_send' WHERE id=%s", (self.invoice,))
+                    conn.commit()
+                finally:
+                    conn.close()
+                queue_deliveries(plans, 1, self.account)
+                def replace_plan(*args):
+                    conn = get_conn()
+                    try:
+                        conn.execute("UPDATE faktury SET invoice_email_status='failed_before_send' WHERE id=%s", (self.invoice,))
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    queue_deliveries([{'id':self.invoice, 'number':'FV/1', 'recipients':[recipient]}], 1, replacement_account)
+                    return '/test/invoice.pdf'
+                with patch('app.email.email_actions.get_smtp_config_for_account', return_value={'host':'smtp.invalid','user':'office@example.com'}), patch.object(delivery, 'official_pdf', side_effect=replace_plan), patch('app.email.email_actions.send_email_smtp') as smtp:
+                    result = deliver_if_queued(self.invoice, 1, '/test/invoice.xml')
+                smtp.assert_not_called()
+                self.assertEqual(result['status'], 'uncertain')
+                self.assertEqual(get_invoice_by_id(self.invoice)['invoice_email_status'], 'queued')
+
+    def test_stale_draft_read_cannot_edit_issued_invoice_or_allocations(self):
+        from app.db import dao_invoices as dao
+        draft = create_manual_invoice('firma', self.company, self.positions, '2026-11-01', '2026-11-01', '2026-11-10')
+        original = get_invoice_by_id(draft)
+        def issue_after_read(_):
+            mark_exported([draft], 1)
+            return original
+        with patch.object(dao, 'get_invoice_by_id', side_effect=issue_after_read), patch.object(dao, '_sync_extra_service_allocations') as allocations, self.assertRaises(dao.InvoiceLockedError):
+            update_invoice_draft(draft, [{**self.positions[0], 'cena_netto':999}], numer='CHANGED')
+        allocations.assert_not_called()
+        saved = get_invoice_by_id(draft)
+        self.assertEqual(saved['kwota_netto'], original['kwota_netto'])
+        self.assertEqual(saved['pozycje_json'], original['pozycje_json'])
+        self.assertEqual(saved['eksportowana'], 1)
+
+    def test_exemption_basis_survives_creation_edits_and_corrections(self):
+        from app.db.dao_invoices import create_correction
+        positions = [{**self.positions[0], 'vat':'zw'}]
+        draft = create_manual_invoice('firma', self.company, positions, '2026-11-01', '2026-11-01', '2026-11-10', podstawa_zwolnienia='art. 113 ust. 1 ustawy o VAT')
+        update_invoice_draft(draft, positions, numer='ZW/1')
+        self.assertEqual(get_invoice_by_id(draft)['podstawa_zwolnienia'], 'art. 113 ust. 1 ustawy o VAT')
+        update_invoice_draft(draft, positions, numer='ZW/1', podstawa_zwolnienia='art. 43 ustawy o VAT')
+        mark_exported([draft], 1)
+        correction = create_correction(draft, 'Zwrot')
+        self.assertEqual(get_invoice_by_id(correction)['podstawa_zwolnienia'], 'art. 43 ustawy o VAT')
+
     def test_uncertain_delivery_is_persisted_and_not_retried(self):
         queue_deliveries(delivery_plan([self.invoice],1),1,self.account)
         with patch('app.email.email_actions.get_smtp_config_for_account',return_value={'host':'smtp.invalid','user':'office@example.com'}), \

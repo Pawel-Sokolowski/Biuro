@@ -135,6 +135,25 @@ def _get_field(obj: Any, key: str, default: Any = "") -> Any:
             return default
 
 
+def _to_bool(v: Any) -> Optional[bool]:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    try:
+        s = str(v).strip().lower()
+    except Exception:
+        return None
+    if s in ("1", "true", "x", "yes", "tak"):
+        return True
+    if s in ("0", "false", "no", "nie"):
+        return False
+    try:
+        return bool(int(s))
+    except Exception:
+        return None
+
+
 def _get_export_bool(*keys: str, default: bool = False) -> bool:
     return get_setting_bool(keys, default=default)
 
@@ -199,24 +218,6 @@ def export_saldeo_xlsx(
     default_wystawca = get_setting_first(("wystawca_faktur", "wystawca", "faktury_wystawca"), "")
     default_konto = get_setting_first(("konto_bankowe_biura", "faktury_konto_bankowe"), "")
     default_termin_dni = get_setting_first(("termin_platnosci_dni", "faktury_termin_dni"), "14")
-
-    def _to_bool(v: Any) -> Optional[bool]:
-        if v is None:
-            return None
-        if isinstance(v, bool):
-            return v
-        try:
-            s = str(v).strip().lower()
-        except Exception:
-            return None
-        if s in ("1", "true", "x", "yes", "tak"):
-            return True
-        if s in ("0", "false", "no", "nie"):
-            return False
-        try:
-            return bool(int(s))
-        except Exception:
-            return None
 
     p = Path(output_path)
     workbook = xlsxwriter.Workbook(str(p))

@@ -78,7 +78,10 @@ def official_pdf(invoice, xml_path):
                 'nabywca_kod':'','nabywca_miasto':'','nabywca_kraj':data['buyer_country'],
                 'sprzedawca_nazwa':data['seller_name'], 'sprzedawca_nip':data['seller_nip'],
                 'sprzedawca_adres':data['seller_address'], 'konto_bankowe':data['account'],
-                'kwota_netto':data['net'], 'kwota_brutto':data['gross']}
+                'kwota_netto':data['net'], 'kwota_brutto':data['gross'],
+                'rodzaj':'korekta' if data['kind'] in ('KOR','KOR_ZAL','KOR_ROZ') else 'faktura',
+                'przyczyna_korekty':data['correction_reason'],
+                'korygowana_faktura_numer':data['corrected_number']}
     official['_qr_data_url'] = _qr_data_url(official)
     if not official.get('ksef_numer') or not official['_qr_data_url']:
         raise KsefError('PDF do wysyłki wymaga numeru KSeF i poprawnie wygenerowanego kodu QR.')
@@ -97,15 +100,23 @@ def official_pdf(invoice, xml_path):
     return str(destination)
 
 
-def _delivery_state(invoice_id, status, *, error=None, pdf=None):
+def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
     conn = get_conn()
     try:
+        predicate = ''
+        snapshot = ()
+        if expected is not None:
+            predicate = ''' AND invoice_email_recipients IS NOT DISTINCT FROM %s
+                            AND invoice_email_account_id IS NOT DISTINCT FROM %s
+                            AND invoice_email_actor_id IS NOT DISTINCT FROM %s'''
+            snapshot = (expected.get('invoice_email_recipients'), expected.get('invoice_email_account_id'),
+                        expected.get('invoice_email_actor_id'))
         conn.execute('''UPDATE faktury SET invoice_email_status=%s, invoice_email_error=%s,
                         invoice_email_pdf_path=COALESCE(%s,invoice_email_pdf_path),
                         invoice_email_sent_at=CASE WHEN %s='sent' THEN now() ELSE invoice_email_sent_at END
                         WHERE id=%s AND (%s <> 'failed_before_send'
-                        OR COALESCE(invoice_email_status,'') IN ('queued','preparing','failed_before_send'))''',
-                     (status,error,pdf,status,invoice_id,status))
+                        OR COALESCE(invoice_email_status,'') IN ('queued','preparing','failed_before_send'))''' + predicate,
+                     (status,error,pdf,status,invoice_id,status) + snapshot)
         conn.commit()
     finally:
         conn.close()
@@ -136,15 +147,18 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
             raise ValueError('Uzupełnij konfigurację SMTP wybranego nadawcy.')
         pdf = official_pdf(invoice,xml_path)
     except Exception as exc:
-        _delivery_state(invoice_id,'failed_before_send',error=str(exc))
+        _delivery_state(invoice_id,'failed_before_send',error=str(exc),expected=invoice)
         raise
     # Only the process that atomically reserves this row may enter SMTP.
     conn = get_conn()
     try:
         reserved = conn.execute('''UPDATE faktury SET invoice_email_status='sending', invoice_email_error=NULL,
                                    invoice_email_pdf_path=%s WHERE id=%s
-                                   AND invoice_email_status IN ('queued','preparing','failed_before_send') RETURNING id''',
-                                (pdf,invoice_id)).fetchone()
+                                   AND invoice_email_status IN ('queued','preparing','failed_before_send')
+                                   AND invoice_email_recipients IS NOT DISTINCT FROM %s
+                                   AND invoice_email_account_id IS NOT DISTINCT FROM %s
+                                   AND invoice_email_actor_id IS NOT DISTINCT FROM %s RETURNING id''',
+                                (pdf,invoice_id,invoice.get('invoice_email_recipients'),account_id,invoice.get('invoice_email_actor_id'))).fetchone()
         conn.commit()
     finally:
         conn.close()

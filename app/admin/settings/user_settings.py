@@ -264,27 +264,8 @@ class UsersSettings(QWidget):
             QMessageBox.critical(self, "Błąd", "Nie znaleziono użytkownika.")
             return
 
-        from app.email import signature as sig
-        from app.email.signature_editor import SignatureEditor
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Stopka e-mail: {user['imie']} {user['nazwisko']}")
-        dlg.resize(560, 460)
-        layout = QVBoxLayout(dlg)
-        layout.addWidget(QLabel("Stopka dodawana automatycznie do wiadomości tego pracownika:"))
-        editor = SignatureEditor(lambda: (user["imie"], user["nazwisko"]))
-        text, html = sig.get_employee_signature(uid)
-        editor.set_signature(html, text)
-        layout.addWidget(editor)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        layout.addWidget(buttons)
-
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            text, html = editor.signature()
-            sig.save_employee_signature(uid, text, html)
-            QMessageBox.information(self, "OK", "Zapisano stopkę.")
+        from app.email.signature_editor import SignatureDialog
+        SignatureDialog(uid, user["imie"], user["nazwisko"], self).exec()
 
     def _toggle_active(self):
         row = self.table.currentRow()

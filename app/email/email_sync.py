@@ -65,7 +65,7 @@ _ACCOUNT_SYNC_LOCKS_MUTEX = threading.Lock()
 
 def _account_sync_lock(konto_id: int) -> threading.Lock:
     with _ACCOUNT_SYNC_LOCKS_MUTEX:
-        return _ACCOUNT_SYNC_LOCKS.setdefault(konto_id, threading.Lock())
+        return _ACCOUNT_SYNC_LOCKS.setdefault(konto_id, threading.RLock())
 
 _IMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -1606,6 +1606,9 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
     def headers(account):
         konto_id = account["id"]
         folders = []
+        lock = _account_sync_lock(konto_id)
+        if not lock.acquire(blocking=False):
+            return konto_id, [], None
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Synchronizacja przerwana.")
@@ -1626,6 +1629,9 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         except Exception as exc:
             return konto_id, [], f"Konto #{konto_id}: {exc}"
 
+        finally:
+            lock.release()
+
     with ThreadPoolExecutor(max_workers=min(4, len(ordered))) as pool:
         jobs = list(pool.map(headers, ordered))
     errors = [error for _, _, error in jobs if error]
@@ -1638,8 +1644,13 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         wanted = [folder for folder in folders if folder == "INBOX" or (konto_id == current_account_id and folder == current_folder)]
         for folder in wanted:
             try:
-                with _account_sync_lock(konto_id):
+                lock = _account_sync_lock(konto_id)
+                if not lock.acquire(blocking=False):
+                    continue
+                try:
                     prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
+                finally:
+                    lock.release()
             except Exception as exc:
                 errors.append(f"Konto #{konto_id}, {folder}: {exc}")
     return errors

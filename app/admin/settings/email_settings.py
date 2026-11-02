@@ -213,7 +213,7 @@ class EmailSettings(QWidget):
             ("Dostęp pracowników", lambda: self._edit_access()),
             ("Aktywuj / Dezaktywuj", self._toggle_active),
             ("Ustaw jako główne do wysyłania", self._set_default_sender),
-            ("Domyślna stopka…", self._edit_signature_template),
+            ("Globalny wzór stopki…", self._edit_signature_template),
             ("Etykiety pracowników…", self._edit_labels),
             ("Usuń", self._delete),
         ):
@@ -447,46 +447,31 @@ class EmailSettings(QWidget):
         )
 
     def _edit_signature_template(self):
-        from app.email.signature import DEFAULT_TEMPLATE, get_template, save_template
-
-        labels = {
-            "stopka_szablon_pozdrowienie": "Pozdrowienie:",
-            "stopka_szablon_firma": "Nazwa firmy:",
-            "stopka_szablon_adres": "Adres (kilka linii):",
-            "stopka_szablon_telefon": "Telefon:",
-            "stopka_szablon_email": "E-mail biura:",
-            "stopka_szablon_zastrzezenie": "Zastrzeżenie prawne:",
-        }
-        current = get_template()
+        from app.email.signature import build_default_signature, save_template
+        from app.email.signature_editor import SignatureEditor
         dlg = QDialog(self)
-        dlg.setWindowTitle("Domyślna stopka wiadomości")
-        dlg.setMinimumWidth(520)
-        form = QFormLayout(dlg)
-        fields = {}
-        for key in DEFAULT_TEMPLATE:
-            if key in ("stopka_szablon_adres", "stopka_szablon_zastrzezenie"):
-                field = QTextEdit(current[key])
-                field.setFixedHeight(60 if key.endswith("adres") else 130)
-            else:
-                field = QLineEdit(current[key])
-            fields[key] = field
-            form.addRow(labels[key], field)
-        form.addRow(QLabel(
-            "Szablon służy do wygenerowania stopki pracownika (imię i nazwisko "
-            "wstawiane są automatycznie)."
-        ))
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
+        dlg.setWindowTitle("Globalny wzór stopki wiadomości")
+        dlg.resize(740, 560)
+        layout = QVBoxLayout(dlg)
+        label = QLabel("Wspólny wzór dla wszystkich pracowników. Pola {imie}, {nazwisko} i {telefon} "
+                       "są uzupełniane danymi autora wiadomości, niezależnie od konta nadawcy. "
+                       "Zdjęcie lub logo możesz wkleić albo dodać z pliku.")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        editor = SignatureEditor(lambda: ("{imie}", "{nazwisko}"))
+        text, html = build_default_signature("{imie}", "{nazwisko}", telefon="{telefon}")
+        editor.set_signature(html, text)
+        layout.addWidget(editor)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("Zapisz")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
-        form.addRow(buttons)
+        layout.addWidget(buttons)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            save_template({
-                k: (f.toPlainText() if isinstance(f, QTextEdit) else f.text()).strip()
-                for k, f in fields.items()
-            })
-            QMessageBox.information(self, "OK", "Zapisano szablon stopki.")
+            _, html = editor.signature()
+            save_template({"stopka_szablon_html": html})
+            QMessageBox.information(self, "Stopka", "Zapisano wspólny wzór. Będzie używany w nowych wiadomościach wszystkich pracowników.")
 
     def _toggle_active(self):
         acc_id = self._selected_id()

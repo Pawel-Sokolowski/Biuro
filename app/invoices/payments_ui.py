@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.db.dao_payments import (
-    PaymentError, confirm_bank_payment, import_mt940_file, list_invoice_choices,
+    PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
     list_unsettled_transfers, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
     invoice_choices_for_transaction, match_invoice_contractor,
     invoice_contractor_key,
@@ -58,6 +58,7 @@ class BankPaymentReview(QDialog):
         super().__init__(parent)
         self.actor_id = actor_id
         self.invoices = []
+        self.companies = []
         self.transactions = []
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
         self.resize(1400, 700)
@@ -149,6 +150,11 @@ class BankPaymentReview(QDialog):
         try:
             invoices = list_invoice_choices(self.actor_id)
             transactions = list_unsettled_transfers(self.actor_id)
+            try:
+                self.companies = list_company_choices(self.actor_id)
+            except Exception:
+                logger.exception("Nie udało się wczytać listy firm do rozliczeń")
+                self.companies = []
         except (PaymentError, PermissionError) as exc:
             QMessageBox.warning(self, "Rozliczenie", str(exc))
             return
@@ -156,6 +162,7 @@ class BankPaymentReview(QDialog):
             logger.exception("Błąd odświeżania rozliczeń bankowych")
             QMessageBox.warning(self, "Rozliczenie", "Nie udało się odczytać rozliczeń. Szczegóły w logach.")
             return
+        saved_choices = self._snapshot_choices()
         self.invoices, self.transactions = invoices, transactions
         self.table.setRowCount(0)
         for entry in self.transactions:
@@ -184,6 +191,11 @@ class BankPaymentReview(QDialog):
                     continue
                 seen.add(key)
                 contractor.addItem(invoice.get("buyer") or "(bez nazwy)", _contractor_data(invoice))
+            for company in self.companies:
+                key = ("firma", company["id"])
+                if key not in seen:
+                    seen.add(key)
+                    contractor.addItem(company["buyer"], f"firma:{company['id']}")
             if match.get("confident"):
                 kind, value = match["company_key"]
                 contractor.setCurrentIndex(max(0, contractor.findData(f"{kind}:{value}")))
@@ -205,12 +217,55 @@ class BankPaymentReview(QDialog):
             override.setToolTip(match.get("reason") or "Nie rozpoznano klienta — wybierz fakturę ręcznie.")
             self.table.setCellWidget(idx, self.COL_FILTER, override)
             self._populate_invoice_choices(idx)
+            self._restore_choices(idx, saved_choices.get(entry["id"]))
             override.toggled.connect(lambda _checked, row=idx: self._override_filter_changed(row))
             contractor.currentIndexChanged.connect(lambda _index, row=idx: self._contractor_changed(row))
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, self.COL_SETTLEMENT))
         if self.transactions:
             self.table.selectRow(0)
+
+    def _snapshot_choices(self):
+        """Zapamiętuje wybory użytkownika, by odświeżenie po jednym rozliczeniu ich nie kasowało."""
+        saved = {}
+        for row, entry in enumerate(self.transactions):
+            invoice = self.table.cellWidget(row, self.COL_INVOICE)
+            contractor = self.table.cellWidget(row, self.COL_CONTRACTOR)
+            amount = self.table.cellWidget(row, self.COL_SETTLEMENT)
+            override = self.table.cellWidget(row, self.COL_FILTER)
+            if None in (invoice, contractor, amount, override) or invoice.currentData() is None:
+                continue
+            saved[entry["id"]] = {
+                "invoice": invoice.currentData(), "contractor": contractor.currentData(),
+                "amount": amount.text(), "override": override.isChecked(),
+            }
+        return saved
+
+    def _restore_choices(self, row, saved):
+        if not saved:
+            return
+        invoice_id = saved["invoice"]
+        if not any(item["id"] == invoice_id for item in self.invoices):
+            return
+        contractor = self.table.cellWidget(row, self.COL_CONTRACTOR)
+        index = contractor.findData(saved["contractor"])
+        if index >= 0:
+            contractor.setCurrentIndex(index)
+        self.table.cellWidget(row, self.COL_FILTER).setChecked(saved["override"])
+        self._populate_invoice_choices(row)
+        combo = self.table.cellWidget(row, self.COL_INVOICE)
+        index = combo.findData(invoice_id)
+        if index < 0:
+            return
+        combo.setCurrentIndex(index)
+        invoice = next(item for item in self.invoices if item["id"] == invoice_id)
+        remaining = Decimal(str(self.transactions[row]["remaining"]))
+        try:
+            wanted = Decimal(saved["amount"].replace(",", "."))
+        except DecimalException:
+            wanted = remaining
+        limit = min(remaining, Decimal(str(invoice["balance"])))
+        self.table.cellWidget(row, self.COL_SETTLEMENT).setText(money_text(min(wanted, limit) if wanted > 0 else limit))
 
     def _populate_invoice_choices(self, row):
         entry = self.transactions[row]
@@ -407,7 +462,7 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
     layout = QFormLayout(form)
     date_input = QDateEdit(QDate.currentDate(), form)
     date_input.setCalendarPopup(True)
-    date_input.setDisplayFormat("dd/MM/yyyy")
+    date_input.setDisplayFormat("dd-MM-yyyy")
     amount_edit = QLineEdit(form)
     amount_edit.setText(money_text(summary["balance"]))
     layout.addRow("Faktura:", QLabel(str(invoice.get("numer") or invoice["id"]), form))
@@ -432,7 +487,7 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
         return False
     if QMessageBox.question(
         parent, "Potwierdź płatność gotówkową",
-        f"Zarejestrować wpłatę {amount} zł z dnia {date_input.date().toString('dd/MM/yyyy')} "
+        f"Zarejestrować wpłatę {amount} zł z dnia {date_input.date().toString('dd-MM-yyyy')} "
         f"na fakturę {invoice.get('numer') or invoice['id']}?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No,

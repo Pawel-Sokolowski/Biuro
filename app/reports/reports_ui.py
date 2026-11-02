@@ -98,6 +98,10 @@ class ReportsPage(QWidget):
 
         self.month_start.addItems(months)
         self.month_end.addItems(months)
+        # domyślnie cały bieżący rok (styczeń–grudzień); zakres można skrócić
+        default_year = max(now.year, first_year)
+        self.month_start.setCurrentText(f"{default_year}-01")
+        self.month_end.setCurrentText(f"{default_year}-12")
         self.year_combo.addItems([str(y) for y in range(first_year, max(now.year, first_year) + 1)])
 
         self.month_box_container = QWidget()

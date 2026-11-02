@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-11-02.1"
+SCHEMA_VERSION = "2026-11-03.1"
 
 
 def _schema_hash() -> str:
@@ -402,6 +402,15 @@ def init_db():
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_czasomierze_month ON czasomierze(miesiac, firma_id)"
     )
+    # stoper ogólny (bez firmy)
+    cur.execute(
+        "SELECT is_nullable FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'czasomierze' AND column_name = 'firma_id'"
+    )
+    _nullable = cur.fetchone()
+    if _nullable and _nullable[0] == "NO":
+        cur.execute("ALTER TABLE czasomierze ALTER COLUMN firma_id DROP NOT NULL")
+    _safe_alter_add_column(cur, "czasomierze", "opis TEXT")
 
     # -------------------------
     # pracownik_firma
@@ -617,6 +626,23 @@ def init_db():
     _safe_alter_add_column(cur, "firmy", "zapis_ostatniej_kopii TEXT")
     _safe_alter_add_column(cur, "firmy", "cena_netto_ksiegowosc DOUBLE PRECISION")
     _safe_alter_add_column(cur, "firmy", "cena_ponad_limit DOUBLE PRECISION")
+    _safe_alter_add_column(cur, "firmy", "rozliczenie_roczne TEXT DEFAULT ''")
+    _safe_alter_add_column(cur, "firmy", "deklaracje_dodatkowe TEXT DEFAULT ''")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS zakonczenie_roku (
+            firma_id INTEGER NOT NULL REFERENCES firmy(id) ON DELETE CASCADE,
+            rok INTEGER NOT NULL,
+            deklaracja TEXT NOT NULL,
+            zlozona INTEGER NOT NULL DEFAULT 0,
+            data_zlozenia TEXT,
+            kwota DOUBLE PRECISION,
+            upo TEXT,
+            uwagi TEXT,
+            updated_by INTEGER,
+            updated_at TEXT,
+            PRIMARY KEY (firma_id, rok, deklaracja)
+        )
+    """)
     _safe_alter_add_column(cur, "firmy", "fakturowac_ksiegowosc INTEGER NOT NULL DEFAULT 1")
     _safe_alter_add_column(cur, "firmy", "fakturowac_kadry INTEGER NOT NULL DEFAULT 1")
     _safe_alter_add_column(cur, "firmy", "stala_kwota_ksiegowosc DOUBLE PRECISION")

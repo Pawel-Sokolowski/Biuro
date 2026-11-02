@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -223,6 +223,21 @@ def stored_backup_dates() -> Dict[int, tuple]:
         conn.close()
 
 
+def _age_hours(start: datetime, end: datetime) -> float:
+    """Wiek w godzinach z pominięciem sobót i niedziel (w weekend kopie nie powstają)."""
+    if end <= start:
+        return 0.0
+    total = 0.0
+    cursor = start
+    while cursor < end:
+        next_midnight = datetime.combine(cursor.date() + timedelta(days=1), datetime.min.time())
+        segment_end = min(next_midnight, end)
+        if cursor.weekday() < 5:
+            total += (segment_end - cursor).total_seconds() / 3600
+        cursor = segment_end
+    return total
+
+
 def get_backup_status(now: Optional[datetime] = None, from_mail: bool = False) -> Dict[str, Any]:
     """Stan: brak_konfiguracji, brak_logu, brak_kopii, ok, nieaktualna, blad.
 
@@ -260,12 +275,12 @@ def get_backup_status(now: Optional[datetime] = None, from_mail: bool = False) -
         max_age = float(get_setting(MAX_AGE_KEY) or DEFAULT_MAX_AGE_HOURS)
     except ValueError:
         max_age = DEFAULT_MAX_AGE_HOURS
-    age = (now - last).total_seconds() / 3600
+    age = _age_hours(last, now)
     companies = _company_rows()
     bazy = []
     for name, info in parsed["databases"].items():
         when = info["last_success"]
-        db_age = (now - when).total_seconds() / 3600 if when else None
+        db_age = _age_hours(when, now) if when else None
         if when is None or info.get("error"):
             state = "blad"
         elif db_age > max_age:

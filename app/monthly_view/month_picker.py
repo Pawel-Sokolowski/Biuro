@@ -14,10 +14,11 @@ class MonthPicker(QToolButton):
 
     monthChanged = pyqtSignal(str)
 
-    def __init__(self, month: str, parent=None):
+    def __init__(self, month: str, parent=None, allow_year: bool = False):
         super().__init__(parent)
         self._year = int(month[:4])
         self._month = int(month[5:7])
+        self._whole_year = False
         self._view_year = self._year
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -50,6 +51,13 @@ class MonthPicker(QToolButton):
             grid.addWidget(btn, idx // 3, idx % 3)
             self._buttons.append(btn)
         layout.addLayout(grid)
+        if allow_year:
+            self._year_button = QPushButton("Cały rok")
+            self._year_button.setCheckable(True)
+            self._year_button.clicked.connect(self._choose_year)
+            layout.addWidget(self._year_button)
+        else:
+            self._year_button = None
 
         action = QWidgetAction(self._menu)
         action.setDefaultWidget(panel)
@@ -63,10 +71,17 @@ class MonthPicker(QToolButton):
         self._refresh()
 
     def currentText(self) -> str:
+        return f"{self._year:04d}" if self._whole_year else self.monthText()
+
+    def monthText(self) -> str:
         return f"{self._year:04d}-{self._month:02d}"
 
+    def isWholeYear(self) -> bool:
+        return self._whole_year
+
     def setCurrentText(self, month: str) -> None:
-        self._year, self._month = int(month[:4]), int(month[5:7])
+        self._year, self._month = int(month[:4]), int(month[5:7]) if len(month) >= 7 else self._month
+        self._whole_year = len(month) < 7
         self._view_year = self._year
         self._update_text()
         self._refresh()
@@ -85,10 +100,19 @@ class MonthPicker(QToolButton):
     def _refresh(self) -> None:
         self._year_label.setText(str(self._view_year))
         for idx, btn in enumerate(self._buttons):
-            btn.setChecked(self._view_year == self._year and idx + 1 == self._month)
+            btn.setChecked(not self._whole_year and self._view_year == self._year and idx + 1 == self._month)
+        if self._year_button is not None:
+            self._year_button.setChecked(self._whole_year and self._view_year == self._year)
+
+    def _choose_year(self) -> None:
+        self._year, self._whole_year = self._view_year, True
+        self._update_text()
+        self._refresh()
+        self._menu.close()
+        self.monthChanged.emit(self.currentText())
 
     def _choose(self, month: int) -> None:
-        self._year, self._month = self._view_year, month
+        self._year, self._month, self._whole_year = self._view_year, month, False
         self._update_text()
         self._refresh()
         self._menu.close()

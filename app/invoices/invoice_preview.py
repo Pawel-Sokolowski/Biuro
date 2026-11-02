@@ -127,6 +127,10 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
     payment_method = invoice.get("sposob_zaplaty") or "Przelew"
     account = invoice.get("konto_bankowe") or ("" if invoice.get("_official") else get_setting("konto_bankowe_biura")) or ""
     ksef_date = str(invoice.get("ksef_data") or "")[:10]
+    number_part = str(invoice.get("ksef_numer") or "").split("-")
+    if len(number_part) >= 3 and re.fullmatch(r"\d{8}", number_part[1]):
+        # Data z numeru KSeF to faktyczna data nadania; ksef_data w starszych importach bywa datą pobrania.
+        ksef_date = f"{number_part[1][:4]}-{number_part[1][4:6]}-{number_part[1][6:]}"
     return f"""
     <html><head><style>
       body {{ background-color: white; font-family: 'Arial'; font-size: 9.5pt; color: #111; margin: 10px; }}

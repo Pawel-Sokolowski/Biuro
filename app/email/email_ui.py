@@ -609,13 +609,9 @@ class EmailPage(QWidget):
     def _on_sync_progress(self, data) -> None:
         label, done, total, folder, headers = data
         elapsed = int(time.monotonic() - getattr(self, "_sync_started_at", time.monotonic()))
-        self.sync_progress_frame.show()
-        self.sync_progress_bar.setMaximum(max(total, 1))
-        self.sync_progress_bar.setValue(done)
         where = f" – {clean_folder_label(decode_mailbox_utf7(folder))}" if folder else ""
-        self.sync_progress_label.setText(
-            f"Synchronizacja {label}: foldery {done}/{total}, "
-            f"pobrano {headers} nagłówków{where} · czas {elapsed//60}:{elapsed%60:02d}"
+        self.sync_status.setToolTip(
+            f"Foldery {done}/{total}, pobrano {headers} nagłówków{where} · czas {elapsed//60}:{elapsed%60:02d}"
         )
 
     def _schedule_headers_refresh(self):
@@ -632,7 +628,6 @@ class EmailPage(QWidget):
     def _on_sync_finished(self, ok: bool) -> None:
         self._headers_refresh_timer.stop()
         self._sync_running = False
-        self.sync_progress_frame.hide()
         if ok:
             self.sync_status.setText(f"Ostatnia synchronizacja: {datetime.now():%H:%M:%S} · co 2 min")
             self.sync_status.setToolTip("")
@@ -862,18 +857,6 @@ class EmailPage(QWidget):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
         splitter.setSizes([260, 880, 700])
-
-        self.sync_progress_frame = QFrame()
-        self.sync_progress_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        progress_row = QHBoxLayout(self.sync_progress_frame)
-        progress_row.setContentsMargins(6, 3, 6, 3)
-        self.sync_progress_label = QLabel("")
-        progress_row.addWidget(self.sync_progress_label, 1)
-        self.sync_progress_bar = QProgressBar()
-        self.sync_progress_bar.setMinimumWidth(240)
-        progress_row.addWidget(self.sync_progress_bar)
-        self.sync_progress_frame.hide()
-        main_layout.addWidget(self.sync_progress_frame)
 
     def _create_mail_action(self, text: str, icon_name, callback) -> QToolButton:
         button = QToolButton(self)

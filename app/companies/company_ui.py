@@ -56,10 +56,10 @@ class CompanyUI(QWidget):
 
         layout.addLayout(filter_layout)
 
-        self.table = QTableWidget(0, 15)
+        self.table = QTableWidget(0, 14)
         self.table.setHorizontalHeaderLabels([
             "ID", "Nazwa", "NIP", "Miasto", "Status",
-            "Forma opodatkowania", "Typ rozliczenia", "VAT",
+            "Forma opodatkowania", "VAT",
             "Księgowa", "Kadrowa",
             "Cennik", "Limit dokumentów", "PEL", "UPL", "Ostatni backup"
         ])
@@ -138,15 +138,14 @@ class CompanyUI(QWidget):
             self.table.setItem(row, 3, QTableWidgetItem(r.get("miasto") or ""))
             self.table.setItem(row, 4, QTableWidgetItem(r.get("status") or ""))
             self.table.setItem(row, 5, QTableWidgetItem(r.get("forma_opodatkowania") or ""))
-            self.table.setItem(row, 6, QTableWidgetItem(r.get("typ_rozliczenia") or ""))
-            self.table.setItem(row, 7, QTableWidgetItem("czynny" if r.get("vat_czynny") else "—"))
-            self.table.setItem(row, 8, QTableWidgetItem(r.get("ksiegowa") or ""))
-            self.table.setItem(row, 9, QTableWidgetItem(r.get("kadrowa") or ""))
-            self.table.setItem(row, 10, QTableWidgetItem(r.get("glowny_cennik") or ""))
-            self.table.setItem(row, 11, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
-            self.table.setItem(row, 12, QTableWidgetItem(r.get("pel") or ""))
-            self.table.setItem(row, 13, QTableWidgetItem(r.get("upl") or ""))
-            self.table.setItem(row, 14, self._backup_item(backups.get(r.get("nazwa")), stored.get(r.get("id"))))
+            self.table.setItem(row, 6, QTableWidgetItem("czynny" if r.get("vat_czynny") else "—"))
+            self.table.setItem(row, 7, QTableWidgetItem(r.get("ksiegowa") or ""))
+            self.table.setItem(row, 8, QTableWidgetItem(r.get("kadrowa") or ""))
+            self.table.setItem(row, 9, QTableWidgetItem(r.get("glowny_cennik") or ""))
+            self.table.setItem(row, 10, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
+            self.table.setItem(row, 11, QTableWidgetItem(r.get("pel") or ""))
+            self.table.setItem(row, 12, QTableWidgetItem(r.get("upl") or ""))
+            self.table.setItem(row, 13, self._backup_item(backups.get(r.get("nazwa")), stored.get(r.get("id"))))
             if r.get("uslugi_zawieszone"):
                 for col in range(self.table.columnCount()):
                     item = self.table.item(row, col)

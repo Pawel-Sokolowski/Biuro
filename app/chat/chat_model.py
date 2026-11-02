@@ -287,6 +287,40 @@ def update_conversation(konwersacja_id: int, nazwa: str, participant_ids: List[i
     conn.commit()
     conn.close()
 
+def delete_conversation(konwersacja_id: int, actor_id: Optional[int]) -> str:
+    """Kanał usuwa właściciel/administrator (z wiadomościami); rozmowę prywatną może wyczyścić uczestnik.
+
+    Zwraca 'deleted' lub 'cleared'. Rozmowy prywatne są tworzone automatycznie, więc
+    usuwamy tylko ich historię.
+    """
+    conv = get_conversation(konwersacja_id)
+    if not conv:
+        raise ValueError("Konwersacja już nie istnieje.")
+    conn = _get_conn()
+    try:
+        if conv.get("typ") == "prywatna":
+            if not is_participant(konwersacja_id, actor_id):
+                raise PermissionError("Brak dostępu do tej rozmowy.")
+            conn.execute("DELETE FROM wiadomosci_chat WHERE konwersacja_id = %s", (konwersacja_id,))
+            conn.execute(
+                "UPDATE uczestnicy_chat SET ostatnie_przeczytane_id = 0 WHERE konwersacja_id = %s",
+                (konwersacja_id,),
+            )
+            result = "cleared"
+        else:
+            if not can_manage_conversation(konwersacja_id, actor_id):
+                raise PermissionError("Tylko właściciel kanału lub administrator może go usunąć.")
+            conn.execute("DELETE FROM konwersacje WHERE id = %s", (konwersacja_id,))
+            result = "deleted"
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _direct_name(a: int, b: int) -> str:
     lo, hi = sorted((int(a), int(b)))
     return f"dm:{lo}-{hi}"

@@ -42,6 +42,13 @@ FORMA_OPODATKOWANIA = [
     "Karta podatkowa",
 ]
 
+# Podstawowa deklaracja roczna firmy (podatek dochodowy)
+ROZLICZENIE_ROCZNE = ["", "PIT-28", "PIT-36", "PIT-36L", "CIT-8E", "CIT-8"]
+ROZLICZENIE_ROCZNE_OPIS = {
+    "PIT-28": "ryczałt", "PIT-36": "skala podatkowa", "PIT-36L": "podatek liniowy",
+    "CIT-8E": "CIT estoński", "CIT-8": "CIT",
+}
+
 # ============================================================
 #  STATUS PODATKOWY
 

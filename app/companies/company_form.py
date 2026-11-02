@@ -34,6 +34,7 @@ import logging
 from app.companies.constants import (
     FORMA_DZIALALNOSCI, FORMA_OPODATKOWANIA, SPOSOB_ZAPLATY,
     STATUS_PODATKOWY, MIESIACE_FAKTUROWANIE, FORMY_OSOBY_FIZYCZNEJ,
+    ROZLICZENIE_ROCZNE, ROZLICZENIE_ROCZNE_OPIS,
 )
 from app.companies.company_lookup import lookup_company_by_nip
 from app.companies.cennik_keys import (
@@ -232,6 +233,19 @@ class CompanyForm(QDialog):
             [status_vat, urzad_skarbowy, forma_opodatkowania]
         )
 
+        rozliczenie_roczne = QComboBox()
+        rozliczenie_roczne.addItems(ROZLICZENIE_ROCZNE)
+        rozliczenie_roczne.setToolTip(
+            "Puste = automatycznie z formy opodatkowania (ryczałt → PIT-28, liniowy → PIT-36L, "
+            "skala → PIT-36, księgi rachunkowe/estoński → CIT-8/CIT-8E).\n"
+            "Deklaracja roczna: " + "; ".join(f"{k} – {v}" for k, v in ROZLICZENIE_ROCZNE_OPIS.items()))
+        deklaracje_dodatkowe = QLineEdit()
+        deklaracje_dodatkowe.setPlaceholderText("np. PIT-4R, PIT-11, VAT-9M (po przecinku)")
+        add_row(
+            ["Deklaracja roczna (zakończenie roku):", "Dodatkowe deklaracje roczne:"],
+            [rozliczenie_roczne, deklaracje_dodatkowe]
+        )
+
         analityka_fk = QLineEdit()
         kody_pkd = QLineEdit()
 
@@ -316,7 +330,8 @@ class CompanyForm(QDialog):
             "status_vat": status_vat,
             "urzad_skarbowy": urzad_skarbowy,
             "forma_opodatkowania": forma_opodatkowania,
-            "analityka_fk": analityka_fk,
+            "rozliczenie_roczne": rozliczenie_roczne,
+            "deklaracje_dodatkowe": deklaracje_dodatkowe,
             "kody_pkd": kody_pkd,
             "status": status,
             "uslugi_zawieszone": uslugi_zawieszone,

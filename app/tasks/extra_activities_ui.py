@@ -162,7 +162,7 @@ class ExtraActivitiesPage(QWidget):
         filters.addStretch()
         layout.addLayout(filters)
         self.table = QTableWidget(0, 12)
-        self.table.setHorizontalHeaderLabels(["Klient", "Miesiąc", "Czynność dodatkowa", "Ilość", "Stan", "Zadanie", "Status zadania", "Pracownik", "Fakturować po wykonaniu", "Cena netto", "Wartość netto", "Faktura"])
+        self.table.setHorizontalHeaderLabels(["Klient", "Miesiąc", "Faktura", "Czynność dodatkowa", "Ilość", "Stan", "Zadanie", "Status zadania", "Pracownik", "Fakturować po wykonaniu", "Cena netto", "Wartość netto"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -202,13 +202,13 @@ class ExtraActivitiesPage(QWidget):
             return
         self.table.setRowCount(len(self.rows))
         for row_number, row in enumerate(self.rows):
-            invoice = (row.get("invoice_number") or f"ID {row['invoice_id']}") if row.get("invoice_id") else "—"
-            if row.get("invoice_id") and not row.get("invoice_issued"):
+            invoice = (row.get("invoice_number") or "faktura robocza (bez numeru)") if row.get("invoice_id") else "—"
+            if row.get("invoice_id") and row.get("invoice_number") and not row.get("invoice_issued"):
                 invoice += " (robocza)"
-            values = [row["firma_nazwa"], row["miesiac"], row["nazwa"], f"{row['ilosc']:g} {row['jednostka']}",
+            values = [row["firma_nazwa"], row["miesiac"], invoice, row["nazwa"], f"{row['ilosc']:g} {row['jednostka']}",
                       STATES[row["state"]], row.get("task_title") or "—", row.get("task_status") or "—",
                       row.get("task_employee_name") or "—", "Tak" if row["fakturowac"] else "Nie",
-                      f"{row['cena_netto']:.2f} PLN", f"{row['cena_netto'] * row['ilosc']:.2f} PLN", invoice]
+                      f"{row['cena_netto']:.2f} PLN", f"{row['cena_netto'] * row['ilosc']:.2f} PLN"]
             for col, value in enumerate(values):
                 self.table.setItem(row_number, col, QTableWidgetItem(str(value)))
 

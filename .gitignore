@@ -33,3 +33,9 @@ installer/output/
 /.idea/misc.xml
 /import_saldeo.py
 /app/db/dao_saldeo_import.py
+
+saldeo_probe.log
+saldeo_probe_raw/
+/ksef/
+inspect_export.log
+/.idea

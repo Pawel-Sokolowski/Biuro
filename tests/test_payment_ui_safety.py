@@ -67,6 +67,9 @@ class BankReviewSafetyTests(unittest.TestCase):
 
     def test_explicit_encoding_is_remembered_and_passed_to_import(self):
         self.dialog.settings = Mock()
+        self.dialog.encoding.blockSignals(True)
+        self.dialog.encoding.setCurrentIndex(0)
+        self.dialog.encoding.blockSignals(False)
         self.dialog.encoding.setCurrentIndex(self.dialog.encoding.findData("iso8859_2"))
         with patch("app.invoices.payments_ui.QFileDialog.getOpenFileName", return_value=("statement.sta", "")), \
              patch("app.invoices.payments_ui.import_mt940_file", return_value={"all": 1, "new": 1, "duplicates": 0}) as importer, \

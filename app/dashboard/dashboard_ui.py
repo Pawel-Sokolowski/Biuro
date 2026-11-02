@@ -37,7 +37,7 @@ CARDS = (
     ("zadania_otwarte", "Moje otwarte zadania"),
     ("zadania_zalegle", "Zadania po terminie"),
     ("sesje_dzisiaj", "Moje sesje pracy dziś"),
-    ("dokumenty_miesiac", "Dokumenty w tym miesiącu"),
+    ("dokumenty_miesiac", "Dokumenty w poprzednim miesiącu"),
     ("dokumenty_dostarczone", "Dokumenty dostarczone"),
     ("dokumenty_brak", "Brak dokumentów"),
 )
@@ -161,7 +161,7 @@ class DashboardPage(QWidget):
 
     def refresh(self):
         data = get_dashboard_data(self.pracownik_id)
-        self.title.setText(f"Pulpit — {data['miesiac']}")
+        self.title.setText(f"Pulpit — rozliczany miesiąc {data['miesiac']}")
         for key, label in self.cards.items():
             label.setText(str(data.get(key, 0)))
         self.cards["zadania_zalegle"].setStyleSheet(
@@ -170,7 +170,7 @@ class DashboardPage(QWidget):
         )
         self.time_label.setText(f"Mój czas pracy w tym miesiącu: {format_duration(data['sekundy_miesiac'])}")
         self.stages_label.setText(
-            "Etapy miesiąca: " + ", ".join(f"{k}: {v}" for k, v in data["etapy"].items())
+            f"Etapy miesiąca {data['miesiac']}: " + ", ".join(f"{k}: {v}" for k, v in data["etapy"].items())
         )
 
         self._refresh_backup()

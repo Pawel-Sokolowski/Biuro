@@ -18,7 +18,9 @@ def _scalar(conn, query: str, params: tuple = ()) -> int:
 def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str, Any]:
     """Zbiera wszystkie dane widoczne na stronie głównej dla danego pracownika."""
     today = today or date.today()
-    month = today.strftime("%Y-%m")
+    current_month = today.strftime("%Y-%m")
+    # Biuro rozlicza miesiąc poprzedni, więc statystyki miesięczne dotyczą jego.
+    month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     placeholders = ",".join("%s" for _ in OPEN_TASK_STATUSES)
     conn = get_conn()
     try:
@@ -55,7 +57,7 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
         data["sekundy_miesiac"] = _scalar(
             conn,
             "SELECT COALESCE(SUM(sekundy), 0) FROM czasomierze WHERE pracownik_id = %s AND miesiac = %s",
-            (pracownik_id, month),
+            (pracownik_id, current_month),
         )
 
         delivered = _scalar(

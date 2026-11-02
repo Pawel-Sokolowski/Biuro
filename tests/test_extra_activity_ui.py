@@ -143,11 +143,11 @@ class ExtraActivityUiTests(DbTestCase):
         page.extra_activities.refresh()
         page.tabs.setCurrentWidget(page.tab_dodatkowe)
         self.assertIsNot(page.draft_table, page.extra_activities.table)
-        self.assertEqual(page.extra_activities.table.item(0, 9).text(), "100.00 PLN")
-        self.assertEqual(page.extra_activities.table.item(0, 11).text(), "DOD/09/2026 (robocza)")
+        self.assertEqual(page.extra_activities.table.item(0, 10).text(), "100.00 PLN")
+        self.assertEqual(page.extra_activities.table.item(0, 2).text(), "DOD/09/2026 (robocza)")
         mark_exported([generated['id']], 1)
         page.extra_activities.refresh()
-        self.assertEqual(page.extra_activities.table.item(0, 11).text(), "DOD/09/2026")
+        self.assertEqual(page.extra_activities.table.item(0, 2).text(), "DOD/09/2026")
 
 
 if __name__ == "__main__":

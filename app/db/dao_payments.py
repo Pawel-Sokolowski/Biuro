@@ -552,6 +552,98 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
         raise
     finally:
         conn.close()
+def list_company_choices(actor_id: int) -> list[dict[str, Any]]:
+    """Wszystkie dostępne firmy, także te bez otwartych faktur (do ręcznego wyboru)."""
+    if not _allowed(actor_id):
+        raise PermissionError("Brak uprawnień do rozliczania faktur.")
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, COALESCE(NULLIF(nazwa_skrocona, ''), nazwa, '') AS buyer, nip FROM firmy "
+            "ORDER BY LOWER(COALESCE(NULLIF(nazwa_skrocona, ''), nazwa, ''))"
+        ).fetchall()
+        return [dict(row) for row in rows if row["buyer"] and can_access_invoice(actor_id, row["id"])]
+    finally:
+        conn.close()
+
+
+def payments_for_invoices(invoice_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """Wpłaty przypisane do podanych faktur (do kolumny i podpowiedzi na liście faktur)."""
+    ids = [int(i) for i in invoice_ids]
+    if not ids:
+        return {}
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, faktura_id, data_zaplaty, kwota, sposob FROM faktury_platnosci "
+            "WHERE faktura_id = ANY(%s) ORDER BY data_zaplaty, id", (ids,),
+        ).fetchall()
+        result: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            result.setdefault(row["faktura_id"], []).append(dict(row))
+        return result
+    finally:
+        conn.close()
+
+
+def list_settlements(actor_id: int, firma_id: int | None = None, search: str = "", limit: int = 500) -> list[dict[str, Any]]:
+    """Rozliczenia faktur (od najnowszych) z danymi faktury i przelewu."""
+    if not _allowed(actor_id):
+        raise PermissionError("Brak uprawnień do przeglądania rozliczeń.")
+    conn = get_conn()
+    try:
+        params: list[Any] = []
+        where = ""
+        if firma_id is not None:
+            where += " AND i.firma_id = %s"
+            params.append(firma_id)
+        if search.strip():
+            where += (" AND (i.numer ILIKE %s OR COALESCE(f.nazwa_skrocona, f.nazwa, i.nabywca_pelna, '') ILIKE %s"
+                      " OR COALESCE(b.tytul, '') ILIKE %s OR COALESCE(b.kontrahent, '') ILIKE %s)")
+            params += [f"%{search.strip()}%"] * 4
+        rows = conn.execute(
+            f"""
+            SELECT p.id, p.faktura_id, p.data_zaplaty, p.kwota, p.sposob, p.created_at,
+                   i.numer, i.data_wystawienia, i.firma_id, i.kwota_brutto,
+                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
+                   b.kontrahent AS bank_sender, b.tytul AS bank_title,
+                   TRIM(COALESCE(w.imie, '') || ' ' || COALESCE(w.nazwisko, '')) AS actor_name
+            FROM faktury_platnosci p
+            JOIN faktury i ON i.id = p.faktura_id
+            LEFT JOIN firmy f ON f.id = i.firma_id
+            LEFT JOIN bank_transakcje b ON b.id = p.transakcja_id
+            LEFT JOIN pracownicy w ON w.id = p.pracownik_id
+            WHERE 1 = 1 {where}
+            ORDER BY p.data_zaplaty DESC, p.id DESC LIMIT %s
+            """, (*params, int(limit) * 3),
+        ).fetchall()
+        result = [dict(row) for row in rows if can_access_invoice(actor_id, row["firma_id"])]
+        return result[:limit]
+    finally:
+        conn.close()
+
+
+def revert_settlement(payment_id: int, actor_id: int) -> None:
+    """Wycofuje rozliczenie: faktura odzyskuje saldo, a przelew wraca na listę nierozliczonych."""
+    if not _allowed(actor_id):
+        raise PermissionError("Brak uprawnień do wycofania rozliczenia.")
+    conn = get_conn()
+    try:
+        payment = conn.execute("SELECT * FROM faktury_platnosci WHERE id = %s FOR UPDATE", (payment_id,)).fetchone()
+        if not payment:
+            raise PaymentError("Rozliczenie już nie istnieje. Odśwież listę.")
+        invoice = conn.execute("SELECT firma_id FROM faktury WHERE id = %s", (payment["faktura_id"],)).fetchone()
+        if not invoice or not can_access_invoice(actor_id, invoice["firma_id"]):
+            raise PermissionError("Brak dostępu do wskazanej faktury.")
+        conn.execute("DELETE FROM faktury_platnosci WHERE id = %s", (payment_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def delete_bank_transaction(
     transaction_id: int,
     actor_id: int,

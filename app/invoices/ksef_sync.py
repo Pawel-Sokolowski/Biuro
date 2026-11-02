@@ -36,6 +36,17 @@ def _valid_ksef_number(value: Any) -> str:
     return "" if number.casefold() in {"nan", "none", "null", "<na>", "n/a"} else number
 
 
+def ksef_number_date(number: str) -> str:
+    """Data nadania numeru KSeF (RRRR-MM-DD z jego środkowego członu), inaczej dziś."""
+    parts = str(number or "").split("-")
+    if len(parts) >= 3 and re.fullmatch(r"\d{8}", parts[1]):
+        try:
+            return datetime.strptime(parts[1], "%Y%m%d").strftime("%Y-%m-%d 00:00:00")
+        except ValueError:
+            pass
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _local_name(element: ET.Element) -> str:
     return element.tag.rsplit("}", 1)[-1]
 
@@ -137,6 +148,7 @@ def _upsert_downloaded_invoice(
     ksef_number = _valid_ksef_number(ksef_number)
     if not ksef_number:
         raise KsefError("Faktura nie ma prawidłowego numeru KSeF.")
+    ksef_date = data.get("ksef_date") or ksef_number_date(ksef_number)
     conn = get_conn()
     try:
         if company_id is not None:
@@ -205,17 +217,15 @@ def _upsert_downloaded_invoice(
         )
         if existing:
             invoice_id = existing[0]["id"]
+            # Faktura jest już w systemie: zostają jej własne dane (raporty, płatności),
+            # a z KSeF dopisujemy wyłącznie dane identyfikujące dokument.
             conn.execute("""
-                UPDATE faktury SET firma_id=%s, reczna=1, miesiac=%s, kwota_netto=%s, kwota_brutto=%s,
-                    data_wystawienia=%s, data_sprzedazy=%s, termin_platnosci=%s,
-                    nabywca_skrocona=%s, nabywca_pelna=%s, nabywca_adres=%s,
-                    nabywca_kod=%s, nabywca_miasto=%s, nabywca_nip=%s, nabywca_kraj=%s,
-                    pozycje_json=%s, numer=%s, ksef_numer=%s, ksef_nip_wysylki=%s, ksef_hash_faktury=%s,
-                    rodzaj=%s, korygowana_faktura_id=%s, przyczyna_korekty=%s,
-                    ksef_data=to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
-                    eksportowana=1, status='wystawiona', data_eksportu=COALESCE(data_eksportu, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+                UPDATE faktury SET ksef_numer=%s, ksef_nip_wysylki=%s, ksef_hash_faktury=%s,
+                    ksef_data=%s, eksportowana=1, status='wystawiona',
+                    data_eksportu=COALESCE(data_eksportu, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
                     updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=%s
-            """, values + (invoice_id,))
+            """, (ksef_number, data.get("seller_nip") or None, data.get("invoice_hash") or None,
+                  ksef_date, invoice_id))
             action = "zaktualizowane"
         else:
             invoice_id = conn.execute("""
@@ -226,9 +236,9 @@ def _upsert_downloaded_invoice(
                     ksef_hash_faktury, rodzaj, korygowana_faktura_id, przyczyna_korekty,
                     ksef_data, eksportowana, status, data_eksportu)
                 VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), 1,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, 1,
                     'wystawiona', to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
-            """, values).fetchone()[0]
+            """, values + (ksef_date,)).fetchone()[0]
             action = "utworzone"
         conn.commit()
         return action, int(invoice_id)
@@ -325,8 +335,15 @@ def sync_issued_invoices(
     client: Optional[KsefClient] = None,
     xml_dir: Optional[Path] = None,
     progress=None,
+    buyer_nip: Optional[str] = None,
+    invoice_number: Optional[str] = None,
+    force: bool = False,
 ) -> Dict[str, Any]:
-    """Pobiera sprzedaż z KSeF i zastępuje lokalne faktury treścią FA(3)."""
+    """Pobiera sprzedaż z KSeF i zastępuje lokalne faktury treścią FA(3).
+
+    buyer_nip / invoice_number zawężają pobieranie do jednej firmy lub faktury;
+    force pobiera ponownie także faktury już zapisane lokalnie.
+    """
     client = client or client_from_settings()
     end = date_to or datetime.now(timezone.utc)
     if date_from.tzinfo is None:
@@ -336,17 +353,25 @@ def sync_issued_invoices(
 
     # Najpierw pobieramy całą listę. KSeF potrafi zwrócić ten sam
     # dokument na granicy stron/okien, więc numer KSeF jest kluczem deduplikacji.
+    wanted_nip = _digits(buyer_nip)
+    wanted_number = (invoice_number or "").strip().casefold()
     metadata: Dict[str, Dict[str, Any]] = {}
     missing_number: List[str] = []
     for window_start, window_end in _windows(date_from, end):
         for meta in client.query_invoices(window_start, window_end):
+            if wanted_nip and _metadata_buyer_nip(meta) != wanted_nip:
+                continue
+            if wanted_number and wanted_number not in (
+                f"{meta.get('invoiceNumber') or ''} {meta.get('ksefNumber') or ''}".casefold()
+            ):
+                continue
             ksef_number = _valid_ksef_number(meta.get("ksefNumber"))
             if not ksef_number:
                 missing_number.append(meta.get("invoiceNumber") or "(bez numeru)")
                 continue
             metadata.setdefault(ksef_number, meta)
 
-    existing_numbers = _already_imported_ksef_numbers(list(metadata))
+    existing_numbers = set() if force else _already_imported_ksef_numbers(list(metadata))
     matched: List[str] = []
     unmatched: List[str] = []
     created: List[str] = []
@@ -488,9 +513,9 @@ def _take_match(
 
 
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None,
-               progress=None) -> Dict[str, Any]:
+               progress=None, **filters) -> Dict[str, Any]:
     """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""
     start = datetime.strptime(miesiac, "%Y-%m").replace(tzinfo=timezone.utc)
     end = (start + timedelta(days=32)).replace(day=1)
     return sync_issued_invoices(start, end - timedelta(seconds=1), client=client, xml_dir=xml_dir,
-                                progress=progress)
+                                progress=progress, **filters)

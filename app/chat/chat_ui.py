@@ -16,7 +16,7 @@ from app.chat.chat_model import (
     get_conversation, get_participant_ids, get_active_employees,
     update_conversation, can_manage_conversation, is_participant,
     get_direct_conversations, get_latest_message_ids, get_unread_counts,
-    mark_conversation_read,
+    mark_conversation_read, delete_conversation,
 )
 
 import psycopg
@@ -154,6 +154,11 @@ class ChatPage(QWidget):
         self.btn_manage.clicked.connect(self.manage_access)
         left_layout.addWidget(self.btn_manage)
 
+        self.btn_delete = QPushButton("Usuń konwersację")
+        self.btn_delete.setEnabled(False)
+        self.btn_delete.clicked.connect(self.delete_current_conversation)
+        left_layout.addWidget(self.btn_delete)
+
         # RIGHT: messages area with scroll
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -246,12 +251,14 @@ class ChatPage(QWidget):
             self.current_konwersacja = None
             self._clear_messages()
             self.btn_manage.setEnabled(False)
+            self.btn_delete.setEnabled(False)
 
     def on_chat_selected(self):
         item = self.chat_conversations.currentItem()
         if not item:
             return
         self.current_konwersacja = item.data(Qt.ItemDataRole.UserRole)
+        self.btn_delete.setEnabled(self.current_konwersacja is not None)
         if self.current_konwersacja in self._unread:
             self._mark_read(self.current_konwersacja)
         self.btn_manage.setEnabled(can_manage_conversation(self.current_konwersacja, self.pracownik_id))
@@ -443,6 +450,40 @@ class ChatPage(QWidget):
             QMessageBox.critical(self, "Błąd", f"Nie udało się utworzyć konwersacji: {e}")
             return
         self.refresh_chat_conversations(select_id=new_id)
+
+    def delete_current_conversation(self):
+        kid = self.current_konwersacja
+        if not kid:
+            return
+        conv = get_conversation(kid)
+        if not conv:
+            self.refresh_chat_conversations()
+            return
+        direct = conv.get("typ") == "prywatna"
+        text = ("Wyczyścić całą historię tej rozmowy? Wiadomości znikną u obu rozmówców."
+                if direct else
+                f"Usunąć kanał „{conv['nazwa']}” razem z wszystkimi wiadomościami? Tej operacji nie można cofnąć.")
+        if QMessageBox.question(
+            self, "Usuń konwersację", text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = delete_conversation(kid, self.pracownik_id)
+        except PermissionError as e:
+            QMessageBox.warning(self, "Brak uprawnień", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się usunąć konwersacji: {e}")
+            return
+        self._unread.pop(kid, None)
+        if result == "deleted":
+            self.current_konwersacja = None
+            self._clear_messages()
+            self.refresh_chat_conversations()
+        else:
+            self.offset = 0
+            self.load_messages()
 
     def manage_access(self):
         if not self.current_konwersacja:

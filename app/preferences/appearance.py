@@ -2,6 +2,7 @@
 from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication, QComboBox, QFormLayout, QLabel, QVBoxLayout, QWidget
+from app.preferences.checkbox_style import CheckboxStyle
 
 ACCENTS = [("Niebieski", "#2563eb"), ("Fioletowy", "#7c3aed"),
            ("Zielony", "#047857"), ("Turkusowy", "#0e7490"),
@@ -25,7 +26,7 @@ def apply_appearance(actor_id):
     dark = mode == "dark"
     bg, surface, raised = ("#111827", "#1f2937", "#293548") if dark else ("#f3f5f9", "#ffffff", "#e9eef6")
     text, muted, border = ("#e5eaf2", "#a8b4c5", "#3c485c") if dark else ("#1e293b", "#64748b", "#d5deea")
-    app.setStyle("Fusion")
+    app.setStyle(CheckboxStyle())
     palette = QPalette()
     for role, colour in ((QPalette.ColorRole.Window, bg), (QPalette.ColorRole.WindowText, text),
                          (QPalette.ColorRole.Base, surface), (QPalette.ColorRole.AlternateBase, raised),

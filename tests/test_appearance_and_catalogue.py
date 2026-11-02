@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 from PyQt6.QtCore import QSettings, Qt
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor, QPalette, QImage, QPainter
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QAbstractItemView, QTableWidget, QTableWidgetItem, QPushButton, QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QApplication, QAbstractItemView, QTableWidget, QTableWidgetItem, QPushButton, QWidget, QVBoxLayout, QCheckBox, QStyle, QStyleOptionButton
 from app.preferences import appearance
 from app.invoices.service_picker import ServicePicker
 from app.invoices.manual_invoice_dialog import ManualInvoiceDialog
@@ -97,6 +97,46 @@ class AppearanceAndCatalogueTests(unittest.TestCase):
                     rect = table.visualItemRect(table.item(1, column))
                     self.assertEqual(rendered.pixelColor(rect.right() - 8, rect.center().y()).name(), "#2563eb")
                 window.close()
+
+    def test_checkbox_marks_remain_visible_in_both_themes_and_scaled_item_views(self):
+        for mode in ("light", "dark"):
+            with self.subTest(mode=mode), patch.object(appearance, "preferences", return_value=(mode, "#2563eb")):
+                appearance.apply_appearance(1)
+                checkbox = QCheckBox("Zdrowotna wliczona do ceny")
+                checkbox.show()
+                self.addCleanup(checkbox.close)
+                self.app.processEvents()
+                before = checkbox.grab().toImage()
+                QTest.mouseClick(checkbox, Qt.MouseButton.LeftButton, pos=checkbox.rect().center())
+                self.assertTrue(checkbox.isChecked())
+                self.assertTrue(checkbox.isVisible())
+                self.assertNotEqual(before, checkbox.grab().toImage())
+                # Exercise the same painter used for checkable table cells,
+                # including disabled, partially checked and selected states at HiDPI.
+                for scale in (1, 1.5, 2):
+                    for enabled in (True, False):
+                        for selected in (True, False):
+                            images = []
+                            for mark in (QStyle.StateFlag.State_Off, QStyle.StateFlag.State_On, QStyle.StateFlag.State_NoChange):
+                                option = QStyleOptionButton()
+                                option.rect.setRect(0, 0, 20, 20)
+                                option.palette = self.app.palette()
+                                option.state = mark
+                                if enabled:
+                                    option.state |= QStyle.StateFlag.State_Enabled
+                                if selected:
+                                    option.state |= QStyle.StateFlag.State_Selected
+                                image = QImage(int(20*scale), int(20*scale), QImage.Format.Format_ARGB32)
+                                image.setDevicePixelRatio(scale)
+                                image.fill(QColor("#ff00ff"))
+                                painter = QPainter(image)
+                                self.app.style().drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck, option, painter)
+                                painter.end()
+                                self.assertNotEqual(image.pixelColor(int(10*scale), int(10*scale)), QColor("#ff00ff"))
+                                images.append(image)
+                            self.assertNotEqual(images[0], images[1])
+                            self.assertNotEqual(images[1], images[2])
+                checkbox.close()
 
     def test_catalogue_filter_quantity_price_vat_and_empty_selection(self):
         picker = ServicePicker([SERVICE])

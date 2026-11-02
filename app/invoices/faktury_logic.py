@@ -240,9 +240,7 @@ class FakturyLogic:
             netto = self._to_float(company.get("cena_netto_ksiegowosc", 0.0)) or \
                 self._to_float(pricing.get("cena_netto_ksiegowosc", 0.0))
             brutto = round(netto * vat_mult, 2)
-            if wliczona and zdrowotna_val > 0:
-                netto = round(netto + zdrowotna_val * zdrowotna_sztuk, 2)
-                brutto = round(brutto + zdrowotna_val * zdrowotna_sztuk * vat_mult, 2)
+            # Wliczona zdrowotna jest już częścią uzgodnionej ceny, bez dopłaty.
             pozycje.append({
                 "nazwa": "Usługa księgowa",
                 "ilosc": 1,

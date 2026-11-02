@@ -226,7 +226,7 @@ class _DayCell(QFrame):
         num = QLabel(str(day.day) if day.day != 1 else f"1 {MONTHS_PL[day.month - 1][:3]}")
         num.setStyleSheet(
             f"font-size:15px; font-weight:{'bold' if today else 'normal'}; "
-            f"color:{'#999' if dimmed else '#222'};"
+            + ("color: palette(mid);" if dimmed else "")
         )
         num.setAlignment(Qt.AlignmentFlag.AlignRight)
         lay.addWidget(num)
@@ -243,14 +243,12 @@ class _DayCell(QFrame):
         lay.addStretch()
 
     def _apply_style(self, selected: bool):
-        bg = "#fff4c2" if self._today else ("#f3f3f3" if self._dimmed else "white")
-        if selected:
-            border = "3px solid #1565c0"
-            if not self._today:
-                bg = "#e3f2fd"
-        else:
-            border = "1px solid #d0d0d0"
-        self.setStyleSheet(f"_DayCell {{ background:{bg}; border:{border}; }}")
+        self.setProperty("dimmed", self._dimmed)
+        self.setProperty("today", self._today)
+        self.setProperty("selectedDay", selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
     def set_selected_day(self, selected: bool):
         self._apply_style(selected)
@@ -313,7 +311,7 @@ class CalendarPage(QWidget):
         self.calendars.itemChanged.connect(lambda _: self._rebuild())
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color:#555;")
+        self.status.setStyleSheet("color:palette(text);")
         side = QVBoxLayout()
         side.setSpacing(6)
         side.addWidget(self.calendar)
@@ -582,14 +580,14 @@ class CalendarPage(QWidget):
         for c, name in enumerate(WEEKDAYS_PL):
             h = QLabel(name)
             h.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            h.setStyleSheet("font-weight:bold; background:#eceff1; padding:2px; font-size:14px;")
+            h.setStyleSheet("font-weight:bold; background:palette(alternate-base); padding:2px; font-size:14px;")
             self.grid.addWidget(h, 0, c + 1)
         today = date.today()
         for r in range(weeks):
             monday = first + timedelta(weeks=r)
             wk = QLabel(f"{monday.isocalendar()[1]}. tydz.")
             wk.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-            wk.setStyleSheet("color:#666; background:#eceff1; padding:2px; font-size:13px;")
+            wk.setStyleSheet("color:palette(text); background:palette(alternate-base); padding:2px; font-size:13px;")
             wk.setFixedWidth(62)
             self.grid.addWidget(wk, r + 1, 0)
             for c in range(7):

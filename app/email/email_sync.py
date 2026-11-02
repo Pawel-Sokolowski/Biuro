@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 from app.config import EMAIL_HISTORY_DAYS
 from app.db.dao_conn import get_conn
+from app.db.dao_app_settings import get_setting, set_setting
 from app.email import email_cache
 from app.email.email_connection import open_imap
 from app.email.email_helpers import (
@@ -47,6 +48,7 @@ from app.email.email_storage import (
     update_message_read_flag, delete_missing_folders,
     get_message_row_id,
     load_raw_message,
+    get_message_cache_states,
     save_raw_message,
 )
 from app.utils.crypto import decrypt_password
@@ -378,6 +380,8 @@ def prefetch_messages(
     uids: List[str],
     timeout: int = 30,
     strict: bool = False,
+    on_progress=None,
+    cancel_event=None,
 ) -> int:
     folder_id = get_folder_id(konto_id, folder)
     if not folder_id:
@@ -404,6 +408,13 @@ def prefetch_messages(
         )
         return 0
 
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("Synchronizacja przerwana.")
+    cache_states = get_message_cache_states(konto_id,folder_id,unique_uids)
+    if all(cache_states.get(uid,(None,False))[1] for uid in unique_uids):
+        if on_progress:
+            on_progress(total,total)
+        return 0
     logger.warning(
         "%s — rozpoczęto pobieranie pełnych wiadomości: %s",
         folder, total,
@@ -421,18 +432,18 @@ def prefetch_messages(
                 return 0
 
             for index, uid in enumerate(unique_uids, start=1):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("Synchronizacja przerwana; zostanie wznowiona po uruchomieniu aplikacji.")
                 try:
-                    row_id = get_message_row_id(
-                        konto_id, folder_id, uid
-                    )
+                    row_id, cached = cache_states.get(uid,(None,False))
 
                     if not row_id:
                         if strict:
                             failed += 1
                         else:
                             skipped += 1
-                    elif load_raw_message(row_id):
-                        # Pełna treść jest już w bazie.
+                    elif cached:
+                        # Pełna treść jest już w bazie; nie pobieraj jej ponownie do RAM.
                         skipped += 1
                     else:
                         typ, data = session.conn.uid(
@@ -465,6 +476,8 @@ def prefetch_messages(
 
                 # Raport co 100 UID-ów oraz na końcu folderu.
                 if index % 100 == 0 or index == total:
+                    if on_progress:
+                        on_progress(index, total)
                     logger.warning(
                         "%s — sprawdzono %s/%s wiadomości; "
                         "zapisano nowych: %s; pominięto: %s; "
@@ -593,7 +606,7 @@ def fetch_headers(
     account = _get_account_info(konto_id)
 
     if not account:
-        return []
+        raise RuntimeError("Brak konfiguracji konta e-mail.")
 
     imap_conn = _connect_imap(
         account,
@@ -601,7 +614,7 @@ def fetch_headers(
     )
 
     if not imap_conn:
-        return []
+        raise ConnectionError("Nie można połączyć się z serwerem IMAP.")
 
     try:
 
@@ -610,7 +623,7 @@ def fetch_headers(
             folder,
             readonly=True,
         ):
-            return []
+            raise RuntimeError(f"Nie można otworzyć folderu IMAP: {folder}")
 
         if history_days is None:
 
@@ -640,7 +653,7 @@ def fetch_headers(
             )
 
         if typ != "OK":
-            return []
+            raise RuntimeError(f"Nie można pobrać listy wiadomości z folderu {folder}.")
 
         if not data or not data[0]:
 
@@ -728,7 +741,7 @@ def fetch_headers(
                 break
 
             if typ_h != "OK":
-                continue
+                raise RuntimeError(f"Nie można pobrać nagłówków z folderu {folder}.")
 
             records: List[List[Any]] = []
 
@@ -906,6 +919,8 @@ def _store_folders(
     infos: List[Dict[str, Any]],
 ) -> None:
 
+    if not infos:
+        return
     delete_missing_folders(
         konto_id,
         {
@@ -1145,8 +1160,8 @@ def selectable_folder_names(konto_id: int) -> List[str]:
 
 
 def needs_initial_sync(konto_id: int) -> bool:
-    """Pierwsze otwarcie konta: brak folderów lub nagłówków w bazie (gotowa baza = już zsynchronizowane)."""
-    return not account_has_headers(konto_id)
+    """Only a completed full two-year download counts as initial sync."""
+    return get_setting(f"email_initial_sync_complete_{konto_id}") != "1" or get_setting(f"email_initial_sync_pending_{konto_id}") == "1"
 
 def _sync_and_prefetch_impl(
     konto_id: int,
@@ -1156,6 +1171,8 @@ def _sync_and_prefetch_impl(
     on_progress=None,
     all_folders: bool = False,
     full_mailbox: bool = False,
+    headers_only: bool = False,
+    cancel_event=None,
 ) -> int:
     """
     Synchronizuje nagłówki oraz pełne treści wiadomości.
@@ -1178,7 +1195,7 @@ def _sync_and_prefetch_impl(
         or not get_folders_for_account(konto_id)
     ):
         refreshed = list_folders_from_imap_and_store(konto_id)
-        if full_mailbox and not refreshed:
+        if (full_mailbox or first_run) and not refreshed:
             raise RuntimeError("Nie udało się odczytać listy folderów z serwera IMAP.")
 
     if first_run or all_folders or full_mailbox:
@@ -1205,6 +1222,8 @@ def _sync_and_prefetch_impl(
     )
 
     for index, folder in enumerate(folders):
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Synchronizacja przerwana; zostanie wznowiona po uruchomieniu aplikacji.")
         if on_progress and index == 0:
             on_progress(0, total, folder, total_headers)
 
@@ -1229,6 +1248,11 @@ def _sync_and_prefetch_impl(
             if on_headers:
                 on_headers()
 
+            if headers_only:
+                if on_progress:
+                    on_progress(index + 1, total, folder, total_headers)
+                continue
+
             # 2. Pobierz wiadomości z tego folderu z PostgreSQL.
             folder_id = get_folder_id(konto_id, folder)
 
@@ -1237,7 +1261,7 @@ def _sync_and_prefetch_impl(
                     "%s — brak folder_id, pomijam treści",
                     folder,
                 )
-                if full_mailbox:
+                if full_mailbox or first_run:
                     raise RuntimeError(f"Brak folder_id dla {folder}")
                 continue
 
@@ -1294,12 +1318,16 @@ def _sync_and_prefetch_impl(
             for start in range(0, len(uids), 100):
                 batch = uids[start:start + 100]
 
-                saved = prefetch_messages(
-                    konto_id,
-                    folder,
-                    batch,
-                    strict=full_mailbox,
-                )
+                progress_callback = None
+                if on_progress:
+                    progress_callback = lambda done, total, offset=start, count=len(uids), name=folder: on_progress(
+                        index, len(folders), f"{name} · pełne wiadomości {offset+done}/{count}", total_headers)
+                options = {"strict": (full_mailbox or first_run)}
+                if cancel_event is not None:
+                    options["cancel_event"] = cancel_event
+                if progress_callback:
+                    options["on_progress"] = progress_callback
+                saved = prefetch_messages(konto_id, folder, batch, **options)
 
                 total_bodies += saved
 
@@ -1322,8 +1350,7 @@ def _sync_and_prefetch_impl(
                 "Błąd synchronizacji folderu %s",
                 folder,
             )
-            if full_mailbox:
-                failed_folders.append(folder)
+            failed_folders.append(folder)
 
         if on_progress:
             on_progress(
@@ -1350,7 +1377,7 @@ def _sync_and_prefetch_impl(
 
     if failed_folders:
         raise RuntimeError(
-            "Błędy pełnej synchronizacji folderów: " + ", ".join(failed_folders[:15])
+            "Błędy synchronizacji folderów: " + ", ".join(failed_folders[:15])
         )
     return total_headers
 
@@ -1363,14 +1390,27 @@ def sync_and_prefetch(
     on_progress=None,
     all_folders: bool = False,
     full_mailbox: bool = False,
+    headers_only: bool = False,
+    cancel_event=None,
 ) -> int:
-    # Pełne i automatyczne synchronizacje jednego konta wykonują się kolejno.
-    with _account_sync_lock(konto_id):
-        return _sync_and_prefetch_impl(
+    lock = _account_sync_lock(konto_id)
+    while not lock.acquire(timeout=0.5):
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Synchronizacja przerwana.")
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Synchronizacja przerwana.")
+        result = _sync_and_prefetch_impl(
             konto_id, folders, first_run=first_run, on_headers=on_headers,
             on_progress=on_progress, all_folders=all_folders,
-            full_mailbox=full_mailbox,
+            full_mailbox=full_mailbox, headers_only=headers_only, cancel_event=cancel_event,
         )
+        if full_mailbox or (first_run and not headers_only):
+            set_setting(f"email_initial_sync_complete_{konto_id}", "1")
+            set_setting(f"email_initial_sync_pending_{konto_id}", "0")
+        return result
+    finally:
+        lock.release()
 
 
 def _set_seen_remote(
@@ -1401,8 +1441,10 @@ def mark_read_remote(konto_id: int, folder: str, uid: str, timeout: int = 30) ->
 
 def list_folders_from_imap_and_store(konto_id: int) -> bool:
     infos = list_folder_infos(konto_id)
+    if not infos:
+        return False
     _store_folders(konto_id, infos)
-    return bool(infos)
+    return True
 
 
 def fetch_headers_from_imap_and_store(
@@ -1547,3 +1589,80 @@ def rename_folder(konto_id: int, old: str, new_name: str) -> str:
     _mailbox_command(konto_id, action)
     rename_folder_local(konto_id, old, new_server)
     return new_server
+
+
+def sync_automatic_accounts(accounts, current_account_id=None, current_folder=None, *, on_headers=None, on_progress=None, cancel_event=None):
+    """Check new mail only. Full history is never initiated by app startup.
+
+    Accounts run independently so a slow account or a full-mailbox import does
+    not prevent other accounts from receiving mail. Same-account syncs retain
+    their existing lock. Full history downloads remain an explicit action.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    ordered = sorted(accounts, key=lambda account: account["id"] != current_account_id)
+    if not ordered:
+        return []
+
+    def headers(account):
+        konto_id = account["id"]
+        folders = []
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Synchronizacja przerwana.")
+            if not list_folders_from_imap_and_store(konto_id):
+                raise ConnectionError("Nie udało się odświeżyć listy folderów IMAP.")
+            folders = selectable_folder_names(konto_id)
+            priority = [current_folder] if konto_id == current_account_id and current_folder in folders else []
+            if "INBOX" in folders:
+                priority.append("INBOX")
+            folders = list(dict.fromkeys(priority + folders))
+            if not folders:
+                raise RuntimeError("Brak wybieralnych folderów IMAP.")
+            options = {"first_run":False,"headers_only":True,"on_headers":on_headers,"on_progress":on_progress}
+            if cancel_event is not None:
+                options["cancel_event"] = cancel_event
+            sync_and_prefetch(konto_id, folders, **options)
+            return konto_id, folders, None
+        except Exception as exc:
+            return konto_id, [], f"Konto #{konto_id}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=min(4, len(ordered))) as pool:
+        jobs = list(pool.map(headers, ordered))
+    errors = [error for _, _, error in jobs if error]
+    # Body prefetch cannot postpone other accounts' header/unread updates.
+    for konto_id, folders, error in jobs:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if error:
+            continue
+        wanted = [folder for folder in folders if folder == "INBOX" or (konto_id == current_account_id and folder == current_folder)]
+        for folder in wanted:
+            try:
+                with _account_sync_lock(konto_id):
+                    prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
+            except Exception as exc:
+                errors.append(f"Konto #{konto_id}, {folder}: {exc}")
+    return errors
+
+
+def sync_requested_accounts(accounts, *, on_progress=None, cancel_event=None):
+    """Explicit Settings action: full messages/attachments, all folders, 730 days.
+
+    Pending markers retain progress information, never permission to start a
+    full download automatically. Repeating the Settings action reuses the cache.
+    """
+    errors = []
+    for account in accounts:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        account_id = account["id"]
+        try:
+            set_setting(f"email_initial_sync_pending_{account_id}", "1")
+            def progress(done, total, folder, headers):
+                if on_progress:
+                    on_progress(account.get("email") or str(account_id), done, total, folder, headers)
+            sync_and_prefetch(account_id, ["INBOX"], first_run=True,
+                              on_progress=progress, cancel_event=cancel_event)
+        except Exception as exc:
+            errors.append(f"Konto #{account_id}: {exc}")
+    return errors

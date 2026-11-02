@@ -1,4 +1,5 @@
-﻿# app/admin/settings/email_settings.py
+import time
+# app/admin/settings/email_settings.py
 
 import logging
 import threading
@@ -222,7 +223,7 @@ class EmailSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        self.full_sync_button = QPushButton("Synchronizuj pełną skrzynkę (wszystkie foldery)")
+        self.full_sync_button = QPushButton("Pobierz pełne wiadomości z 2 lat (wszystkie foldery)")
         self.full_sync_button.clicked.connect(self._sync_full_mailbox)
         layout.addWidget(self.full_sync_button)
         self.full_sync_status = QLabel("Pełna synchronizacja uruchamiana tylko ręcznie. Automatycznie pobierane są nowe wiadomości.")
@@ -305,13 +306,14 @@ class EmailSettings(QWidget):
         if QMessageBox.question(
             self,
             "Pełna synchronizacja poczty",
-            "Pobrać wszystkie foldery i wszystkie wiadomości z całej historii "
+            "Pobrać pełne wiadomości i załączniki z ostatnich dwóch lat ze wszystkich folderów "
             "wybranego konta IMAP do PostgreSQL? Może to być czasochłonne.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
 
         self._full_sync_running = True
+        self._full_sync_started = time.monotonic()
         self.full_sync_button.setEnabled(False)
         self.full_sync_status.setText(f"Rozpoczynam pełną synchronizację konta {account_id}...")
 
@@ -319,7 +321,7 @@ class EmailSettings(QWidget):
             error = None
             try:
                 sync_and_prefetch(
-                    account_id, ["INBOX"], full_mailbox=True,
+                    account_id, ["INBOX"], first_run=True,
                     on_progress=lambda done, total, folder, headers: self.full_sync_progress.emit(
                         (done, total, folder, headers)
                     ),
@@ -336,9 +338,10 @@ class EmailSettings(QWidget):
 
     def _on_full_sync_progress(self, progress) -> None:
         done, total, folder, headers = progress
+        elapsed = int(time.monotonic() - getattr(self, "_full_sync_started", time.monotonic()))
         self.full_sync_status.setText(
             f"Pełna synchronizacja: folder {done}/{total}, "
-            f"zapisano {headers} nagłówków. {folder or ''}"
+            f"zapisano {headers} nagłówków. {folder or ''} · czas {elapsed//60}:{elapsed%60:02d}"
         )
 
     def _on_full_sync_finished(self, result) -> None:

@@ -16,11 +16,11 @@ def vat_code(position):
         return raw.lower()
 
 
-def vat_summary(positions):
+def vat_summary(positions, *, accepted_amounts=False):
     groups = {}
     for source in positions:
         code = vat_code(source)
-        item = normalize_position(source)
+        item = source if accepted_amounts else normalize_position(source)
         net = Decimal(str(item['netto'])).quantize(CENT, rounding=ROUND_HALF_UP)
         gross = Decimal(str(item['brutto'])).quantize(CENT, rounding=ROUND_HALF_UP)
         group = groups.setdefault(code, {'code': code, 'net': Decimal('0.00'), 'vat': Decimal('0.00'), 'gross': Decimal('0.00')})
@@ -35,8 +35,8 @@ def vat_summary(positions):
     return sorted(groups.values(), key=order)
 
 
-def summary_html(positions, *, paper=False):
-    groups = vat_summary(positions)
+def summary_html(positions, *, paper=False, accepted_amounts=False):
+    groups = vat_summary(positions, accepted_amounts=accepted_amounts)
     if not groups:
         return 'Podsumowanie VAT — brak pozycji'
     rows = []

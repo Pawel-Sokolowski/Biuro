@@ -115,7 +115,9 @@ administracyjne nadal wymagają odpowiednich uprawnień.
 Podczas wystawiania faktury przycisk **Dodaj z katalogu usług** otwiera
 wyszukiwalną listę usług dodatkowych. W zakładce roboczych faktur pozycje
 edytuje się bezpośrednio w dolnej tabeli: nazwa, ilość, jednostka, cena netto,
-VAT i kategoria. Zmiany zapisują się automatycznie, a wartości netto i brutto
+VAT i kategoria. W tym samym panelu można zapisać daty wystawienia, sprzedaży,
+termin płatności, przyczynę korekty i podstawę zwolnienia z VAT.
+Zmiany pozycji zapisują się automatycznie, a wartości netto i brutto
 są przeliczane. Obok tabeli można wybrać usługę z katalogu i jej ilość,
 dodać nową pozycję lub usunąć wybraną.
 Wybierz usługę i ilość; nazwa, cena netto i VAT są pobierane z katalogu.

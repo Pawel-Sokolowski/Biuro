@@ -968,7 +968,10 @@ class FakturyPage(QWidget):
             return False
         if not positions or any(not str(p.get("nazwa") or "").strip() for p in positions):
             raise ValueError("Faktura wymaga co najmniej jednej nazwanej pozycji.")
-        header = header or {}
+        if header is None:
+            header = {field: edit.date().toString("yyyy-MM-dd") for field, edit in self.inline_dates.items()}
+            header.update(przyczyna_korekty=self.inline_reason.text().strip(),
+                          podstawa_zwolnienia=self.inline_exemption.text().strip())
         update_invoice_draft(invoice_id, positions, numer=number if number is not None else invoice.get("numer"),
                              data_wystawienia=header.get("data_wystawienia", invoice.get("data_wystawienia")),
                              data_sprzedazy=header.get("data_sprzedazy", invoice.get("data_sprzedazy")),

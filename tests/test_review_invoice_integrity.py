@@ -47,6 +47,20 @@ class ReviewInvoiceIntegrityTests(unittest.TestCase):
             self.assertIn('0.125', html)
             self.assertIn(f'<b>{accepted_net}</b>', html)
 
+    def test_accepted_vat_and_gross_survive_rounding_boundary_without_p_11a(self):
+        root = etree.fromstring(build_fa3_xml(INVOICE, [POSITION], SELLER))
+        row = root.xpath('//*[local-name()="FaWiersz"]')[0]
+        for name, value in {'P_11':'0.10', 'P_12':'5', 'P_11Vat':'0.01'}.items():
+            row.xpath('.//*[local-name()=$name]', name=name)[0].text = value
+        self.assertFalse(row.xpath('.//*[local-name()="P_11A"]'))
+        parsed = parse_fa3_invoice(etree.tostring(root).decode())
+        position = parsed['positions'][0]
+        self.assertEqual(position['brutto'], 0.11)
+        group = vat_summary(parsed['positions'], accepted_amounts=True)[0]
+        self.assertEqual(group['net'], Decimal('0.10'))
+        self.assertEqual(group['vat'], Decimal('0.01'))
+        self.assertEqual(group['gross'], Decimal('0.11'))
+
     def test_official_correction_pdf_identifies_corrected_invoice(self):
         correction = {**INVOICE, 'numer':'KOR/1', 'rodzaj':'korekta', 'kwota_netto':-100, 'kwota_brutto':-123, 'przyczyna_korekty':'Zwrot'}
         xml = build_fa3_xml(correction, [{**POSITION,'ilosc':-1}], SELLER, corrected=INVOICE)

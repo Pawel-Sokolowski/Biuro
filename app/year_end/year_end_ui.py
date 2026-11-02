@@ -2,15 +2,40 @@ from datetime import date
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget, QAbstractItemView, QHeaderView,
 )
 
-from app.db.dao_year_end import list_year_end, save_declaration
+from app.companies.constants import ROZLICZENIE_ROCZNE, ROZLICZENIE_ROCZNE_OPIS
+from app.db.dao_year_end import list_year_end, save_declaration, set_company_declarations
 
 HEADERS = ["Klient", "NIP", "Forma opodatkowania", "Deklaracja", "Stan", "Data złożenia",
            "Kwota", "UPO", "Uwagi"]
+
+
+class CompanyDeclarationDialog(QDialog):
+    """Szybkie uzupełnienie deklaracji rocznej firmy."""
+
+    def __init__(self, name: str, company: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{name} — deklaracja roczna")
+        form = QFormLayout(self)
+        form.addRow(QLabel(f"Forma opodatkowania: {company.get('forma_opodatkowania') or '—'}"))
+        self.main = QComboBox()
+        for code in ROZLICZENIE_ROCZNE:
+            desc = ROZLICZENIE_ROCZNE_OPIS.get(code)
+            self.main.addItem(f"{code} ({desc})" if desc else "(brak)", code)
+        idx = self.main.findData((company.get("rozliczenie_roczne") or "").strip())
+        self.main.setCurrentIndex(max(idx, 0))
+        self.extra = QLineEdit(company.get("deklaracje_dodatkowe") or "")
+        self.extra.setPlaceholderText("np. VAT-UE, CIT-8")
+        form.addRow("Deklaracja:", self.main)
+        form.addRow("Dodatkowe:", self.extra)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
 
 
 class DeclarationDialog(QDialog):
@@ -120,15 +145,28 @@ class YearEndPage(QWidget):
                 continue
             if not company["deklaracje"]:
                 missing.append(name)
+                rows.append((company, name, None))
                 continue
             for decl in company["deklaracje"]:
                 if self.only_open.isChecked() and decl.get("zlozona"):
                     continue
                 rows.append((company, name, decl))
         self._rows = rows
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(rows))
         done = 0
         for r, (company, name, decl) in enumerate(rows):
+            if decl is None:
+                values = [name, company.get("nip") or "", company.get("forma_opodatkowania") or "",
+                          "BRAK", "", "", "", "", ""]
+                for c, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    if c == 3:
+                        item.setForeground(Qt.GlobalColor.red)
+                    self.table.setItem(r, c, item)
+                continue
             filed = bool(decl.get("zlozona"))
             done += filed
             values = [
@@ -143,9 +181,13 @@ class YearEndPage(QWidget):
                 if c == 4:
                     item.setForeground(Qt.GlobalColor.darkGreen if filed else Qt.GlobalColor.red)
                 self.table.setItem(r, c, item)
-        text = f"Złożone: {done} / {len(rows)}"
+        self.table.setUpdatesEnabled(True)
+        self.table.resizeColumnsToContents()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        text = f"Złożone: {done} / {len(rows) - len(missing)}"
         if missing:
-            text += f"   |   Bez ustawionej deklaracji rocznej: {len(missing)} (uzupełnij w karcie firmy)"
+            text += f"   |   Bez deklaracji (BRAK): {len(missing)} — zaznacz i kliknij „Edytuj…”"
         self.summary.setText(text)
 
     def _selected(self):
@@ -165,6 +207,9 @@ class YearEndPage(QWidget):
         if not sel:
             return
         company, _, decl = sel
+        if decl is None:
+            self._edit_selected()
+            return
         self._save(company, decl, dict(
             filed=True, filed_date=decl.get("data_zlozenia") or date.today().isoformat(),
             amount=decl.get("kwota"), upo=decl.get("upo") or "", notes=decl.get("uwagi") or ""))
@@ -174,6 +219,17 @@ class YearEndPage(QWidget):
         if not sel:
             return
         company, name, decl = sel
+        if decl is None:
+            dlg = CompanyDeclarationDialog(name, company, self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                try:
+                    set_company_declarations(company["id"], dlg.main.currentData() or "",
+                                             dlg.extra.text().strip())
+                except Exception as exc:
+                    QMessageBox.critical(self, "Zakończenie roku", f"Nie udało się zapisać: {exc}")
+                    return
+                self.refresh()
+            return
         dialog = DeclarationDialog(f"{name} — {decl['kod']} za {self.year.value()}", decl, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return

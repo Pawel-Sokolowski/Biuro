@@ -51,9 +51,12 @@ def _text(element: Optional[ET.Element], name: str, default: str = "") -> str:
     return (item.text or "").strip() if item is not None else default
 
 
-def _decimal(value: Any, field: str) -> Decimal:
+def _decimal(value: Any, field: str, *, money=True) -> Decimal:
     try:
-        return Decimal(str(value).replace(",", ".")).quantize(Decimal("0.01"))
+        number = Decimal(str(value).replace(",", "."))
+        if not number.is_finite():
+            raise InvalidOperation
+        return number.quantize(Decimal("0.01")) if money else number
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise KsefError(f"Faktura KSeF ma nieprawidłową wartość pola {field}.") from exc
 
@@ -75,20 +78,27 @@ def parse_fa3_invoice(xml: str, *, allow_buyer_without_nip=False) -> Dict[str, A
         raise KsefError("Faktura KSeF nie zawiera numeru, daty wystawienia lub NIP-u nabywcy.")
     positions: List[Dict[str, Any]] = []
     for row in (item for item in fa.iter() if _local_name(item) == "FaWiersz"):
-        quantity = _decimal(_text(row, "P_8B", "1"), "P_8B")
-        unit_net = _decimal(_text(row, "P_9A", "0"), "P_9A")
+        quantity = _decimal(_text(row, "P_8B", "1"), "P_8B", money=False)
+        unit_net = _decimal(_text(row, "P_9A", "0"), "P_9A", money=False)
         net = _decimal(_text(row, "P_11", str(quantity * unit_net)), "P_11")
         vat_text = _text(row, "P_12", "0")
+        vat_amount_text = _text(row, "P_11Vat")
+        vat_amount = _decimal(vat_amount_text, "P_11Vat") if vat_amount_text else None
         try:
             vat: Any = int(Decimal(vat_text))
-            gross = _decimal(_text(row, "P_11A", str(net * (Decimal("1") + Decimal(vat) / 100))), "P_11A")
+            gross_default = (
+                str(net + vat_amount) if vat_amount is not None
+                else str(net * (Decimal("1") + Decimal(vat) / 100))
+            )
         except InvalidOperation:
             vat = vat_text.lower()
-            gross = _decimal(_text(row, "P_11A", str(net)), "P_11A")
+            gross_default = str(net + vat_amount) if vat_amount is not None else str(net)
+        gross = _decimal(_text(row, "P_11A", gross_default), "P_11A")
         positions.append({
             "nazwa": _text(row, "P_7") or "Pozycja KSeF", "ilosc": float(quantity),
             "jednostka": _text(row, "P_8A") or "szt.", "cena_netto": float(unit_net),
-            "vat": vat, "netto": float(net), "brutto": float(gross), "zrodlo": "KSeF",
+            "vat": vat, "netto": float(net), "brutto": float(gross),
+            "vat_amount": float(vat_amount) if vat_amount is not None else None, "zrodlo": "KSeF",
         })
     if not positions:
         raise KsefError(f"Faktura KSeF {number} nie zawiera pozycji.")

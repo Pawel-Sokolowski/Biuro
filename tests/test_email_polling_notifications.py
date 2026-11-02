@@ -36,6 +36,27 @@ class AutomaticSyncTests(unittest.TestCase):
         self.assertTrue(all(set(event[2])=={'INBOX','Clients','Archive'} for event in header_events))
         self.assertEqual([event[0] for event in events[:2]],['headers','headers'])
 
+    def test_busy_manual_account_does_not_block_repeated_automatic_passes(self):
+        acquired = threading.Event()
+        release = threading.Event()
+        def manual():
+            with email_sync._account_sync_lock(901):
+                acquired.set()
+                release.wait(5)
+        worker = threading.Thread(target=manual)
+        worker.start()
+        self.assertTrue(acquired.wait(2))
+        try:
+            with patch.object(email_sync, 'list_folders_from_imap_and_store', return_value=True) as discovery, patch.object(email_sync, 'selectable_folder_names', return_value=['INBOX']), patch.object(email_sync, 'sync_and_prefetch') as sync, patch.object(email_sync, 'prefetch_recent') as bodies:
+                for _ in range(2):
+                    self.assertEqual(email_sync.sync_automatic_accounts([{'id':901},{'id':902}]), [])
+                self.assertEqual([call.args[0] for call in discovery.call_args_list], [902,902])
+                self.assertEqual([call.args[0] for call in sync.call_args_list], [902,902])
+                self.assertEqual([call.args[0] for call in bodies.call_args_list], [902,902])
+        finally:
+            release.set()
+            worker.join(2)
+
     def test_slow_account_does_not_prevent_another_account_sync(self):
         second_done=threading.Event()
         def sync(account,*args,**kwargs):

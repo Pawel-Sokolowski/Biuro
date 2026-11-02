@@ -329,8 +329,12 @@ def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -
     if not str(get_setting("faktury_sprzedawca_adres") or "").strip():
         raise KsefError("Uzupełnij adres sprzedawcy w ustawieniach faktur.")
     invoice = _with_buyer_data(invoice)
-    if "metoda_kasowa" not in invoice:
-        invoice["metoda_kasowa"] = str(get_setting_first(("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa"), "")).strip().casefold() in ("x", "1", "true", "tak")
+    from app.db.dao_companies import get_company
+    from app.utils.saldeo_exporter import _to_bool
+    company = (get_company(invoice["firma_id"]) or {}) if invoice.get("firma_id") else {}
+    candidates = (invoice.get("metoda_kasowa"), company.get("metoda_kasowa"),
+                  get_setting_first(("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa"), ""))
+    invoice["metoda_kasowa"] = next((flag for value in candidates if (flag := _to_bool(value)) is not None), False)
     seller_nip = _digits(get_setting("faktury_sprzedawca_nip") or get_setting(NIP_KEY))
     if seller_nip != _digits(get_setting(NIP_KEY)):
         raise KsefError("NIP sprzedawcy różni się od NIP w konfiguracji KSeF.")

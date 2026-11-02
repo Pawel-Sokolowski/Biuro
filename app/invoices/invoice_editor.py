@@ -56,6 +56,8 @@ class InvoiceEditorDialog(QDialog):
         self.przyczyna = QLineEdit(invoice.get("przyczyna_korekty") or "")
         if self.is_correction:
             form.addRow("Przyczyna korekty:", self.przyczyna)
+        self.podstawa_zwolnienia = QLineEdit(invoice.get("podstawa_zwolnienia") or "")
+        form.addRow("Podstawa zwolnienia z VAT:", self.podstawa_zwolnienia)
         layout.addLayout(form)
 
         if self.is_correction:
@@ -108,7 +110,7 @@ class InvoiceEditorDialog(QDialog):
         self.table.itemChanged.connect(self._on_item_changed)
 
         if self.read_only:
-            for widget in (self.numer, self.data_wyst, self.data_sprz, self.termin, self.przyczyna):
+            for widget in (self.numer, self.data_wyst, self.data_sprz, self.termin, self.przyczyna, self.podstawa_zwolnienia):
                 widget.setEnabled(False)
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.btn_add.setEnabled(False)
@@ -202,6 +204,7 @@ class InvoiceEditorDialog(QDialog):
                 data_sprzedazy=self.data_sprz.date().toString("yyyy-MM-dd"),
                 termin_platnosci=self.termin.date().toString("yyyy-MM-dd"),
                 przyczyna_korekty=self.przyczyna.text().strip(),
+                podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Faktura", str(exc))

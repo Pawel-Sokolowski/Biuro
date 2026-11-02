@@ -27,10 +27,10 @@ PAGES = [
     ("raporty", 6), ("zadania", 7), ("kalendarz", 8), ("ustawienia", 9),
 ]
 DEMO_COMPANIES = [
-    ("Przykładowa Firma Alfa Sp. z o.o.", "Alfa", "1234563218", "Szczecin"),
-    ("Demo Usługi Beta S.C.", "Beta", "5260001246", "Gdańsk"),
-    ("Jan Przykładowy Gamma", "Gamma", "7740001454", "Poznań"),
-    ("Wzorcowa Delta Sp. z o.o.", "Delta", "9512345632", "Wrocław"),
+    ("Przykładowa Firma Alfa Sp. z o.o.", "Alfa", "1234563218", "Szczecin", "Księgi rachunkowe"),
+    ("Demo Usługi Beta S.C.", "Beta", "5260001246", "Gdańsk", "Podatek liniowy"),
+    ("Jan Przykładowy Gamma", "Gamma", "7740001454", "Poznań", "Ryczałt ewidencjonowany"),
+    ("Wzorcowa Delta Sp. z o.o.", "Delta", "9512345632", "Wrocław", "CIT estoński"),
 ]
 
 
@@ -42,9 +42,15 @@ def main() -> int:
         init_db()
         admin_id = create_initial_admin("admin@example.com", "Admin12345", "Jan", "Demo")
         emp = admin_id
-        for nazwa, skrot, nip, miasto in DEMO_COMPANIES:
-            firma_id = save_company({"nazwa": nazwa, "nazwa_skrocona": skrot, "nip": nip, "miasto": miasto})
+        demo_ids = []
+        for nazwa, skrot, nip, miasto, forma in DEMO_COMPANIES:
+            firma_id = save_company({"nazwa": nazwa, "nazwa_skrocona": skrot, "nip": nip, "miasto": miasto,
+                                     "forma_opodatkowania": forma})
             assign_employee_to_company(emp, firma_id)
+            demo_ids.append(firma_id)
+        from app.db.dao_year_end import save_declaration
+        save_declaration(emp, demo_ids[2], 2025, "PIT-28", filed=True, filed_date="2026-02-10",
+                         amount=1250.0, upo="UPO-DEMO-0001")
         for name in ("warning", "information", "critical", "question"):
             mock.patch.object(QMessageBox, name, return_value=QMessageBox.StandardButton.Yes).start()
         from app.main_ui import OfficeManagerApp
@@ -63,6 +69,15 @@ def main() -> int:
             app.processEvents()
             win.grab().save(str(OUT / f"{name}.png"))
             print("OK", name)
+        win.sidebar.setCurrentRow(1)
+        win.pages.setCurrentIndex(1)
+        win.page_monthly.month_combo.setCurrentText("2025")
+        win.page_monthly._on_filters_changed()
+        app.processEvents()
+        win.grab().save(str(OUT / "zakonczenie-roku.png"))
+        print("OK zakonczenie-roku")
+        win.page_monthly.month_combo.setCurrentText(win.page_monthly.logic.aktualny_miesiac)
+        win.page_monthly._on_filters_changed()
         win.pages.setCurrentIndex(9)
         win._refresh_current_page(9)
         settings = win.page_settings

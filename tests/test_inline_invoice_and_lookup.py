@@ -68,45 +68,20 @@ class InlineInvoiceTests(unittest.TestCase):
         self.assertEqual(self.updates[-1][2]["numer"], "FV/5")
         self.assertFalse(self.page.positions_table.item(0, 5).flags() & Qt.ItemFlag.ItemIsEditable)
 
-    def test_existing_draft_header_dates_reason_and_exemption_save_inline(self):
-        from PyQt6.QtCore import QDate
-        self.invoice['rodzaj'] = 'korekta'
+    def test_header_form_is_not_shown_inline_and_header_survives_position_edit(self):
+        self.assertFalse(hasattr(self.page, "inline_invoice_number"))
+        self.edit(0, "Usługa po zmianie")
+        self.assertEqual(self.updates[-1][2]["numer"], "FV/5")
+        self.assertEqual(self.updates[-1][2]["data_wystawienia"], "2026-11-01")
+
+    def test_catalogue_is_reloaded_when_new_service_is_added(self):
         self.page._show_draft_positions()
-        for field in self.page.inline_dates:
-            self.page.inline_dates[field].setDate(QDate(2026, 11, 15))
-        self.page.inline_reason.setText('Zwrot usługi')
-        self.page.inline_exemption.setText('art. 113 ust. 1 ustawy o VAT')
-        self.page._save_inline_header()
-        header = self.updates[-1][2]
-        for field in self.page.inline_dates:
-            self.assertEqual(header[field], '2026-11-15')
-        self.assertEqual(header['przyczyna_korekty'], 'Zwrot usługi')
-        self.assertEqual(header['podstawa_zwolnienia'], 'art. 113 ust. 1 ustawy o VAT')
-
-    def test_header_edits_survive_position_autosave_and_invoice_number_save(self):
-        from PyQt6.QtCore import QDate
-        self.page._show_draft_positions()
-        for field in self.page.inline_dates:
-            self.page.inline_dates[field].setDate(QDate(2026, 11, 15))
-        self.page.inline_reason.setText('Zwrot usługi')
-        self.page.inline_exemption.setText('art. 113 ust. 1 ustawy o VAT')
-        self.edit(0, 'Usługa po zmianie')
-        for field in self.page.inline_dates:
-            self.assertEqual(self.updates[-1][2][field], '2026-11-15')
-        self.assertEqual(self.updates[-1][2]['przyczyna_korekty'], 'Zwrot usługi')
-        self.assertEqual(self.updates[-1][2]['podstawa_zwolnienia'], 'art. 113 ust. 1 ustawy o VAT')
-
-        self.page.inline_dates['data_wystawienia'].setDate(QDate(2026, 11, 20))
-        self.page.inline_reason.setText('Korekta ceny')
-        self.page.inline_exemption.setText('art. 113 ust. 2 ustawy o VAT')
-        self.page.inline_invoice_number.setText('KOR/5')
-        self.page._save_inline_invoice_number()
-        header = self.updates[-1][2]
-        self.assertEqual(header['numer'], 'KOR/5')
-        self.assertEqual(header['data_wystawienia'], '2026-11-20')
-        self.assertEqual(header['przyczyna_korekty'], 'Korekta ceny')
-        self.assertEqual(header['podstawa_zwolnienia'], 'art. 113 ust. 2 ustawy o VAT')
-
+        self.assertEqual(self.page.service_choice.count(), 2)
+        with patch.object(ui, "get_extra_services", return_value=[
+                {"id": 8, "nazwa": "Konsultacja", "cena_netto": 50, "stawka_vat": "8%", "kategoria": "inne"},
+                {"id": 9, "nazwa": "Nowa usługa", "cena_netto": 10, "stawka_vat": "23%", "kategoria": "inne"}]):
+            self.page._show_draft_positions()
+        self.assertEqual(self.page.service_choice.count(), 3)
     def test_invalid_numbers_and_blank_name_do_not_write(self):
         for column, text in ((1, "NaN"), (3, "abc"), (4, "101"), (0, "")):
             with patch.object(QMessageBox, "warning") as warning:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime
 import psycopg
@@ -44,7 +44,68 @@ class MonthlyViewLogic:
         self.aktywna_firma_stoper_ks_activity: Optional[Dict[str, Any]] = None
         self.aktywna_firma_stoper_kadry_activity: Optional[Dict[str, Any]] = None
 
+        self.czas_start_general: Optional[datetime.datetime] = None
+        self.general_activity: Optional[Dict[str, Any]] = None
+
         self._auto_check_suspension()
+
+    def is_general_timer_running(self) -> bool:
+        return self.czas_start_general is not None
+
+    def start_general_timer(self, activity: Optional[Dict[str, Any]] = None) -> None:
+        """Uruchamia stoper ogólny (bez firmy); poprzedni ogólny zostaje zapisany."""
+        if self.is_general_timer_running():
+            self.stop_general_timer()
+        activity = dict(activity or {})
+        task_id = activity.get("task_id")
+        if task_id:
+            conn = get_conn()
+            try:
+                conn.execute(
+                    "UPDATE zadania SET status = 'W toku', updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') "
+                    "WHERE id = %s AND status = 'Nowe'",
+                    (task_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        self.general_activity = activity
+        self.czas_start_general = datetime.datetime.now()
+
+    def stop_general_timer(self) -> int:
+        if self.czas_start_general is None:
+            return 0
+        now = datetime.datetime.now()
+        start = self.czas_start_general
+        delta = max(0, int((now - start).total_seconds()))
+        activity = self.general_activity or {}
+        conn = get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO czasomierze (firma_id, pracownik_id, miesiac, typ, usluga_id, fakturowac, "
+                "task_id, rozpoczecie, zakonczenie, sekundy, opis) "
+                "VALUES (NULL, %s, %s, 'ogolne', NULL, 0, %s, %s, %s, %s, %s)",
+                (self.pracownik_id, now.strftime("%Y-%m"), activity.get("task_id"),
+                 start.isoformat(timespec="seconds"), now.isoformat(timespec="seconds"), delta,
+                 activity.get("task_title") or None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.czas_start_general = None
+        self.general_activity = None
+        return delta
+
+    def get_general_timer_detail(self) -> Optional[Dict[str, str]]:
+        if self.czas_start_general is None:
+            return None
+        elapsed = max(0, int((datetime.datetime.now() - self.czas_start_general).total_seconds()))
+        return {
+            "task": (self.general_activity or {}).get("task_title") or "Zadania ogólne",
+            "company": "Ogólne",
+            "department": "Ogólne",
+            "elapsed": self.format_seconds(elapsed),
+        }
 
     def set_month(self, new_month: str):
         self.aktualny_miesiac = new_month
@@ -134,14 +195,14 @@ class MonthlyViewLogic:
             r["invoice_payments"] = invoices
             r["numer_faktury"] = "\n".join(inv["numer"] for inv in invoices)
             r["faktura_zaplacona"] = "\n".join(
-                inv["paid_on"].strftime("%d/%m/%Y") if inv["paid_on"] else "" for inv in invoices
+                inv["paid_on"].strftime("%d-%m-%Y") if inv["paid_on"] else "" for inv in invoices
             )
             details = []
             for inv in invoices:
                 details.append(f"{inv['numer']}: wpłacono {inv['paid']:.2f} PLN; saldo {inv['balance']:.2f} PLN")
                 for p in inv["payments"]:
                     method = "gotówka" if p["sposob"] == "gotowka" else "przelew"
-                    details.append(f"  {p['data_zaplaty']:%d/%m/%Y}: {p['kwota']:.2f} PLN ({method})")
+                    details.append(f"  {p['data_zaplaty']:%d-%m-%Y}: {p['kwota']:.2f} PLN ({method})")
             r["faktura_platnosci_tooltip"] = "\n".join(details)
             if selected_status != "Wszystkie":
                 if (r["status"] or "Aktywne") != selected_status:
@@ -231,6 +292,9 @@ class MonthlyViewLogic:
                 })
             finally:
                 conn.close()
+        general = self.get_general_timer_detail()
+        if general:
+            details.append(general)
         return details
 
     def save_status_for_company(

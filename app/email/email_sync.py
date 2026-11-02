@@ -2,6 +2,7 @@
 
 import email.policy
 import imaplib
+import json
 import time
 import logging
 import re
@@ -1052,14 +1053,6 @@ def sync_folder(
 ) -> int:
     history_days = None if entire_mailbox else (730 if full_sync else EMAIL_HISTORY_DAYS)
 
-    logger.warning(
-        "SYNC START konto=%s folder=%s full_sync=%s history_days=%s",
-        konto_id,
-        folder,
-        full_sync,
-        history_days,
-    )
-
     folder_id = get_folder_id(konto_id, folder)
 
     if not folder_id:
@@ -1075,11 +1068,6 @@ def sync_folder(
     if not full_sync and not entire_mailbox:
         known = get_known_uids(konto_id, folder_id)
 
-    logger.warning(
-        "%s — rozpoczynam pobieranie nagłówków",
-        folder,
-    )
-
     headers = fetch_headers(
         konto_id,
         folder,
@@ -1088,21 +1076,10 @@ def sync_folder(
         history_days=history_days,
     )
 
-    logger.warning(
-        "%s — pobrano %s nagłówków",
-        folder,
-        len(headers),
-    )
-
     save_message_headers(
         konto_id,
         folder_id,
         headers,
-    )
-
-    logger.warning(
-        "%s — zapisano nagłówki w PostgreSQL",
-        folder,
     )
 
     try:
@@ -1215,11 +1192,7 @@ def _sync_and_prefetch_impl(
     total_bodies = 0
     failed_folders = []
 
-    logger.warning(
-        "SYNC: konto=%s, foldery do przetworzenia=%s",
-        konto_id,
-        folders,
-    )
+    historical = bool(first_run or all_folders or full_mailbox)
 
     for index, folder in enumerate(folders):
         if cancel_event is not None and cancel_event.is_set():
@@ -1227,12 +1200,9 @@ def _sync_and_prefetch_impl(
         if on_progress and index == 0:
             on_progress(0, total, folder, total_headers)
 
-        logger.warning(
-            "=== FOLDER %s/%s: %s ===",
-            index + 1,
-            total,
-            folder,
-        )
+        folder_saved = 0
+        folder_checked = 0
+        count = 0
 
         try:
             # 1. Pobierz i zapisz nagłówki.
@@ -1308,11 +1278,7 @@ def _sync_and_prefetch_impl(
                 if row.get("uid") is not None
             ]
 
-            logger.warning(
-                "%s — wiadomości do sprawdzenia pod kątem treści: %s",
-                folder,
-                len(uids),
-            )
+            folder_checked = len(uids)
 
             # 3. Prefetch wiadomości w paczkach po 100 UID-ów.
             for start in range(0, len(uids), 100):
@@ -1330,26 +1296,17 @@ def _sync_and_prefetch_impl(
                 saved = prefetch_messages(konto_id, folder, batch, **options)
 
                 total_bodies += saved
+                folder_saved += saved
 
+            if historical:
                 logger.warning(
-                    "%s — sprawdzono %s/%s wiadomości; "
-                    "w tej paczce zapisano nowych: %s",
-                    folder,
-                    min(start + len(batch), len(uids)),
-                    len(uids),
-                    saved,
+                    "%s: nagłówki %s, zapisano treści %s, pominięto %s, błędy 0",
+                    folder, count, folder_saved, max(folder_checked - folder_saved, 0),
                 )
 
-            logger.warning(
-                "=== KONIEC FOLDERU: %s ===",
-                folder,
-            )
-
-        except Exception:
-            logger.exception(
-                "Błąd synchronizacji folderu %s",
-                folder,
-            )
+        except Exception as exc:
+            logger.error("%s: BŁĄD — %s: %s", folder, type(exc).__name__, exc)
+            logger.debug("Szczegóły błędu folderu %s", folder, exc_info=True)
             failed_folders.append(folder)
 
         if on_progress:
@@ -1367,13 +1324,6 @@ def _sync_and_prefetch_impl(
         logger.exception(
             "Nie udało się zaktualizować statusów z maili Saldeo"
         )
-
-    logger.warning(
-        "SYNC KONIEC konto=%s; nagłówki=%s; nowe pełne treści=%s",
-        konto_id,
-        total_headers,
-        total_bodies,
-    )
 
     if failed_folders:
         raise RuntimeError(
@@ -1591,12 +1541,60 @@ def rename_folder(konto_id: int, old: str, new_name: str) -> str:
     return new_server
 
 
+_STATUS_RE = re.compile(r"(UIDVALIDITY|UIDNEXT|MESSAGES|UNSEEN)\s+(\d+)", re.IGNORECASE)
+FULL_SWEEP_EVERY = 10
+_auto_runs: Dict[int, int] = {}
+
+
+def _folder_status(session: _Session, folder: str) -> Optional[str]:
+    """Tani odcisk folderu z polecenia STATUS (bez SELECT i bez pobierania nagłówków)."""
+    for candidate in (quote_mailbox(folder), folder):
+        try:
+            typ, data = session.conn.status(candidate, "(UIDVALIDITY UIDNEXT MESSAGES UNSEEN)")
+        except Exception:
+            continue
+        if typ == "OK" and data and data[0]:
+            raw = data[0] if isinstance(data[0], bytes) else str(data[0]).encode()
+            pairs = _STATUS_RE.findall(raw.decode("ascii", "replace").rsplit("(", 1)[-1])
+            if pairs:
+                return ",".join(f"{key.upper()}={value}" for key, value in sorted(pairs))
+    return None
+
+
+def _changed_folders(konto_id: int, folders: List[str], force_full: bool) -> Tuple[List[str], Dict[str, str]]:
+    """Zwraca foldery, których STATUS różni się od zapamiętanego, oraz bieżący odcisk.
+
+    Brak odcisku (pierwsze uruchomienie, błąd połączenia, folder bez STATUS) oznacza
+    „zmieniony”, więc w razie problemów działa jak dotychczasowa pełna kontrola.
+    """
+    try:
+        previous = json.loads(get_setting(f"email_status_snapshot_{konto_id}") or "{}")
+    except Exception:
+        previous = {}
+    current: Dict[str, str] = {}
+    try:
+        with _shared_session(konto_id) as session:
+            if session is not None:
+                for folder in folders:
+                    status = _folder_status(session, folder)
+                    if status:
+                        current[folder] = status
+    except Exception:
+        logger.debug("Odczyt STATUS folderów nie powiódł się", exc_info=True)
+    changed = [f for f in folders if force_full or f not in current or previous.get(f) != current[f]]
+    return changed, current
+
+
 def sync_automatic_accounts(accounts, current_account_id=None, current_folder=None, *, on_headers=None, on_progress=None, cancel_event=None):
     """Check new mail only. Full history is never initiated by app startup.
 
     Accounts run independently so a slow account or a full-mailbox import does
     not prevent other accounts from receiving mail. Same-account syncs retain
     their existing lock. Full history downloads remain an explicit action.
+
+    Foldery są najpierw porównywane przez IMAP STATUS (UIDNEXT/MESSAGES/UNSEEN);
+    nagłówki pobierane są tylko ze zmienionych. Co FULL_SWEEP_EVERY-ty przebieg
+    (i pierwszy po starcie) sprawdza wszystkie foldery, by wychwycić zmiany flag.
     """
     from concurrent.futures import ThreadPoolExecutor
     ordered = sorted(accounts, key=lambda account: account["id"] != current_account_id)
@@ -1621,11 +1619,24 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
             folders = list(dict.fromkeys(priority + folders))
             if not folders:
                 raise RuntimeError("Brak wybieralnych folderów IMAP.")
+            sweep_key = f"email_full_sweep_{konto_id}"
+            today = datetime.now().strftime("%Y-%m-%d")
+            full_sweep = get_setting(sweep_key) != today
+            changed, snapshot = _changed_folders(konto_id, folders, force_full=full_sweep)
+            logger.info("Konto %s: zmienione foldery %s z %s", konto_id, len(changed), len(folders))
+            if not changed:
+                if full_sweep:
+                    set_setting(sweep_key, today)
+                return konto_id, [], None
             options = {"first_run":False,"headers_only":True,"on_headers":on_headers,"on_progress":on_progress}
             if cancel_event is not None:
                 options["cancel_event"] = cancel_event
-            sync_and_prefetch(konto_id, folders, **options)
-            return konto_id, folders, None
+            sync_and_prefetch(konto_id, changed, **options)
+            if snapshot:
+                set_setting(f"email_status_snapshot_{konto_id}", json.dumps(snapshot))
+            if full_sweep:
+                set_setting(sweep_key, today)
+            return konto_id, changed, None
         except Exception as exc:
             return konto_id, [], f"Konto #{konto_id}: {exc}"
 

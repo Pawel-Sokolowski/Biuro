@@ -25,7 +25,7 @@ NUMERIC_COLUMNS = (COL_ILOSC, COL_CENA, COL_VAT, COL_NETTO, COL_BRUTTO)
 def _date_edit(value: str) -> QDateEdit:
     edit = QDateEdit()
     edit.setCalendarPopup(True)
-    edit.setDisplayFormat("yyyy-MM-dd")
+    edit.setDisplayFormat("dd-MM-yyyy")
     parsed = QDate.fromString((value or "")[:10], "yyyy-MM-dd")
     edit.setDate(parsed if parsed.isValid() else QDate.currentDate())
     return edit
@@ -45,7 +45,7 @@ class InvoiceEditorDialog(QDialog):
 
         form = QFormLayout()
         self.numer = QLineEdit(invoice.get("numer") or "")
-        self.numer.setPlaceholderText("np. FV/10/2026/001")
+        self.numer.setPlaceholderText("puste = numer nadany automatycznie (FV/0001/MM/RRRR)")
         self.data_wyst = _date_edit(invoice.get("data_wystawienia") or "")
         self.data_sprz = _date_edit(invoice.get("data_sprzedazy") or "")
         self.termin = _date_edit(invoice.get("termin_platnosci") or "")

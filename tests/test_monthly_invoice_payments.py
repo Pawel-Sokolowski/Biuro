@@ -1,4 +1,4 @@
-"""Pokazanie zapłaconej faktury z wybranego miesiąca w księgowym widoku miesięcznym."""
+﻿"""Pokazanie zapłaconej faktury z wybranego miesiąca w księgowym widoku miesięcznym."""
 import unittest
 
 from app.db.dao_conn import get_conn
@@ -33,7 +33,7 @@ class MonthlyInvoicePaymentTests(DbTestCase):
         rows = logic.get_monthly_rows("2026-09", selected_employee=0, selected_status="Wszystkie")
         row = next(r for r in rows if r["id"] == company)
         self.assertEqual(row["numer_faktury"], "FV/001/09/2026")
-        self.assertEqual(row["faktura_zaplacona"], "07/09/2026")
+        self.assertEqual(row["faktura_zaplacona"], "07-09-2026")
 
         october = logic.get_monthly_rows("2026-10", selected_employee=0, selected_status="Wszystkie")
         row_next = next(r for r in october if r["id"] == company)
@@ -53,7 +53,7 @@ class MonthlyInvoicePaymentTests(DbTestCase):
         rows = logic.get_monthly_rows("2026-09", 0, "Wszystkie")
         row = next(r for r in rows if r["id"] == company)
         self.assertEqual(row["faktura_zaplacona"], "")
-        self.assertIn("07/09/2026: 50.00 PLN (gotówka)", row["faktura_platnosci_tooltip"])
+        self.assertIn("07-09-2026: 50.00 PLN (gotówka)", row["faktura_platnosci_tooltip"])
 
     def test_payment_date_from_october_remains_attached_to_september_invoice(self):
         company = self.make_company("Płatność w następnym miesiącu")
@@ -62,7 +62,7 @@ class MonthlyInvoicePaymentTests(DbTestCase):
         record_cash_payment(invoice, "2026-10-07", "123.00", actor_id=1)
         rows = MonthlyViewLogic(1).get_monthly_rows("2026-09", 0, "Wszystkie")
         row = next(r for r in rows if r["id"] == company)
-        self.assertEqual(row["faktura_zaplacona"], "07/10/2026")
+        self.assertEqual(row["faktura_zaplacona"], "07-10-2026")
 
     def test_multiple_issued_invoices_are_visible_and_draft_is_excluded(self):
         company = self.make_company("Kilka faktur")
@@ -84,7 +84,7 @@ class MonthlyInvoicePaymentTests(DbTestCase):
         rows = MonthlyViewLogic(1).get_monthly_rows("2026-09", 0, "Wszystkie")
         row = next(r for r in rows if r["id"] == company)
         self.assertEqual(row["numer_faktury"], "FV/001/09/2026\nFV/002/09/2026")
-        self.assertEqual(row["faktura_zaplacona"], "07/09/2026\n")
+        self.assertEqual(row["faktura_zaplacona"], "07-09-2026\n")
         self.assertEqual(len(row["invoice_payments"]), 2)
 
     def test_accounting_columns_keep_completeness_and_stage_editable_at_new_indices(self):

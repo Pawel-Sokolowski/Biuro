@@ -223,10 +223,10 @@ class KsefTests(DbTestCase):
         self.assertEqual(result["niedopasowane_szczegoly"][0]["invoice_number"], "OBCA/1")
         row = dao_invoices.get_invoice_by_id(invoice_id)
         self.assertEqual(row["ksef_numer"], "1234567890-20261015-AAAAAA-BB")
-        self.assertEqual(row["numer"], "7/10/2026")
-        self.assertEqual(row["kwota_netto"], 200.0)
-        self.assertEqual(row["kwota_brutto"], 246.0)
-        self.assertEqual(row["nabywca_pelna"], "Klient z KSeF SA")
+        # Dane lokalnej faktury pozostają bez zmian; z KSeF dopisywane są tylko identyfikatory.
+        self.assertEqual(row["kwota_netto"], 100.0)
+        self.assertEqual(row["kwota_brutto"], 123.0)
+        self.assertEqual(str(row["ksef_data"])[:10], "2026-10-15")
         self.assertEqual(row["ksef_nip_wysylki"], "1234567890")
         self.assertTrue(row["ksef_hash_faktury"])
         self.assertEqual(
@@ -234,9 +234,9 @@ class KsefTests(DbTestCase):
             base64.b64encode(hashlib.sha256(FA3_XML.encode("utf-8")).digest()).decode("ascii"),
         )
         self.assertTrue(ksef_url(row["ksef_numer"], invoice=row).startswith(
-            "https://qr.ksef.mf.gov.pl/invoice/1234567890/15-10-2026/"
+            "https://qr.ksef.mf.gov.pl/invoice/1234567890/"
         ))
-        self.assertEqual(dao_invoices.get_invoice_positions(invoice_id)[0]["nazwa"], "Usługa z KSeF")
+        self.assertEqual(dao_invoices.get_invoice_positions(invoice_id)[0]["nazwa"], "Usługa")
         self.assertEqual(get_invoice_payment_summary(invoice_id, 1)["paid"], 50)
         self.assertEqual(result["zaktualizowane"], ["1234567890-20261015-AAAAAA-BB"])
         self.assertEqual(client.download_invoice_xml("X"), FA3_XML)
@@ -394,8 +394,8 @@ class KsefTests(DbTestCase):
 
         self.assertEqual((action, updated_id), ("zaktualizowane", old_id))
         updated = dao_invoices.get_invoice_by_id(old_id)
-        self.assertEqual(updated["miesiac"], "2026-10")
-        self.assertEqual(updated["reczna"], 1)
+        self.assertEqual(updated["miesiac"], "2026-09")
+        self.assertEqual(updated["ksef_numer"], "1234567890-20261015-ZMIANAMIESIACA-AA")
 
     def test_credentials_are_stored_encrypted(self):
         ksef_sync.save_ksef_credentials("123-456-78-90", "SEKRET", "test")

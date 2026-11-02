@@ -1009,16 +1009,20 @@ def list_invoices(
     wystawione: bool,
     miesiac: Optional[str] = None,
     firma_id: Optional[int] = None,
+    kontrahent_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Faktury robocze (wystawione=False) albo wystawione (wystawione=True) widoczne dla pracownika."""
     where = ["COALESCE(f.eksportowana, 0) = %s"]
     params: List[Any] = [1 if wystawione else 0]
     if miesiac:
-        where.append("f.miesiac = %s")
-        params.append(miesiac)
+        where.append("f.miesiac LIKE %s" if len(miesiac) == 4 else "f.miesiac = %s")
+        params.append(miesiac + "-%" if len(miesiac) == 4 else miesiac)
     if firma_id:
         where.append("f.firma_id = %s")
         params.append(firma_id)
+    if kontrahent_id:
+        where.append("f.kontrahent_id = %s")
+        params.append(kontrahent_id)
     if not _has_full_finance_access(pracownik_id):
         ids = sorted(assigned_company_ids(pracownik_id))
         if not ids:
@@ -1214,6 +1218,43 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
             "ORDER BY f.miesiac, f.id"
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def assign_invoice_number(invoice_id: int) -> Optional[str]:
+    """Nadaje kolejny numer FV/NNNN/MM/RRRR (KFV dla korekt), jeśli faktura go nie ma."""
+    import re
+    conn = get_conn()
+    try:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
+        row = conn.execute(
+            "SELECT numer, rodzaj, data_wystawienia FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        if (row["numer"] or "").strip():
+            conn.rollback()
+            return row["numer"].strip()
+        try:
+            issued = datetime.strptime(str(row["data_wystawienia"])[:10], DATE_FMT)
+        except ValueError:
+            issued = datetime.now()
+        prefix = "KFV" if row["rodzaj"] == "korekta" else "FV"
+        month, year = f"{issued.month:02d}", str(issued.year)
+        pattern = re.compile(rf"^{prefix}/(\d+)/{month}/{year}$")
+        existing = conn.execute(
+            "SELECT numer FROM faktury WHERE numer LIKE %s", (f"{prefix}/%/{month}/{year}",)
+        ).fetchall()
+        used = [int(m.group(1)) for r in existing if (m := pattern.match(r["numer"] or ""))]
+        numer = f"{prefix}/{max(used, default=0) + 1:04d}/{month}/{year}"
+        conn.execute(
+            "UPDATE faktury SET numer = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
+            (numer, invoice_id),
+        )
+        conn.commit()
+        return numer
     finally:
         conn.close()
 

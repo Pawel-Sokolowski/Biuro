@@ -9,12 +9,12 @@ Aplikacja desktopowa (PyQt6 + PostgreSQL) do prowadzenia biura rachunkowego: kli
 | Moduł | Opis |
 |---|---|
 | **Pulpit** | Podsumowanie dnia, czas pracy, stan kopii zapasowych |
-| **Widok miesięczny** | Status firm w wybranym miesiącu (wybór miesiąca i roku) |
-| **Klienci** | Lista firm, formularz firmy, pełnomocnictwa (PEL/UPL), data ostatniej kopii bazy |
+| **Widok miesięczny** | Status firm w wybranym miesiącu; „Cały rok” przełącza na zakończenie roku (deklaracje roczne) |
+| **Klienci** | Lista firm, formularz firmy (m.in. deklaracja roczna), pełnomocnictwa (PEL/UPL), data ostatniej kopii bazy |
 | **E-mail** | Wiele kont IMAP/SMTP, foldery, reguły, etykiety, przypisywanie wiadomości do firm |
 | **Czat** | Wewnętrzna komunikacja pracowników |
-| **Faktury** | Wystawianie z cennika, usługi dodatkowe, KSeF, eksport XLSX do Saldeo |
-| **Raporty** | Import dokumentów i czasu pracy, rentowność, czas według klienta i pracownika |
+| **Faktury** | Wystawianie z cennika, usługi dodatkowe, KSeF, eksport XLSX do Saldeo, JPK_V7M (Enova), rozliczenia i płatności |
+| **Raporty** | Import dokumentów i czasu pracy, rentowność (domyślnie cały rok), czas według klienta i pracownika |
 | **Zadania** | Zadania z czasomierzem |
 | **Kalendarz** | Wydarzenia, import ICS, synchronizacja CalDAV |
 | **Ustawienia** | Panel administratora (poniżej) |
@@ -23,6 +23,7 @@ Aplikacja desktopowa (PyQt6 + PostgreSQL) do prowadzenia biura rachunkowego: kli
 
 ![Pulpit](docs/screenshots/pulpit.png)
 ![Widok miesięczny](docs/screenshots/widok-miesieczny.png)
+![Zakończenie roku (Widok miesięczny → Cały rok)](docs/screenshots/zakonczenie-roku.png)
 ![Klienci](docs/screenshots/klienci.png)
 ![Faktury](docs/screenshots/faktury.png)
 ![Raporty](docs/screenshots/raporty.png)
@@ -39,7 +40,8 @@ Aplikacja desktopowa (PyQt6 + PostgreSQL) do prowadzenia biura rachunkowego: kli
 | ![Usługi dodatkowe](docs/screenshots/admin-uslugi-dodatkowe.png) | ![Firmy](docs/screenshots/admin-firmy.png) |
 | ![Faktury i KSeF](docs/screenshots/admin-faktury-i-ksef.png) | ![KSeF – dostęp i certyfikat](docs/screenshots/admin-ksef--dostep-i-certyfikat.png) |
 | ![Import danych](docs/screenshots/admin-import-danych.png) | ![Baza danych i kopie](docs/screenshots/admin-baza-danych-i-kopie.png) |
-| ![System](docs/screenshots/admin-system.png) | ![Audyt i importy](docs/screenshots/admin-audyt-i-importy.png) |
+| ![Audyt i importy](docs/screenshots/admin-audyt-i-importy.png) | ![Wygląd](docs/screenshots/admin-wyglad.png) |
+| ![Synchronizacja poczty](docs/screenshots/admin-synchronizacja-poczty.png) | |
 
 ## Kopie zapasowe
 
@@ -253,6 +255,42 @@ rozpoznanie pozostaje wyłącznie propozycją do ręcznego potwierdzenia.
 
 Przegląd możliwości użycia bibliotek: [docs/library-review.md](docs/library-review.md).
 
+## Zakończenie roku, JPK_V7M i raporty
+
+**Zakończenie roku podatkowego.** W **Widoku miesięcznym** wybór miesiąca ma
+przycisk **Cały rok**. Po jego wybraniu tabele Księgowość/Kadry zastępuje lista
+firm z rocznymi deklaracjami (np. PIT-28, PIT-36, PIT-36L, CIT-8, CIT-8E)
+i ich stanem: złożona lub do złożenia, data złożenia, kwota, nr UPO i uwagi.
+Wiersz można oznaczyć jako złożony albo edytować (dwuklik); dostępne są filtry
+„Tylko niezłożone” i wyszukiwanie klienta. Wybór miesiąca przywraca zwykły widok.
+
+Deklaracja roczna firmy jest dobierana automatycznie z pola **Forma
+opodatkowania** w karcie firmy: ryczałt → PIT-28, skala → PIT-36, liniowy →
+PIT-36L, księgi rachunkowe → CIT-8, CIT estoński → CIT-8E. Pole **Deklaracja
+roczna** w karcie firmy pozwala to nadpisać, a **Dodatkowe deklaracje roczne**
+(np. `PIT-4R, PIT-11`) dopisuje kolejne. Firmy bez rozpoznanej deklaracji są
+zliczone nad tabelą. Stan zapisuje tabela `zakonczenie_roku`; programu nie
+łączy z e-Deklaracjami, więc nr UPO wpisuje się ręcznie.
+
+**JPK_V7M (Enova).** W wystawionych fakturach przycisk **JPK_V7M (Enova)**
+generuje ewidencję sprzedaży z numerami KSeF (`NrKSeF`) dla zaznaczonych
+faktur. Program pyta o kod urzędu i e-mail (zapamiętuje je w ustawieniach)
+i zapisuje `JPK_V7M_<miesiąc>.xml`. To plik ewidencji VAT bez pozycji
+i płatności, więc Enova zaimportuje go jako wpisy rejestru VAT, a nie pełne
+faktury. Struktura odpowiada schemie JPK_V7M (3).
+
+**Faktury i KSeF.** Lista rozliczeń i pobieranie z KSeF działają dla wszystkich
+firm (metoda kasowa); bez wybranej firmy pobranie pyta o numer faktury lub KSeF.
+Miesiąc w Fakturach można ustawić na **Cały rok**. Metoda kasowa trafia do XML
+jako `P_16`. Daty w fakturach, wpłatach i widoku miesięcznym mają format
+`dd-MM-rrrr` (np. `29-10-2026`), by nie mylić ich z numerem `FV/10/10/2026`.
+
+**Raport rentowności.** Domyślnie obejmuje cały bieżący rok (od 01 do 12);
+zakres „Od/Do” można skrócić (wybór jest miesięczny).
+
+**Czynności dodatkowe.** Kolumna **Faktura** stoi tuż za miesiącem i pokazuje
+numer faktury, do której dopisano czynność (albo „faktura robocza”).
+
 ## Testy
 
 ```powershell
@@ -272,12 +310,12 @@ Skrypt tworzy tymczasowy schemat z fikcyjnymi firmami, zapisuje obrazy w `docs\s
 
 ## Instalator
 
-Skrypt Inno Setup: `installer\biuro.iss` (wersja 1.3.1). Specyfikacja PyInstallera: `packaging\biuro.spec` (opis w `packaging\README.md`).
+Skrypt Inno Setup: `installer\biuro.iss` (wersja 1.3.7). Specyfikacja PyInstallera: `packaging\biuro.spec` (opis w `packaging\README.md`).
 
 ## Struktura
 
 ```
-app\            kod aplikacji (admin, companies, dashboard, db, email, invoices, kalendarz, monthly_view, reports, tasks, utils ...)
+app\            kod aplikacji (admin, companies, dashboard, db, email, invoices, kalendarz, monthly_view, reports, tasks, utils, year_end ...)
 tests\          testy unittest
 scripts\        narzędzia pomocnicze
 installer\      instalator Inno Setup

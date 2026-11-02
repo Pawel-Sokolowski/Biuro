@@ -10,7 +10,8 @@ from app.db.dao_conn import get_conn
 from app.db.dao_invoices import create_or_update_invoice, mark_exported
 from app.db.dao_payments import (
     PaymentError, _money, confirm_bank_payment, get_invoice_payment_summary,
-    import_mt940_file, list_invoice_choices, list_unsettled_transfers, parse_ing_mt940, record_cash_payment,
+    import_mt940_file, list_company_choices, list_invoice_choices, list_settlements, list_unsettled_transfers,
+    parse_ing_mt940, payments_for_invoices, record_cash_payment, revert_settlement,
     suggested_invoice_ids,
 )
 from tests.base import DbTestCase
@@ -134,6 +135,30 @@ class PaymentSafetyTests(DbTestCase):
         invoice = self.invoice()
         with self.assertRaises(PermissionError):
             record_cash_payment(invoice, "2026-09-07", "1.00", employee)
+
+    def test_settlements_list_and_revert_restores_balance_and_transfer(self):
+        invoice = self.invoice()
+        transfer = self.transfer()
+        confirm_bank_payment(transfer, invoice, "100.00", 1)
+        record_cash_payment(invoice, "2026-09-10", "23.00", 1)
+        remaining = lambda: next(r["remaining"] for r in list_unsettled_transfers(1) if r["id"] == transfer)
+        self.assertEqual(Decimal(str(remaining())), Decimal("23.00"))
+        payments = payments_for_invoices([invoice])[invoice]
+        self.assertEqual([p["sposob"] for p in payments], ["bank", "gotowka"])
+        rows = list_settlements(1)
+        self.assertEqual({r["faktura_id"] for r in rows}, {invoice})
+        bank_row = next(r for r in rows if r["sposob"] == "bank")
+        revert_settlement(bank_row["id"], 1)
+        self.assertEqual(get_invoice_payment_summary(invoice, 1)["paid"], Decimal("23.00"))
+        self.assertEqual(Decimal(str(remaining())), Decimal("123.00"))
+        with self.assertRaises(PaymentError):
+            revert_settlement(bank_row["id"], 1)
+        with self.assertRaises(PermissionError):
+            revert_settlement(rows[0]["id"], self.make_employee())
+
+    def test_company_choices_include_firms_without_open_invoices(self):
+        company = self.make_company()
+        self.assertIn(company, [row["id"] for row in list_company_choices(1)])
 
     def test_invoice_choice_balance_keeps_decimal_precision_for_suggestions(self):
         invoice = self.invoice()

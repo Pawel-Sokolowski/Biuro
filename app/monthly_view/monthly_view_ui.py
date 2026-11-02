@@ -4,7 +4,7 @@ import os
 import datetime
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent, QDate
+from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent, QDate, QRect
 from PyQt6.QtGui import (
     QAction,
     QIntValidator,
@@ -120,8 +120,9 @@ class IconButtonDelegate(QStyledItemDelegate):
         painter.save()
 
         rect = option.rect.adjusted(4, 4, -4, -4)
-
-        bg = QColor("#e6e6e6")
+        # stały rozmiar przycisku, także w wyższych wierszach (kilka faktur)
+        size = min(rect.height(), 24)
+        rect = QRect(rect.center().x() - 22, rect.center().y() - size // 2, 44, size)
         if option.state & QStyle.StateFlag.State_MouseOver:
             bg = QColor("#d0d0d0")
 
@@ -524,7 +525,7 @@ class MonthlyViewPage(QWidget):
 
         filters_layout = QHBoxLayout()
 
-        self.month_combo = MonthPicker(self.logic.aktualny_miesiac)
+        self.month_combo = MonthPicker(self.logic.aktualny_miesiac, allow_year=True)
         filters_layout.addWidget(QLabel("Miesiąc:"))
         filters_layout.addWidget(self.month_combo)
 
@@ -552,6 +553,11 @@ class MonthlyViewPage(QWidget):
 
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
+
+        from app.year_end.year_end_ui import YearEndPage
+        self.year_end_page = YearEndPage(self.pracownik_id, self, embedded=True)
+        self.year_end_page.setVisible(False)
+        main_layout.addWidget(self.year_end_page)
 
         self.table_ks = QTableView()
         self.table_ks.setModel(self.model_ks)
@@ -693,7 +699,17 @@ class MonthlyViewPage(QWidget):
             self.employee_combo.setCurrentIndex(own)
 
     def _current_month(self) -> str:
-        return self.month_combo.currentText()
+        return self.month_combo.monthText()
+
+    def _apply_year_mode(self) -> bool:
+        """Cały rok = widok zakończenia roku zamiast tabeli miesięcznej."""
+        whole = self.month_combo.isWholeYear()
+        self.tabs.setVisible(not whole)
+        self.activity_label.setVisible(not whole)
+        self.year_end_page.setVisible(whole)
+        if whole:
+            self.year_end_page.set_year(int(self.month_combo.currentText()))
+        return whole
 
     def _current_employee_id(self) -> Optional[int]:
         idx = self.employee_combo.currentIndex()
@@ -709,18 +725,23 @@ class MonthlyViewPage(QWidget):
         if index not in self._months_by_tab:
             return
         month = self._months_by_tab[index]
-        if self.month_combo.currentText() != month:
+        if self.month_combo.currentText() != month and not self.month_combo.isWholeYear():
             self.month_combo.setCurrentText(month)
         self.logic.set_month(month)
         self._reload_rows()
 
     def _on_filters_changed(self):
+        if self._apply_year_mode():
+            return
         month = self._current_month()
         self._months_by_tab[self.tabs.currentIndex()] = month
         self.logic.set_month(month)
         self._reload_rows()
 
     def _reload_rows(self):
+        if self.month_combo.isWholeYear():
+            self.year_end_page.refresh()
+            return
         month = self._current_month()
         emp_id = self._current_employee_id()
         status = self._current_status_filter()
@@ -750,7 +771,7 @@ class MonthlyViewPage(QWidget):
         self.model_kadry.set_rows(kadry_rows)
         for idx, row in enumerate(ks_rows):
             lines = max(1, len(row.get("invoice_payments", [])))
-            self.table_ks.setRowHeight(idx, max(32, lines * (self.table_ks.fontMetrics().lineSpacing() + 4) + 8))
+            self.table_ks.setRowHeight(idx, max(32, lines * self.table_ks.fontMetrics().lineSpacing() + 8))
         total = sum(int(r.get("ilosc_dok") or 0) for r in ks_rows)
         self.activity_label.setText(f"Aktywność pracownika: {total}")
 

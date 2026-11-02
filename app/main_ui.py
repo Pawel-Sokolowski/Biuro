@@ -1,6 +1,6 @@
 import os
 
-from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog, QStyledItemDelegate
+from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog, QStyledItemDelegate, QSystemTrayIcon
 from PyQt6.QtCore import QSettings, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen
 
@@ -499,11 +499,10 @@ class OfficeManagerApp(QMainWindow):
         header_layout.addWidget(live_container)
         self.notification_center = NotificationCenter(self.pracownik_id, self._open_assignment_notification, header)
         header_layout.addWidget(self.notification_center)
-        minimize_button = QPushButton("—")
-        minimize_button.setFixedSize(34, 28)
-        minimize_button.setToolTip("Minimalizuj okno")
-        minimize_button.clicked.connect(self.showMinimized)
-        header_layout.addWidget(minimize_button)
+        self.btn_general_timer = QPushButton("▶ Start stopera")
+        self.btn_general_timer.setToolTip("Uruchom stoper dla zadań ogólnych (bez firmy)")
+        self.btn_general_timer.clicked.connect(self._toggle_general_timer)
+        header_layout.addWidget(self.btn_general_timer)
 
         content_layout.addWidget(header)
 
@@ -551,7 +550,61 @@ class OfficeManagerApp(QMainWindow):
         self._email_badge_timer.setInterval(10000)
         self._email_badge_timer.timeout.connect(self._update_email_badge)
         self._email_badge_timer.start()
+        from app.mail_toasts import MailToaster
+        self._mail_toaster = MailToaster(self, self._show_email_tab)
         self._update_email_badge()
+        self._start_saldeo_push_watcher()
+
+    def _start_saldeo_push_watcher(self):
+        import threading
+        from app.utils.saldeo_push import SaldeoPushWatcher
+        self._saldeo_push = SaldeoPushWatcher()
+        self._saldeo_push_busy = False
+        self._saldeo_push_results = []
+        self._saldeo_push_timer = QTimer(self)
+        self._saldeo_push_timer.setInterval(5000)
+
+        def tick():
+            if self._saldeo_push_busy or not self._saldeo_push.available:
+                if self._saldeo_push_results:
+                    results, self._saldeo_push_results = self._saldeo_push_results, []
+                    self._show_saldeo_push_results(results)
+                return
+            self._saldeo_push_busy = True
+
+            def work():
+                try:
+                    self._saldeo_push_results.extend(self._saldeo_push.poll())
+                finally:
+                    self._saldeo_push_busy = False
+
+            threading.Thread(target=work, daemon=True).start()
+            if self._saldeo_push_results:
+                results, self._saldeo_push_results = self._saldeo_push_results, []
+                self._show_saldeo_push_results(results)
+
+        self._saldeo_push_timer.timeout.connect(tick)
+        self._saldeo_push_timer.start()
+
+    def _show_saldeo_push_results(self, results):
+        done = [(name, month) for name, month, outcome in results if outcome == "ok"]
+        for name, month in done:
+            tray = getattr(self._mail_toaster, "_tray", None)
+            if tray is not None:
+                tray.showMessage("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}",
+                                 QSystemTrayIcon.MessageIcon.Information, 6000)
+        if done and self.pages.currentWidget() is self.page_monthly:
+            self._refresh_current_page(self.pages.currentIndex())
+
+    def _show_email_tab(self):
+        self.showNormal() if self.isMinimized() else self.show()
+        self.raise_()
+        self.activateWindow()
+        for row in range(self.sidebar.count()):
+            if self.sidebar.item(row).data(Qt.ItemDataRole.UserRole) == "E-mail" and not self.sidebar.item(row).isHidden():
+                self.sidebar.setCurrentRow(row)
+                self.pages.setCurrentIndex(row)
+                break
 
     def _apply_tab_permissions(self):
         from app.security.authorization import allowed_tabs
@@ -616,6 +669,7 @@ class OfficeManagerApp(QMainWindow):
                 "E-mail",
                 total,
             )
+            self._mail_toaster.check(self.page_email.accounts, self.page_email.hidden_folders)
 
         except Exception:
             logger.debug(
@@ -636,7 +690,32 @@ class OfficeManagerApp(QMainWindow):
             self.sidebar_toggle.setText("☰  Menu")
             self.sidebar_toggle.setToolTip("Zwiń lub rozwiń menu")
 
+    def _toggle_general_timer(self):
+        logic = getattr(self.page_monthly, "logic", None)
+        if not logic:
+            return
+        try:
+            if logic.is_general_timer_running():
+                logic.stop_general_timer()
+            else:
+                from app.monthly_view.general_timer_dialog import GeneralTimerDialog
+                dialog = GeneralTimerDialog(self.pracownik_id, self)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                logic.start_general_timer(dialog.activity())
+        except Exception as exc:
+            logger.warning("Stoper ogólny: błąd", exc_info=True)
+            QMessageBox.warning(self, "Stoper", f"Nie udało się zmienić stanu stopera: {exc}")
+        self._update_header_timer()
+
     def _update_header_timer(self):
+        logic = getattr(self.page_monthly, "logic", None)
+        if hasattr(self, "btn_general_timer") and logic:
+            self.btn_general_timer.setText(
+                "■ Stop stopera" if logic.is_general_timer_running() else "▶ Start stopera")
+        self._update_header_timer_labels()
+
+    def _update_header_timer_labels(self):
         """
         Odczytuje z MonthlyViewPage.logic aktywne stopery (ksiegowosc/kadry)
         i aktualizuje tekst w nagłówku: "Nazwa firmy — HH:MM:SS — Czynność".
@@ -702,6 +781,8 @@ class OfficeManagerApp(QMainWindow):
             self.page_email.stop_background_sync()
         if hasattr(self, "notification_center"):
             self.notification_center.timer.stop()
+        if hasattr(self, "_mail_toaster"):
+            self._mail_toaster.hide()
         settings = QSettings("Biuro", "OfficeManager")
         settings.setValue("window/maximized", self.isMaximized())
         if not self.isMaximized():
@@ -712,4 +793,10 @@ class OfficeManagerApp(QMainWindow):
                 self._header_timer.stop()
         except Exception:
             logger.warning("Zignorowany błąd", exc_info=True)
+        try:
+            logic = getattr(self.page_monthly, "logic", None)
+            if logic is not None:
+                logic.stop_general_timer()
+        except Exception:
+            logger.warning("Nie zapisano stopera ogólnego", exc_info=True)
         super().closeEvent(event)

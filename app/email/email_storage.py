@@ -627,6 +627,53 @@ def get_visible_unread_counts(konto_id: int, hidden_paths: set[str] | None = Non
     )
 
 
+_NO_TOAST_ROLES = {"sent", "drafts", "trash", "junk", "archive"}
+
+
+def get_new_unread_messages(
+    konto_id: int,
+    after_id: Optional[int],
+    hidden_paths: set[str] | None = None,
+    limit: int = 20,
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """Zwraca (największe id wiadomości konta, nowe nieprzeczytane wiadomości o id > after_id).
+
+    Przy after_id=None zwraca tylko największe id (punkt odniesienia, bez powiadomień).
+    Pomija foldery ukryte oraz wysłane, robocze, kosz i spam.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM wiadomosci_email WHERE konto_id = %s", (konto_id,))
+        max_id = int(cur.fetchone()["max_id"])
+        if after_id is None or max_id <= after_id:
+            return max_id, []
+        cur.execute(
+            """
+            SELECT w.id, w.nadawca, w.temat, f.server_name, f.attributes, f.delimiter
+            FROM wiadomosci_email w
+            JOIN foldery_email f ON f.id = w.folder_id
+            WHERE w.konto_id = %s AND w.id > %s
+              AND COALESCE(w.usunieta, 0) = 0 AND COALESCE(w.przeczytana, 0) = 0
+            ORDER BY w.id
+            """,
+            (konto_id, after_id),
+        )
+        hidden_paths = hidden_paths or set()
+        found: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            path = str(row["server_name"] or "")
+            delimiter = row["delimiter"] or "."
+            if any(path == h or path.startswith(h + delimiter) for h in hidden_paths):
+                continue
+            if folder_role(path, row["attributes"], row["delimiter"]) in _NO_TOAST_ROLES:
+                continue
+            found.append({"id": int(row["id"]), "nadawca": row["nadawca"], "temat": row["temat"]})
+        return max_id, found[-limit:]
+    finally:
+        conn.close()
+
+
 def find_special_folder(konto_id: int, role: str) -> Optional[str]:
     """Zwraca surową nazwę serwerową folderu o danej roli (archive/junk/trash/sent/drafts)."""
     for folder in get_folders_for_account(konto_id):

@@ -52,6 +52,22 @@ class ChatAccessTests(DbTestCase):
         self.assertEqual(cm.get_conversation(cid)["nazwa"], "Nowa")
         self.assertFalse(cm.is_participant(cid, self.a))
 
+    def test_delete_channel_and_clear_direct(self):
+        cid = cm.create_conversation("Kanał", self.owner, [self.a])
+        cm.add_message(cid, self.owner, "x")
+        with self.assertRaises(PermissionError):
+            cm.delete_conversation(cid, self.a)
+        self.assertEqual(cm.delete_conversation(cid, self.owner), "deleted")
+        self.assertIsNone(cm.get_conversation(cid))
+        cm.ensure_direct_conversations(self.owner)
+        direct = cm.get_direct_conversations(self.owner)[0]["id"]
+        cm.add_message(direct, self.owner, "hej")
+        with self.assertRaises(PermissionError):
+            cm.delete_conversation(direct, 999999)
+        self.assertEqual(cm.delete_conversation(direct, self.owner), "cleared")
+        self.assertEqual(cm.get_messages(direct), [])
+        self.assertIsNotNone(cm.get_conversation(direct))
+
     def test_notifier_only_for_participants(self):
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
         cm.add_message(cid, self.owner, "x")

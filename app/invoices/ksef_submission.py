@@ -351,7 +351,8 @@ def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -
 def send_invoice_document(invoice_id: int, actor_id: int, *, client=None) -> dict:
     invoice = _authorized_invoice(invoice_id, actor_id)
     if not invoice.get("eksportowana"):
-        from app.db.dao_invoices import mark_exported, validate_invoice_extra_services_ready
+        from app.db.dao_invoices import mark_exported, validate_invoice_extra_services_ready, assign_invoice_number
+        assign_invoice_number(invoice_id)
         # Validate the complete document before making the draft immutable.
         generate_invoice_xml(invoice_id, actor_id, allow_draft=True)
         validate_invoice_extra_services_ready([invoice_id])

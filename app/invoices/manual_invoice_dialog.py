@@ -265,7 +265,7 @@ class ManualInvoiceDialog(QDialog):
     def _date_widget(days_from_today=0):
         widget = QDateEdit()
         widget.setCalendarPopup(True)
-        widget.setDisplayFormat("yyyy-MM-dd")
+        widget.setDisplayFormat("dd-MM-yyyy")
         widget.setDate(QDate.currentDate().addDays(days_from_today))
         return widget
 

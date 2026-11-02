@@ -11,6 +11,7 @@ from app.db.dao_invoices import (
     update_invoice_draft,
 )
 from app.invoices.positions import normalize_position, reverse_positions, totals
+from app.db.dao_conn import get_conn
 from tests.base import DbTestCase
 
 POSITIONS = [
@@ -47,6 +48,29 @@ class InvoiceLifecycleTests(DbTestCase):
         self.assertEqual(invoice["numer"], "FV/1")
         self.assertEqual(len(get_invoice_positions(self.invoice_id)), 1)
 
+    def test_automatic_numbers_are_sequential_and_keep_manual_ones(self):
+        from app.db.dao_invoices import assign_invoice_number
+        second = create_or_update_invoice(self.make_company("Druga SA"), "2026-10", POSITIONS, 520.0, 639.6)
+        first_number = assign_invoice_number(self.invoice_id)
+        self.assertRegex(first_number, r"^FV/0001/\d\d/\d{4}$")
+        self.assertEqual(assign_invoice_number(self.invoice_id), first_number)
+        self.assertRegex(assign_invoice_number(second), r"^FV/0002/")
+        update_invoice_draft(self.invoice_id, POSITIONS, numer="RĘCZNY/1")
+        self.assertEqual(assign_invoice_number(self.invoice_id), "RĘCZNY/1")
+
+    def test_general_timer_is_saved_without_company(self):
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+        logic = MonthlyViewLogic(1)
+        logic.start_general_timer({"task_id": None, "task_title": "Szkolenie"})
+        self.assertEqual(logic.get_active_timer_details()[0]["task"], "Szkolenie")
+        logic.stop_general_timer()
+        self.assertFalse(logic.is_general_timer_running())
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT firma_id, typ, opis FROM czasomierze").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual((row["firma_id"], row["typ"], row["opis"]), (None, "ogolne", "Szkolenie"))
     def test_issued_invoice_is_locked_and_listed_separately(self):
         self.assertEqual(len(list_invoices(1, False, "2026-10")), 1)
         mark_exported([self.invoice_id], 1)

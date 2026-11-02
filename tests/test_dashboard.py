@@ -25,7 +25,7 @@ class DashboardDataTests(DbTestCase):
         save_task("Cudze", pracownik_id=other, created_by=1, actor_id=1)
         save_task("Skończone", status="Zakończone", pracownik_id=emp, created_by=emp, actor_id=emp)
 
-        save_month_status(firma, "2026-03", {"etap": "Zatwierdzone", "dokumenty_dostarczone": 1})
+        save_month_status(firma, "2026-02", {"etap": "Zatwierdzone", "dokumenty_dostarczone": 1})
 
         data = get_dashboard_data(emp, today=TODAY)
         self.assertGreaterEqual(data["firmy_aktywne"], 2)
@@ -52,7 +52,7 @@ class DashboardDataTests(DbTestCase):
         missing_companies = [
             self.make_company(f"Brak {index:02}") for index in range(12)
         ]
-        save_month_status(delivered_company, "2026-03", {"dokumenty_dostarczone": 1})
+        save_month_status(delivered_company, "2026-02", {"dokumenty_dostarczone": 1})
 
         data = get_dashboard_data(emp, today=TODAY)
         missing_names = {company["nazwa"] for company in data["brak_dokumentow"]}

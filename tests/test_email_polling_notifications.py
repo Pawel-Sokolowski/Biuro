@@ -18,6 +18,10 @@ class AutomaticSyncTests(unittest.TestCase):
     def setUp(self):
         patcher=patch.object(email_sync,'needs_initial_sync',return_value=False)
         patcher.start();self.addCleanup(patcher.stop)
+        patcher=patch.object(email_sync,'_shared_session',side_effect=ConnectionError('no network in tests'))
+        patcher.start();self.addCleanup(patcher.stop)
+        patcher=patch.object(email_sync,'get_setting',return_value=None)
+        patcher.start();self.addCleanup(patcher.stop)
 
     def test_every_selectable_folder_and_account_is_checked_before_body_prefetch(self):
         events=[]
@@ -82,6 +86,29 @@ class AutomaticSyncTests(unittest.TestCase):
         setting.assert_not_called()
         self.assertFalse(sync.call_args.kwargs['first_run'])
         self.assertTrue(sync.call_args.kwargs['headers_only'])
+
+    def test_only_folders_with_changed_status_are_synced(self):
+        status = {'INBOX': 'MESSAGES=5,UIDNEXT=6', 'Clients': 'MESSAGES=2,UIDNEXT=3', 'Archive': 'MESSAGES=9,UIDNEXT=10'}
+        saved = {}
+        email_sync._auto_runs.pop(77, None)
+        class Ctx:
+            def __enter__(self): return object()
+            def __exit__(self, *a): return False
+        def run():
+            with patch.object(email_sync, 'list_folders_from_imap_and_store', return_value=True), \
+                 patch.object(email_sync, 'selectable_folder_names', return_value=list(status)), \
+                 patch.object(email_sync, '_shared_session', return_value=Ctx()), \
+                 patch.object(email_sync, '_folder_status', side_effect=lambda s, f: status[f]), \
+                 patch.object(email_sync, 'get_setting', side_effect=lambda k: saved.get(k)), \
+                 patch.object(email_sync, 'set_setting', side_effect=lambda k, v: saved.__setitem__(k, v)), \
+                 patch.object(email_sync, 'sync_and_prefetch') as sync, \
+                 patch.object(email_sync, 'prefetch_recent', return_value=0):
+                self.assertEqual(email_sync.sync_automatic_accounts([{'id': 77}]), [])
+                return [call.args[1] for call in sync.call_args_list]
+        self.assertEqual(run(), [['INBOX', 'Clients', 'Archive']])
+        self.assertEqual(run(), [])
+        status['Clients'] = 'MESSAGES=3,UIDNEXT=4'
+        self.assertEqual(run(), [['Clients']])
 
     def test_manual_sync_requests_all_two_year_messages_only_for_selected_accounts(self):
         with patch.object(email_sync,'set_setting') as setting, patch.object(email_sync,'sync_and_prefetch') as sync:

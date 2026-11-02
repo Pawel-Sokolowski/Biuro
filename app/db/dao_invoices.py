@@ -509,6 +509,7 @@ def create_manual_invoice(
     data_wystawienia: str,
     data_sprzedazy: str,
     termin_platnosci: str,
+    podstawa_zwolnienia: str = "",
 ) -> int:
     """Tworzy robocz\u0105 faktur\u0119 r\u0119czn\u0105 dla firmy lub kontrahenta."""
     if buyer_type not in ("firma", "kontrahent"):
@@ -551,9 +552,11 @@ def create_manual_invoice(
         miesiac = (data_wystawienia or _now_date())[:7]
         columns = ["firma_id", "kontrahent_id", "reczna", "miesiac", "kwota_netto", "kwota_brutto",
                    "data_wystawienia", "data_sprzedazy", "termin_platnosci", "pozycje_json", "status", "rodzaj"]
+        columns.append("podstawa_zwolnienia")
         columns.extend(buyer_data)
         values = [firma_id, kontrahent_id, 1, miesiac, netto, brutto, data_wystawienia,
                   data_sprzedazy, termin_platnosci, json.dumps(normalized, ensure_ascii=False), "robocza", "faktura"]
+        values.append(podstawa_zwolnienia.strip())
         values.extend(buyer_data.values())
         marks = ", ".join("%s" for _ in columns)
         cur = conn.execute(f"INSERT INTO faktury ({', '.join(columns)}) VALUES ({marks}) RETURNING id", values)
@@ -711,6 +714,8 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     cur = conn.cursor()
     try:
         placeholders = ",".join(["%s"] * len(invoice_ids))
+        # Use the same invoice -> allocation lock order as draft editing.
+        cur.execute(f"SELECT id FROM faktury WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE", invoice_ids)
         validate_invoice_extra_services_ready(invoice_ids, conn=conn, lock=True)
         params: List[Any] = list(invoice_ids)
         sql = (
@@ -1053,6 +1058,7 @@ def update_invoice_draft(
     data_sprzedazy: Optional[str] = None,
     termin_platnosci: Optional[str] = None,
     przyczyna_korekty: Optional[str] = None,
+    podstawa_zwolnienia: Optional[str] = None,
 ) -> Tuple[float, float]:
     """Zapisuje pozycje i nagłówek roboczej faktury; zwraca (netto, brutto)."""
     invoice = get_invoice_by_id(invoice_id)
@@ -1066,23 +1072,34 @@ def update_invoice_draft(
     netto, brutto = totals(normalized)
     conn = get_conn()
     try:
-        conn.execute(
+        # Row lock and guarded UPDATE serialize edits with issuance.
+        locked = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
+        if not locked or locked["eksportowana"]:
+            raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
+        invoice = dict(locked)
+        updated = conn.execute(
             """
             UPDATE faktury
             SET pozycje_json = %s, kwota_netto = %s, kwota_brutto = %s, numer = %s,
                 data_wystawienia = %s, data_sprzedazy = %s, termin_platnosci = %s,
-                przyczyna_korekty = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
-            WHERE id = %s
+                przyczyna_korekty = %s, podstawa_zwolnienia = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id = %s AND COALESCE(eksportowana, 0) = 0 RETURNING id
             """,
             (
                 json.dumps(normalized, ensure_ascii=False), netto, brutto, (numer or "").strip() or None,
                 data_wystawienia, data_sprzedazy, termin_platnosci,
                 przyczyna_korekty if invoice.get("rodzaj") == "korekta" else invoice.get("przyczyna_korekty"),
+                podstawa_zwolnienia if podstawa_zwolnienia is not None else invoice.get("podstawa_zwolnienia"),
                 invoice_id,
             ),
         )
+        if not updated.fetchone():
+            raise InvoiceLockedError("Faktura została już wystawiona.")
         _sync_extra_service_allocations(conn, invoice_id, normalized)
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return netto, brutto
@@ -1146,7 +1163,7 @@ def create_correction(invoice_id: int, przyczyna: str = "") -> int:
     columns = [
         "nabywca_skrocona", "nabywca_pelna", "nabywca_adres", "nabywca_kod", "nabywca_miasto",
         "nabywca_nip", "nabywca_regon", "nabywca_kraj", "nabywca_email", "wystawca",
-        "konto_bankowe", "gtu", "metoda_kasowa", "wyslij_do_ksef", "wyslij_do_kontrahenta",
+        "konto_bankowe", "gtu", "metoda_kasowa", "wyslij_do_ksef", "wyslij_do_kontrahenta", "podstawa_zwolnienia",
     ]
     conn = get_conn()
     try:

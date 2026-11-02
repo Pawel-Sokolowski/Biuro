@@ -167,7 +167,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       <th width="5%">Lp.</th><th width="32%">Nazwa towaru lub usługi</th><th width="8%">Ilość</th><th width="7%">J.m.</th>
       <th width="13%">Cena netto</th><th width="7%">VAT %</th><th width="14%">Netto</th><th width="14%">Brutto</th></tr></thead>
       <tbody>{''.join(rows)}</tbody></table>
-      <br>{summary_html(positions, paper=True)}<br>
+      <br>{summary_html(positions, paper=True, accepted_amounts=bool(invoice.get("_official")))}<br>
       <table width="100%" border="0" cellspacing="0" cellpadding="5"><tr>
         <td width="43%"></td><td width="32%" align="right"><b>Razem netto</b></td>
         <td width="25%" align="right">{_money(invoice.get('kwota_netto'))} PLN</td></tr>

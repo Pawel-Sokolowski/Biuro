@@ -2,11 +2,11 @@ import logging
 import math
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QRunnable, QThreadPool
+from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QRunnable, QThreadPool
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton,
+    QDateEdit, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton,
     QCheckBox, QDoubleSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -323,6 +323,22 @@ class FakturyPage(QWidget):
         self.btn_save_invoice_number.clicked.connect(self._save_inline_invoice_number)
         number_row.addWidget(self.btn_save_invoice_number)
         layout.addLayout(number_row)
+        header_form = QFormLayout()
+        self.inline_dates = {}
+        for field, label in (("data_wystawienia", "Data wystawienia:"), ("data_sprzedazy", "Data sprzedaży:"), ("termin_platnosci", "Termin płatności:")):
+            edit = QDateEdit()
+            edit.setCalendarPopup(True)
+            edit.setDisplayFormat("yyyy-MM-dd")
+            self.inline_dates[field] = edit
+            header_form.addRow(label, edit)
+        self.inline_reason = QLineEdit()
+        header_form.addRow("Przyczyna korekty:", self.inline_reason)
+        self.inline_exemption = QLineEdit()
+        header_form.addRow("Podstawa zwolnienia z VAT:", self.inline_exemption)
+        self.btn_save_header = QPushButton("Zapisz dane faktury")
+        self.btn_save_header.clicked.connect(self._save_inline_header)
+        header_form.addRow(self.btn_save_header)
+        layout.addLayout(header_form)
         layout.addWidget(QLabel("Pozycje faktury"))
         self.positions_table = _make_table(["Nazwa", "Ilość", "Jednostka", "Cena netto", "VAT %", "Netto", "Brutto", "Kategoria"])
         quantity_delegate = QuantityDelegate(self.positions_table)
@@ -865,7 +881,8 @@ class FakturyPage(QWidget):
     def _set_inline_enabled(self, enabled):
         for widget in (self.positions_table, self.service_choice, self.service_quantity,
                        self.btn_add_catalogue_inline, self.btn_add_position_inline, self.btn_remove_position_inline,
-                       self.inline_invoice_number, self.btn_save_invoice_number):
+                       self.inline_invoice_number, self.btn_save_invoice_number, self.inline_reason,
+                       self.inline_exemption, self.btn_save_header, *self.inline_dates.values()):
             widget.setEnabled(enabled)
 
     def _show_draft_positions(self):
@@ -885,6 +902,11 @@ class FakturyPage(QWidget):
                 return
             self._shown_draft_id = ids[0]
             self.inline_invoice_number.setText(invoice.get("numer") or "")
+            for field, edit in self.inline_dates.items():
+                date = QDate.fromString(str(invoice.get(field) or "")[:10], "yyyy-MM-dd")
+                edit.setDate(date if date.isValid() else QDate.currentDate())
+            self.inline_reason.setText(invoice.get("przyczyna_korekty") or "")
+            self.inline_exemption.setText(invoice.get("podstawa_zwolnienia") or "")
             positions = [normalize_position(p) for p in get_invoice_positions(ids[0])]
             for position in positions:
                 row = self.positions_table.rowCount()
@@ -924,7 +946,19 @@ class FakturyPage(QWidget):
         except (ValueError, TypeError, InvoiceLockedError) as exc:
             QMessageBox.warning(self, "Numer faktury", str(exc))
 
-    def _save_inline_positions(self, positions, *, number=None):
+    def _save_inline_header(self):
+        if self._shown_draft_id is None:
+            return
+        try:
+            header = {field: edit.date().toString("yyyy-MM-dd") for field, edit in self.inline_dates.items()}
+            header.update(przyczyna_korekty=self.inline_reason.text().strip(),
+                          podstawa_zwolnienia=self.inline_exemption.text().strip())
+            self._save_inline_positions(get_invoice_positions(self._shown_draft_id),
+                                        number=self.inline_invoice_number.text().strip(), header=header)
+        except (ValueError, TypeError, InvoiceLockedError) as exc:
+            QMessageBox.warning(self, "Dane faktury", str(exc))
+
+    def _save_inline_positions(self, positions, *, number=None, header=None):
         invoice_id = self._shown_draft_id
         if invoice_id is None or self._selected_ids(self.draft_table) != [invoice_id]:
             return False
@@ -934,9 +968,13 @@ class FakturyPage(QWidget):
             return False
         if not positions or any(not str(p.get("nazwa") or "").strip() for p in positions):
             raise ValueError("Faktura wymaga co najmniej jednej nazwanej pozycji.")
+        header = header or {}
         update_invoice_draft(invoice_id, positions, numer=number if number is not None else invoice.get("numer"),
-                             data_wystawienia=invoice.get("data_wystawienia"), data_sprzedazy=invoice.get("data_sprzedazy"),
-                             termin_platnosci=invoice.get("termin_platnosci"), przyczyna_korekty=invoice.get("przyczyna_korekty"))
+                             data_wystawienia=header.get("data_wystawienia", invoice.get("data_wystawienia")),
+                             data_sprzedazy=header.get("data_sprzedazy", invoice.get("data_sprzedazy")),
+                             termin_platnosci=header.get("termin_platnosci", invoice.get("termin_platnosci")),
+                             przyczyna_korekty=header.get("przyczyna_korekty", invoice.get("przyczyna_korekty")),
+                             podstawa_zwolnienia=header.get("podstawa_zwolnienia", invoice.get("podstawa_zwolnienia")))
         self.refresh()
         self._select_draft(invoice_id)
         return True

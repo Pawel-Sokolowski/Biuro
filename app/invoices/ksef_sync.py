@@ -51,9 +51,12 @@ def _text(element: Optional[ET.Element], name: str, default: str = "") -> str:
     return (item.text or "").strip() if item is not None else default
 
 
-def _decimal(value: Any, field: str) -> Decimal:
+def _decimal(value: Any, field: str, *, money=True) -> Decimal:
     try:
-        return Decimal(str(value).replace(",", ".")).quantize(Decimal("0.01"))
+        number = Decimal(str(value).replace(",", "."))
+        if not number.is_finite():
+            raise InvalidOperation
+        return number.quantize(Decimal("0.01")) if money else number
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise KsefError(f"Faktura KSeF ma nieprawidłową wartość pola {field}.") from exc
 
@@ -75,8 +78,8 @@ def parse_fa3_invoice(xml: str, *, allow_buyer_without_nip=False) -> Dict[str, A
         raise KsefError("Faktura KSeF nie zawiera numeru, daty wystawienia lub NIP-u nabywcy.")
     positions: List[Dict[str, Any]] = []
     for row in (item for item in fa.iter() if _local_name(item) == "FaWiersz"):
-        quantity = _decimal(_text(row, "P_8B", "1"), "P_8B")
-        unit_net = _decimal(_text(row, "P_9A", "0"), "P_9A")
+        quantity = _decimal(_text(row, "P_8B", "1"), "P_8B", money=False)
+        unit_net = _decimal(_text(row, "P_9A", "0"), "P_9A", money=False)
         net = _decimal(_text(row, "P_11", str(quantity * unit_net)), "P_11")
         vat_text = _text(row, "P_12", "0")
         try:

@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-11-01.1"
+SCHEMA_VERSION = "2026-11-02.1"
 
 
 def _schema_hash() -> str:
@@ -1099,6 +1099,7 @@ def init_db():
     # Tylko archiwa automatycznych faktur mogą odtwarzać ręcznie dodane usługi.
     _safe_alter_add_column(cur, "faktury_archiwum", "restore_manual INTEGER NOT NULL DEFAULT 0")
 
+    _safe_alter_add_column(cur, "faktury", "podstawa_zwolnienia TEXT")
     _safe_alter_add_column(cur, "firmy", "email_faktury TEXT")
     for definition in (
         "invoice_email_status TEXT", "invoice_email_recipients TEXT",

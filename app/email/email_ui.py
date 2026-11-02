@@ -11,6 +11,7 @@ import threading
 import unicodedata
 from urllib.parse import quote, unquote
 from datetime import datetime
+import time
 from collections import Counter
 from email.utils import getaddresses, parseaddr
 from html import escape as html_escape
@@ -45,6 +46,8 @@ from app.email.email_storage import (
     get_assignment_map,
     get_completed_map,
     list_assigned_rows,
+    count_unread_assigned_by_employee,
+    resolve_assigned_message,
     list_completed_rows,
     set_messages_completed,
     set_employee_assignment,
@@ -67,6 +70,7 @@ from app.email.email_sync import (
     move_emails,
     rename_folder,
     sync_and_prefetch,
+    sync_automatic_accounts,
 )
 
 from app.email.email_rules import apply_rules_to_folder, import_thunderbird_filters
@@ -186,6 +190,10 @@ def display_names(value: str) -> str:
 def employee_tag(employee: Dict[str, Any]) -> str:
     surname = (employee.get("nazwisko") or "").strip()
     return f"{employee.get('imie') or ''} {surname[:1]}.".strip() if surname else (employee.get("imie") or "")
+
+
+def employee_name(employee: Dict[str, Any]) -> str:
+    return f"{employee.get('imie') or ''} {employee.get('nazwisko') or ''}".strip()
 
 
 def build_folder_tree(folders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -380,6 +388,7 @@ class FolderTree(QTreeWidget):
 class EmailPage(QWidget):
     folder_visibility_changed = pyqtSignal()
     sync_finished = pyqtSignal(bool)
+    sync_failed = pyqtSignal(str)
     headers_ready = pyqtSignal()
     sync_progress = pyqtSignal(object)
     async_result = pyqtSignal(object)
@@ -395,6 +404,9 @@ class EmailPage(QWidget):
         self.current_message_labels: List[Tuple[str, str]] = []
         self.unread_map: Dict[str, bool] = {}
         self._sync_running = False
+        self._sync_cancel = threading.Event()
+        self._last_account_check = 0.0
+        self._last_sync_error = ""
         self._resync_pending = False
         self._tree_signature = None
         self.employee_filter: Optional[int] = None
@@ -420,16 +432,18 @@ class EmailPage(QWidget):
         self._refresh_chips()
         self.async_result.connect(self._on_async_result)
         self.sync_finished.connect(self._on_sync_finished)
-        self.headers_ready.connect(self._on_headers_ready)
+        self.sync_failed.connect(self._on_sync_failed)
+        self._headers_refresh_timer = QTimer(self)
+        self._headers_refresh_timer.setSingleShot(True)
+        self._headers_refresh_timer.setInterval(500)
+        self._headers_refresh_timer.timeout.connect(self._on_headers_ready)
+        self.headers_ready.connect(self._schedule_headers_refresh)
         self.sync_progress.connect(self._on_sync_progress)
 
         if self.accounts:
             self.current_account = self.accounts[0]
             self.load_folders_from_db()
             self.start_background_sync()
-            self._timer = QTimer(self)
-            self._timer.timeout.connect(self.start_background_sync)
-            self._timer.start(AUTO_SYNC_INTERVAL_MS)
         else:
             QMessageBox.warning(
                 self,
@@ -438,6 +452,14 @@ class EmailPage(QWidget):
                 "Administrator może je przypisać w Ustawienia → Konta e-mail → "
                 "Dostęp pracowników.",
             )
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.start_background_sync)
+        self._timer.start(AUTO_SYNC_INTERVAL_MS)
+        self._assignment_timer = QTimer(self)
+        self._assignment_timer.setInterval(15000)
+        self._assignment_timer.timeout.connect(self._refresh_chips)
+        self._assignment_timer.start()
 
     # ------------------------------------------------------------------
     # Automatyczna synchronizacja w tle
@@ -475,49 +497,85 @@ class EmailPage(QWidget):
         return label_color(self.label_numbers.get(employee_id))
 
     def start_background_sync(self) -> None:
-        if not self.current_account:
+        if self._sync_cancel.is_set():
             return
         if self._sync_running:
             self._resync_pending = True
             return
+        if time.monotonic() - self._last_account_check > 30:
+            try:
+                accounts = get_email_accounts_for_employee(self.pracownik_id)
+                current_id = self.current_account["id"] if self.current_account else None
+                self.accounts = accounts
+                self.current_account = next((a for a in accounts if a["id"] == current_id), accounts[0] if accounts else None)
+                self._last_account_check = time.monotonic()
+                if self.current_account is None and current_id is not None:
+                    self.current_folder_local = None
+                    self.current_uid = None
+                    self.mail_list.clear()
+                    self.folder_tree.clear()
+                    self._clear_view()
+                    self._refresh_chips()
+                if self.current_account and self.current_account["id"] != current_id:
+                    self.current_folder_local = "INBOX"
+                    self.current_uid = None
+                    self.load_folders_from_db()
+            except Exception:
+                logger.exception("Nie można odświeżyć dostępu do kont poczty")
+        if not self.current_account:
+            self.sync_status.setText("Brak przypisanych kont · dostęp sprawdzany co 2 min")
+            return
         self._sync_running = True
         self._resync_pending = False
-        jobs = []
-        for account in self.accounts:
-            folders = ["INBOX"]
-            if account["id"] == self.current_account["id"] and self.current_folder_local \
-                    and self.current_folder_local not in folders:
-                folders.insert(0, self.current_folder_local)
-            jobs.append((account["id"], folders))
-        jobs.sort(key=lambda j: j[0] != self.current_account["id"])
-        def work() -> None:
-            ok = True
-            for konto_id, folders in jobs:
-                try:
-                    sync_and_prefetch(
-                        konto_id, folders,
-                        on_headers=lambda: self.headers_ready.emit(),
-                    )
-                except Exception:
-                    logger.warning("Synchronizacja konta %s nie powiodła się", konto_id, exc_info=True)
-                    ok = False
-            try:
-                self.sync_finished.emit(ok)
-            except RuntimeError:
-                pass  # widżet został już zamknięty
+        self._last_sync_error = ""
+        self._sync_started_at = time.monotonic()
+        self.sync_status.setText("Synchronizacja w toku…")
+        accounts = list(self.accounts)
+        account_id = self.current_account["id"]
+        folder = self.current_folder_local
 
+        def work() -> None:
+            try:
+                errors = sync_automatic_accounts(accounts, account_id, folder,
+                    on_headers=self.headers_ready.emit, cancel_event=self._sync_cancel,
+                    on_progress=lambda done, total, name, headers: self.sync_progress.emit(("", done, total, name, headers)))
+            except Exception as exc:
+                logger.exception("Błąd synchronizacji poczty")
+                errors = [str(exc)]
+            try:
+                if errors:
+                    self.sync_failed.emit("\n".join(errors))
+                self.sync_finished.emit(not errors)
+            except RuntimeError:
+                pass
         threading.Thread(target=work, daemon=True).start()
+
+    def stop_background_sync(self):
+        self._sync_cancel.set()
+        self._timer.stop()
+        self._assignment_timer.stop()
+        self._headers_refresh_timer.stop()
+
+    def _on_sync_failed(self, message):
+        self._last_sync_error = message
+        self.sync_status.setText("Błąd synchronizacji · ponowna próba co 2 min")
+        self.sync_status.setToolTip(message)
 
     def _on_sync_progress(self, data) -> None:
         label, done, total, folder, headers = data
+        elapsed = int(time.monotonic() - getattr(self, "_sync_started_at", time.monotonic()))
         self.sync_progress_frame.show()
         self.sync_progress_bar.setMaximum(max(total, 1))
         self.sync_progress_bar.setValue(done)
         where = f" – {clean_folder_label(decode_mailbox_utf7(folder))}" if folder else ""
         self.sync_progress_label.setText(
-            f"Pierwsze pobieranie nagłówków {label}: foldery {done}/{total}, "
-            f"pobrano {headers} nagłówków{where}"
+            f"Synchronizacja {label}: foldery {done}/{total}, "
+            f"pobrano {headers} nagłówków{where} · czas {elapsed//60}:{elapsed%60:02d}"
         )
+
+    def _schedule_headers_refresh(self):
+        if not self._headers_refresh_timer.isActive():
+            self._headers_refresh_timer.start()
 
     def _on_headers_ready(self) -> None:
         if not self.current_account:
@@ -527,11 +585,15 @@ class EmailPage(QWidget):
             self.load_mail_list_from_db(self.current_folder_local, keep_view=True)
 
     def _on_sync_finished(self, ok: bool) -> None:
+        self._headers_refresh_timer.stop()
         self._sync_running = False
         self.sync_progress_frame.hide()
         if ok:
-            self._on_headers_ready()
-        if self._resync_pending:
+            self.sync_status.setText(f"Ostatnia synchronizacja: {datetime.now():%H:%M:%S} · co 2 min")
+            self.sync_status.setToolTip("")
+        self._on_headers_ready()
+        self._refresh_chips()
+        if self._resync_pending and not self._sync_cancel.is_set():
             self.start_background_sync()
 
     def _build_ui(self) -> None:
@@ -543,6 +605,8 @@ class EmailPage(QWidget):
         btn_sync = QPushButton("Synchronizacja wiadomości")
         btn_sync.clicked.connect(self.on_manual_sync)
         toolbar.addWidget(btn_sync)
+        self.sync_status = QLabel("Automatyczna synchronizacja co 2 min")
+        toolbar.addWidget(self.sync_status)
 
         btn_refresh = QPushButton("Odśwież widok")
         btn_refresh.clicked.connect(self.refresh_all)
@@ -690,7 +754,7 @@ class EmailPage(QWidget):
                 shortcut.activated.connect(lambda n=number: self._toggle_employee_by_number(n))
         self.mail_list.setStyleSheet(
             "QTreeWidget::item { padding: 5px 6px; }"
-            "QTreeWidget::item:selected { background: #cfe3f7; color: #000; }"
+            "QTreeWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
         )
         hdr = self.mail_list.header()
         hdr.setStretchLastSection(False)
@@ -1138,6 +1202,7 @@ class EmailPage(QWidget):
             self,
             local_folder: str,
             keep_view: bool = False,
+            ensure_row: Optional[Dict[str, Any]] = None,
     ) -> None:
 
         selected_uids = {
@@ -1189,6 +1254,8 @@ class EmailPage(QWidget):
             logger.exception("Nie można wczytać listy wiadomości")
             rows = []
 
+        if ensure_row is not None and ensure_row.get("konto_id") == konto_id and not any(row["id"] == ensure_row["id"] for row in rows):
+            rows.append(ensure_row)
         query = self.search_input.text().strip().casefold()
 
         if query:
@@ -1517,7 +1584,13 @@ class EmailPage(QWidget):
     # Etykiety pracowników nad listą
     # ------------------------------------------------------------------
     def _refresh_chips(self) -> None:
+        try:
+            unread_counts = count_unread_assigned_by_employee(self.current_account["id"]) if self.current_account else {}
+        except Exception:
+            logger.exception("Nie można pobrać liczników przypisanej poczty")
+            unread_counts = {}
         signature = (
+            tuple(sorted(unread_counts.items())),
             self.employee_filter, self.completed_filter,
             tuple((e["id"], self.label_numbers.get(e["id"])) for e in self.employees),
         )
@@ -1539,7 +1612,7 @@ class EmailPage(QWidget):
             selected_background = QColor(color).lighter(175).name()
             btn.setStyleSheet(
                 f"QPushButton {{ border: 0; border-radius: 3px; padding: 2px 6px;"
-                f" text-align: left; color: {color}; background: transparent; }}"
+                f" text-align: left; color: palette(text); background: transparent; border-left: 3px solid {color}; }}"
                 f"QPushButton:checked {{ color: #111; background: {selected_background}; font-weight: bold; }}"
                 f"QPushButton:hover {{ background: {selected_background}; }}"
             )
@@ -1566,11 +1639,12 @@ class EmailPage(QWidget):
         for emp in self.employees:
             number = self.label_numbers.get(emp["id"])
             chip(
-                employee_tag(emp),
+                f"{employee_name(emp)} ({unread_counts.get(emp['id'], 0)})",
                 self._employee_color(emp["id"]),
                 not self.completed_filter and self.employee_filter == emp["id"],
                 lambda _=False, e=emp["id"]: self._on_chip_clicked(e),
-                f"Klawisz {number} przypisuje zaznaczone wiadomości" if number else "",
+                f"Nieprzeczytane przypisane wiadomości na tym koncie: {unread_counts.get(emp['id'], 0)}. "
+                + (f"Klawisz {number} przypisuje zaznaczone wiadomości" if number else ""),
             )
 
     def _on_chip_clicked(self, employee_id: Optional[int]) -> None:
@@ -1579,6 +1653,54 @@ class EmailPage(QWidget):
         self.current_uid = None
         if self.current_folder_local:
             self.load_mail_list_from_db(self.current_folder_local)
+
+    def open_assignment_notification(self, target):
+        try:
+            accounts = get_email_accounts_for_employee(self.pracownik_id)
+            account = next((account for account in accounts if account["id"] == target.get("account_id")), None)
+            message = resolve_assigned_message(self.pracownik_id, target) if account else None
+        except Exception:
+            logger.exception("Nie można odnaleźć przypisanej wiadomości")
+            message = None
+        if not message:
+            QMessageBox.information(self, "Powiadomienie", "Wiadomość została usunięta, przeniesiona bez identyfikatora lub nie jest już Tobie dostępna.")
+            return False
+        self._select_timer.stop()
+        self.accounts = accounts
+        self.current_account = account
+        self.current_folder_local = message["server_name"]
+        self.current_uid = None
+        self.employee_filter = None
+        self.completed_filter = False
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+        self.load_folders_from_db()
+        self.load_mail_list_from_db(self.current_folder_local, ensure_row=message)
+        from PyQt6.QtWidgets import QTreeWidgetItemIterator
+        iterator = QTreeWidgetItemIterator(self.mail_list)
+        found = None
+        while iterator.value():
+            item = iterator.value()
+            if item.data(0, ROLE_ROW_ID) == message["id"]:
+                found = item
+                break
+            iterator += 1
+        if found is None:
+            QMessageBox.information(self, "Powiadomienie", "Wiadomość nie jest dostępna na bieżącej liście.")
+            return False
+        parent = found.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        self.mail_list.blockSignals(True)
+        self.mail_list.clearSelection()
+        self.mail_list.setCurrentItem(found)
+        found.setSelected(True)
+        self.mail_list.blockSignals(False)
+        self.mail_list.scrollToItem(found)
+        self.on_mail_clicked(found)
+        return True
 
     def _on_completed_chip_clicked(self) -> None:
         self.employee_filter = None
@@ -1739,6 +1861,7 @@ class EmailPage(QWidget):
             except Exception:
                 logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
         self.load_folders_from_db()
+        self._refresh_chips()
 
         def work():
             remote = mark_read_remote if read else mark_unread_remote
@@ -1939,6 +2062,7 @@ class EmailPage(QWidget):
         except Exception:
             logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
         self.load_folders_from_db()
+        self._refresh_chips()
         self._run_async(lambda: mark_read_remote(konto_id, folder, uid), lambda res, err: None)
 
     def _render_message(self, msg: email.message.Message) -> None:
@@ -2150,17 +2274,7 @@ class EmailPage(QWidget):
         return QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def on_manual_sync(self) -> None:
-        if not self.current_account:
-            return
-
-        konto_id = self.current_account["id"]
-
-        ok, msg = check_imap(get_account_info(konto_id) or {})
-        if not ok:
-            QMessageBox.warning(self, "Synchronizacja", f"Nie można połączyć się z serwerem:\n{msg}")
-            return
-
-        # Nie uruchamiaj drugiego wątku na już trwającej synchronizacji.
+        self._last_account_check = 0.0
         self.start_background_sync()
 
     def refresh_all(self) -> None:

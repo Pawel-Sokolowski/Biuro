@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from decimal import Decimal, DecimalException
 
 from PyQt6.QtCore import QDate, QSettings, Qt
@@ -127,7 +128,13 @@ class BankPaymentReview(QDialog):
             return
         except Exception:
             logger.exception("Błąd importu wyciągu MT940")
-            QMessageBox.warning(self, "Wyciąg MT940", "Nie udało się zaimportować wyciągu. Szczegóły w logach.")
+            error = QMessageBox(self)
+            error.setIcon(QMessageBox.Icon.Warning)
+            error.setWindowTitle("Wyciąg MT940")
+            error.setText("Nie udało się zaimportować wyciągu.")
+            error.setInformativeText("Rozwiń szczegóły i skopiuj treść błędu, aby ustalić przyczynę.")
+            error.setDetailedText(traceback.format_exc())
+            error.exec()
             return
         QMessageBox.information(
             self, "Wyciąg MT940",

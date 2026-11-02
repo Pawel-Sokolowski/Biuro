@@ -108,8 +108,8 @@ class PageFeatureTests(ServerStateTests):
             page._assign_selected(7, True)
             tags = ["Pan T." for i in range(page.mail_list.topLevelItemCount()) if page.mail_list.topLevelItem(i).toolTip(0).endswith("Pan T.")]
             self.assertEqual(tags.count("Pan T."), 2)
-            self.assertIn("Pan T.", [b.text() for b in page.chips_group.buttons()])
-            employee_chip = next(b for b in page.chips_group.buttons() if b.text() == "Pan T.")
+            self.assertIn("Pan Test (2)", [b.text() for b in page.chips_group.buttons()])
+            employee_chip = next(b for b in page.chips_group.buttons() if b.text() == "Pan Test (2)")
             employee_chip.click()
             self.assertEqual(page.mail_list.topLevelItemCount(), 2)
             menu = QMenu()

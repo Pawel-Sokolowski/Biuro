@@ -923,8 +923,8 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
             vat_mult = 1 + vat_rate / 100
             vat_str = f"{vat_rate:g}"
 
-            if wliczaj_zdrowotna and zdrowotna_val > 0:
-                podstawa = round(cena_netto_ks + zdrowotna_val * zdrowotna_sztuk, 2)
+            if wliczaj_zdrowotna:
+                podstawa = round(cena_netto_ks, 2)
                 pozycje.append(
                     {
                         "opis": "Księgowość (miesięczna) - podstawowa opłata",
@@ -979,7 +979,7 @@ INVOICE_LIST_SQL = """
            COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?') AS nazwa_skrocona,
            f.miesiac, f.rodzaj, f.numer, f.status,
            f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
-           f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer,
+           f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer, f.ksef_status, f.ksef_srodowisko_wysylki, f.ksef_nip_wysylki, f.invoice_email_status,
            f.korygowana_faktura_id, f.przyczyna_korekty
     FROM faktury f
     LEFT JOIN firmy c ON c.id = f.firma_id

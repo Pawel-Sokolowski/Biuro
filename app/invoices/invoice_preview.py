@@ -9,7 +9,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from PyQt6.QtCore import QMarginsF
+from PyQt6.QtCore import QMarginsF, QSizeF, QTimer
 from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QMessageBox, QPushButton, QTextBrowser, QVBoxLayout,
@@ -20,6 +20,7 @@ from app.db.dao_companies import get_company
 from app.db.dao_invoices import get_invoice_positions
 from app.db.dao_kontrahenci import get_kontrahent
 from app.invoices.ksef import ksef_url
+from app.invoices.vat_summary import summary_html
 
 logger = logging.getLogger(__name__)
 
@@ -86,17 +87,17 @@ def _qr_data_url(invoice: dict) -> str:
 
 
 def invoice_html(invoice: dict, positions: list[dict]) -> str:
-    seller = get_setting("faktury_sprzedawca_nazwa") or invoice.get("wystawca") or get_setting_first(
+    seller = invoice.get("sprzedawca_nazwa") or get_setting("faktury_sprzedawca_nazwa") or invoice.get("wystawca") or get_setting_first(
         ("wystawca_faktur", "wystawca", "faktury_wystawca"), "Biuro rachunkowe",
     )
-    seller_nip = get_setting("faktury_sprzedawca_nip") or invoice.get("ksef_nip_wysylki") or ""
-    seller_address = " ".join(filter(None, (
+    seller_nip = invoice.get("sprzedawca_nip") or get_setting("faktury_sprzedawca_nip") or invoice.get("ksef_nip_wysylki") or ""
+    seller_address = invoice.get("sprzedawca_adres") or " ".join(filter(None, (
         get_setting("faktury_sprzedawca_adres"), get_setting("faktury_sprzedawca_kod"),
         get_setting("faktury_sprzedawca_miasto"), get_setting("faktury_sprzedawca_kraj"),
     )))
     logo = get_setting("faktury_logo_data") or ""
     logo_html = f'<img src="{_escape(logo)}" width="180"><br>' if logo.startswith("data:image/") else ""
-    qr = _qr_data_url(invoice)
+    qr = invoice.get("_qr_data_url") or _qr_data_url(invoice)
     qr_html = (f'<img src="{_escape(qr)}" width="120" height="120"><br>' if qr else
                '<span style="color:#8b98a5">Kod QR niedostępny</span><br>')
     buyer_address = " ".join(filter(None, (
@@ -124,11 +125,11 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
     document_title = "FAKTURA KORYGUJĄCA" if invoice.get("rodzaj") == "korekta" else "FAKTURA VAT"
     document_number = invoice.get("numer") or "Dokument KSeF"
     payment_method = invoice.get("sposob_zaplaty") or "Przelew"
-    account = invoice.get("konto_bankowe") or get_setting("konto_bankowe_biura") or ""
+    account = invoice.get("konto_bankowe") or ("" if invoice.get("_official") else get_setting("konto_bankowe_biura")) or ""
     ksef_date = str(invoice.get("ksef_data") or "")[:10]
     return f"""
     <html><head><style>
-      body {{ font-family: 'Arial'; font-size: 9.5pt; color: #111; margin: 10px; }}
+      body {{ background-color: white; font-family: 'Arial'; font-size: 9.5pt; color: #111; margin: 10px; }}
       table {{ border-collapse: collapse; }}
       td {{ vertical-align: top; }}
       .doc-title {{ font-size: 12pt; font-weight: bold; text-align: right; }}
@@ -139,7 +140,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       .items th {{ background: #eeeeee; padding: 6px 4px; }}
       .items td {{ padding: 7px 4px; }}
       .num {{ text-align: right; white-space: nowrap; }}
-      .grand {{ font-size: 15pt; font-weight: bold; }}
+      .grand {{ font-size: 12pt; font-weight: bold; }}
       .ksef-number {{ font-family: monospace; font-size: 8pt; color: #333; }}
     </style></head><body>
       <table width="100%" border="0" cellspacing="0" cellpadding="8"><tr>
@@ -163,15 +164,15 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       </tr></table>
       <br><br>
       <table class="items" width="100%" border="1" cellspacing="0" cellpadding="4"><thead><tr>
-      <th width="5%">Lp.</th><th width="35%">Nazwa towaru lub usługi</th><th width="8%">Ilość</th><th width="7%">J.m.</th>
-      <th>Cena netto</th><th>VAT %</th><th>Netto</th><th>Brutto</th></tr></thead>
+      <th width="5%">Lp.</th><th width="32%">Nazwa towaru lub usługi</th><th width="8%">Ilość</th><th width="7%">J.m.</th>
+      <th width="13%">Cena netto</th><th width="7%">VAT %</th><th width="14%">Netto</th><th width="14%">Brutto</th></tr></thead>
       <tbody>{''.join(rows)}</tbody></table>
-      <br>
+      <br>{summary_html(positions, paper=True)}<br>
       <table width="100%" border="0" cellspacing="0" cellpadding="5"><tr>
-        <td width="55%"></td><td width="25%" align="right"><b>Razem netto</b></td>
-        <td width="20%" align="right">{_money(invoice.get('kwota_netto'))} PLN</td></tr>
+        <td width="43%"></td><td width="32%" align="right"><b>Razem netto</b></td>
+        <td width="25%" align="right">{_money(invoice.get('kwota_netto'))} PLN</td></tr>
         <tr><td></td><td align="right" class="grand">Razem do zapłaty</td>
-        <td align="right" class="grand">{_money(invoice.get('kwota_brutto'))} PLN</td></tr>
+        <td align="right" class="grand">{_money(invoice.get('kwota_brutto'))}&nbsp;PLN</td></tr>
       </table>
       {f'<div><b>Faktura korygowana:</b> {_escape(invoice.get("korygowana_faktura_numer"))}<br><b>Przyczyna:</b> {_escape(invoice.get("przyczyna_korekty"))}</div>' if invoice.get('rodzaj') == 'korekta' else ''}
       <br>
@@ -188,6 +189,22 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
     """
 
 
+def write_invoice_pdf(path, rendered_html, *, title="Faktura"):
+    """Qt's reentrant document/PDF classes also support background delivery jobs."""
+    writer = QPdfWriter(str(path))
+    writer.setResolution(96)
+    writer.setTitle(title)
+    writer.setPageLayout(QPageLayout(QPageSize(QPageSize.PageSizeId.A4), QPageLayout.Orientation.Portrait,
+                                    QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter))
+    document = QTextDocument()
+    document.documentLayout().setPaintDevice(writer)
+    document.setDocumentMargin(0)
+    document.setHtml(rendered_html)
+    document.setPageSize(QSizeF(writer.width(), writer.height()))
+    document.print(writer)
+    del writer
+
+
 class InvoicePreviewDialog(QDialog):
     def __init__(self, invoice: dict, parent=None):
         super().__init__(parent)
@@ -200,6 +217,8 @@ class InvoicePreviewDialog(QDialog):
         self.resize(1150, 840)
         layout = QVBoxLayout(self)
         self.preview = QTextBrowser(self)
+        # Invoice paper stays white independently of the application theme.
+        self.preview.setStyleSheet("QTextBrowser { background: white; color: #111; }")
         self.html = invoice_html(self.invoice, get_invoice_positions(int(self.invoice["id"])))
         self.preview.setHtml(self.html)
         self.preview.document().setDocumentMargin(8)
@@ -210,6 +229,26 @@ class InvoicePreviewDialog(QDialog):
         buttons.addButton(save, QDialogButtonBox.ButtonRole.ActionRole)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self._ksef_refresh_timer = QTimer(self)
+        self._ksef_refresh_timer.setInterval(5000)
+        self._ksef_refresh_timer.timeout.connect(self._refresh_ksef_identity)
+        if self.invoice.get("ksef_status") in ("wysylanie", "oczekuje", "do_sprawdzenia"):
+            self._ksef_refresh_timer.start()
+
+    def _refresh_ksef_identity(self):
+        from app.db.dao_invoices import get_invoice_by_id
+        try:
+            latest = get_invoice_by_id(int(self.invoice["id"]))
+            if latest and latest.get("ksef_numer") and latest.get("ksef_numer") != self.invoice.get("ksef_numer"):
+                for key in ("ksef_numer", "ksef_data", "ksef_nip_wysylki", "ksef_hash_faktury", "ksef_status"):
+                    self.invoice[key] = latest.get(key)
+                self.html = invoice_html(self.invoice, get_invoice_positions(int(self.invoice["id"])))
+                self.preview.setHtml(self.html)
+                self._ksef_refresh_timer.stop()
+            elif latest and latest.get("ksef_status") == "odrzucona":
+                self._ksef_refresh_timer.stop()
+        except Exception:
+            logger.exception("Nie udało się odświeżyć numeru KSeF w podglądzie")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -229,19 +268,7 @@ class InvoicePreviewDialog(QDialog):
         if not path.lower().endswith(".pdf"):
             path += ".pdf"
         try:
-            writer = QPdfWriter(path)
-            writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-            writer.setPageLayout(QPageLayout(
-                QPageSize(QPageSize.PageSizeId.A4), QPageLayout.Orientation.Portrait,
-                QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter,
-            ))
-            document = QTextDocument()
-            document.setDocumentMargin(0)
-            document.setHtml(self.html)
-            # Ustal tylko szerokość składu. Nadanie dokumentowi pełnej wysokości
-            # A4 powoduje w QTextDocument sztuczne rozciąganie pionowych przerw.
-            document.setTextWidth(float(writer.pageLayout().paintRectPoints().width()))
-            document.print(writer)
+            write_invoice_pdf(path, self.html, title=f"Faktura {self.invoice.get('numer') or self.invoice['id']}")
         except (OSError, RuntimeError) as exc:
             QMessageBox.warning(self, "PDF", f"Nie udało się zapisać pliku PDF: {exc}")
             return

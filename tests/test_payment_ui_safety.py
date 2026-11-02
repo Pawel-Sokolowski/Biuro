@@ -75,6 +75,26 @@ class BankReviewSafetyTests(unittest.TestCase):
         importer.assert_called_once_with("statement.sta", 1, encoding="iso8859_2")
         self.dialog.settings.setValue.assert_called_with("mt940/encoding", "iso8859_2")
 
+    def test_unexpected_import_error_is_available_in_dialog_details(self):
+        details = []
+
+        def inspect_error(dialog):
+            details.append(dialog.detailedText())
+            self.assertEqual(dialog.text(), "Nie udało się zaimportować wyciągu.")
+            return 0
+
+        with patch("app.invoices.payments_ui.QFileDialog.getOpenFileName", return_value=("statement.sta", "")), \
+             patch("app.invoices.payments_ui.import_mt940_file", side_effect=RuntimeError("missing bank column")), \
+             patch.object(QMessageBox, "exec", inspect_error), \
+             patch.object(QMessageBox, "information") as success, \
+             patch.object(self.dialog, "refresh") as refresh, \
+             self.assertLogs("app.invoices.payments_ui", level="ERROR"):
+            self.dialog._import_file()
+        self.assertEqual(len(details), 1)
+        self.assertIn("RuntimeError: missing bank column", details[0])
+        success.assert_not_called()
+        refresh.assert_not_called()
+
     def test_unselected_invoice_and_declined_confirmation_never_write(self):
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "warning"):
@@ -331,18 +351,15 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
             page._mark_cash_payment()
         cash.assert_not_called()
 
-    def test_ksef_transmission_reports_processing_without_acceptance(self):
+    def test_ksef_transmission_starts_automatic_batch_without_xml_file(self):
         page = self.page()
         with patch("app.invoices.faktury_ui.ksef_configured", return_value=True), \
-             patch("app.invoices.faktury_ui.QFileDialog.getOpenFileName", return_value=("invoice.xml", "")), \
-             patch("app.invoices.faktury_ui.send_invoice_xml", return_value={"session_reference": "SES", "invoice_reference": "INV"}) as send, \
-             patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
-             patch.object(QMessageBox, "information") as information:
+             patch("app.invoices.faktury_ui.QFileDialog.getOpenFileName") as picker, \
+             patch.object(page, "_start_ksef_batch") as start, \
+             patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
             page._send_selected_to_ksef()
-        send.assert_called_once_with(self.invoice_id, "invoice.xml", 1)
-        message = information.call_args.args[2]
-        self.assertIn("przetwarzania", message)
-        self.assertNotIn("przyjęta", message)
+        start.assert_called_once_with([self.invoice_id], send=True)
+        picker.assert_not_called()
 
 
 if __name__ == "__main__":

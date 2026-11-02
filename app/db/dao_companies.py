@@ -18,7 +18,7 @@ FIRMA_FIELDS = [
     "kraj", "wojewodztwo", "powiat", "gmina",
 
     "forma_dzialalnosci", "forma_opodatkowania", "analityka_fk",
-    "osoba_kontaktowa", "adres_email", "nr_telefonu",
+    "osoba_kontaktowa", "adres_email", "email_faktury", "nr_telefonu",
 
     "adres_zam_miasto", "adres_zam_kod_pocztowy", "adres_zam_ulica",
     "adres_zam_budynek", "adres_zam_lokal",
@@ -458,6 +458,9 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
     services_changed: Optional[bool] = None
 
     try:
+        if data.get("email_faktury"):
+            from app.invoices.invoice_delivery import parse_recipients
+            data["email_faktury"] = ", ".join(parse_recipients(data["email_faktury"]))
         if actor_id and not can(actor_id, "can_edit_companies"):
             raise PermissionError("Brak uprawnień do edycji firm.")
         if mapped.get("id"):

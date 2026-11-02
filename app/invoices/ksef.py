@@ -26,9 +26,10 @@ def ksef_url(ksef_numer: Optional[str], invoice: Optional[dict] = None) -> str:
     document_hash = str(invoice.get("ksef_hash_faktury") or "").strip()
     # Skrót w linku weryfikacyjnym ma postać Base64URL bez dopełnienia.
     url_hash = document_hash.rstrip("=").replace("+", "-").replace("/", "_")
-    configured = (get_setting(URL_TEMPLATE_KEY) or "").strip()
+    configured = "" if invoice.get("_official") else (get_setting(URL_TEMPLATE_KEY) or "").strip()
     if nip and issue_date and url_hash and configured in ("", DEFAULT_URL_TEMPLATE):
-        template = VERIFICATION_URL_TEMPLATE
+        host = {"test":"qr-test.ksef.mf.gov.pl", "demo":"qr-demo.ksef.mf.gov.pl"}.get(invoice.get("ksef_srodowisko_wysylki"), "qr.ksef.mf.gov.pl")
+        template = VERIFICATION_URL_TEMPLATE.replace("qr.ksef.mf.gov.pl",host)
     else:
         template = configured or DEFAULT_URL_TEMPLATE
     replacements = {"{numer}": number, "{nip}": nip, "{data}": issue_date, "{hash}": url_hash}

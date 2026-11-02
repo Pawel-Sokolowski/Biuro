@@ -181,26 +181,26 @@ def send_email_smtp(
     """Wysyła wiadomość. Przy `save_copy` kopia trafia do `copy_folder` (np. folder oryginału,
     folder z reguły filtra), a gdy go brak - do folderu Wysłane."""
 
-    cfg = get_smtp_config_for_account(
-        konto_id
-    )
+    try:
+        cfg = get_smtp_config_for_account(konto_id)
+        msg = prepare_message(
+            cfg["user"],
+            cfg["display_name"],
+            to_addrs,
+            subject,
+            body,
+            attachments,
+            cc,
+            bcc,
+            html_body,
+            in_reply_to,
+            references,
+        )
 
-    msg = prepare_message(
-        cfg["user"],
-        cfg["display_name"],
-        to_addrs,
-        subject,
-        body,
-        attachments,
-        cc,
-        bcc,
-        html_body,
-        in_reply_to,
-        references,
-    )
-
-    if require_attachments and len(list(msg.iter_attachments())) != len(attachments or []):
-        raise ValueError("Nie udało się dołączyć wszystkich wymaganych załączników. Wiadomość nie została wysłana.")
+        if require_attachments and len(list(msg.iter_attachments())) != len(attachments or []):
+            raise ValueError("Nie udało się dołączyć wszystkich wymaganych załączników. Wiadomość nie została wysłana.")
+    except Exception as exc:
+        return False, f"{describe_error(exc)}\n{traceback.format_exc()}"
 
     recipients = (
         list(to_addrs or [])

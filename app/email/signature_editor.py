@@ -128,6 +128,7 @@ class SignatureDialog(QDialog):
         self.pracownik_id = pracownik_id
         info = get_employee_info(pracownik_id) or {}
         self.name = (info.get('imie', imie), info.get('nazwisko', nazwisko))
+        self.template = sig.get_template()
         self.setWindowTitle("Moja stopka")
         self.resize(620, 500)
         layout = QVBoxLayout(self)
@@ -153,7 +154,7 @@ class SignatureDialog(QDialog):
         layout.addWidget(buttons)
 
     def _preview(self):
-        _, html = sig.build_default_signature(*self.name, telefon=self.phone.text().strip())
+        _, html = sig.build_default_signature(*self.name, self.template, telefon=self.phone.text().strip())
         self.preview.setHtml(html)
 
     def _save(self):

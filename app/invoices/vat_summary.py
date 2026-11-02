@@ -25,7 +25,9 @@ def vat_summary(positions, *, accepted_amounts=False):
         gross = Decimal(str(item['brutto'])).quantize(CENT, rounding=ROUND_HALF_UP)
         group = groups.setdefault(code, {'code': code, 'net': Decimal('0.00'), 'vat': Decimal('0.00'), 'gross': Decimal('0.00')})
         group['net'] += net
-        group['vat'] += gross - net
+        line_vat = item.get('vat_amount') if accepted_amounts else None
+        group['vat'] += (Decimal(str(line_vat)).quantize(CENT, rounding=ROUND_HALF_UP)
+                         if line_vat is not None else gross - net)
         group['gross'] += gross
     def order(item):
         try:

@@ -8,10 +8,10 @@ from unittest.mock import patch
 from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtGui import QImage, QColor, QTextDocument
 from PyQt6.QtWidgets import QApplication
-from app.email.signature_editor import SignatureEditor
+from app.email.signature_editor import SignatureDialog, SignatureEditor
 from app.email.compose_dialog import ComposeDialog
 from app.email.signature import build_default_signature
-from app.email.email_actions import prepare_message
+from app.email.email_actions import prepare_message, send_email_smtp
 
 
 class SignatureImageTests(unittest.TestCase):
@@ -75,3 +75,24 @@ class SignatureImageTests(unittest.TestCase):
         self.assertNotIn('<script>', html)
         self.assertNotIn('<b>Anna</b>', html)
         self.assertIn('A&amp;B', html)
+
+    def test_signature_preview_loads_template_once_for_phone_updates(self):
+        template = {'stopka_szablon_html':'<p>{imie} {nazwisko}<br>{telefon}</p>'}
+        with patch('app.db.dao_employees.get_employee_info', return_value={'imie':'Anna', 'nazwisko':'Nowak'}), \
+             patch('app.email.signature_editor.sig.get_template', return_value=template) as get_template:
+            dialog = SignatureDialog(7, 'Anna', 'Nowak')
+            self.addCleanup(dialog.close)
+            dialog.phone.setText('123')
+            dialog.phone.setText('1234')
+        get_template.assert_called_once_with()
+        self.assertIn('1234', dialog.preview.toHtml())
+
+    def test_send_reports_message_preparation_failure(self):
+        html = '<img src="data:image/png;base64,' + 'A' * 2_800_000 + '">'
+        with patch('app.email.email_actions.get_smtp_config_for_account', return_value={
+            'user':'office@example.com', 'display_name':'Office',
+        }), patch('app.email.email_actions.open_smtp') as open_smtp:
+            result = send_email_smtp(1, ['client@example.com'], 'Test', '', html_body=html)
+        self.assertFalse(result[0])
+        self.assertIn('Obraz stopki jest zbyt duży', result[1])
+        open_smtp.assert_not_called()

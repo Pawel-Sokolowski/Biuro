@@ -1099,6 +1099,7 @@ def init_db():
     # Tylko archiwa automatycznych faktur mogą odtwarzać ręcznie dodane usługi.
     _safe_alter_add_column(cur, "faktury_archiwum", "restore_manual INTEGER NOT NULL DEFAULT 0")
 
+    _safe_alter_add_column(cur, "pracownicy", "telefon TEXT")
     _safe_alter_add_column(cur, "faktury", "podstawa_zwolnienia TEXT")
     _safe_alter_add_column(cur, "firmy", "email_faktury TEXT")
     for definition in (

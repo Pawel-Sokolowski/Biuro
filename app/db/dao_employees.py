@@ -48,7 +48,7 @@ def get_employee_info(pracownik_id: int) -> Optional[Dict[str, Any]]:
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, email, imie, nazwisko, aktywny, data_utworzenia
+            SELECT id, email, imie, nazwisko, aktywny, data_utworzenia, telefon
             FROM pracownicy
             WHERE id = %s
         """, (pracownik_id,))

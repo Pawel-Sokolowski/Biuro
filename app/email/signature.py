@@ -9,7 +9,8 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_conn import get_conn
 
 DEFAULT_TEMPLATE: Dict[str, str] = {
-    "stopka_szablon_pozdrowienie": "Pozdrawiam",
+    "stopka_szablon_html": "",
+    "stopka_szablon_pozdrowienie": "Pozdrawiam,",
     "stopka_szablon_firma": "Biuro Rachunkowe EM-KA Sp. z o.o.",
     "stopka_szablon_adres": "ul. Chopina 35\n71-450 Szczecin",
     "stopka_szablon_telefon": "123456789",
@@ -42,14 +43,20 @@ def save_template(values: Dict[str, str]) -> None:
 
 
 def build_default_signature(
-    imie: str, nazwisko: str, template: Optional[Dict[str, str]] = None
+    imie: str, nazwisko: str, template: Optional[Dict[str, str]] = None, *, telefon: str = ""
 ) -> Tuple[str, str]:
     """Zwraca (tekst, html) domyślnej stopki wypełnionej imieniem i nazwiskiem pracownika."""
     t = template or get_template()
+    if t.get("stopka_szablon_html", "").strip():
+        values = {"imie": imie or "", "nazwisko": nazwisko or "", "telefon": telefon or ""}
+        fragment = re.sub(r"\{(imie|nazwisko|telefon)\}", lambda match: escape(values[match[1]]), t["stopka_szablon_html"])
+        return html_to_text(fragment), fragment
     name = f"{imie or ''} {nazwisko or ''}".strip()
     address = [l.strip() for l in t["stopka_szablon_adres"].splitlines() if l.strip()]
 
     blocks = [["--", t["stopka_szablon_pozdrowienie"], name]]
+    if telefon.strip():
+        blocks[0].append(f"tel: {telefon.strip()}")
     company = [t["stopka_szablon_firma"], *address]
     if t["stopka_szablon_telefon"].strip():
         company.append(f"tel: {t['stopka_szablon_telefon'].strip()}")
@@ -135,21 +142,27 @@ def load_signature_file(path: str) -> Tuple[str, str]:
 
 
 def get_employee_signature(pracownik_id: int) -> Tuple[str, str]:
-    """Stopka pracownika; gdy jej nie ma - domyślna wygenerowana z imienia i nazwiska."""
+    """Aktualny wspólny wzór z danymi autora wiadomości, niezależnie od nadawcy SMTP."""
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT imie, nazwisko, stopka_tekst, stopka_html FROM pracownicy WHERE id = %s",
+            "SELECT imie, nazwisko, telefon FROM pracownicy WHERE id = %s",
             (pracownik_id,),
         ).fetchone()
     finally:
         conn.close()
     if not row:
         return "", ""
-    text, html = row["stopka_tekst"] or "", row["stopka_html"] or ""
-    if html.strip() or text.strip():
-        return text or html_to_text(html), html or text_to_html(text)
-    return build_default_signature(row["imie"], row["nazwisko"])
+    return build_default_signature(row["imie"], row["nazwisko"], telefon=row["telefon"] or "")
+
+
+def save_employee_phone(pracownik_id: int, telefon: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE pracownicy SET telefon = %s WHERE id = %s", (telefon.strip() or None, pracownik_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_saved_signature(pracownik_id: int) -> Tuple[str, str]:

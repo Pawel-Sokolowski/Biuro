@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import email
+import base64
+import re
 import mimetypes
 import traceback
 
@@ -87,7 +89,22 @@ def prepare_message(
         msg["References"] = f"{references} {in_reply_to}".strip() if references else in_reply_to
     msg.set_content(body or "")
     if html_body:
+        # Embed signature images as MIME related parts for Outlook and other
+        # clients that do not display data URLs. Never read local/remote URLs.
+        related = {}
+        def inline_image(match):
+            source = match[2]
+            if source not in related:
+                data = base64.b64decode(match[4], validate=True)
+                if len(data) > 2 * 1024 * 1024:
+                    raise ValueError("Obraz stopki jest zbyt duży (maks. 2 MB).")
+                related[source] = (make_msgid(), match[3].lower(), data)
+            return match[1] + 'cid:' + related[source][0][1:-1] + match[5]
+        html_body = re.sub(r"(src\s*=\s*['\"])(data:image/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/=]+))(['\"])", inline_image, html_body, flags=re.I)
         msg.add_alternative(html_body, subtype="html")
+        html_part = msg.get_payload()[-1]
+        for cid, subtype, data in related.values():
+            html_part.add_related(data, maintype='image', subtype=subtype, cid=cid, disposition='inline')
 
     for path_str in attachments or []:
         path = Path(path_str)

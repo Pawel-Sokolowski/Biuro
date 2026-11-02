@@ -14,30 +14,6 @@ HEADERS = ["Klient", "NIP", "Forma opodatkowania", "Deklaracja", "Stan", "Data z
            "Kwota", "UPO", "Uwagi"]
 
 
-class CompanyDeclarationDialog(QDialog):
-    """Szybkie uzupełnienie deklaracji rocznej firmy."""
-
-    def __init__(self, name: str, company: dict, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"{name} — deklaracja roczna")
-        form = QFormLayout(self)
-        form.addRow(QLabel(f"Forma opodatkowania: {company.get('forma_opodatkowania') or '—'}"))
-        self.main = QComboBox()
-        for code in ROZLICZENIE_ROCZNE:
-            desc = ROZLICZENIE_ROCZNE_OPIS.get(code)
-            self.main.addItem(f"{code} ({desc})" if desc else "(brak)", code)
-        idx = self.main.findData((company.get("rozliczenie_roczne") or "").strip())
-        self.main.setCurrentIndex(max(idx, 0))
-        self.extra = QLineEdit(company.get("deklaracje_dodatkowe") or "")
-        self.extra.setPlaceholderText("np. VAT-UE, CIT-8")
-        form.addRow("Deklaracja:", self.main)
-        form.addRow("Dodatkowe:", self.extra)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-
 class DeclarationDialog(QDialog):
     def __init__(self, title: str, row: dict, parent=None):
         super().__init__(parent)
@@ -171,7 +147,7 @@ class YearEndPage(QWidget):
             done += filed
             values = [
                 name, company.get("nip") or "", company.get("forma_opodatkowania") or "",
-                decl["kod"], "Złożona" if filed else "Do złożenia",
+                decl["kod"] + (" — " + decl["owner_name"] if decl.get("owner_name") else ""), "Złożona" if filed else "Do złożenia",
                 decl.get("data_zlozenia") or "",
                 "" if decl.get("kwota") is None else f"{float(decl['kwota']):.2f}",
                 decl.get("upo") or "", decl.get("uwagi") or "",
@@ -196,7 +172,7 @@ class YearEndPage(QWidget):
 
     def _save(self, company, decl, values):
         try:
-            save_declaration(self.pracownik_id, company["id"], self.year.value(), decl["kod"], **values)
+            save_declaration(self.pracownik_id, company["id"], self.year.value(), decl["kod"], owner_key=decl.get("owner_key", 0), **values)
         except Exception as exc:
             QMessageBox.critical(self, "Zakończenie roku", f"Nie udało się zapisać: {exc}")
             return
@@ -220,14 +196,10 @@ class YearEndPage(QWidget):
             return
         company, name, decl = sel
         if decl is None:
-            dlg = CompanyDeclarationDialog(name, company, self)
+            from app.companies.company_form import CompanyForm
+            dlg = CompanyForm(company["id"], self, actor_id=self.pracownik_id)
+            dlg.annual_year.setValue(self.year.value())
             if dlg.exec() == QDialog.DialogCode.Accepted:
-                try:
-                    set_company_declarations(company["id"], dlg.main.currentData() or "",
-                                             dlg.extra.text().strip())
-                except Exception as exc:
-                    QMessageBox.critical(self, "Zakończenie roku", f"Nie udało się zapisać: {exc}")
-                    return
                 self.refresh()
             return
         dialog = DeclarationDialog(f"{name} — {decl['kod']} za {self.year.value()}", decl, self)

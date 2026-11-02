@@ -6,7 +6,7 @@ from app.db.dao_conn import get_conn
 SCHEMA_LOCK_ID = 748201
 SCHEMA_KEY = "schema_hash"
 # Podnieś przy każdej zmianie schematu (nowe tabele/kolumny/migracje) - wymusza migrację.
-SCHEMA_VERSION = "2026-11-03.1"
+SCHEMA_VERSION = "2026-11-03.2"
 
 
 def _schema_hash() -> str:
@@ -628,6 +628,7 @@ def init_db():
     _safe_alter_add_column(cur, "firmy", "cena_ponad_limit DOUBLE PRECISION")
     _safe_alter_add_column(cur, "firmy", "rozliczenie_roczne TEXT DEFAULT ''")
     _safe_alter_add_column(cur, "firmy", "deklaracje_dodatkowe TEXT DEFAULT ''")
+    _safe_alter_add_column(cur, "firmy", "roczne_deklaracje TEXT")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS zakonczenie_roku (
             firma_id INTEGER NOT NULL REFERENCES firmy(id) ON DELETE CASCADE,
@@ -1310,6 +1311,63 @@ def init_db():
             email TEXT NOT NULL,
             czas TEXT NOT NULL DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
         )
+    """)
+
+    _safe_alter_add_column(cur, "faktury_archiwum", "document_json TEXT")
+    _safe_alter_add_column(cur, "faktury", "cancelled_reason TEXT")
+    _safe_alter_add_column(cur, "faktury", "cancelled_by INTEGER")
+    _safe_alter_add_column(cur, "faktury", "cancelled_at TIMESTAMPTZ")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_number_ledger (
+            numer TEXT PRIMARY KEY, invoice_id INTEGER NOT NULL,
+            reserved_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        INSERT INTO invoice_number_ledger(numer, invoice_id)
+        SELECT DISTINCT ON (numer) numer, id FROM faktury
+        WHERE COALESCE(TRIM(numer), '') <> '' ORDER BY numer, id
+        ON CONFLICT DO NOTHING;
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            token_hash TEXT PRIMARY KEY, employee_id INTEGER NOT NULL
+                REFERENCES pracownicy(id) ON DELETE CASCADE,
+            expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ
+        );
+        CREATE TABLE IF NOT EXISTS year_end_snapshots (
+            rok INTEGER NOT NULL, firma_id INTEGER NOT NULL REFERENCES firmy(id) ON DELETE RESTRICT,
+            company_json TEXT NOT NULL, PRIMARY KEY (rok, firma_id)
+        );
+        CREATE TABLE IF NOT EXISTS year_end_snapshot_years (rok INTEGER PRIMARY KEY);
+    """)
+    _safe_alter_add_column(cur, "zakonczenie_roku", "owner_key INTEGER NOT NULL DEFAULT 0")
+    cur.execute("""
+        ALTER TABLE zakonczenie_roku DROP CONSTRAINT IF EXISTS zakonczenie_roku_pkey;
+        ALTER TABLE zakonczenie_roku ADD PRIMARY KEY (firma_id, rok, deklaracja, owner_key);
+        CREATE TABLE IF NOT EXISTS owner_year_declarations (
+            firma_id INTEGER NOT NULL REFERENCES firmy(id) ON DELETE RESTRICT,
+            rok INTEGER NOT NULL, owner_id INTEGER NOT NULL, owner_name TEXT NOT NULL,
+            declarations_json TEXT NOT NULL, PRIMARY KEY (firma_id, rok, owner_id)
+        );
+    """)
+    # Exact storage for newly calculated monetary amounts (legacy values retain cents).
+    for table in ("faktury", "faktury_archiwum"):
+        for column in ("kwota_netto", "kwota_brutto"):
+            cur.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE NUMERIC(18,2) USING {column}::numeric(18,2)")
+    # Issued numbers and complete documents survive every application code path.
+    cur.execute("""
+        CREATE OR REPLACE FUNCTION protect_issued_invoice() RETURNS trigger AS $$
+        BEGIN
+            IF COALESCE(OLD.eksportowana, 0) = 1 THEN
+                IF TG_OP = 'DELETE' THEN
+                    RAISE EXCEPTION 'Wystawionej faktury nie można usunąć. Użyj anulowania lub korekty.';
+                END IF;
+                IF NEW.numer IS DISTINCT FROM OLD.numer OR COALESCE(NEW.eksportowana, 0) <> 1 THEN
+                    RAISE EXCEPTION 'Nie można zmienić numeru ani cofnąć wystawionej faktury.';
+                END IF;
+            END IF;
+            IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+            RETURN NEW;
+        END; $$ LANGUAGE plpgsql;
+        CREATE OR REPLACE TRIGGER protect_issued_invoice
+        BEFORE UPDATE OR DELETE ON faktury FOR EACH ROW EXECUTE FUNCTION protect_issued_invoice();
     """)
 
     # Firma demonstracyjna tylko przy inicjalizacji pustej bazy, nie po jej usunięciu.

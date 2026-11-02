@@ -59,7 +59,8 @@ class MonthlyTabsTests(unittest.TestCase):
         with patch("app.monthly_view.monthly_view_ui.MonthlyViewLogic") as factory, \
              patch.object(MonthlyViewPage, "_load_initial_data"), \
              patch.object(MonthlyViewPage, "_setup_timer"), \
-             patch.object(MonthlyViewPage, "_reload_rows"):
+             patch.object(MonthlyViewPage, "_reload_rows"), \
+             patch("app.year_end.year_end_ui.list_year_end", return_value=[]):
             factory.return_value.aktualny_miesiac = "2026-09"
             page = MonthlyViewPage(1)
             try:

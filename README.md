@@ -337,3 +337,47 @@ telefon pracownika przez **Użytkownicy → Stopka**. Imię i nazwisko pochodzą
 pracownika. Zmiana globalnego wzoru obowiązuje w nowo otwieranych wiadomościach.
 Dawne indywidualne treści stopek pozostają w bazie, ale nowe wiadomości używają
 wspólnego wzoru. Wymagana jest aktualizacja schematu do `2026-11-02.1`.
+
+## Wystawianie i historia dokumentów
+
+W **Fakturach roboczych** zaznacz dokumenty i kliknij **Wystaw faktury**.
+Program nadaje numery, zapisuje wystawienie i otwiera zakładkę **Faktury wystawione**;
+nie pyta o plik Excel. Eksport XLSX do Saldeo jest osobną opcją dla wystawionych dokumentów.
+Wysyłka do KSeF pozostaje oddzielną czynnością.
+
+Wystawionych faktur nie usuwa się ani nie zmienia ich numerów. **Anuluj fakturę**
+wymaga przyczyny i zachowuje cały dokument, numer, autora i czas operacji.
+Dotyczy wyłącznie dokumentów niewprowadzonych do obrotu, bez historii płatności
+ani trwającej/przyjętej wysyłki KSeF; pozostałe dokumenty wymagają korekty.
+Anulowane dokumenty mają oznaczenie w tabeli i PDF, nie są rozliczane ani eksportowane.
+Raz zarezerwowany numer nie wraca do puli po usunięciu szkicu.
+Obliczenia pozycji korzystają z Decimal i zaokrąglania HALF_UP do groszy;
+nowe zapisy sum faktur są przechowywane jako NUMERIC(18,2).
+
+## Roczne rozliczenie według roku i wspólnika
+
+W karcie firmy, w sekcji **Roczne rozliczenie**, wybierz **Rok** i **Rozliczenie dla**
+(firma lub wspólnik), a następnie zaznacz odpowiednie deklaracje. Wspólników dodaje się
+w zakładce **Wspólnicy**. Przykład: dla 2025 r. Anna może mieć PIT-36, a Jan PIT-36L.
+Można zaznaczyć kilka deklaracji. Selekcje różnych lat i osób są niezależne;
+przełączanie zachowuje niezapisane zmiany, a przycisk zapisu firmy utrwala je razem.
+W zakończeniu roku deklaracja każdego wspólnika ma osobny stan złożenia, datę i UPO,
+także gdy oboje składają ten sam formularz.
+
+Istniejące ustawienia firmy są punktem wyjścia dla nieskonfigurowanych lat.
+Pierwsze otwarcie listy roku utrwala dostępne dane; program nie odtwarza nieznanej
+historii sprzed tej zmiany. Zapisane lata nie zmieniają się po zmianie danych lub statusu
+firmy. Zapisane złożenia pozostają widoczne również po odznaczeniu obowiązku.
+
+## Bezpieczny reset hasła
+
+**Nie pamiętam hasła** wysyła jednorazowy kod ważny 15 minut; dotychczasowe hasło
+pozostaje aktywne. W oknie logowania wybierz **Mam kod resetowania**, wklej kod i podaj
+nowe hasło dwukrotnie. Dopiero wykorzystanie kodu zmienia hasło i unieważnia zapisane
+sesje. W bazie przechowywany jest wyłącznie skrót kodu.
+
+Po instalacji tej wersji uruchom **Biuro – aktualizacja bazy** (`python migrate_db.py`).
+
+Katalog **Rocznego rozliczenia** zawiera także obowiązki ZUS (DRA/RCA — roczne zdrowotne,
+IWA, ZSWA, informacja roczna dla ubezpieczonego) oraz PFRON (DEK-R, INF-2).
+Pełna lista i sprawdzone źródła urzędowe: [docs/annual-declarations.md](docs/annual-declarations.md).

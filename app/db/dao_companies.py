@@ -83,7 +83,7 @@ FIRMA_FIELDS = [
 
     "ksiegowa_id",
     "kadrowa_id",
-    "rozliczenie_roczne", "deklaracje_dodatkowe",
+    "rozliczenie_roczne", "deklaracje_dodatkowe", "roczne_deklaracje",
 ]
 
 ASSIGNEE_FIELDS = {"ksiegowa_id": "firma:ksiegowa", "kadrowa_id": "firma:kadrowa"}

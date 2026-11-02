@@ -88,7 +88,9 @@ class SubmissionSafetyTests(DbTestCase):
         self.assertFalse(self.invoice()['ksef_status'])
 
     def test_draft_is_rejected_by_backend(self):
-        self.update(eksportowana=0)
+        self.invoice_id = dao_invoices.create_or_update_invoice(self.firma, '2026-10', [
+            {'nazwa': 'Usługa', 'ilosc': 1, 'cena_netto': 100, 'vat': 23}
+        ], 100, 123)
         with self.assertRaisesRegex(KsefError, 'wystawioną'):
             self.send()
         self.factory.assert_not_called()

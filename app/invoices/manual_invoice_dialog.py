@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QDate
+from PyQt6.QtCore import Qt, QDate, QThreadPool
 from PyQt6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget,
@@ -8,12 +8,16 @@ from PyQt6.QtWidgets import (
 )
 
 from app.db.dao_conn import get_conn
+from app.companies.company_lookup import lookup_company_by_nip
+from app.companies.company_logic import CEIDGWorker
 from app.utils.payment_terms import default_due_date
 from app.db.dao_kontrahenci import (
     delete_kontrahent, get_kontrahent, list_kontrahenci, save_kontrahent, search_kontrahenci,
 )
 from app.db.dao_invoices import create_manual_invoice
 from app.invoices.positions import normalize_position
+from app.invoices.service_picker import choose_service
+from app.invoices.vat_summary import VatSummary
 from app.utils.parsing import to_float
 
 
@@ -49,12 +53,77 @@ class KontrahentDialog(QDialog):
                               ("REGON:", self.regon), ("Adres:", self.adres), ("Kod pocztowy:", self.kod),
                               ("Miasto:", self.miasto), ("Kraj:", self.kraj), ("E-mail:", self.email), ("Telefon:", self.telefon)):
             layout.addRow(label, widget)
+        self.btn_lookup = QPushButton("Pobierz dane po NIP (GUS / CEIDG)")
+        self.btn_lookup.setToolTip("Wpisz NIP firmy. Pobrane dane możesz sprawdzić i zmienić przed zapisaniem.")
+        self.btn_lookup.clicked.connect(self._lookup_company)
+        layout.addRow("Dane rejestrowe:", self.btn_lookup)
+        self._lookup_worker = None
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("Zapisz")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        self.buttons = buttons
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+
+    def _lookup_company(self):
+        if self._lookup_worker is not None:
+            return
+        nip = "".join(ch for ch in self.nip.text() if ch.isdigit())
+        if len(nip) != 10:
+            QMessageBox.warning(self, "Dane kontrahenta", "Wpisz NIP firmy składający się z 10 cyfr.")
+            return
+        self._lookup_nip = nip
+        self._lookup_worker = CEIDGWorker(nip, self, fetch=lookup_company_by_nip)
+        self._lookup_worker.signals.result.connect(self._lookup_result)
+        self._lookup_worker.signals.error.connect(self._lookup_error)
+        self._lookup_worker.signals.finished.connect(self._lookup_finished)
+        self._set_lookup_busy(True)
+        QThreadPool.globalInstance().start(self._lookup_worker)
+
+    def _set_lookup_busy(self, busy):
+        self.btn_lookup.setEnabled(not busy)
+        self.btn_lookup.setText("Pobieranie…" if busy else "Pobierz dane po NIP (GUS / CEIDG)")
+        for widget in (self.typ, self.nazwa, self.nip, self.regon, self.adres, self.kod,
+                       self.miasto, self.kraj, self.email, self.telefon):
+            widget.setEnabled(not busy)
+        self.buttons.button(QDialogButtonBox.StandardButton.Save).setEnabled(not busy)
+
+    def _lookup_result(self, payload):
+        _, data = payload
+        if not data or data.get("error"):
+            QMessageBox.warning(self, "Dane kontrahenta", (data or {}).get("message") or "Nie znaleziono firmy.")
+            return
+        returned_nip = "".join(ch for ch in str(data.get("nip") or self._lookup_nip) if ch.isdigit())
+        if returned_nip != self._lookup_nip:
+            QMessageBox.warning(self, "Dane kontrahenta", "Rejestr zwrócił inny NIP. Dane nie zostały wczytane.")
+            return
+        address = data.get("adresDzialalnosci") or data.get("adres_dzialalnosci") or {}
+        street = data.get("dz_ulica") or address.get("ulica") or data.get("ulica") or ""
+        building = data.get("dz_budynek") or address.get("budynek") or ""
+        apartment = data.get("dz_lokal") or address.get("lokal") or ""
+        number = str(building) + (f"/{apartment}" if apartment else "")
+        street_address = " ".join(str(part) for part in (street, number) if part)
+        values = ((self.nazwa, data.get("nazwa")), (self.nip, returned_nip), (self.regon, data.get("regon")),
+                  (self.adres, street_address or data.get("adres")),
+                  (self.kod, data.get("dz_kod") or address.get("kod") or address.get("kodPocztowy") or data.get("kod")),
+                  (self.miasto, data.get("dz_miasto") or address.get("miasto") or data.get("miasto")),
+                  (self.kraj, data.get("dz_kraj") or address.get("kraj") or data.get("kraj")),
+                  (self.email, data.get("email") or data.get("kontaktEmail")),
+                  (self.telefon, data.get("telefon") or data.get("kontaktTelefon")))
+        for widget, value in values:
+            if value:
+                widget.setText(str(value))
+        self.typ.setCurrentIndex(self.typ.findData("firma"))
+        if data.get("_registry_warning"):
+            QMessageBox.warning(self, "Dane kontrahenta", "Pobrano dostępne dane. " + str(data["_registry_warning"]))
+
+    def _lookup_error(self, error):
+        QMessageBox.warning(self, "Dane kontrahenta", f"Nie udało się pobrać danych: {error}")
+
+    def _lookup_finished(self):
+        self._lookup_worker = None
+        self._set_lookup_busy(False)
 
     def values(self):
         return {"typ": self.typ.currentData(), "nazwa": self.nazwa.text(), "nip": self.nip.text(),
@@ -163,6 +232,9 @@ class ManualInvoiceDialog(QDialog):
         self.items.setHorizontalHeaderLabels(["Nazwa", "Ilo\u015B\u0107", "Jednostka", "Cena netto", "VAT %"])
         self.items.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.items)
+        self.vat_summary = VatSummary()
+        layout.addWidget(self.vat_summary)
+        self.items.itemChanged.connect(self._update_vat_summary)
         item_buttons = QHBoxLayout()
         add = QPushButton("Dodaj pozycj\u0119")
         remove = QPushButton("Usu\u0144 pozycj\u0119")
@@ -170,6 +242,9 @@ class ManualInvoiceDialog(QDialog):
         remove.clicked.connect(self._remove_item)
         item_buttons.addWidget(add)
         item_buttons.addWidget(remove)
+        self.btn_catalogue = QPushButton("Dodaj z katalogu usług")
+        self.btn_catalogue.clicked.connect(self._add_catalogue_service)
+        item_buttons.addWidget(self.btn_catalogue)
         item_buttons.addStretch()
         layout.addLayout(item_buttons)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -242,10 +317,32 @@ class ManualInvoiceDialog(QDialog):
         for column, value in enumerate(("", "1", "szt.", "0.00", "23")):
             self.items.setItem(row, column, QTableWidgetItem(value))
 
+    def _add_catalogue_service(self):
+        position = choose_service(self)
+        if position is None:
+            return
+        # Reuse the untouched placeholder instead of leaving an invalid blank line.
+        row = next((r for r in range(self.items.rowCount())
+                    if [self.items.item(r, c).text() if self.items.item(r, c) else "" for c in range(5)]
+                    == ["", "1", "szt.", "0.00", "23"]), None)
+        if row is None:
+            row = self.items.rowCount()
+            self._add_item()
+        for column, value in enumerate((position["nazwa"], f'{position["ilosc"]:g}', position["jednostka"],
+                                        f'{position["cena_netto"]:.2f}', position.get("vat_code") or f'{position["vat"]:g}')):
+            self.items.setItem(row, column, QTableWidgetItem(value))
+        self.items.item(row, 0).setData(Qt.ItemDataRole.UserRole, position)
+        self._update_vat_summary()
+        self.items.setCurrentCell(row, 0)
+
+    def _update_vat_summary(self, *_args):
+        self.vat_summary.set_positions(self._positions())
+
     def _remove_item(self):
         row = self.items.currentRow()
         if row >= 0:
             self.items.removeRow(row)
+            self._update_vat_summary()
 
     def _positions(self):
         positions = []
@@ -253,9 +350,9 @@ class ManualInvoiceDialog(QDialog):
             values = [self.items.item(row, col).text().strip() if self.items.item(row, col) else "" for col in range(5)]
             if not any(values):
                 continue
-            positions.append(normalize_position({"nazwa": values[0], "ilosc": to_float(values[1], 0),
+            positions.append(normalize_position({**(self.items.item(row, 0).data(Qt.ItemDataRole.UserRole) or {}), "nazwa": values[0], "ilosc": to_float(values[1], 0),
                                                  "jednostka": values[2] or "szt.", "cena_netto": to_float(values[3], 0),
-                                                 "vat": to_float(values[4], 0)}))
+                                                 "vat": values[4] or 0, "vat_code": values[4].strip().lower().replace("%", "").strip()}))
         return positions
 
     def _save(self):

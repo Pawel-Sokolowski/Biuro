@@ -1,18 +1,44 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
+
+# Hidden imports alone only produce warnings when a dependency is missing.
+# Stop the build instead of producing an executable without the bank parser.
+try:
+    import mt940
+    if not callable(getattr(mt940, "parse", None)):
+        raise ImportError("The installed mt940 module has no parse() function")
+except ImportError as exc:
+    raise SystemExit(
+        "MT940 parser unavailable. Use the build interpreter to run: "
+        "python -m pip install -r requirements.txt"
+    ) from exc
+
+try:
+    import qrcode.image.pil
+    import lxml.etree
+except ImportError as exc:
+    raise SystemExit(
+        "Invoice PDF/KSeF dependencies unavailable. Run: "
+        "python -m pip install -r requirements.txt"
+    ) from exc
 
 ROOT = Path(SPEC).resolve().parent.parent
 APP = ROOT / "app"
 
 datas = [
     (str(APP / "icons"), "app/icons"),
+    (str(APP / "invoices" / "schemas"), "app/invoices/schemas"),
 ]
 CALDAV_PACKAGES = ["caldav", "icalendar", "icalendar_searcher", "recurring_ical_events", "niquests", "lxml"]
 for pkg in CALDAV_PACKAGES:
     datas += collect_data_files(pkg)
 # psycopg 3 + wbudowana libpq (psycopg_binary) - bez tego aplikacja nie polaczy sie z PostgreSQL
 binaries = []
+mt940_datas, mt940_binaries, mt940_hidden = collect_all("mt940")
+datas += mt940_datas
+datas += copy_metadata("mt-940")
+binaries += mt940_binaries
 PSYCOPG_HIDDEN = []
 pkg_datas, pkg_binaries, pkg_hidden = collect_all("psycopg")
 datas += pkg_datas
@@ -36,6 +62,11 @@ a = Analysis(
     datas=datas,
     hiddenimports=[
         *collect_submodules("app"),
+        *mt940_hidden,
+        "encodings.utf_8_sig",
+        "encodings.cp1250",
+        "encodings.iso8859_2",
+        "encodings.cp852",
         *PSYCOPG_HIDDEN,
         *[m for pkg in CALDAV_PACKAGES
           for m in collect_submodules(
@@ -50,6 +81,8 @@ a = Analysis(
         "dotenv",
         "xlsxwriter",
         "dateutil",
+        "qrcode.image.pil",
+        "PIL.PngImagePlugin",
         "imaplib",
         "smtplib",
     ],

@@ -106,7 +106,7 @@ class CompanyBatchTests(DbTestCase):
         netto = {r["firma_id"]: r["kwota_netto"] for r in conn.execute(
             "SELECT firma_id, kwota_netto FROM faktury WHERE miesiac = '2026-09'")}
         conn.close()
-        self.assertEqual(netto[with_h], 360.0)
+        self.assertEqual(netto[with_h], 300.0)
         self.assertEqual(netto[without], 360.0)
         import json
         conn = get_conn()

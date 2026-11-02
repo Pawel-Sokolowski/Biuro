@@ -219,7 +219,7 @@ class HoverScrollTextEdit(QTextEdit):
         self.setMaximumHeight(120)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setStyleSheet("QTextEdit { background: #f9f9f9; }")
+        self.setStyleSheet("QTextEdit { background: palette(base); }")
 
     def set_text(self, text: str):
         self.setPlainText(text or "")

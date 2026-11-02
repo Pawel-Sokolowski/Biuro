@@ -304,7 +304,43 @@ def attachment_output_path(
     return str((root / f"{uuid.uuid4().hex}_{safe_name}").resolve())
 
 
+RISKY_EXTENSIONS = frozenset({
+    "exe", "com", "scr", "pif", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse",
+    "wsf", "wsh", "hta", "lnk", "url", "jar", "msi", "msp", "reg", "dll", "cpl", "iso",
+    "img", "vhd", "chm", "docm", "xlsm", "pptm", "dotm", "xlam", "ppam", "sh", "appx",
+    "msix", "gadget", "inf", "scf", "application", "settingcontent-ms",
+})
+
+_WINDOWS_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
+
+def safe_attachment_name(filename: Optional[str], default: str = "zalacznik") -> str:
+    """Nazwa pliku bezpieczna na Windows: bez ścieżek, strumieni ADS, znaków sterujących i nazw zarezerwowanych."""
+    raw = str(filename or "").replace("\\", "/").split("/")[-1]
+    raw = "".join(c for c in raw if ord(c) >= 32 and c not in '<>:"|?*')
+    raw = raw.strip(" .")
+    if not raw:
+        return default
+    stem = raw.split(".")[0].strip().lower()
+    if stem in _WINDOWS_RESERVED:
+        raw = "_" + raw
+    return raw[:200]
+
+
+def is_risky_attachment(filename: Optional[str]) -> bool:
+    """Wykrywa niebezpieczne rozszerzenie w dowolnym segmencie (np. faktura.pdf.exe)."""
+    parts = safe_attachment_name(filename).lower().split(".")[1:]
+    return any(p.strip() in RISKY_EXTENSIONS for p in parts)
+
+
 __all__ = [
+    "RISKY_EXTENSIONS",
+    "safe_attachment_name",
+    "is_risky_attachment",
     "SERVER_TO_LOCAL",
     "LOCAL_TO_SERVER",
     "normalize_folder_name",

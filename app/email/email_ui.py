@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import email
 import tempfile
 import threading
@@ -28,7 +29,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QCoreApplication, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont, QKeySequence, QShortcut, QDesktopServices
 QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
-from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PyQt6.QtWebEngineCore import (
+    QWebEnginePage,
+    QWebEngineProfile,
+    QWebEngineSettings,
+    QWebEngineUrlRequestInterceptor,
+)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from app.db.dao_app_settings import get_setting, set_setting
@@ -88,7 +94,9 @@ from app.email.email_helpers import (
     folder_role,
     get_attachments,
     inline_resources,
+    is_risky_attachment,
     iter_message_attachments,
+    safe_attachment_name,
 )
 import logging
 
@@ -250,31 +258,68 @@ def build_folder_tree(folders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return roots
 
 
+class _RemoteContentBlocker(QWebEngineUrlRequestInterceptor):
+    """Blokuje zdalne zasoby (piksele śledzące, obrazy, CSS) dopóki użytkownik ich nie zaakceptuje."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.allow_remote = False
+
+    def interceptRequest(self, info) -> None:
+        if not self.allow_remote and info.requestUrl().scheme().lower() in ("http", "https", "ftp"):
+            info.block(True)
+
+
 class _MailWebPage(QWebEnginePage):
     def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+        scheme = url.scheme().lower()
         if navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
-            if url.scheme().lower() in ("http", "https", "mailto"):
+            if scheme == "biuro-images":
+                view = self.parent()
+                if hasattr(view, "load_remote_images"):
+                    view.load_remote_images()
+            elif scheme in ("http", "https", "mailto"):
                 QDesktopServices.openUrl(url)
             return False
-        return url.scheme().lower() in ("about", "data", "http", "https")
+        return scheme in ("about", "data")
 
 
 class MailBrowser(QWebEngineView):
-    """Podgląd HTML wiadomości w Chromium; JavaScript i dostęp do plików są wyłączone."""
+    """Podgląd HTML wiadomości w Chromium; JavaScript, pliki i zdalne zasoby są domyślnie blokowane."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.resources: Dict[str, Any] = {}
-        self.setPage(_MailWebPage(self))
+        self._last_html = ""
+        self._last_header = ""
+        # Osobny profil bez zapisu na dysku, żeby blokada nie dotyczyła innych widoków aplikacji.
+        self._profile = QWebEngineProfile(self)
+        self._blocker = _RemoteContentBlocker(self)
+        self._profile.setUrlRequestInterceptor(self._blocker)
+        self.setPage(_MailWebPage(self._profile, self))
+        self.page().setBackgroundColor(QColor("white"))
         settings = self.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, False)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
 
+    def load_remote_images(self) -> None:
+        self._blocker.allow_remote = True
+        self.setHtml(self.prepare_html(self._last_html, self.resources, self._last_header))
+
     def show_html(self, html: str, header: str = "") -> None:
+        self._blocker.allow_remote = False
+        self._last_html, self._last_header = html, header
+        if re.search(r"(?i)(https?:)?//[^\s\"'<>)]+", html or "") and re.search(
+            r"(?i)<img\b|url\(|<link\b", html or ""
+        ):
+            header += (
+                "<div style='margin:4px 0'><a href='biuro-images:load'>"
+                "Zdalne obrazy zablokowane – kliknij, aby załadować</a></div>"
+            )
         self.setHtml(self.prepare_html(html, self.resources, header))
 
     def setPlainText(self, text: str) -> None:
@@ -701,7 +746,6 @@ class EmailPage(QWidget):
         self.folder_tree.currentItemChanged.connect(
             self._on_folder_current_changed
         )
-        self.folder_tree.currentItemChanged.connect(self._on_folder_current_changed)
         self.folder_tree.mails_dropped.connect(self._on_mails_dropped)
         self.folder_tree.folder_dropped.connect(self._on_folder_dropped)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1977,8 +2021,18 @@ class EmailPage(QWidget):
 
         self._loading_message_key = load_key
 
-        self._clear_view()
-        self.mail_view.setPlainText("Pobieranie wiadomości…")
+        # Stary podgląd zostaje do czasu nadejścia nowej treści – kolejne setHtml("")
+        # i "Pobieranie…" powodowały czarne mignięcie na starszych komputerach.
+        self.mail_view.resources = {}
+        self.att_bar.hide()
+        self.att_list.hide()
+        self.att_list.clear()
+        QTimer.singleShot(
+            400,
+            lambda: self._loading_message_key == load_key
+            and token == self._load_token
+            and self.mail_view.setPlainText("Pobieranie wiadomości…"),
+        )
 
         def show(msg) -> None:
             if token != self._load_token:
@@ -2175,8 +2229,20 @@ class EmailPage(QWidget):
             return
 
         def name_of(part) -> str:
-            raw = part.get_filename() or "zalacznik"
-            return os.path.basename(str(raw)) or "zalacznik"
+            return safe_attachment_name(part.get_filename())
+
+        risky = [name_of(p) for _, p in chosen if is_risky_attachment(name_of(p))]
+        if risky:
+            answer = QMessageBox.warning(
+                self,
+                "Potencjalnie niebezpieczny załącznik",
+                "Ten typ pliku może uruchamiać kod:\n\n" + "\n".join(risky[:10])
+                + "\n\nZapisz tylko, jeśli ufasz nadawcy. Kontynuować?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
         saved = 0
         if len(chosen) == 1:
@@ -2257,20 +2323,34 @@ class EmailPage(QWidget):
         index = item.data(Qt.ItemDataRole.UserRole)
         parts = self._attachment_parts()
         part = parts[index] if isinstance(index, int) and 0 <= index < len(parts) else None
-        is_pdf = part is not None and (
-            part.get_content_type() == "application/pdf"
-            or str(part.get_filename() or "").lower().endswith(".pdf")
-        )
+        is_pdf = part is not None and self._is_safe_pdf_part(part)
         if is_pdf and self._open_attachment_externally(part):
             return
         self.save_attachments([index])
 
-    def _open_attachment_externally(self, part) -> bool:
-        name = os.path.basename(str(part.get_filename() or "zalacznik.pdf")) or "zalacznik.pdf"
-        directory = tempfile.mkdtemp(prefix="biuro_zal_")
-        path = os.path.join(directory, name)
-        if not self._write_attachment(part, path):
+    @staticmethod
+    def _is_safe_pdf_part(part) -> bool:
+        """PDF tylko gdy MIME, ostatnie rozszerzenie i zawartość (%PDF-) są zgodne."""
+        if part.get_content_type() != "application/pdf":
             return False
+        name = os.path.basename(str(part.get_filename() or "")).strip().lower()
+        if not name.endswith(".pdf"):
+            return False
+        payload = part.get_payload(decode=True)
+        return bool(payload) and len(payload) <= 50 * 1024 * 1024 and payload.startswith(b"%PDF-")
+
+    def _open_attachment_externally(self, part) -> bool:
+        # Nazwa pliku od nadawcy nigdy nie trafia na dysk – zawsze stała nazwa .pdf.
+        if not self._is_safe_pdf_part(part):
+            return False
+        directory = tempfile.mkdtemp(prefix="biuro_zal_")
+        path = os.path.join(directory, "zalacznik.pdf")
+        if not self._write_attachment(part, path):
+            shutil.rmtree(directory, ignore_errors=True)
+            return False
+        QTimer.singleShot(
+            10 * 60 * 1000, lambda: shutil.rmtree(directory, ignore_errors=True)
+        )
         return QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def on_manual_sync(self) -> None:

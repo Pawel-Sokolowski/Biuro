@@ -43,29 +43,46 @@ def company_declarations(company: dict) -> List[str]:
     return codes
 
 
+def _seed_company_snapshot(conn, year: int, company: dict) -> None:
+    company = dict(company)
+    if conn.execute(
+        "SELECT 1 FROM year_end_snapshots WHERE rok = %s AND firma_id = %s",
+        (year, company["id"]),
+    ).fetchone():
+        return
+    codes = company_declarations(company)
+    for saved in conn.execute(
+        "SELECT deklaracja FROM zakonczenie_roku "
+        "WHERE firma_id = %s AND rok = %s AND owner_key = 0",
+        (company["id"], year),
+    ).fetchall():
+        if saved[0] not in codes:
+            codes.append(saved[0])
+    company["declaration_codes"] = codes
+    conn.execute(
+        "INSERT INTO year_end_snapshots(rok, firma_id, company_json) "
+        "VALUES (%s, %s, %s) ON CONFLICT (rok, firma_id) DO NOTHING",
+        (year, company["id"], json.dumps(company, ensure_ascii=False, default=str)),
+    )
+
+
 def list_year_end(year: int) -> List[Dict]:
     """Use a durable snapshot of each year's company obligations."""
     conn = get_conn()
     try:
         conn.execute("SELECT pg_advisory_xact_lock(748204)")
-        exists = conn.execute("SELECT 1 FROM year_end_snapshot_years WHERE rok = %s", (year,)).fetchone()
-        if not exists:
-            # Include inactive companies with previously recorded filings too.
-            companies = conn.execute("""
-                SELECT id, nazwa, nazwa_skrocona, nip, forma_opodatkowania, forma_dzialalnosci,
-                       rozliczenie_roczne, deklaracje_dodatkowe, roczne_deklaracje FROM firmy
-                WHERE COALESCE(status, 'Aktywne') = 'Aktywne'
-                   OR id IN (SELECT firma_id FROM zakonczenie_roku WHERE rok = %s)
-            """, (year,)).fetchall()
-            for row in companies:
-                company = dict(row)
-                codes = company_declarations(company)
-                for saved_code in conn.execute("SELECT deklaracja FROM zakonczenie_roku WHERE firma_id = %s AND rok = %s AND owner_key = 0", (company["id"], year)).fetchall():
-                    if saved_code[0] not in codes:
-                        codes.append(saved_code[0])
-                company["declaration_codes"] = codes
-                conn.execute("INSERT INTO year_end_snapshots(rok, firma_id, company_json) VALUES (%s, %s, %s) ON CONFLICT (rok, firma_id) DO NOTHING", (year, company["id"], json.dumps(company, ensure_ascii=False)))
-            conn.execute("INSERT INTO year_end_snapshot_years(rok) VALUES (%s)", (year,))
+        companies_to_seed = conn.execute("""
+            SELECT * FROM firmy
+            WHERE COALESCE(status, 'Aktywne') = 'Aktywne'
+               OR id IN (SELECT firma_id FROM zakonczenie_roku WHERE rok = %s)
+               OR id IN (SELECT firma_id FROM owner_year_declarations WHERE rok = %s)
+        """, (year, year)).fetchall()
+        for row in companies_to_seed:
+            _seed_company_snapshot(conn, year, dict(row))
+        conn.execute(
+            "INSERT INTO year_end_snapshot_years(rok) VALUES (%s) ON CONFLICT DO NOTHING",
+            (year,),
+        )
         companies = [json.loads(row[0]) for row in conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s ORDER BY firma_id", (year,)).fetchall()]
         owners = [dict(r) for r in conn.execute("SELECT * FROM owner_year_declarations WHERE rok = %s", (year,)).fetchall()]
         conn.commit()
@@ -81,8 +98,6 @@ def list_year_end(year: int) -> List[Dict]:
         for code in company.get("declaration_codes", company_declarations(company)):
             declarations.append({"kod": code, **saved.get((company["id"], code, 0), {})})
         owner_rows = [r for r in owners if r["firma_id"] == company["id"]]
-        owner_codes = {code for r in owner_rows for code in json.loads(r["declarations_json"])}
-        declarations = [d for d in declarations if d["kod"] not in owner_codes or (company["id"], d["kod"], 0) in saved]
         for owner in owner_rows:
             codes = json.loads(owner["declarations_json"])
             codes += [code for (fid, code, oid) in saved if fid == company["id"] and oid == owner["owner_id"] and code not in codes]
@@ -158,7 +173,10 @@ def save_company_year_declarations(firma_id: int, selections: dict[int, list[str
             if not 2000 <= int(year) <= 2100:
                 raise ValueError("Nieprawidłowy rok.")
             row = conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s AND firma_id = %s FOR UPDATE", (year, firma_id)).fetchone()
-            snapshot = json.loads(row[0]) if row else {k: company[k] for k in ("id", "nazwa", "nazwa_skrocona", "nip", "forma_opodatkowania", "forma_dzialalnosci")}
+            if not row:
+                _seed_company_snapshot(conn, year, dict(company))
+                row = conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s AND firma_id = %s FOR UPDATE", (year, firma_id)).fetchone()
+            snapshot = json.loads(row[0])
             codes = list(dict.fromkeys(codes))
             # Recorded filings remain visible even after an obligation is unticked.
             for saved in conn.execute("SELECT deklaracja FROM zakonczenie_roku WHERE rok = %s AND firma_id = %s AND owner_key = 0", (year, firma_id)).fetchall():
@@ -185,15 +203,13 @@ def save_owner_year_declarations(firma_id, selections, actor_id):
         for (year, owner_id), codes in selections.items():
             if not 2000 <= int(year) <= 2100:
                 raise ValueError("Nieprawidłowy rok.")
-            company = conn.execute("SELECT id,nazwa,nazwa_skrocona,nip,forma_opodatkowania,forma_dzialalnosci FROM firmy WHERE id=%s", (firma_id,)).fetchone()
+            company = conn.execute("SELECT * FROM firmy WHERE id=%s", (firma_id,)).fetchone()
             if not company:
                 raise ValueError("Nie znaleziono firmy.")
-            snapshot = dict(company)
-            snapshot["declaration_codes"] = []
-            conn.execute("INSERT INTO year_end_snapshots(rok,firma_id,company_json) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", (year,firma_id,json.dumps(snapshot,ensure_ascii=False)))
             owner = conn.execute("SELECT imie_pierwsze, nazwisko FROM udzialowcy WHERE firma_id=%s AND id=%s", (firma_id, owner_id)).fetchone()
             if not owner:
                 raise ValueError("Nie znaleziono wspólnika tej firmy.")
+            _seed_company_snapshot(conn, year, dict(company))
             name = " ".join(filter(None, owner)) or f"Wspólnik #{owner_id}"
             conn.execute("INSERT INTO owner_year_declarations(firma_id, rok, owner_id, owner_name, declarations_json) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (firma_id,rok,owner_id) DO UPDATE SET declarations_json=EXCLUDED.declarations_json", (firma_id, year, owner_id, name, json.dumps(codes)))
             conn.execute("INSERT INTO audit_log(tabela,rekord_id,akcja,uzytkownik_id,szczegoly) VALUES ('owner_year_declarations',%s,'edycja',%s,%s)", (firma_id, actor_id, json.dumps({"year":year,"owner_id":owner_id,"declarations":codes})))

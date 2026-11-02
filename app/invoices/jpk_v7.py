@@ -75,7 +75,7 @@ def build_jpk_v7m(invoices, seller, year, month, office_code, system_name="Biuro
     total_tax = Decimal("0")
     for number, invoice in enumerate(invoices, 1):
         sums = {}
-        for group in vat_summary(invoice.get("positions") or []):
+        for group in vat_summary(invoice.get("positions") or [], accepted_amounts=True):
             fields = RATE_FIELDS.get(group["code"])
             if not fields:
                 raise JpkError("Nieobsługiwana stawka VAT %s na fakturze %s." % (group["code"], invoice.get("numer")))

@@ -54,7 +54,8 @@ def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT * FROM faktury WHERE firma_id = %s AND miesiac = %s AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0",
+            "SELECT * FROM faktury WHERE firma_id = %s AND miesiac = %s AND rodzaj = 'faktura' "
+            "AND COALESCE(reczna, 0) = 0 AND cancelled_at IS NULL",
             (firma_id, miesiac),
         )
         row = cur.fetchone()
@@ -139,12 +140,13 @@ def _backfill_extra_service_allocations(conn, firma_id: int, miesiac: str) -> No
     ).fetchall()]
     allocations = {row["extra_service_row_id"]: row["invoice_id"] for row in conn.execute(
         "SELECT a.* FROM faktury_uslugi_dodatkowe a JOIN faktury f ON f.id = a.invoice_id "
-        "WHERE f.firma_id = %s AND f.miesiac = %s", (firma_id, miesiac),
+        "WHERE f.firma_id = %s AND f.miesiac = %s AND f.cancelled_at IS NULL",
+        (firma_id, miesiac),
     ).fetchall()}
     ledger_by_id = {row["id"]: row for row in ledger}
     for invoice in conn.execute(
         "SELECT id, pozycje_json FROM faktury WHERE firma_id = %s AND miesiac = %s "
-        "AND rodzaj = 'faktura' ORDER BY id", (firma_id, miesiac),
+        "AND rodzaj = 'faktura' AND cancelled_at IS NULL ORDER BY id", (firma_id, miesiac),
     ).fetchall():
         try:
             positions = json.loads(invoice["pozycje_json"] or "[]")
@@ -1248,9 +1250,14 @@ def _assign_invoice_number(conn, invoice_id: int) -> str:
         prefix = "KFV" if row["rodzaj"] == "korekta" else "FV"
         suffix = f"/{issued.month:02d}/{issued.year}"
         pattern = re.compile(rf"^{prefix}/(\d+){suffix}$")
-        existing = conn.execute("SELECT numer FROM invoice_number_ledger UNION SELECT numer FROM faktury").fetchall()
+        existing = conn.execute(
+            "SELECT numer FROM invoice_number_ledger UNION "
+            "SELECT numer FROM faktury WHERE cancelled_at IS NULL"
+        ).fetchall()
         used = [int(m.group(1)) for r in existing if (m := pattern.match(r[0] or ""))]
         numer = f"{prefix}/{max(used, default=0) + 1:04d}{suffix}"
+    if row["cancelled_at"]:
+        raise InvoiceLockedError("Anulowanej faktury nie można ponownie wystawić.")
     _reserve_number(conn, invoice_id, numer)
     conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", (numer, invoice_id))
     return numer
@@ -1261,7 +1268,10 @@ def _reserve_number(conn, invoice_id, numer):
         return
     conn.execute("SELECT pg_advisory_xact_lock(748202)")
     existing = conn.execute("SELECT invoice_id FROM invoice_number_ledger WHERE numer = %s", (numer,)).fetchone()
-    duplicate = conn.execute("SELECT id FROM faktury WHERE numer = %s AND id <> %s", (numer, invoice_id)).fetchone()
+    duplicate = conn.execute(
+        "SELECT id FROM faktury WHERE numer = %s AND id <> %s AND cancelled_at IS NULL",
+        (numer, invoice_id),
+    ).fetchone()
     if duplicate or (existing and existing[0] != invoice_id):
         raise ValueError("Ten numer faktury jest już zajęty lub był używany wcześniej.")
     conn.execute("INSERT INTO invoice_number_ledger(numer, invoice_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (numer, invoice_id))
@@ -1291,6 +1301,8 @@ def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
         row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not row or not row["eksportowana"]:
             raise InvoiceLockedError("Wybierz wystawioną fakturę.")
+        if not can_access_invoice(actor_id, row["firma_id"]):
+            raise PermissionError("Brak dostępu do wybranej faktury.")
         if row["cancelled_at"]:
             raise InvoiceLockedError("Faktura jest już anulowana.")
         if row["ksef_numer"] or row["ksef_status"] in ("wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta"):
@@ -1299,4 +1311,9 @@ def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
             raise InvoiceLockedError("Faktura ma historię płatności. Użyj korekty.")
         archive_invoice_positions(conn, dict(row))
         conn.execute("UPDATE faktury SET status = 'anulowana', cancelled_reason = %s, cancelled_by = %s, cancelled_at = now() WHERE id = %s", (reason.strip(), actor_id, invoice_id))
+        conn.execute("DELETE FROM faktury_uslugi_dodatkowe WHERE invoice_id = %s", (invoice_id,))
+        conn.execute(
+            "DELETE FROM invoice_number_ledger WHERE numer = %s AND invoice_id = %s",
+            (row["numer"], invoice_id),
+        )
         conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('faktury', %s, 'anulowanie', %s, %s)", (invoice_id, actor_id, reason.strip()))

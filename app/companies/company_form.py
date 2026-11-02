@@ -1507,6 +1507,11 @@ class CompanyForm(QDialog):
 
         rows = get_partners(self.firma_id)
         selected_owner = self.annual_owner.currentData()
+        owner_ids = {owner["id"] for owner in rows}
+        self._owner_annual_edits = {
+            key: value for key, value in self._owner_annual_edits.items()
+            if key[1] in owner_ids
+        }
         self.annual_owner.blockSignals(True)
         self.annual_owner.clear()
         self.annual_owner.addItem("Firma", 0)
@@ -1515,6 +1520,8 @@ class CompanyForm(QDialog):
             self.annual_owner.addItem(name, owner["id"])
         self.annual_owner.setCurrentIndex(max(0, self.annual_owner.findData(selected_owner)))
         self.annual_owner.blockSignals(False)
+        if self.annual_owner.currentData() != selected_owner:
+            self._annual_year_changed(self.annual_year.value())
         self.partners_table.setRowCount(0)
 
         for r in rows:

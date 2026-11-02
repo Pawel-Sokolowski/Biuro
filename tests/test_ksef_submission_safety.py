@@ -95,6 +95,26 @@ class SubmissionSafetyTests(DbTestCase):
             self.send()
         self.factory.assert_not_called()
 
+    def test_atomic_submission_reservation_excludes_cancelled_invoice(self):
+        invoice = {
+            'numer': 'FV/001/09/2026', 'kwota_brutto': 123, 'eksportowana': 1,
+            'ksef_numer': None, 'ksef_status': None, 'waluta': 'PLN',
+        }
+        row = mock.Mock()
+        row.fetchone.return_value = None
+        conn = mock.Mock()
+        conn.execute.return_value = row
+        with mock.patch.object(submission, '_authorized_invoice', return_value=invoice), \
+                mock.patch.object(submission, 'inspect_fa3_xml', return_value={}), \
+                mock.patch.object(submission, '_validate_invoice_xml', return_value='1234567890'), \
+                mock.patch.object(submission, 'get_setting', return_value='test'), \
+                mock.patch.object(submission, 'client_from_settings'), \
+                mock.patch.object(submission, 'get_conn', return_value=conn):
+            with self.assertRaisesRegex(KsefError, 'już wysyłana'):
+                submission._send_invoice_bytes(self.invoice_id, b'<xml/>', 1)
+        reservation_sql = conn.execute.call_args.args[0]
+        self.assertIn('cancelled_at IS NULL', reservation_sql)
+
     def test_certificate_without_token_configures_the_application(self):
         from app.invoices import ksef_credentials
         from tests.test_ksef_credentials import make_pair

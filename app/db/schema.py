@@ -1322,9 +1322,13 @@ def init_db():
             numer TEXT PRIMARY KEY, invoice_id INTEGER NOT NULL,
             reserved_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
+        DELETE FROM invoice_number_ledger
+        WHERE invoice_id IN (SELECT id FROM faktury WHERE cancelled_at IS NOT NULL);
+        DELETE FROM faktury_uslugi_dodatkowe
+        WHERE invoice_id IN (SELECT id FROM faktury WHERE cancelled_at IS NOT NULL);
         INSERT INTO invoice_number_ledger(numer, invoice_id)
         SELECT DISTINCT ON (numer) numer, id FROM faktury
-        WHERE COALESCE(TRIM(numer), '') <> '' ORDER BY numer, id
+        WHERE COALESCE(TRIM(numer), '') <> '' AND cancelled_at IS NULL ORDER BY numer, id
         ON CONFLICT DO NOTHING;
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             token_hash TEXT PRIMARY KEY, employee_id INTEGER NOT NULL
@@ -1336,6 +1340,12 @@ def init_db():
             company_json TEXT NOT NULL, PRIMARY KEY (rok, firma_id)
         );
         CREATE TABLE IF NOT EXISTS year_end_snapshot_years (rok INTEGER PRIMARY KEY);
+    """)
+    cur.execute("""
+        DROP INDEX IF EXISTS ux_faktury_firma_miesiac;
+        CREATE UNIQUE INDEX ux_faktury_firma_miesiac
+        ON faktury(firma_id, miesiac)
+        WHERE rodzaj = 'faktura' AND reczna = 0 AND cancelled_at IS NULL;
     """)
     _safe_alter_add_column(cur, "zakonczenie_roku", "owner_key INTEGER NOT NULL DEFAULT 0")
     cur.execute("""

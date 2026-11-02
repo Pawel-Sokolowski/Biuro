@@ -69,6 +69,14 @@ class ReviewInvoiceIntegrityTests(unittest.TestCase):
         self.assertIn(INVOICE['numer'], html)
         self.assertIn('Zwrot', html)
 
+    def test_fa3_keeps_historical_line_amounts_when_unit_price_is_missing(self):
+        invoice = {**INVOICE, 'kwota_netto': 10, 'kwota_brutto': 12.3}
+        position = {'nazwa': 'Usługa archiwalna', 'ilosc': 3, 'netto': 10, 'brutto': 12.3, 'vat': 23}
+        root = etree.fromstring(build_fa3_xml(invoice, [position], SELLER))
+        self.assertEqual(root.xpath('string(//*[local-name()="P_13_1"])'), '10.00')
+        self.assertEqual(root.xpath('string(//*[local-name()="P_15"])'), '12.30')
+        self.assertEqual(root.xpath('string(//*[local-name()="P_11"])'), '10.00')
+
     def test_cash_method_precedence_invoice_company_global(self):
         settings = {'faktury_sprzedawca_nip':SELLER['nip'], 'ksef_nip':SELLER['nip'], 'faktury_sprzedawca_kraj':'PL', 'faktury_sprzedawca_adres':SELLER['address'], 'faktury_sprzedawca_nazwa':SELLER['name']}
         cases = [('', None, 'tak', '1'), ('', 'X', 'false', '1'), ('', '0', 'true', '2'), ('nie', '1', 'true', '2'), ('true', '0', 'false', '1'), (None, None, '', '2')]

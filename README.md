@@ -283,3 +283,19 @@ scripts\        narzędzia pomocnicze
 installer\      instalator Inno Setup
 docs\screenshots\  zrzuty ekranu do README
 ```
+
+### Wspólna stopka poczty i dane pracownika
+
+W **Ustawienia → Konta e-mail → Globalny wzór stopki…** administrator edytuje
+wspólny wzór. Pola `{imie}`, `{nazwisko}` i `{telefon}` są zastępowane danymi
+pracownika piszącego wiadomość, niezależnie od konta nadawcy. Wzór można
+uzupełnić zdjęciem lub logo przez wklejenie obrazu albo **Dodaj zdjęcie / logo…**.
+Obrazy są zapisywane w szablonie, a przy wysyłce dołączane do HTML jako obrazy MIME/CID.
+
+Stopkę widać od razu w treści nowej wiadomości, odpowiedzi i przekazania.
+Przycisk **Moja stopka…** umożliwia zapisanie własnego telefonu i pokazuje podgląd;
+zmiana telefonu aktualizuje stopkę w otwartym edytorze. Administrator może zmienić
+telefon pracownika przez **Użytkownicy → Stopka**. Imię i nazwisko pochodzą z konta
+pracownika. Zmiana globalnego wzoru obowiązuje w nowo otwieranych wiadomościach.
+Dawne indywidualne treści stopek pozostają w bazie, ale nowe wiadomości używają
+wspólnego wzoru. Wymagana jest aktualizacja schematu do `2026-11-02.1`.

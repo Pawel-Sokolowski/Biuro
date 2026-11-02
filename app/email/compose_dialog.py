@@ -4,7 +4,7 @@ import os
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QFont, QTextCursor
+from PyQt6.QtGui import QAction, QFont, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QComboBox,
     QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QTextEdit,
@@ -122,6 +122,7 @@ class ComposeDialog(QDialog):
         from app.email.signature import get_employee_signature, merge_signature
 
         sig_text, sig_html = get_employee_signature(self.pracownik_id)
+        self._signature_html = sig_html
         return merge_signature(html, body, sig_html, sig_text) or html
 
     def _edit_signature(self) -> None:
@@ -129,9 +130,26 @@ class ComposeDialog(QDialog):
         from app.email.signature_editor import SignatureDialog
 
         info = get_employee_info(self.pracownik_id) or {}
-        SignatureDialog(
-            self.pracownik_id, info.get("imie", ""), info.get("nazwisko", ""), self
-        ).exec()
+        dialog = SignatureDialog(self.pracownik_id, info.get("imie", ""), info.get("nazwisko", ""), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            from app.email.signature import get_employee_signature
+            _, updated = get_employee_signature(self.pracownik_id)
+            self._refresh_signature(updated)
+
+    def _refresh_signature(self, updated):
+        previous = QTextDocument()
+        previous.setHtml(getattr(self, "_signature_html", ""))
+        old_text = previous.toPlainText()
+        body = self.body_edit.toPlainText()
+        start = body.find(old_text) if old_text else -1
+        if start >= 0:
+            # QTextCursor positions count UTF-16 code units, unlike Python strings.
+            cursor = self.body_edit.textCursor()
+            cursor.setPosition(len(body[:start].encode("utf-16-le")) // 2)
+            cursor.setPosition(len(body[:start + len(old_text)].encode("utf-16-le")) // 2,
+                               QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertHtml(updated)
+            self._signature_html = updated
 
     def _build_format_bar(self) -> QToolBar:
         bar = QToolBar()

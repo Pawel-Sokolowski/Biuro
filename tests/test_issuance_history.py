@@ -9,11 +9,11 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     assign_invoice_number, cancel_invoice, create_or_update_invoice, delete_draft_invoice,
-    delete_issued_invoice, get_invoice_by_id, InvoiceLockedError, list_invoices,
+    delete_issued_invoice, get_invoice_by_id, get_invoice_for_company_month, InvoiceLockedError, list_invoices,
     mark_exported, set_invoice_number,
 )
 from app.db.dao_year_end import list_year_end, set_company_declarations
-from app.invoices.positions import normalize_position, totals
+from app.invoices.positions import normalize_position, reverse_positions, totals
 from tests.base import DbTestCase
 
 POSITION = {"nazwa": "Usługa", "ilosc": 1, "cena_netto": 10, "vat": 23}
@@ -60,6 +60,25 @@ class InvoiceHistoryTests(DbTestCase):
                 with get_conn() as conn:
                     conn.execute(sql, (invoice,))
 
+    def test_cancel_releases_number_for_another_invoice(self):
+        first = self.draft("Anulowany")
+        mark_exported([first], 1)
+        number = get_invoice_by_id(first)["numer"]
+        cancel_invoice(first, 1, "Dokument archiwalny")
+
+        second = self.draft("Nowy klient")
+        self.assertEqual(assign_invoice_number(second), number)
+        self.assertEqual(get_invoice_by_id(first)["numer"], number)
+
+    def test_cancel_requires_access_to_the_locked_invoice(self):
+        invoice = self.draft()
+        mark_exported([invoice], 1)
+        with patch("app.db.dao_invoices.can", return_value=True), \
+                patch("app.db.dao_invoices.can_access_invoice", return_value=False):
+            with self.assertRaises(PermissionError):
+                cancel_invoice(invoice, 999, "Niedozwolone")
+        self.assertIsNone(get_invoice_by_id(invoice)["cancelled_at"])
+
     def test_ui_issues_without_a_file_dialog(self):
         from app.invoices.faktury_ui import FakturyPage
         app = QApplication.instance() or QApplication([])
@@ -102,6 +121,13 @@ class RoundingTests(unittest.TestCase):
         self.assertEqual(p['brutto'], -0.62)
         self.assertEqual(totals(iter([p, p])), (-1.0, -1.24))
 
+    def test_historical_amounts_are_preserved_for_reading_and_reversal(self):
+        historical = {'nazwa': 'A', 'ilosc': 3, 'netto': 10, 'brutto': 12.3, 'vat': 23}
+        preserved = normalize_position(historical, preserve_amounts=True)
+        self.assertEqual((preserved['netto'], preserved['brutto']), (10, 12.3))
+        correction = reverse_positions([historical])[0]
+        self.assertEqual((correction['ilosc'], correction['netto'], correction['brutto']), (-3, -10, -12.3))
+
 
 class AnnualCompanyFormTests(DbTestCase):
     def test_year_switch_keeps_unsaved_ticks_and_saves_independently(self):
@@ -138,6 +164,69 @@ class AnnualCompanyFormTests(DbTestCase):
 
 
 class OwnerAnnualTests(DbTestCase):
+    def test_company_and_owner_can_select_the_same_declaration(self):
+        from app.db.dao_year_end import save_owner_year_declarations
+        company = self.make_company('Niezależne PIT-11', roczne_deklaracje='["PIT-11"]')
+        with get_conn() as conn:
+            owner = conn.execute(
+                "INSERT INTO udzialowcy(firma_id,imie_pierwsze,nazwisko) "
+                "VALUES (%s,'Anna','Nowak') RETURNING id",
+                (company,),
+            ).fetchone()[0]
+        save_owner_year_declarations(company, {(2025, owner): ['PIT-11']}, 1)
+        declarations = next(c for c in list_year_end(2025) if c['id'] == company)['deklaracje']
+        self.assertEqual(
+            {(d['kod'], d.get('owner_key', 0)) for d in declarations},
+            {('PIT-11', 0), ('PIT-11', owner)},
+        )
+
+    def test_new_active_company_is_snapshotted_after_year_initialization(self):
+        list_year_end(2025)
+        company = self.make_company('Dodana później', forma_opodatkowania='Skala')
+        declarations = next(c for c in list_year_end(2025) if c['id'] == company)['deklaracje']
+        self.assertEqual([d['kod'] for d in declarations], ['PIT-36'])
+
+    def test_owner_save_seeds_company_defaults_and_existing_filing(self):
+        from app.db.dao_year_end import save_owner_year_declarations
+        company = self.make_company('Domyślne firmy', roczne_deklaracje='["PIT-36"]')
+        with get_conn() as conn:
+            owner = conn.execute(
+                "INSERT INTO udzialowcy(firma_id,imie_pierwsze,nazwisko) "
+                "VALUES (%s,'Anna','Nowak') RETURNING id",
+                (company,),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO zakonczenie_roku(firma_id,rok,deklaracja,zlozona,upo,owner_key) "
+                "VALUES (%s,2025,'PIT-11',1,'UPO-FIRMY',0)",
+                (company,),
+            )
+        save_owner_year_declarations(company, {(2025, owner): ['PIT-36L']}, 1)
+        declarations = next(c for c in list_year_end(2025) if c['id'] == company)['deklaracje']
+        company_rows = [d for d in declarations if d.get('owner_key', 0) == 0]
+        self.assertEqual({d['kod'] for d in company_rows}, {'PIT-36', 'PIT-11'})
+        self.assertEqual(next(d for d in company_rows if d['kod'] == 'PIT-11')['upo'], 'UPO-FIRMY')
+
+    def test_deleted_annual_owner_discards_pending_edits_and_reloads_company(self):
+        from app.companies.company_form import CompanyForm
+        from app.db.dao_companies import delete_partner
+        app = QApplication.instance() or QApplication([])
+        company = self.make_company('Usunięty wspólnik', roczne_deklaracje='[]')
+        with get_conn() as conn:
+            owner = conn.execute(
+                "INSERT INTO udzialowcy(firma_id,imie_pierwsze,nazwisko) "
+                "VALUES (%s,'Anna','Nowak') RETURNING id",
+                (company,),
+            ).fetchone()[0]
+        form = CompanyForm(company, actor_id=1)
+        form.annual_owner.setCurrentIndex(form.annual_owner.findData(owner))
+        form.declaration_checks['PIT-36'].setChecked(True)
+        delete_partner(owner)
+        form._load_partners()
+        self.assertEqual(form.annual_owner.currentData(), 0)
+        self.assertFalse(form.declaration_checks['PIT-36'].isChecked())
+        self.assertFalse(form._owner_annual_edits)
+        form.close()
+
     def test_two_owners_have_independent_forms_and_filing_status(self):
         from app.companies.company_form import CompanyForm
         from app.db.dao_year_end import save_owner_year_declarations, save_declaration

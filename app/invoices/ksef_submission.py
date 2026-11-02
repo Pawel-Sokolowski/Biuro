@@ -189,6 +189,7 @@ def _send_invoice_bytes(invoice_id: int, xml: bytes, actor_id: int, *, client=No
               ksef_referencja_sesji = NULL, ksef_referencja_faktury = NULL,
               ksef_srodowisko_wysylki = %s, ksef_nip_wysylki = %s, ksef_hash_faktury = %s
             WHERE id = %s
+              AND cancelled_at IS NULL
               AND COALESCE(eksportowana, 0) = 1
               AND numer = %s AND kwota_brutto = %s
               AND NULLIF(BTRIM(COALESCE(ksef_numer, '')), '') IS NULL
@@ -319,7 +320,8 @@ def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -
         raise KsefError("Najpierw wystaw fakturę roboczą.")
     conn = get_conn()
     try:
-        duplicate = conn.execute("SELECT id FROM faktury WHERE id <> %s AND numer = %s AND COALESCE(eksportowana, 0) = 1 LIMIT 1",
+        duplicate = conn.execute("SELECT id FROM faktury WHERE id <> %s AND numer = %s "
+                                 "AND COALESCE(eksportowana, 0) = 1 AND cancelled_at IS NULL LIMIT 1",
                                  (invoice_id, invoice.get("numer"))).fetchone()
         if duplicate:
             raise KsefError("Inna wystawiona faktura ma już ten numer. Ustal prawidłowy numer przed wysyłką.")

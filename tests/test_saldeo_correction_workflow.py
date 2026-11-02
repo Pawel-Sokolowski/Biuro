@@ -4,7 +4,10 @@ from unittest import mock
 from PyQt6.QtWidgets import QApplication
 
 from app.db.dao_conn import get_conn
-from app.db.dao_invoices import create_correction, create_or_update_invoice, get_invoice_by_id, mark_exported
+from app.db.dao_invoices import (
+    create_correction, create_or_update_invoice, delete_draft_invoice,
+    get_invoice_by_id, mark_exported, set_invoice_number,
+)
 from app.invoices.saldeo_correction import confirm_saldeo_correction
 from tests.base import DbTestCase
 
@@ -44,6 +47,14 @@ class SaldeoCorrectionWorkflowTests(DbTestCase):
             confirm_saldeo_correction(self.correction, 'KOR/1', employee)
         with self.assertRaises(ValueError):
             confirm_saldeo_correction(self.original, 'KOR/1', 1)
+        self.assertFalse(get_invoice_by_id(self.correction)['eksportowana'])
+
+    def test_external_confirmation_cannot_reuse_a_deleted_draft_reservation(self):
+        abandoned = create_correction(self.original, 'Roboczy numer')
+        set_invoice_number(abandoned, 'KOR/REZERWACJA/2026')
+        delete_draft_invoice(abandoned)
+        with self.assertRaisesRegex(ValueError, 'zajęty|używany'):
+            confirm_saldeo_correction(self.correction, 'KOR/REZERWACJA/2026', 1)
         self.assertFalse(get_invoice_by_id(self.correction)['eksportowana'])
 
     def test_dialog_requires_explicit_confirmation_of_external_issuance(self):

@@ -29,7 +29,7 @@ def vat_percent(value: Any, default: float = 23.0) -> float:
     return float(decimal_value(text, default))
 
 
-def normalize_position(position: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_position(position: Dict[str, Any], *, preserve_amounts: bool = False) -> Dict[str, Any]:
     """Uzupełnia pozycję: cena jednostkowa, wartość netto i brutto zgodne z ilością i VAT."""
     result = dict(position)
     ilosc = decimal_value(result.get("ilosc"), 1)
@@ -46,15 +46,20 @@ def normalize_position(position: Dict[str, Any]) -> Dict[str, Any]:
     elif result.get("vat_code") and vat != 0:
         result.pop("vat_code", None)
     cena = money(cena)
-    netto = money(cena * ilosc)
-    tax = money(netto * decimal_value(vat) / 100)
+    if preserve_amounts and result.get("netto") not in (None, "") and result.get("brutto") not in (None, ""):
+        netto = decimal_value(result["netto"])
+        brutto = decimal_value(result["brutto"])
+    else:
+        netto = money(cena * ilosc)
+        tax = money(netto * decimal_value(vat) / 100)
+        brutto = netto + tax
     result.update({
         "nazwa": result.get("nazwa") or result.get("opis") or "",
         "ilosc": float(ilosc),
         "cena_netto": float(cena),
         "vat": int(vat) if float(vat).is_integer() else vat,
         "netto": float(netto),
-        "brutto": float(netto + tax),
+        "brutto": float(brutto),
     })
     return result
 
@@ -70,8 +75,12 @@ def reverse_positions(positions: Iterable[Dict[str, Any]]) -> List[Dict[str, Any
     """Pozycje korekty 'do zera': ujemna ilość, te same ceny."""
     reversed_positions = []
     for position in positions:
-        item = normalize_position(position)
+        item = normalize_position(position, preserve_amounts=True)
         item["ilosc"] = -abs(item["ilosc"])
+        item["netto"] = -abs(item["netto"])
+        item["brutto"] = -abs(item["brutto"])
+        if item.get("vat_amount") is not None:
+            item["vat_amount"] = -abs(decimal_value(item["vat_amount"]))
         item["generated"] = False
-        reversed_positions.append(normalize_position(item))
+        reversed_positions.append(item)
     return reversed_positions

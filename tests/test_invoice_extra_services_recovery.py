@@ -4,12 +4,14 @@ import json
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     add_invoice_item_for_service,
+    cancel_invoice,
     create_or_update_invoice,
     delete_draft_invoice,
     delete_issued_invoice,
     InvoiceLockedError,
     delete_invoice_keep_positions,
     get_invoice_by_id,
+    get_invoice_for_company_month,
     mark_exported,
 )
 from app.invoices.faktury_logic import FakturyLogic
@@ -133,6 +135,21 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
         recreated = self._generate()
         self.assertEqual(len(self._positions(recreated)), 1)
         self.assertTrue(get_invoice_by_id(generated)["eksportowana"])
+
+    def test_cancellation_releases_monthly_invoice_and_service_allocations(self):
+        add_invoice_item_for_service(
+            self.firma, self.service, 1, self.MONTH, cena_netto=60,
+        )
+        original = self._generate()
+        mark_exported([original], 1)
+        cancel_invoice(original, 1, "Do ponownego wystawienia")
+
+        self.assertIsNone(get_invoice_for_company_month(self.firma, self.MONTH))
+        replacement = self._generate()
+        self.assertNotEqual(replacement, original)
+        services = [p for p in self._positions(replacement) if p.get("usluga_id") == self.service]
+        self.assertEqual(len(services), 1)
+        self.assertEqual(services[0]["netto"], 60.0)
 
     def test_manual_extra_line_survives_invoice_withdrawal(self):
         # Pozycja wpisana ręcznie w edytorze nie ma identyfikatora katalogu.

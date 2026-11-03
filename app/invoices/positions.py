@@ -79,7 +79,7 @@ def reverse_positions(positions: Iterable[Dict[str, Any]]) -> List[Dict[str, Any
         item["netto"] = -item["netto"]
         item["brutto"] = -item["brutto"]
         if item.get("vat_amount") is not None:
-            item["vat_amount"] = -abs(decimal_value(item["vat_amount"]))
+            item["vat_amount"] = -float(decimal_value(item["vat_amount"]))
         item["generated"] = False
         reversed_positions.append(item)
     return reversed_positions

@@ -201,7 +201,8 @@ def _upsert_downloaded_invoice(
         corrected_invoice_id = None
         if local_kind == "korekta" and data.get("corrected_number"):
             corrected = conn.execute(
-                "SELECT id FROM faktury WHERE firma_id = %s AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
+                "SELECT id FROM faktury WHERE firma_id = %s AND cancelled_at IS NULL "
+                "AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
                 "ORDER BY id LIMIT 1",
                 (company["id"], data["corrected_number"]),
             ).fetchone()

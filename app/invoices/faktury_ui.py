@@ -337,7 +337,7 @@ class FakturyPage(QWidget):
         self.btn_header.clicked.connect(self._edit_draft_header)
         self.btn_issue_ksef = QPushButton("Wystaw i wyślij do KSeF")
         self.btn_issue_ksef.clicked.connect(lambda: self._send_selected_to_ksef(drafts=True))
-        self.btn_export = QPushButton("Eksportuj zaznaczone")
+        self.btn_export = QPushButton("Wystaw faktury")
         self.btn_export.clicked.connect(self._export_selected_drafts)
         self.btn_delete = QPushButton("Usuń roboczą")
         self.btn_delete.clicked.connect(self._delete_selected_draft)
@@ -402,7 +402,7 @@ class FakturyPage(QWidget):
         buttons = QHBoxLayout()
         self.btn_view = QPushButton("Podgląd faktury / PDF")
         self.btn_view.clicked.connect(self._view_selected_issued)
-        self.btn_reexport = QPushButton("Eksportuj ponownie")
+        self.btn_reexport = QPushButton("Eksportuj XLSX (Saldeo)")
         self.btn_reexport.clicked.connect(self._reexport_selected)
         self.btn_jpk = QPushButton("JPK_V7M (Enova)")
         self.btn_jpk.setToolTip("Ewidencja sprzedaży z numerami KSeF dla zaznaczonych faktur")
@@ -424,7 +424,7 @@ class FakturyPage(QWidget):
         self.btn_bank.clicked.connect(self._open_bank_payments)
         self.btn_cash = QPushButton("Zapłata gotówką")
         self.btn_cash.clicked.connect(self._mark_cash_payment)
-        self.btn_delete_issued = QPushButton("Usuń wystawioną")
+        self.btn_delete_issued = QPushButton("Anuluj fakturę")
         self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
         for button in (self.btn_view, self.btn_reexport, self.btn_jpk, self.btn_correction, self.btn_ksef,
                        self.btn_delete_issued):
@@ -974,7 +974,7 @@ class FakturyPage(QWidget):
         for inv in invoices:
             row = self.draft_table.rowCount()
             self.draft_table.insertRow(row)
-            values = [inv["id"], _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+            values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
                       f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                       _fmt_date(inv["data_wystawienia"]), _fmt_date(inv["termin_platnosci"])]
             for column, value in enumerate(values):
@@ -992,7 +992,7 @@ class FakturyPage(QWidget):
             self.issued_table.insertRow(row)
             paid = payments.get(inv["id"], [])
             paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
-            values = [inv["id"], _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
+            values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                       f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}", paid_text,
                       inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
             for column, value in enumerate(values):
@@ -1239,21 +1239,15 @@ class FakturyPage(QWidget):
             return
         if not self._can_export():
             return
-        if QMessageBox.question(
-            self, "Usuwanie",
-            f"Trwale usunąć zaznaczone wystawione faktury ({len(ids)})?\n"
-            "Faktury zostaną usunięte, ale usługi dodatkowe pozostaną do ponownego wygenerowania.\n"
-            "Tej operacji nie można cofnąć.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        ) != QMessageBox.StandardButton.Yes:
+        reason, ok = QInputDialog.getText(self, "Anulowanie faktur", "Przyczyna anulowania (tylko dokumenty niewprowadzone do obrotu):")
+        if not ok or not reason.strip():
             return
+        from app.db.dao_invoices import cancel_invoice
         for invoice_id in ids:
-            invoice = get_invoice_by_id(invoice_id)
-            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                try:
-                    delete_issued_invoice(invoice_id)
-                except InvoiceLockedError as exc:
-                    QMessageBox.warning(self, "Faktura", str(exc))
+            try:
+                cancel_invoice(invoice_id, self.pracownik_id, reason)
+            except (ValueError, PermissionError) as exc:
+                QMessageBox.warning(self, "Faktura", str(exc))
         self.refresh()
 
     # ---------------- eksport ----------------
@@ -1287,7 +1281,23 @@ class FakturyPage(QWidget):
         return False
 
     def _export_selected_drafts(self):
-        self._export_ids(self._selected_ids(self.draft_table), mark=True)
+        if not self._can_export():
+            return
+        ids = self._selected_ids(self.draft_table)
+        if not ids:
+            QMessageBox.information(self, "Faktury", "Zaznacz faktury robocze do wystawienia.")
+            return
+        try:
+            for invoice_id in ids:
+                invoice = get_invoice_by_id(invoice_id)
+                if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
+                    raise PermissionError("Brak dostępu do faktury.")
+            mark_exported(ids, self.pracownik_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Wystawianie faktur", str(exc))
+            return
+        self.refresh()
+        self.tabs.setCurrentWidget(self.tab_wystawione)
 
     def _reexport_selected(self):
         self._export_ids(self._selected_ids(self.issued_table), mark=False)
@@ -1355,6 +1365,8 @@ class FakturyPage(QWidget):
             QMessageBox.warning(self, "Eksport", "Brak faktur dostępnych do eksportu.")
             return
         try:
+            if any(inv.get("cancelled_at") for inv in invoices):
+                raise ValueError("Nie można eksportować anulowanych faktur.")
             validate_saldeo_invoices(invoices)
             validate_invoice_extra_services_ready([invoice["id"] for invoice in invoices])
         except SaldeoCorrectionExportError as exc:

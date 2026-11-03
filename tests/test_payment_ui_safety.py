@@ -335,13 +335,9 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
 
     def test_stale_draft_selection_cannot_trigger_cash_action(self):
         page = self.page()
-        conn = get_conn()
-        try:
-            conn.execute("UPDATE faktury SET eksportowana=0 WHERE id=%s", (self.invoice_id,))
-            conn.commit()
-        finally:
-            conn.close()
-        with patch("app.invoices.faktury_ui.record_cash_in_dialog") as cash, patch.object(QMessageBox, "warning"):
+        from app.db.dao_invoices import get_invoice_by_id
+        draft_snapshot = dict(get_invoice_by_id(self.invoice_id), eksportowana=0)
+        with patch("app.invoices.faktury_ui.get_invoice_by_id", return_value=draft_snapshot), patch("app.invoices.faktury_ui.record_cash_in_dialog") as cash, patch.object(QMessageBox, "warning"):
             page._mark_cash_payment()
         cash.assert_not_called()
 

@@ -27,7 +27,7 @@ class ResetPasswordTests(DbTestCase):
         ok, _ = pr.reset_password("jan@example.com")
         self.assertFalse(ok)
 
-    def test_successful_reset_sends_and_changes_password(self):
+    def test_reset_requires_single_use_code_before_password_change(self):
         set_setting(pr.RESET_ACCOUNT_KEY, "7")
         with patch.object(pr, "send_email_smtp", return_value=(True, "")) as send:
             ok, _ = pr.reset_password("JAN@example.com")
@@ -35,9 +35,13 @@ class ResetPasswordTests(DbTestCase):
         account_id, recipients, _subject, body = send.call_args[0][:4]
         self.assertEqual(account_id, 7)
         self.assertEqual(recipients, ["JAN@example.com"])
-        new_password = body.split("aplikacji Biuro: ")[1].split("\n")[0]
+        token = body.split("Kod resetowania hasła Biuro: ")[1].split("\n")[0]
+        self.assertEqual(login_employee("jan@example.com", "Stare123"), self.emp)
+        pr.redeem_password_reset("jan@example.com", token, "NoweHaslo123")
         self.assertIsNone(login_employee("jan@example.com", "Stare123"))
-        self.assertEqual(login_employee("jan@example.com", new_password), self.emp)
+        self.assertEqual(login_employee("jan@example.com", "NoweHaslo123"), self.emp)
+        with self.assertRaises(ValueError):
+            pr.redeem_password_reset("jan@example.com", token, "JeszczeInne123")
 
     def test_failed_send_keeps_old_password(self):
         set_setting(pr.RESET_ACCOUNT_KEY, "7")
@@ -75,3 +79,26 @@ class RateLimitTests(DbTestCase):
             results = [pr.reset_password("jan@example.com")[0] for _ in range(pr.MAX_ATTEMPTS_PER_EMAIL + 2)]
         self.assertEqual(results, [True] * pr.MAX_ATTEMPTS_PER_EMAIL + [False, False])
         self.assertEqual(send.call_count, pr.MAX_ATTEMPTS_PER_EMAIL)
+
+
+class TokenSafetyTests(DbTestCase):
+    def test_expiry_wrong_account_and_hash_only_storage(self):
+        import hashlib
+        from app.db.dao_conn import get_conn
+        self.make_employee('owner@example.com', haslo='OldPassword123')
+        self.make_employee('other@example.com')
+        set_setting(pr.RESET_ACCOUNT_KEY, '7')
+        with patch.object(pr, 'send_email_smtp', return_value=(True, '')) as send:
+            pr.reset_password('owner@example.com')
+        token = send.call_args[0][3].split('Kod resetowania hasła Biuro: ')[1].split('\n')[0]
+        with get_conn() as conn:
+            stored = conn.execute('SELECT token_hash FROM password_reset_tokens').fetchone()[0]
+            self.assertEqual(stored, hashlib.sha256(token.encode()).hexdigest())
+            self.assertNotEqual(stored, token)
+        with self.assertRaises(ValueError):
+            pr.redeem_password_reset('other@example.com', token, 'NewPassword123')
+        with get_conn() as conn:
+            conn.execute("UPDATE password_reset_tokens SET expires_at = now() - interval '1 minute'")
+        with self.assertRaises(ValueError):
+            pr.redeem_password_reset('owner@example.com', token, 'NewPassword123')
+        self.assertIsNotNone(login_employee('owner@example.com', 'OldPassword123'))

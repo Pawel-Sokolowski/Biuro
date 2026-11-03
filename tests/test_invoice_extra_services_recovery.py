@@ -4,11 +4,14 @@ import json
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     add_invoice_item_for_service,
+    cancel_invoice,
     create_or_update_invoice,
     delete_draft_invoice,
     delete_issued_invoice,
+    InvoiceLockedError,
     delete_invoice_keep_positions,
     get_invoice_by_id,
+    get_invoice_for_company_month,
     mark_exported,
 )
 from app.invoices.faktury_logic import FakturyLogic
@@ -78,15 +81,15 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
         )
         generated_id = self._generate()
         mark_exported([invoice_id], 1)
-        delete_issued_invoice(generated_id)
+        with self.assertRaises(InvoiceLockedError):
+            delete_issued_invoice(generated_id)
 
         rows = self._ledger()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["ilosc"], 0.5)
         self.assertEqual(rows[0]["jednostka"], "godz.")
 
-        recreated_id = self._generate()
-        positions = self._positions(recreated_id)
+        positions = self._positions(generated_id)
         extra = [p for p in positions if p.get("usluga_id") == self.service]
         self.assertEqual(len(extra), 1)
         self.assertEqual(extra[0]["ilosc"], 0.5)
@@ -127,9 +130,26 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
             self.firma, self.service, 1, self.MONTH, cena_netto=60,
         ))
         self.assertEqual(len(self._ledger()), 1)
-        delete_issued_invoice(generated)
+        with self.assertRaises(InvoiceLockedError):
+            delete_issued_invoice(generated)
         recreated = self._generate()
-        self.assertEqual(len(self._positions(recreated)), 2)
+        self.assertEqual(len(self._positions(recreated)), 1)
+        self.assertTrue(get_invoice_by_id(generated)["eksportowana"])
+
+    def test_cancellation_releases_monthly_invoice_and_service_allocations(self):
+        add_invoice_item_for_service(
+            self.firma, self.service, 1, self.MONTH, cena_netto=60,
+        )
+        original = self._generate()
+        mark_exported([original], 1)
+        cancel_invoice(original, 1, "Do ponownego wystawienia")
+
+        self.assertIsNone(get_invoice_for_company_month(self.firma, self.MONTH))
+        replacement = self._generate()
+        self.assertNotEqual(replacement, original)
+        services = [p for p in self._positions(replacement) if p.get("usluga_id") == self.service]
+        self.assertEqual(len(services), 1)
+        self.assertEqual(services[0]["netto"], 60.0)
 
     def test_manual_extra_line_survives_invoice_withdrawal(self):
         # Pozycja wpisana ręcznie w edytorze nie ma identyfikatora katalogu.
@@ -147,10 +167,9 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
             175, 215.25,
         )
         mark_exported([invoice_id], 1)
-        delete_issued_invoice(invoice_id)
-
-        recreated = self._generate()
-        positions = self._positions(recreated)
+        with self.assertRaises(InvoiceLockedError):
+            delete_issued_invoice(invoice_id)
+        positions = self._positions(invoice_id)
         manual = [p for p in positions if p["nazwa"] == "Aktualizacja danych - ręcznie"]
         main = [p for p in positions if p["nazwa"] == "Usługa księgowa"]
         self.assertEqual(len(manual), 1)
@@ -158,9 +177,9 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
         self.assertEqual(len(main), 1)
         self.assertEqual(sum(p["netto"] for p in positions), 175)
 
-        delete_draft_invoice(recreated)
-        regenerated = self._generate()
-        self.assertEqual(len(self._positions(regenerated)), 2)
+        with self.assertRaises(InvoiceLockedError):
+            delete_draft_invoice(invoice_id)
+        self.assertEqual(len(self._positions(invoice_id)), 2)
 
     def test_archival_delete_keeps_service(self):
         invoice_id = add_invoice_item_for_service(

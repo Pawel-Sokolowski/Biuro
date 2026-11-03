@@ -72,7 +72,7 @@ class Mt940SafetyTests(unittest.TestCase):
 class PaymentSafetyTests(DbTestCase):
     def invoice(self, issued=True):
         company = self.make_company()
-        invoice_id = create_or_update_invoice(company, "2026-09", [{"nazwa": "Usługa", "ilosc": 1}], 100, 123)
+        invoice_id = create_or_update_invoice(company, "2026-09", [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100, "vat": 23}], 100, 123)
         if issued:
             mark_exported([invoice_id], 1)
         return invoice_id
@@ -161,13 +161,14 @@ class PaymentSafetyTests(DbTestCase):
         self.assertIn(company, [row["id"] for row in list_company_choices(1)])
 
     def test_invoice_choice_balance_keeps_decimal_precision_for_suggestions(self):
-        invoice = self.invoice()
+        invoice = self.invoice(issued=False)
         conn = get_conn()
         try:
             conn.execute("UPDATE faktury SET kwota_brutto=123.33, numer='FV/DECIMAL' WHERE id=%s", (invoice,))
             conn.commit()
         finally:
             conn.close()
+        mark_exported([invoice], 1)
         record_cash_payment(invoice, "2026-09-07", "100.11", 1)
         choice = next(row for row in list_invoice_choices(1) if row["id"] == invoice)
         self.assertEqual(choice["balance"], Decimal("23.22"))

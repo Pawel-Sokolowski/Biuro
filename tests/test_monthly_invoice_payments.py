@@ -57,7 +57,7 @@ class MonthlyInvoicePaymentTests(DbTestCase):
 
     def test_payment_date_from_october_remains_attached_to_september_invoice(self):
         company = self.make_company("Płatność w następnym miesiącu")
-        invoice = create_or_update_invoice(company, "2026-09", [{"nazwa": "Usługa", "ilosc": 1}], 100, 123)
+        invoice = create_or_update_invoice(company, "2026-09", [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100, "vat": 23}], 100, 123)
         mark_exported([invoice], 1)
         record_cash_payment(invoice, "2026-10-07", "123.00", actor_id=1)
         rows = MonthlyViewLogic(1).get_monthly_rows("2026-09", 0, "Wszystkie")

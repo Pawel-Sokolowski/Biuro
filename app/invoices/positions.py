@@ -45,7 +45,6 @@ def normalize_position(position: Dict[str, Any], *, preserve_amounts: bool = Fal
         result["vat_code"] = raw_vat
     elif result.get("vat_code") and vat != 0:
         result.pop("vat_code", None)
-    cena = money(cena)
     if preserve_amounts and result.get("netto") not in (None, "") and result.get("brutto") not in (None, ""):
         netto = decimal_value(result["netto"])
         brutto = decimal_value(result["brutto"])

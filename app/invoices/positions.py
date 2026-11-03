@@ -76,9 +76,9 @@ def reverse_positions(positions: Iterable[Dict[str, Any]]) -> List[Dict[str, Any
     reversed_positions = []
     for position in positions:
         item = normalize_position(position, preserve_amounts=True)
-        item["ilosc"] = -abs(item["ilosc"])
-        item["netto"] = -abs(item["netto"])
-        item["brutto"] = -abs(item["brutto"])
+        item["ilosc"] = -item["ilosc"]
+        item["netto"] = -item["netto"]
+        item["brutto"] = -item["brutto"]
         if item.get("vat_amount") is not None:
             item["vat_amount"] = -abs(decimal_value(item["vat_amount"]))
         item["generated"] = False

@@ -21,6 +21,10 @@ TABLES = [
     "bank_transakcje",
     "faktury_pozycje",
     "faktury",
+    "owner_year_declarations",
+    "year_end_snapshots",
+    "year_end_snapshot_years",
+    "zakonczenie_roku",
     "faktury_archiwum",
     "uslugi_dodatkowe_firma",
     "uslugi_dodatkowe",
@@ -58,8 +62,14 @@ def count_company_data() -> Dict[str, int]:
 def delete_company_data() -> None:
     conn = get_conn()
     try:
+        # This explicit whole-dataset reset is separate from invoice cancellation.
+        conn.execute("ALTER TABLE faktury DISABLE TRIGGER protect_issued_invoice")
         for t in _existing_tables(conn):
             conn.execute(f"DELETE FROM {t}")
+        conn.execute("ALTER TABLE faktury ENABLE TRIGGER protect_issued_invoice")
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

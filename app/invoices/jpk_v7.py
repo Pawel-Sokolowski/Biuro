@@ -45,6 +45,8 @@ def build_jpk_v7m(invoices, seller, year, month, office_code, system_name="Biuro
     missing = [i.get("numer") for i in invoices if not i.get("ksef_numer") and _digits(i.get("nabywca_nip"))]
     if missing:
         raise JpkError("Brak numeru KSeF dla faktur: " + ", ".join(str(n) for n in missing))
+    if any(i.get("cancelled_at") for i in invoices):
+        raise JpkError("Anulowane faktury nie podlegają eksportowi JPK.")
     if not invoices:
         raise JpkError("Brak faktur do eksportu.")
 
@@ -73,7 +75,7 @@ def build_jpk_v7m(invoices, seller, year, month, office_code, system_name="Biuro
     total_tax = Decimal("0")
     for number, invoice in enumerate(invoices, 1):
         sums = {}
-        for group in vat_summary(invoice.get("positions") or []):
+        for group in vat_summary(invoice.get("positions") or [], accepted_amounts=True):
             fields = RATE_FIELDS.get(group["code"])
             if not fields:
                 raise JpkError("Nieobsługiwana stawka VAT %s na fakturze %s." % (group["code"], invoice.get("numer")))

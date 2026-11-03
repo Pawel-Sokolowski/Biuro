@@ -80,14 +80,14 @@ def build_fa3_xml(invoice, positions, seller, *, corrected=None):
         raise KsefError('Faktura nie zawiera pozycji.')
     normalized = []
     for source in positions:
-        item = normalize_position(source)
+        item = normalize_position(source, preserve_amounts=True)
         for field in ('ilosc', 'cena_netto', 'netto', 'brutto'):
             if not Decimal(str(item[field])).is_finite():
                 raise KsefError('Pozycja zawiera nieprawidłową liczbę.')
         if item['ilosc'] == 0:
             raise KsefError('Pozycja faktury ma zerową ilość.')
         normalized.append(item)
-    groups = vat_summary(normalized)
+    groups = vat_summary(normalized, accepted_amounts=True)
     for group in groups:
         if group['code'] not in ('23', '22', '8', '7', '5', '0', '0 kr', 'zw'):
             raise KsefError('Stawka lub procedura VAT wymaga dodatkowej obsługi: '+group['code'])

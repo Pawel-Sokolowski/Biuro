@@ -177,7 +177,10 @@ class LoginWindow(QDialog):
 
         btn_reset = QPushButton("Nie pamiętam hasła")
         btn_reset.clicked.connect(self._on_reset_password)
+        btn_redeem = QPushButton("Mam kod resetowania")
+        btn_redeem.clicked.connect(self._on_redeem_password_reset)
         layout.addWidget(btn_reset)
+        layout.addWidget(btn_redeem)
 
         # ====================================================
         # OBSŁUGA ENTER / TAB
@@ -336,6 +339,28 @@ class LoginWindow(QDialog):
             QMessageBox.information(self, "Reset hasła", message)
         else:
             QMessageBox.warning(self, "Reset hasła", message)
+
+    def _on_redeem_password_reset(self):
+        from app.utils.password_reset import redeem_password_reset
+        token, ok = QInputDialog.getText(self, "Reset hasła", "Kod z wiadomości e-mail:")
+        if not ok:
+            return
+        password, ok = QInputDialog.getText(self, "Nowe hasło", "Nowe hasło (minimum 10 znaków):", QLineEdit.EchoMode.Password)
+        if not ok:
+            return
+        confirm, ok = QInputDialog.getText(self, "Nowe hasło", "Powtórz nowe hasło:", QLineEdit.EchoMode.Password)
+        if not ok:
+            return
+        if password != confirm:
+            QMessageBox.warning(self, "Reset hasła", "Hasła muszą być takie same.")
+            return
+        try:
+            self._require_current_schema()
+            redeem_password_reset(self.email_input.text(), token, password)
+        except Exception as exc:
+            QMessageBox.warning(self, "Reset hasła", str(exc))
+            return
+        QMessageBox.information(self, "Reset hasła", "Hasło zmienione. Możesz się zalogować.")
 
     def _on_register(self):
         from app.utils.crypto import register_user

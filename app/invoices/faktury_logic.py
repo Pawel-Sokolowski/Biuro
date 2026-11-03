@@ -3,6 +3,7 @@ import json
 import logging
 import psycopg
 from app.utils.parsing import to_float
+from app.invoices.positions import decimal_value, money, normalize_position, totals
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -151,17 +152,15 @@ class FakturyLogic:
         mult = 1 + vat / 100
 
         def pos(nazwa, ilosc, netto_jedn):
-            netto = round(netto_jedn * ilosc, 2)
-            return {
+            return normalize_position({
                 "nazwa": nazwa,
                 "ilosc": ilosc,
                 "jednostka": "mc" if ilosc == 1 and stala_kwota > 0 else "szt.",
-                "netto": netto,
+                "cena_netto": netto_jedn,
                 "vat": vat,
-                "brutto": round(netto * mult, 2),
                 "kategoria": "kadry",
                 "generated": True,
-            }
+            })
 
         if stala_kwota > 0:
             return [pos("Usługa kadrowo-płacowa", 1, stala_kwota)]
@@ -226,7 +225,7 @@ class FakturyLogic:
                 "nazwa": "Usługa księgowa",
                 "ilosc": 1,
                 "jednostka": "mc",
-                "netto": round(stala_ks, 2),
+                "cena_netto": stala_ks, "netto": float(money(decimal_value(stala_ks))),
                 "vat": vat_rate,
                 "brutto": round(stala_ks * vat_mult, 2),
                 "kategoria": "księgowość",
@@ -262,7 +261,7 @@ class FakturyLogic:
                 ponad = ilosc_dok - limit
                 cena = self._to_float(company.get("cena_ponad_limit", 0.0)) or \
                     self._to_float(pricing.get("cena_za_dokument_ponad_limit", 0.0))
-                netto = round(ponad * cena, 2)
+                netto = float(money(decimal_value(ponad) * decimal_value(cena)))
                 brutto = round(netto * vat_mult, 2)
                 pozycje.append({
                     "nazwa": "Dokumenty ponad limit",
@@ -283,7 +282,7 @@ class FakturyLogic:
                     "nazwa": "Zdrowotna",
                     "ilosc": sztuk,
                     "jednostka": "szt.",
-                    "netto": round(zdrowotna_val * sztuk, 2),
+                    "cena_netto": zdrowotna_val, "netto": float(money(decimal_value(zdrowotna_val) * sztuk)),
                     "vat": vat_rate,
                     "brutto": round(zdrowotna_val * sztuk * vat_mult, 2),
                     "kategoria": "księgowość",
@@ -300,7 +299,7 @@ class FakturyLogic:
             if ilosc <= 0:
                 continue
             cena_netto = self._to_float(u.get("cena_netto", 0.0))
-            netto = round(cena_netto * ilosc, 2)
+            netto = float(money(decimal_value(cena_netto) * decimal_value(ilosc)))
             stawka_raw = u.get("stawka_vat") or "0"
             if isinstance(stawka_raw, str):
                 stawka_raw = stawka_raw.replace("%", "").strip()
@@ -323,7 +322,7 @@ class FakturyLogic:
                 "generated": True
             })
 
-        return pozycje
+        return [normalize_position(p) for p in pozycje]
 
     def _merge_positions(
             self,
@@ -433,8 +432,7 @@ class FakturyLogic:
 
             merged = self._merge_positions(existing_positions, generated_positions)
 
-            kwota_netto = round(sum(self._to_float(p.get("netto")) for p in merged), 2)
-            kwota_brutto = round(sum(self._to_float(p.get("brutto")) for p in merged), 2)
+            kwota_netto, kwota_brutto = totals(merged)
 
             invoice_id = create_or_update_invoice(
                 firma_id=firma_id,
@@ -458,8 +456,7 @@ class FakturyLogic:
             for p in generated_positions:
                 p.setdefault("generated", True)
 
-            kwota_netto = round(sum(self._to_float(p.get("netto")) for p in generated_positions), 2)
-            kwota_brutto = round(sum(self._to_float(p.get("brutto")) for p in generated_positions), 2)
+            kwota_netto, kwota_brutto = totals(generated_positions)
 
             invoice_id = create_or_update_invoice(
                 firma_id=firma_id,
@@ -569,8 +566,7 @@ class FakturyLogic:
                             existing_positions = []
 
                         merged = self._merge_positions(existing_positions, filtered)
-                        kw_net = round(sum(self._to_float(p.get("netto")) for p in merged), 2)
-                        kw_br = round(sum(self._to_float(p.get("brutto")) for p in merged), 2)
+                        kw_net, kw_br = totals(merged)
 
                         invoice_id = create_or_update_invoice(
                             firma_id=fid,
@@ -587,8 +583,7 @@ class FakturyLogic:
                     else:
                         for p in filtered:
                             p.setdefault("generated", True)
-                        kw_net = round(sum(self._to_float(p.get("netto")) for p in filtered), 2)
-                        kw_br = round(sum(self._to_float(p.get("brutto")) for p in filtered), 2)
+                        kw_net, kw_br = totals(filtered)
 
                         invoice_id = create_or_update_invoice(
                             firma_id=fid,
@@ -650,8 +645,7 @@ class FakturyLogic:
                 existing_positions = []
 
             merged = self._merge_positions(existing_positions, [pos])
-            kw_net = round(sum(self._to_float(p.get("netto")) for p in merged), 2)
-            kw_br = round(sum(self._to_float(p.get("brutto")) for p in merged), 2)
+            kw_net, kw_br = totals(merged)
 
             invoice_id = create_or_update_invoice(
                 firma_id=firma_id,

@@ -1,12 +1,14 @@
 # app/companies/company_form.py
 import re
+import json
+from datetime import date
 from typing import Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPushButton,
     QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QMessageBox, QGridLayout, QSizePolicy
+    QScrollArea, QMessageBox, QGridLayout, QSizePolicy, QGroupBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QCompleter
@@ -37,6 +39,7 @@ from app.companies.constants import (
     ROZLICZENIE_ROCZNE, ROZLICZENIE_ROCZNE_OPIS,
 )
 from app.companies.company_lookup import lookup_company_by_nip
+from app.companies.annual_declarations import ANNUAL_DECLARATIONS, DECLARATION_DETAILS
 from app.companies.cennik_keys import (
     filter_cennik_keys, parse_cennik_key, typ_from_forma, vat_flag_from_status,
 )
@@ -233,18 +236,39 @@ class CompanyForm(QDialog):
             [status_vat, urzad_skarbowy, forma_opodatkowania]
         )
 
-        rozliczenie_roczne = QComboBox()
-        rozliczenie_roczne.addItems(ROZLICZENIE_ROCZNE)
-        rozliczenie_roczne.setToolTip(
-            "Puste = automatycznie z formy opodatkowania (ryczałt → PIT-28, liniowy → PIT-36L, "
-            "skala → PIT-36, księgi rachunkowe/estoński → CIT-8/CIT-8E).\n"
-            "Deklaracja roczna: " + "; ".join(f"{k} – {v}" for k, v in ROZLICZENIE_ROCZNE_OPIS.items()))
-        deklaracje_dodatkowe = QLineEdit()
-        deklaracje_dodatkowe.setPlaceholderText("np. PIT-4R, PIT-11, VAT-9M (po przecinku)")
-        add_row(
-            ["Deklaracja roczna (zakończenie roku):", "Dodatkowe deklaracje roczne:"],
-            [rozliczenie_roczne, deklaracje_dodatkowe]
-        )
+        annual_group = QGroupBox("Roczne rozliczenie")
+        annual_box = QVBoxLayout(annual_group)
+        year_row = QHBoxLayout()
+        year_row.addWidget(QLabel("Rok:"))
+        self.annual_year = QSpinBox()
+        self.annual_year.setRange(2000, 2100)
+        self.annual_year.setValue(date.today().year)
+        year_row.addWidget(self.annual_year)
+        year_row.addWidget(QLabel("Rozliczenie dla:"))
+        self.annual_owner = QComboBox()
+        self.annual_owner.addItem("Firma", 0)
+        year_row.addWidget(self.annual_owner)
+        year_row.addStretch()
+        annual_box.addLayout(year_row)
+        self.annual_layout = QGridLayout()
+        annual_box.addLayout(self.annual_layout)
+        self.declaration_checks = {}
+        self._annual_edits = {}
+        self._owner_annual_edits = {}
+        self._annual_displayed_year = self.annual_year.value()
+        self._annual_loading = False
+        self._annual_next_row = 0
+        for group, rows in ANNUAL_DECLARATIONS:
+            heading = QLabel(group)
+            heading.setStyleSheet("font-weight: bold; margin-top: 6px;")
+            self.annual_layout.addWidget(heading, self._annual_next_row, 0, 1, 3)
+            self._annual_next_row += 1
+            for index, (code, label, description) in enumerate(rows):
+                self._add_declaration_checkbox(code, row=self._annual_next_row + index // 3, column=index % 3)
+            self._annual_next_row += (len(rows) + 2) // 3
+        self.annual_year.valueChanged.connect(self._annual_year_changed)
+        self.annual_owner.currentIndexChanged.connect(lambda *_: self._annual_year_changed(self.annual_year.value()))
+        dane_layout.addWidget(annual_group)
 
         analityka_fk = QLineEdit()
         kody_pkd = QLineEdit()
@@ -330,8 +354,6 @@ class CompanyForm(QDialog):
             "status_vat": status_vat,
             "urzad_skarbowy": urzad_skarbowy,
             "forma_opodatkowania": forma_opodatkowania,
-            "rozliczenie_roczne": rozliczenie_roczne,
-            "deklaracje_dodatkowe": deklaracje_dodatkowe,
             "kody_pkd": kody_pkd,
             "status": status,
             "uslugi_zawieszone": uslugi_zawieszone,
@@ -1042,6 +1064,7 @@ class CompanyForm(QDialog):
     # ZBIERANIE PAYLOADU
     # ============================================================
     def _collect_payload(self) -> Dict[str, Any]:
+        self._annual_selection_changed()
         payload = {}
 
         if self.firma_id:
@@ -1070,7 +1093,62 @@ class CompanyForm(QDialog):
                     payload[key] = None if checked == self._checkbox_default(key) else int(checked)
                 else:
                     payload[key] = 1 if widget.isChecked() else 0
+        # Only current-year selections update defaults; other years are stored separately.
+        if date.today().year in self._annual_edits:
+            selected = self._annual_edits[date.today().year]
+            payload["roczne_deklaracje"] = json.dumps(selected, ensure_ascii=False)
+            payload["rozliczenie_roczne"] = next((c for c in selected if c in ROZLICZENIE_ROCZNE), "")
+            payload["deklaracje_dodatkowe"] = ", ".join(c for c in selected if c != payload["rozliczenie_roczne"])
         return payload
+
+    def _add_declaration_checkbox(self, code, row=None, column=0):
+        label, description = DECLARATION_DETAILS.get(code, (code, "Wcześniej zapisana deklaracja firmy."))
+        check = QCheckBox(label)
+        check.setToolTip(description)
+        if row is None:
+            row = self._annual_next_row
+            self._annual_next_row += 1
+        self.annual_layout.addWidget(check, row, column)
+        self.declaration_checks[code] = check
+        check.toggled.connect(self._annual_selection_changed)
+
+    def _annual_selection_changed(self, *_):
+        if not self._annual_loading:
+            selected = [code for code, check in self.declaration_checks.items() if check.isChecked()]
+            owner_id = self.annual_owner.currentData() or 0
+            if owner_id:
+                self._owner_annual_edits[(self._annual_displayed_year, owner_id)] = selected
+            else:
+                self._annual_edits[self._annual_displayed_year] = selected
+
+    def _annual_year_changed(self, year):
+        self._annual_displayed_year = year
+        from app.db.dao_year_end import get_company_year_declarations
+        owner_id = self.annual_owner.currentData() or 0
+        if owner_id:
+            from app.db.dao_year_end import get_owner_year_declarations
+            selected = self._owner_annual_edits.get((year, owner_id))
+            if selected is None:
+                selected = get_owner_year_declarations(self.firma_id, year, owner_id)
+        else:
+            selected = self._annual_edits.get(year)
+            if selected is None:
+                selected = get_company_year_declarations(self.firma_id, year) if self.firma_id else []
+        self._show_annual_selection(selected)
+
+    def _show_annual_selection(self, selected):
+        self._annual_loading = True
+        try:
+            for code in selected:
+                if code not in self.declaration_checks:
+                    self._add_declaration_checkbox(code)
+            for code, check in self.declaration_checks.items():
+                check.setChecked(code in selected)
+        finally:
+            self._annual_loading = False
+
+    def _load_declaration_checkboxes(self, data):
+        self._annual_year_changed(self.annual_year.value())
 
     def _load_email_filters(self):
         company = get_company(self.firma_id)
@@ -1211,6 +1289,10 @@ class CompanyForm(QDialog):
         payload = self._collect_payload()
         try:
             self.firma_id = save_company(payload, actor_id=self.actor_id)
+            from app.db.dao_year_end import save_company_year_declarations
+            save_company_year_declarations(self.firma_id, self._annual_edits, self.actor_id)
+            from app.db.dao_year_end import save_owner_year_declarations
+            save_owner_year_declarations(self.firma_id, self._owner_annual_edits, self.actor_id)
             self._save_pelnomocnictwa()
             self._sync_contact_email_filters()
             self.accept()
@@ -1252,6 +1334,7 @@ class CompanyForm(QDialog):
         # Bez mapowania ponowne otwarcie pokazuje puste adresy, a kolejny
         # zapis formularza może nadpisać istniejące adresy pustymi danymi.
         data = self._payload_to_form_keys(data)
+        self._load_declaration_checkboxes(data)
 
         for key, widget in self.inputs.items():
             val = data.get(key)
@@ -1423,6 +1506,22 @@ class CompanyForm(QDialog):
             return
 
         rows = get_partners(self.firma_id)
+        selected_owner = self.annual_owner.currentData()
+        owner_ids = {owner["id"] for owner in rows}
+        self._owner_annual_edits = {
+            key: value for key, value in self._owner_annual_edits.items()
+            if key[1] in owner_ids
+        }
+        self.annual_owner.blockSignals(True)
+        self.annual_owner.clear()
+        self.annual_owner.addItem("Firma", 0)
+        for owner in rows:
+            name = " ".join(filter(None, (owner.get("imie_pierwsze"), owner.get("nazwisko")))) or f"Wspólnik #{owner['id']}"
+            self.annual_owner.addItem(name, owner["id"])
+        self.annual_owner.setCurrentIndex(max(0, self.annual_owner.findData(selected_owner)))
+        self.annual_owner.blockSignals(False)
+        if self.annual_owner.currentData() != selected_owner:
+            self._annual_year_changed(self.annual_year.value())
         self.partners_table.setRowCount(0)
 
         for r in rows:

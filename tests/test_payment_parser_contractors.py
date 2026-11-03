@@ -157,7 +157,7 @@ class ContractorImportTests(DbTestCase):
             import_mt940_file(str(path), 1, "cp1250")
             transfer = list_unsettled_transfers(1)[0]
             company = self.make_company("FIRMA TESTOWA")
-            invoice_id = create_or_update_invoice(company, "2026-09", [{"nazwa": "Usługa", "ilosc": 1}], 100, 1279.2)
+            invoice_id = create_or_update_invoice(company, "2026-09", [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 1040, "vat": 23}], 1040, 1279.2)
             mark_exported([invoice_id], 1)
             confirm_bank_payment(transfer["id"], invoice_id, "1.00", 1)
             self.assertEqual(import_mt940_file(str(path), 1, "iso-8859-2")["new"], 0)

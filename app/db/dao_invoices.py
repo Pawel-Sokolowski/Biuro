@@ -1309,6 +1309,7 @@ def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
             raise InvoiceLockedError("Dokument KSeF wymaga korekty.")
         if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s", (invoice_id,)).fetchone():
             raise InvoiceLockedError("Faktura ma historię płatności. Użyj korekty.")
+        _preserve_legacy_extra_services(conn, dict(row))
         archive_invoice_positions(conn, dict(row))
         conn.execute("UPDATE faktury SET status = 'anulowana', cancelled_reason = %s, cancelled_by = %s, cancelled_at = now() WHERE id = %s", (reason.strip(), actor_id, invoice_id))
         conn.execute("DELETE FROM faktury_uslugi_dodatkowe WHERE invoice_id = %s", (invoice_id,))

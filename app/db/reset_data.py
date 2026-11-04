@@ -26,6 +26,7 @@ TABLES = [
     "year_end_snapshot_years",
     "zakonczenie_roku",
     "faktury_archiwum",
+    "faktury_kosz",
     "uslugi_dodatkowe_firma",
     "uslugi_dodatkowe",
     "rozliczenia_saldeo",

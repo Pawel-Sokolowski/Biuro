@@ -122,7 +122,8 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
             f"<td class='num'>{_money(item.get('brutto', item.get('wartosc_brutto')))}</td>"
             "</tr>"
         )
-    document_title = "FAKTURA KORYGUJĄCA" if invoice.get("rodzaj") == "korekta" else "FAKTURA VAT"
+    document_title = {"korekta": "FAKTURA KORYGUJĄCA", "zaliczkowa": "FAKTURA ZALICZKOWA",
+                      "proforma": "FAKTURA PROFORMA"}.get(invoice.get("rodzaj"), "FAKTURA VAT")
     document_number = invoice.get("numer") or "Dokument KSeF"
     payment_method = invoice.get("sposob_zaplaty") or "Przelew"
     account = invoice.get("konto_bankowe") or ("" if invoice.get("_official") else get_setting("konto_bankowe_biura")) or ""

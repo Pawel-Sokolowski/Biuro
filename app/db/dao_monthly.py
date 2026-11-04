@@ -22,6 +22,12 @@ def get_month_status(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
 
 
 def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> None:
+    import datetime
+    payload = dict(payload)
+    sent = "Wysłane wyniki" in (payload.get("etap"), payload.get("etap_kadry"))
+    if sent and not payload.get("dokumenty_dostarczone"):
+        payload["dokumenty_dostarczone"] = 1
+        payload["data_dostarczenia"] = payload.get("data_dostarczenia") or datetime.date.today().isoformat()
     conn = get_conn()
     cur = conn.cursor()
 

@@ -8,25 +8,25 @@ from app.utils import backup_mail
 from app.utils.backup_status import get_backup_status, parse_backup_log
 from tests.base import DbTestCase
 
-LOG = """  2026-10-15 01:15 The file "E:\\backup_baz\\Adamac_S_C__20261014.BAK" has been compressed
-    2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Adamkiewicz_Paweł_20261014.BAK" into "\\\\nas6t\\backup\\bazy_enova\\backup_baz 2026-10-15 01;14;37 (Full).zip"
-    2026-10-15 01:15 The file "E:\\backup_baz\\Adamkiewicz_Paweł_20261014.BAK" has been compressed
-    2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Adamowicz_Monika_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
-    2026-10-15 01:16 The file "E:\\backup_baz\\Adamowicz_Monika_20261014.BAK" has been compressed
-    2026-10-15 01:16 Compressing the file "E:\\backup_baz\\Ajdukonis_Klaudia_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
+LOG = """  2026-10-15 01:15 The file "E:\\backup_baz\\Alfa_S_C__20261014.BAK" has been compressed
+    2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Kowalski_Jan_20261014.BAK" into "\\\\nas6t\\backup\\bazy_enova\\backup_baz 2026-10-15 01;14;37 (Full).zip"
+    2026-10-15 01:15 The file "E:\\backup_baz\\Kowalski_Jan_20261014.BAK" has been compressed
+    2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Nowak_Anna_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
+    2026-10-15 01:16 The file "E:\\backup_baz\\Nowak_Anna_20261014.BAK" has been compressed
+    2026-10-15 01:16 Compressing the file "E:\\backup_baz\\Wisniewska_Ewa_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
 """
 
 
 def plain_message(body):
     msg = EmailMessage()
-    msg["From"] = "Backup <powiadomienia@example.invalid>"
+    msg["From"] = "Backup <powiadomienia@demo.example>"
     msg.set_content(body)
     return msg
 
 
 class MailBodyTests(unittest.TestCase):
     def test_plain_body(self):
-        self.assertIn("Adamkiewicz_Paweł", backup_mail.message_log_text(plain_message(LOG)))
+        self.assertIn("Kowalski_Jan", backup_mail.message_log_text(plain_message(LOG)))
 
     def test_html_body_keeps_lines(self):
         msg = EmailMessage()
@@ -35,41 +35,41 @@ class MailBodyTests(unittest.TestCase):
         html = "<html><body>" + "<br>".join(line.strip() for line in LOG.splitlines()) + "</body></html>"
         msg.add_alternative(html, subtype="html")
         parsed = parse_backup_log(backup_mail.message_log_text(msg))
-        self.assertEqual(sorted(parsed["databases"]), ["Adamac_S_C", "Adamkiewicz_Paweł", "Adamowicz_Monika", "Ajdukonis_Klaudia"])
+        self.assertEqual(sorted(parsed["databases"]), ["Alfa_S_C", "Kowalski_Jan", "Nowak_Anna", "Wisniewska_Ewa"])
 
     def test_html_table_rows_keep_date_and_message_apart(self):
         html = ("<table><tr><td>2026-10-22 01:12</td><td>Compressing the file "
-                '"E:\\backup_baz\\Adamac_S_C__20261021.BAK" into "x.zip"</td></tr>'
+                '"E:\\backup_baz\\Alfa_S_C__20261021.BAK" into "x.zip"</td></tr>'
                 "<tr><td>2026-10-22 01:13</td><td>The file "
-                '"E:\\backup_baz\\Adamac_S_C__20261021.BAK" has been compressed</td></tr></table>')
+                '"E:\\backup_baz\\Alfa_S_C__20261021.BAK" has been compressed</td></tr></table>')
         parsed = parse_backup_log(backup_mail.html_to_text(html))
-        self.assertIsNotNone(parsed["databases"]["Adamac_S_C"]["last_success"])
+        self.assertIsNotNone(parsed["databases"]["Alfa_S_C"]["last_success"])
 
     def test_log_attachment_used_when_body_empty(self):
         msg = EmailMessage()
-        msg["From"] = "powiadomienia@example.invalid"
+        msg["From"] = "powiadomienia@demo.example"
         msg.set_content(" ")
         msg.add_attachment(LOG.encode("utf-8"), maintype="text", subtype="plain", filename="backup.log")
-        self.assertIn("Adamac_S_C", backup_mail.message_log_text(msg))
+        self.assertIn("Alfa_S_C", backup_mail.message_log_text(msg))
 
     def test_user_sample_per_database(self):
         dbs = parse_backup_log(LOG)["databases"]
-        self.assertEqual(str(dbs["Adamac_S_C"]["file_date"]), "2026-10-14")
-        self.assertIsNotNone(dbs["Adamac_S_C"]["last_success"])
-        self.assertIsNotNone(dbs["Adamowicz_Monika"]["last_success"])
-        self.assertIsNone(dbs["Ajdukonis_Klaudia"]["last_success"])
+        self.assertEqual(str(dbs["Alfa_S_C"]["file_date"]), "2026-10-14")
+        self.assertIsNotNone(dbs["Alfa_S_C"]["last_success"])
+        self.assertIsNotNone(dbs["Nowak_Anna"]["last_success"])
+        self.assertIsNone(dbs["Wisniewska_Ewa"]["last_success"])
 
 
 class MailRefreshTests(DbTestCase):
     def setUp(self):
         super().setUp()
         conn = get_conn()
-        conn.execute("INSERT INTO konta_email (email, systemowe) VALUES ('Powiadomienia@example.invalid', 1)")
+        conn.execute("INSERT INTO konta_email (email, systemowe) VALUES ('Powiadomienia@demo.example', 1)")
         conn.execute("INSERT INTO foldery_email (konto_id, server_name) VALUES (1, 'INBOX')")
         rows = [
             ("1", "Backup <noreply@enova.pl>", "Wed, 14 Oct 2026 09:00:00 +0200"),
-            ("2", "powiadomienia@example.invalid", "Wed, 14 Oct 2026 02:00:00 +0200"),
-            ("3", "powiadomienia@example.invalid", "Thu, 15 Oct 2026 02:00:00 +0200"),
+            ("2", "powiadomienia@demo.example", "Wed, 14 Oct 2026 02:00:00 +0200"),
+            ("3", "powiadomienia@demo.example", "Thu, 15 Oct 2026 02:00:00 +0200"),
         ]
         for uid, sender, date in rows:
             conn.execute(
@@ -109,8 +109,8 @@ class MailRefreshTests(DbTestCase):
         from datetime import datetime
         status = get_backup_status(datetime(2026, 10, 15, 9, 0))
         states = {b["nazwa"]: b["stan"] for b in status["bazy"]}
-        self.assertEqual(states["Adamowicz_Monika"], "ok")
-        self.assertEqual(states["Ajdukonis_Klaudia"], "blad")
+        self.assertEqual(states["Nowak_Anna"], "ok")
+        self.assertEqual(states["Wisniewska_Ewa"], "blad")
 
     def test_missing_account_reports_clearly(self):
         conn = get_conn()

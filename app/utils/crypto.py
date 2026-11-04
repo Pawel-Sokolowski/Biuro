@@ -87,7 +87,7 @@ def decrypt_password(encrypted_password: str) -> str:
         decrypted = _cipher().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
         return decrypted
     except InvalidToken:
-        logger.warning("Failed to decrypt password: invalid token or corrupted data")
+        logger.debug("Failed to decrypt password: invalid token or corrupted data")
         return ""
     except Exception as e:
         logger.error(f"Decryption failed: {e}")

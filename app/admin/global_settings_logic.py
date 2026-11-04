@@ -682,6 +682,72 @@ class GlobalSettingsLogic:
             kategoria=kategoria,
         )
 
+    def import_extra_services_from_csv(self, path: str) -> Dict[str, int]:
+        """Import usług dodatkowych z CSV/XLSX w formacie: Nazwa, Netto, Kategoria.
+
+        VAT i GTU pochodzą z ustawień domyślnych; istniejące usługi (po nazwie) są aktualizowane.
+        """
+        file = Path(path)
+        if not file.exists():
+            raise FileNotFoundError(path)
+        suffix = file.suffix.lower()
+        if suffix == ".csv":
+            raw = file.read_bytes()
+            try:
+                text = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1250")
+            first = text.splitlines()[0] if text.strip() else ""
+            delimiter = ";" if first.count(";") >= first.count(",") else ","
+            rows = [list(r) for r in csv.reader(text.splitlines(), delimiter=delimiter)]
+        elif suffix in (".xlsx", ".xls"):
+            wb = openpyxl.load_workbook(file, data_only=True)
+            rows = [["" if c is None else c for c in r] for r in wb.active.iter_rows(values_only=True)]
+        else:
+            raise ValueError("Obsługiwane formaty: CSV, XLSX, XLS")
+
+        def is_header(row) -> bool:
+            names = {str(c).strip().lower() for c in row}
+            return "nazwa" in names
+
+        index = {"nazwa": 0, "netto": 1, "kategoria": 2}
+        if rows and is_header(rows[0]):
+            header = [str(c).strip().lower() for c in rows[0]]
+            for key, aliases in (("nazwa", ("nazwa",)), ("netto", ("netto", "cena netto", "cena_netto")),
+                                 ("kategoria", ("kategoria",))):
+                found = next((header.index(a) for a in aliases if a in header), None)
+                if found is not None:
+                    index[key] = found
+                elif key == "kategoria":
+                    index[key] = None
+            rows = rows[1:]
+
+        default_vat = self.get_setting("uslugi_domyslny_vat") or "23%"
+        existing = {str(r["nazwa"]).strip().lower(): r for r in self.get_extra_services()}
+        result = {"dodane": 0, "zaktualizowane": 0, "pominiete": 0}
+        seen = set()
+        for row in rows:
+            def cell(key):
+                i = index.get(key)
+                return row[i] if i is not None and i < len(row) else ""
+
+            nazwa = str(cell("nazwa") or "").strip()
+            if not nazwa or nazwa.lower() in seen:
+                result["pominiete"] += 1
+                continue
+            seen.add(nazwa.lower())
+            netto = safe_float(cell("netto"))
+            kategoria = str(cell("kategoria") or "").strip() or "księgowość"
+            current = existing.get(nazwa.lower())
+            if current:
+                self.update_extra_service_by_name(
+                    str(current["nazwa"]), nazwa, netto, current["stawka_vat"] or default_vat, kategoria)
+                result["zaktualizowane"] += 1
+            else:
+                self.add_extra_service(nazwa, netto, default_vat, kategoria)
+                result["dodane"] += 1
+        return result
+
     # -------------------------
     # Firmy
     # -------------------------

@@ -40,6 +40,46 @@ def _authorized_company_ids(firma_ids: List[int], pracownik_id: int | None) -> L
     return [firma_id for firma_id in firma_ids if firma_id in allowed]
 
 
+_TYPE_LABELS = {"ksiegowosc": "Księgowość", "kadry": "Kadry", "dodatkowe": "Czynność dodatkowa", "ogolne": "Ogólne"}
+
+
+def build_daily_report(employee_ids: List[int], start: str, end: str,
+                       pracownik_id: int | None = None) -> List[Dict[str, Any]]:
+    """Czas pracy z czasomierzy dla wybranych pracowników w dniach start..end (YYYY-MM-DD, włącznie).
+
+    Pracownik bez uprawnień do finansów widzi wyłącznie własny czas."""
+    see_all = not pracownik_id or is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
+    employee_ids = [int(e) for e in employee_ids if see_all or int(e) == pracownik_id]
+    if not employee_ids:
+        return []
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT substr(c.rozpoczecie, 1, 10) AS dzien, c.typ, c.opis, c.sekundy,
+                   COALESCE(NULLIF(TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')), ''), '(brak)') AS pracownik,
+                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, '') AS firma, u.nazwa AS usluga
+            FROM czasomierze c
+            LEFT JOIN pracownicy p ON p.id = c.pracownik_id
+            LEFT JOIN firmy f ON f.id = c.firma_id
+            LEFT JOIN uslugi_dodatkowe u ON u.id = c.usluga_id
+            WHERE c.pracownik_id = ANY(%s)
+              AND substr(c.rozpoczecie, 1, 10) >= %s AND substr(c.rozpoczecie, 1, 10) <= %s
+            ORDER BY dzien, pracownik, firma, c.rozpoczecie
+            """,
+            (employee_ids, start, end),
+        ).fetchall()
+    finally:
+        conn.close()
+    totals: Dict[tuple, int] = {}
+    for row in rows:
+        activity = row["opis"] or row["usluga"] or _TYPE_LABELS.get(row["typ"], row["typ"])
+        key = (row["dzien"], row["pracownik"], row["firma"], activity)
+        totals[key] = totals.get(key, 0) + int(row["sekundy"] or 0)
+    return [{"data": day, "pracownik": emp, "firma": firm, "czynnosc": act, "sekundy": secs}
+            for (day, emp, firm, act), secs in sorted(totals.items())]
+
+
 # ============================================================
 # RANGE MIESIĘCY
 # ============================================================

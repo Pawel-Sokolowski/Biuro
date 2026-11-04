@@ -64,6 +64,10 @@ _ACCOUNT_SYNC_LOCKS = {}
 _ACCOUNT_SYNC_LOCKS_MUTEX = threading.Lock()
 
 
+_AUTH_FAILURES: Dict[Any, float] = {}
+AUTH_RETRY_SECONDS = 900
+
+
 def _account_sync_lock(konto_id: int) -> threading.Lock:
     with _ACCOUNT_SYNC_LOCKS_MUTEX:
         return _ACCOUNT_SYNC_LOCKS.setdefault(konto_id, threading.RLock())
@@ -81,15 +85,32 @@ def _connect_imap(
     if not host or not login:
         return None
 
+    key = (host, login, account.get("haslo_enc"))
+    failed_at = _AUTH_FAILURES.get(key)
+    if failed_at is not None and time.monotonic() - failed_at < AUTH_RETRY_SECONDS:
+        return None
+
     try:
+        password = decrypt_password(account.get("haslo_enc"))
+        if account.get("haslo_enc") and not password:
+            _AUTH_FAILURES[key] = time.monotonic()
+            return None
         return open_imap(
             host,
             account.get("port_imap"),
             account.get("ssl_imap"),
             login,
-            decrypt_password(account.get("haslo_enc")),
+            password,
             timeout,
         )
+    except imaplib.IMAP4.error as exc:
+        if "AUTHENTICATIONFAILED" in str(exc).upper() or "LOGIN" in str(exc).upper():
+            # Złe hasło ignorujemy; ponowna próba dopiero po zmianie hasła lub po czasie.
+            _AUTH_FAILURES[key] = time.monotonic()
+            logger.info("IMAP: nieprawidłowe dane logowania dla %s", login)
+            return None
+        logger.warning("IMAP login failed for %s: %s", login, exc)
+        return None
     except Exception:
         logger.exception("IMAP login failed for %s", login)
         return None
@@ -198,7 +219,7 @@ def list_folder_infos(
     imap_conn = _connect_imap(account, timeout)
 
     if not imap_conn:
-        logger.warning(
+        logger.debug(
             "list_folder_infos: brak połączenia IMAP dla konta %s",
             konto_id,
         )
@@ -728,7 +749,7 @@ def fetch_headers(
                     "FETCH",
                     ",".join(chunk),
                     "(FLAGS BODY.PEEK[HEADER.FIELDS "
-                    "(FROM TO SUBJECT DATE MESSAGE-ID "
+                    "(FROM TO CC SUBJECT DATE MESSAGE-ID "
                     "IN-REPLY-TO REFERENCES CONTENT-TYPE)])",
                 )
 
@@ -787,8 +808,8 @@ def fetch_headers(
                         "sender": safe_header(
                             msg.get("From", "")
                         ),
-                        "recipient": safe_header(
-                            msg.get("To", "")
+                        "recipient": ", ".join(
+                            part for part in (safe_header(msg.get("To", "")), safe_header(msg.get("Cc", ""))) if part
                         ),
                         "subject": safe_header(
                             msg.get("Subject", "")
@@ -1318,8 +1339,12 @@ def _sync_and_prefetch_impl(
             )
 
     try:
-        from app.utils.saldeo_status import apply_saldeo_emails
+        from app.utils.saldeo_status import (
+            apply_saldeo_emails,
+            rescan_on_startup,
+        )
         apply_saldeo_emails()
+        rescan_on_startup()
     except Exception:
         logger.exception(
             "Nie udało się zaktualizować statusów z maili Saldeo"

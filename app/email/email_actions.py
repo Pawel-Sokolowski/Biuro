@@ -133,13 +133,11 @@ def prepare_message(
 
 def choose_copy_folder(konto_id: int, from_addr: str, to_addrs: Iterable[str], subject: str) -> Optional[str]:
     """Folder z reguły filtra pasującej do wychodzącej wiadomości (np. folder klienta)."""
-    from app.email.email_rules import _active_rules, rule_matches
+    from app.email.email_rules import _active_rules, find_rule
 
     header = {"sender": from_addr, "recipient": ", ".join(to_addrs or []), "subject": subject}
-    for rule in _active_rules(konto_id):
-        if rule_matches(rule, header):
-            return rule["target"]
-    return None
+    rule = find_rule(_active_rules(konto_id), header)
+    return rule["target"] if rule else None
 
 
 def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> None:

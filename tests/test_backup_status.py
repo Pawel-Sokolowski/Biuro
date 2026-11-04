@@ -9,8 +9,8 @@ from tests.base import DbTestCase
 
 SAMPLE = """Connection timed out.
     2026-10-15 01:15 The file "E:\\backup_baz\\_S_C__20261014.BAK" has been compressed
-    2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Adamkiewicz_Paweł_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
-    2026-10-15 01:15 The file "E:\\backup_baz\\Paweł_20261014.BAK" has been compressed
+    2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Kowalski_Jan_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
+    2026-10-15 01:15 The file "E:\\backup_baz\\Jan_20261014.BAK" has been compressed
     2026-10-15 01:15 Compressing the file "E:\\backup_baz\\Monika_20261014.BAK" into "\\\\nas6t\\backup\\x.zip"
 """
 
@@ -48,15 +48,15 @@ class ParseTests(unittest.TestCase):
 
     def test_per_database_results(self):
         dbs = parse_backup_log(SAMPLE)["databases"]
-        self.assertEqual(list(dbs), ["Adamkiewicz_Paweł", "Monika", "Paweł", "S_C"])
-        self.assertIsNone(dbs["Adamkiewicz_Paweł"]["last_success"])
-        self.assertIsNotNone(dbs["Paweł"]["last_success"])
+        self.assertEqual(list(dbs), ["Jan", "Kowalski_Jan", "Monika", "S_C"])
+        self.assertIsNone(dbs["Kowalski_Jan"]["last_success"])
+        self.assertIsNotNone(dbs["Jan"]["last_success"])
         self.assertIsNone(dbs["Monika"]["last_success"])
 
     def test_backup_name_and_company_match(self):
-        self.assertEqual(backup_name(r"E:\backup_baz\Adamkiewicz_Paweł_20261014.BAK"), "Adamkiewicz_Paweł")
-        firmy = [{"nazwa": "ADAMKIEWICZ PAWEŁ Usługi", "nazwa_skrocona": None}]
-        self.assertEqual(match_company("Adamkiewicz_Paweł", firmy), "ADAMKIEWICZ PAWEŁ Usługi")
+        self.assertEqual(backup_name(r"E:\backup_baz\Kowalski_Jan_20261014.BAK"), "Kowalski_Jan")
+        firmy = [{"nazwa": "KOWALSKI JAN Usługi", "nazwa_skrocona": None}]
+        self.assertEqual(match_company("Kowalski_Jan", firmy), "KOWALSKI JAN Usługi")
         self.assertIsNone(match_company("Monika", firmy))
 
     def test_empty_log(self):
@@ -86,7 +86,7 @@ class StatusTests(DbTestCase):
         set_setting("backup_log_path", str(self.log))
         status = get_backup_status(datetime(2026, 10, 15, 9, 0))
         states = {b["nazwa"]: b["stan"] for b in status["bazy"]}
-        self.assertEqual(states["Paweł"], "ok")
+        self.assertEqual(states["Jan"], "ok")
         self.assertEqual(states["Monika"], "blad")
 
     def test_missing_path(self):

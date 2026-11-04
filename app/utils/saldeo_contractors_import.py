@@ -212,3 +212,95 @@ def import_saldeo_contractors(path: str, actor_id: int) -> dict[str, Any]:
     finally:
         conn.close()
     return result
+
+
+def read_saldeo_company_names(path: str) -> list[dict[str, str]]:
+    """Wczytuje kolumny Nazwa firmy, Nazwa skrócona i Login (wzór demo-NIP)."""
+    source = Path(path)
+    extension = source.suffix.lower()
+    if extension == ".csv":
+        rows = _csv_rows(source)
+    elif extension == ".xlsx":
+        rows = _xlsx_rows(source)
+    else:
+        raise ValueError("Obsługiwane formaty to CSV i XLSX.")
+    columns = None
+    header_index = 0
+    for i, row in enumerate(rows[:20]):
+        normalized = [_header(cell) for cell in row]
+        if {"nazwaskrocona", "login"}.issubset(set(normalized)):
+            columns = {name: j for j, name in enumerate(normalized)}
+            header_index = i
+            break
+    if columns is None:
+        raise ValueError("Brak nagłówków: Nazwa firmy, Nazwa skrócona, Login.")
+    records = []
+    for row_number, row in enumerate(rows[header_index + 1:], start=header_index + 2):
+        if not any(_cell(v) for v in row):
+            continue
+
+        def value(name: str) -> str:
+            index = columns.get(name)
+            return _cell(row[index]) if index is not None and index < len(row) else ""
+
+        records.append({"row": str(row_number), "company": value("nazwafirmy"),
+                        "short_name": value("nazwaskrocona"), "login": value("login")})
+    return records
+
+
+def import_saldeo_company_names(path: str, actor_id: int) -> dict[str, Any]:
+    """Zapisuje firmy.nazwa_saldeo_firmy (nazwa używana w mailach Saldeo).
+
+    Firma jest dopasowywana po NIP z loginu (demo-[NIP]); nazwa Saldeo
+    kontrahenta używana w eksporcie faktur pozostaje bez zmian.
+    """
+    if not is_administrator(actor_id):
+        raise PermissionError("Import danych Saldeo jest dostępny tylko dla administratora.")
+    records = read_saldeo_company_names(path)
+    result: dict[str, Any] = {"total": len(records), "updated": 0, "unchanged": 0,
+                              "invalid_login": 0, "missing_company": 0, "ambiguous": 0,
+                              "empty_name": 0, "warnings": []}
+    by_nip: dict[str, set[str]] = {}
+    for entry in records:
+        match = re.search(r"(\d{10})\s*$", re.sub(r"[\s-]", "", entry["login"]))
+        nip = match.group(1) if match else ""
+        if not nip:
+            result["invalid_login"] += 1
+            result["warnings"].append("Wiersz {}: login bez NIP.".format(entry["row"]))
+        elif not entry["short_name"]:
+            result["empty_name"] += 1
+        else:
+            by_nip.setdefault(nip, set()).add(entry["short_name"])
+
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT id, nip, nazwa_saldeo_firmy FROM firmy").fetchall()
+        db_by_nip: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            company = dict(row)
+            nip = _nip(company["nip"])
+            if nip:
+                db_by_nip.setdefault(nip, []).append(company)
+        for nip, names in by_nip.items():
+            candidates = db_by_nip.get(nip, [])
+            if len(names) != 1 or len(candidates) > 1:
+                result["ambiguous"] += 1
+                result["warnings"].append("NIP {}: niejednoznaczne dane — pominięto.".format(nip))
+                continue
+            if not candidates:
+                result["missing_company"] += 1
+                continue
+            name = next(iter(names))
+            if name == (candidates[0]["nazwa_saldeo_firmy"] or "").strip():
+                result["unchanged"] += 1
+                continue
+            conn.execute("UPDATE firmy SET nazwa_saldeo_firmy = %s WHERE id = %s",
+                         (name, candidates[0]["id"]))
+            result["updated"] += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return result

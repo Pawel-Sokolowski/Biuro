@@ -48,6 +48,30 @@ class AppearanceAndCatalogueTests(unittest.TestCase):
         appearance.apply_appearance(13)
         self.assertGreater(self.app.palette().color(QPalette.ColorRole.Base).lightness(), 200)
 
+    def test_custom_accent_persists_and_survives_reopen(self):
+        widget = appearance.AppearanceSettings(21)
+        with patch.object(appearance.QColorDialog, "getColor", return_value=QColor("#12ab34")):
+            widget.accent.setCurrentIndex(widget.accent.findData(appearance.CUSTOM_MARKER))
+        self.assertEqual(appearance.preferences(21), ("light", "#12ab34"))
+        self.assertEqual(widget.accent.currentData(), "#12ab34")
+        reopened = appearance.AppearanceSettings(21)
+        self.assertEqual(reopened.accent.currentData(), "#12ab34")
+        self.assertEqual(appearance.preferences(21)[1], "#12ab34")
+
+    def test_cancelled_color_dialog_keeps_previous_accent(self):
+        widget = appearance.AppearanceSettings(22)
+        widget.accent.setCurrentIndex(widget.accent.findData("#047857"))
+        with patch.object(appearance.QColorDialog, "getColor", return_value=QColor()):
+            widget.accent.setCurrentIndex(widget.accent.findData(appearance.CUSTOM_MARKER))
+        self.assertEqual(widget.accent.currentData(), "#047857")
+        self.assertEqual(appearance.preferences(22)[1], "#047857")
+
+    def test_accent_outside_preset_list_is_not_reset_and_garbage_is(self):
+        appearance.QSettings("x", "y").setValue("users/23/appearance/accent", "#abcdef")
+        self.assertEqual(appearance.preferences(23)[1], "#abcdef")
+        appearance.QSettings("x", "y").setValue("users/23/appearance/accent", "nonsens")
+        self.assertEqual(appearance.preferences(23)[1], "#2563eb")
+
     def test_normal_user_has_appearance_without_administrative_pages(self):
         logic = Mock()
         logic.get_user_permissions.return_value = {}

@@ -216,8 +216,11 @@ class ExtraServicesSettings(QWidget):
             return
 
         try:
-            self.logic.import_extra_services_from_csv(path)
+            result = self.logic.import_extra_services_from_csv(path)
             self._refresh()
-            QMessageBox.information(self, "OK", "Zaimportowano usługi.")
+            QMessageBox.information(
+                self, "OK",
+                f"Dodano: {result['dodane']}, zaktualizowano: {result['zaktualizowane']}, "
+                f"pominięto: {result['pominiete']}.\nVAT i GTU uzupełniono z ustawień domyślnych.")
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Import nieudany: {e}")

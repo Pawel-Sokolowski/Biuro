@@ -22,7 +22,7 @@ class XadesTests(unittest.TestCase):
     @unittest.skipIf(etree is None, "brak lxml")
     def test_signature_matches_exclusive_c14n(self):
         cert, key = make_pair()
-        root = etree.fromstring(sign_auth_request("CH-1", "5265877635", cert, key).encode())
+        root = etree.fromstring(sign_auth_request("CH-1", "9240000010", cert, key).encode())
         sig = root.find("ds:Signature", NS)
         info = sig.find("ds:SignedInfo", NS)
         key.public_key().verify(
@@ -59,7 +59,7 @@ class XadesTests(unittest.TestCase):
 
         session = mock.Mock()
         session.request.side_effect = request
-        client = KsefClient("5265877635", "", "test", session=session, certificate=cert, private_key=key)
+        client = KsefClient("9240000010", "", "test", session=session, certificate=cert, private_key=key)
         self.assertEqual(client.authenticate(), "A")
         sent = next(c for c in calls if c[1] == "/auth/xades-signature")
         self.assertIn(b"<ds:Signature", sent[2]["data"])

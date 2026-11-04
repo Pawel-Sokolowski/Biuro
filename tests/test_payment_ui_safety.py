@@ -40,6 +40,7 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.addCleanup(self.dialog.close)
 
     def test_editing_invoice_selects_its_transfer_and_caps_split_amount(self):
+        self.dialog.table.cellWidget(1, 5).setCurrentIndex(0)
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)
         self.assertEqual(self.dialog.table.currentRow(), 1)
         self.assertEqual(self.dialog.table.cellWidget(1, 6).text(), "40.00")
@@ -104,7 +105,7 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.dialog.refresh()
         self.assertEqual(self.dialog.table.cellWidget(1, 5).currentData(), 11)
         self.assertEqual(self.dialog.table.cellWidget(1, 6).text(), "15.00")
-        self.assertIsNone(self.dialog.table.cellWidget(0, 5).currentData())
+        self.assertEqual(self.dialog.table.cellWidget(0, 5).currentData(), 11)
 
     def test_remembered_amount_is_capped_to_invoice_balance_after_refresh(self):
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)
@@ -114,6 +115,7 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.assertEqual(self.dialog.table.cellWidget(1, 6).text(), "10.00")
 
     def test_unselected_invoice_and_declined_confirmation_never_write(self):
+        self.dialog.table.cellWidget(0, 5).setCurrentIndex(0)
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "warning"):
             self.dialog._confirm()
@@ -148,7 +150,7 @@ class BankReviewSafetyTests(unittest.TestCase):
         first, second = (self.dialog.table.cellWidget(row, 5) for row in (0, 1))
         self.assertEqual({first.itemData(i) for i in range(1, first.count())}, {11, 13})
         self.assertEqual({second.itemData(i) for i in range(1, second.count())}, {12})
-        self.assertIsNone(first.currentData())
+        self.assertEqual(first.currentData(), 11)
         override = self.dialog.table.cellWidget(0, 8)
         self.assertFalse(override.isChecked())
         override.setChecked(True)
@@ -212,7 +214,21 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.assertEqual({combo.itemData(i) for i in range(1, combo.count())}, {11})
         self.assertIn("FV/0091/09/2026", combo.itemText(1))
         self.assertEqual(self.dialog.table.cellWidget(0, 7).currentText(), "FIRMA SP.J.")
-        self.assertIsNone(combo.currentData())
+        self.assertEqual(combo.currentData(), 11)
+        self.assertEqual(self.dialog.table.cellWidget(0, 6).text(), "1279.20")
+
+    def test_starred_suggestion_is_preselected_but_never_settled_without_confirmation(self):
+        self.invoices[0].update(numer="FV/0091/09/2026", balance=Decimal("1279.20"))
+        self.transfers[0].update(kwota=Decimal("1279.20"), remaining=Decimal("1279.20"),
+                                 tytul="FV/0091/09/2026")
+        self.dialog.refresh()
+        combo = self.dialog.table.cellWidget(0, 5)
+        self.assertTrue(combo.itemText(1).startswith("★"))
+        self.assertEqual(combo.currentIndex(), 1)
+        with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
+             patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+            self.dialog._confirm()
+        confirm.assert_not_called()
 
     def test_bulk_confirmation_lists_invoice_allocations_before_saving(self):
         for row in (0, 1):
@@ -273,6 +289,25 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         page.issued_table.selectRow(0)
         return page
 
+    def test_issued_and_draft_toolbars_have_requested_buttons_in_order(self):
+        from PyQt6.QtWidgets import QPushButton
+        page = self.page()
+
+        def texts(tab):
+            layout = tab.layout().itemAt(0).layout()
+            return [layout.itemAt(i).widget().text() for i in range(layout.count())
+                    if isinstance(layout.itemAt(i).widget(), QPushButton) and layout.itemAt(i).widget().isVisibleTo(tab)]
+
+        self.assertEqual(texts(page.tab_wystawione), [
+            "Podgląd faktury", "JPK_V7M", "Wystaw korektę", "Anuluj fakturę", "Pobierz z KSeF",
+            "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Rozlicz MT940", "Rozlicz gotówką",
+            "Wyślij pdf e-mailem", "Przenieś do kosza", "Kosz…"])
+        drafts = texts(page.tab_robocze)
+        self.assertEqual(drafts[:2], ["Generuj faktury", "Wystaw faktury"])
+        general = [page.btn_manual.text(), page.btn_contractors.text()]
+        self.assertNotIn("Generuj faktury", general)
+        self.assertIs(page.btn_generate_all.parent(), page.tab_robocze)
+
     def test_cash_dialog_defaults_to_remaining_balance(self):
         record_cash_payment(self.invoice_id, "2026-09-06", "23.00", 1)
         captured = []
@@ -305,6 +340,13 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertEqual(page.issued_table.columnWidth(6), 88)
         self.assertEqual(page.issued_table.columnWidth(7), 88)
         self.assertEqual(page.issued_table.columnWidth(page.ISSUED_KSEF_COLUMN), 360)
+        headers = [page.issued_table.horizontalHeaderItem(i).text() for i in range(page.issued_table.columnCount())]
+        self.assertEqual(headers[page.ISSUED_PAID_AMOUNT_COLUMN], "Zapłacono")
+        self.assertEqual(headers[page.ISSUED_REMAINING_COLUMN], "Pozostało")
+        brutto = Decimal(page.issued_table.item(0, 7).text())
+        paid = Decimal(page.issued_table.item(0, page.ISSUED_PAID_AMOUNT_COLUMN).text())
+        remaining = Decimal(page.issued_table.item(0, page.ISSUED_REMAINING_COLUMN).text())
+        self.assertEqual(paid + remaining, brutto)
         with patch("app.invoices.faktury_ui.QInputDialog.getText", return_value=("Korekta", True)), \
              patch.object(page, "_open_editor") as open_editor:
             page._create_correction()

@@ -8,6 +8,7 @@ from app.db.dao_monthly import contracts_by_month
 from app.reports.import_parse import (
     MIN_YEAR,
     compute_employee_report,
+    classify_invoice_item,
     digits,
     fold,
     kadry_contract_type,
@@ -360,6 +361,66 @@ def delete_imported(
     return deleted
 
 
+def _live_work(conn, firma_ids: List[int], months: List[str], skip: set) -> List[Dict[str, Any]]:
+    """Czas z czasomierzy zapisany w programie; pomija firmy/miesiące, które mają dane z importu."""
+    ph_f = ",".join("%s" for _ in firma_ids)
+    ph_m = ",".join("%s" for _ in months)
+    rows = conn.execute(
+        f"""
+        SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac,
+               TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')) AS pracownik_nazwa,
+               c.typ, c.usluga_id, c.sekundy
+        FROM czasomierze c JOIN firmy f ON f.id = c.firma_id
+        LEFT JOIN pracownicy p ON p.id = c.pracownik_id
+        WHERE c.firma_id IN ({ph_f}) AND c.miesiac IN ({ph_m})
+        """,
+        [*firma_ids, *months],
+    ).fetchall()
+    result = []
+    for r in rows:
+        if (r["firma_id"], r["miesiac"]) in skip:
+            continue
+        kadry = r["typ"] == "kadry"
+        extra = r["typ"] in ("dodatkowe", "ogolne") or bool(r["usluga_id"])
+        dzial = ("inne_kadry" if extra else "kadry") if kadry else ("inne_ksiegowosc" if extra else "ksiegowosc")
+        result.append({"firma_id": r["firma_id"], "firma_nazwa": r["firma_nazwa"], "miesiac": r["miesiac"],
+                       "pracownik_nazwa": r["pracownik_nazwa"], "dzial": dzial, "sekundy": r["sekundy"]})
+    return result
+
+
+def _live_invoices(conn, firma_ids: List[int], months: List[str], skip: set) -> List[Dict[str, Any]]:
+    """Pozycje faktur (robocze i wystawione) utworzone w programie, bez anulowanych i proform."""
+    import json
+
+    ph_f = ",".join("%s" for _ in firma_ids)
+    ph_m = ",".join("%s" for _ in months)
+    rows = conn.execute(
+        f"""
+        SELECT fa.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS kontrahent, fa.miesiac, fa.pozycje_json
+        FROM faktury fa JOIN firmy f ON f.id = fa.firma_id
+        WHERE fa.firma_id IN ({ph_f}) AND fa.miesiac IN ({ph_m})
+          AND fa.rodzaj = 'faktura' AND fa.cancelled_at IS NULL
+        """,
+        [*firma_ids, *months],
+    ).fetchall()
+    result = []
+    for r in rows:
+        if (r["firma_id"], r["miesiac"]) in skip:
+            continue
+        try:
+            positions = json.loads(r["pozycje_json"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        for position in positions if isinstance(positions, list) else []:
+            kategoria = fold(position.get("kategoria"))
+            rodzaj = classify_invoice_item(position.get("nazwa"))
+            if rodzaj == "inne":
+                rodzaj = "kadry" if "kadr" in kategoria else "ksiegowosc" if "ksiegow" in kategoria else "inne"
+            result.append({"firma_id": r["firma_id"], "kontrahent": r["kontrahent"], "miesiac": r["miesiac"],
+                           "rodzaj": rodzaj, "wartosc_netto": float(position.get("netto") or 0)})
+    return result
+
+
 def build_profitability_report(
     firma_ids: List[int], months: List[str], pracownik_id: Optional[int] = None
 ) -> List[Dict[str, Any]]:
@@ -389,6 +450,8 @@ def build_profitability_report(
             """,
             [*firma_ids, *years],
         ).fetchall()]
+        work += _live_work(conn, firma_ids, months, {(w["firma_id"], w["miesiac"]) for w in work})
+        invoices += _live_invoices(conn, firma_ids, months, {(i["firma_id"], i["miesiac"]) for i in invoices})
         counts: Dict[tuple, int] = {
             ("ksiegowosc", r["firma_id"], r["miesiac"]): int(r["ile"])
             for r in conn.execute(

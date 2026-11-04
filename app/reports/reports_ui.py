@@ -1,7 +1,7 @@
 # app/reports/reports_ui.py
 from app.utils.ui_imports import *
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QCheckBox
+from PyQt6.QtWidgets import QCheckBox, QCalendarWidget
 from PyQt6.QtCharts import (
     QChart, QChartView,
     QBarSeries, QBarSet,
@@ -20,10 +20,40 @@ from app.reports.reports_logic import (
     compare_companies,
     build_profit_report,
     build_summary_report,
+    build_daily_report,
 )
 from app.reports.import_parse import SEKCJE, SEKCJA_LABELS
 
 PROFIT_MODE = "Rentowność"
+DAILY_MODE = "Raport dzienny"
+DAILY_HEADERS = ["Data", "Pracownik", "Firma", "Zadanie / czynność", "Czas"]
+
+
+def daily_display_rows(rows):
+    """Data i pracownik tylko przy pierwszym wystąpieniu; pusty wiersz między dniami."""
+    out, last_day, last_emp = [], None, None
+    for item in rows:
+        if last_day is not None and item["data"] != last_day:
+            out.append([""] * len(DAILY_HEADERS))
+            last_emp = None
+        new_day = item["data"] != last_day
+        out.append([
+            datetime.date.fromisoformat(item["data"]).strftime("%d/%m/%Y") if new_day else "",
+            item["pracownik"] if new_day or item["pracownik"] != last_emp else "",
+            item.get("firma") or "", item["czynnosc"], format_hours(item["sekundy"]),
+        ])
+        last_day, last_emp = item["data"], item["pracownik"]
+    return out
+
+
+def daily_range(day: datetime.date, whole_month: bool) -> tuple[str, str]:
+    """Zakres dat (włącznie) dla raportu dziennego: wybrany dzień albo cały miesiąc."""
+    if not whole_month:
+        return day.isoformat(), day.isoformat()
+    first = day.replace(day=1)
+    last = (first.replace(year=first.year + (first.month == 12), month=first.month % 12 + 1)
+            - datetime.timedelta(days=1))
+    return first.isoformat(), last.isoformat()
 PROFIT_HEADERS = {
     "ksiegowosc": ["Firma", "Miesiąc", "Pracownik", "Ilość dokumentów", "Czas pracy księgowość",
                    "Księgowość", "Czas pracy usługi dodatkowe", "Usługi dodatkowe", "Koszt pracownika", "Zysk / strata"],
@@ -73,6 +103,7 @@ class ReportsPage(QWidget):
             "Raport miesięczny",
             "Raport roczny",
             PROFIT_MODE,
+            DAILY_MODE,
         ])
         mode_box.addWidget(QLabel("Tryb:"))
         mode_box.addWidget(self.mode_combo)
@@ -117,6 +148,31 @@ class ReportsPage(QWidget):
         self.year_box.addWidget(QLabel("Rok:"))
         self.year_box.addWidget(self.year_combo)
         layout.addWidget(self.year_box_container)
+
+        self.daily_box_container = QWidget()
+        daily_box = QHBoxLayout(self.daily_box_container)
+        self.employee_list = QListWidget()
+        self.employee_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.employee_list.setMaximumHeight(200)
+        for emp_id, label in self._reportable_employees():
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, emp_id)
+            self.employee_list.addItem(item)
+        daily_box.addWidget(self.employee_list, 1)
+        self.daily_from = QCalendarWidget()
+        self.daily_to = QCalendarWidget()
+        self.daily_from.setMaximumHeight(200)
+        self.daily_to.setMaximumHeight(200)
+        self.chk_whole_month = QCheckBox("Cały miesiąc (z daty „Od”)")
+        for title, calendar in (("Od dnia", self.daily_from), ("Do dnia", self.daily_to)):
+            column = QVBoxLayout()
+            column.addWidget(QLabel(title))
+            column.addWidget(calendar)
+            daily_box.addLayout(column, 1)
+        daily_box.addWidget(self.chk_whole_month)
+        self.daily_from.selectionChanged.connect(self._daily_from_changed)
+        self.chk_whole_month.toggled.connect(self.daily_to.setDisabled)
+        layout.addWidget(self.daily_box_container)
 
         self.mode_combo.currentTextChanged.connect(self._update_mode_ui)
 
@@ -209,6 +265,8 @@ class ReportsPage(QWidget):
         self.report_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.report_table)
 
+        self.daily_table = self._make_table(DAILY_HEADERS)
+        layout.addWidget(self.daily_table)
         self._update_mode_ui(self.mode_combo.currentText())
         for table in (self.summary_table, self.report_table, self.import_table, self.import_table_kadry,
                       self.common_table, self.company_table):
@@ -250,8 +308,12 @@ class ReportsPage(QWidget):
 
     def _update_mode_ui(self, mode):
         profit = mode == PROFIT_MODE
+        daily = mode == DAILY_MODE
         summary = False
         self.month_box_container.setVisible(mode in ["Raport miesięczny", PROFIT_MODE])
+        self.firm_list.setVisible(not daily)
+        self.daily_box_container.setVisible(daily)
+        self.daily_table.setVisible(daily)
         self.year_box_container.setVisible(mode == "Raport roczny")
         self.summary_table.setVisible(summary)
         self.import_table.setVisible(profit)
@@ -262,11 +324,18 @@ class ReportsPage(QWidget):
         self.common_table.setVisible(profit)
         self.company_label.setVisible(profit)
         self.company_table.setVisible(profit)
-        self.report_table.setVisible(not summary and not profit)
-        self.chart_top.setVisible(not summary)
-        self.chart_bottom.setVisible(not summary)
+        self.report_table.setVisible(not summary and not profit and not daily)
+        self.chart_top.setVisible(not summary and not daily)
+        self.chart_bottom.setVisible(not summary and not daily)
 
     def _generate_report(self):
+        mode = self.mode_combo.currentText()
+        if mode == DAILY_MODE:
+            rows = self._daily_rows()
+            if rows is not None:
+                self._render_daily(rows)
+            return
+
         selected = [
             self.firm_list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self.firm_list.count())
@@ -276,8 +345,6 @@ class ReportsPage(QWidget):
         if not selected:
             QMessageBox.warning(self, "Brak wyboru", "Wybierz co najmniej jedną firmę.")
             return
-
-        mode = self.mode_combo.currentText()
 
         if mode == "Raport miesięczny":
             start = self.month_start.currentText()
@@ -295,6 +362,50 @@ class ReportsPage(QWidget):
         elif mode == PROFIT_MODE:
             months = get_months_range(self.month_start.currentText(), self.month_end.currentText())
             self._render_import_report(self._profit_rows(selected, months))
+
+    def _reportable_employees(self):
+        from app.db.dao_conn import get_conn
+        from app.security.authorization import can, is_administrator
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, TRIM(COALESCE(imie, '') || ' ' || COALESCE(nazwisko, '')) AS label "
+                "FROM pracownicy ORDER BY nazwisko, imie"
+            ).fetchall()
+        finally:
+            conn.close()
+        see_all = (not self.pracownik_id or is_administrator(self.pracownik_id)
+                   or can(self.pracownik_id, "can_view_finances"))
+        return [(r["id"], r["label"] or f"#{r['id']}") for r in rows if see_all or r["id"] == self.pracownik_id]
+
+    def _daily_from_changed(self):
+        if self.daily_to.selectedDate() < self.daily_from.selectedDate():
+            self.daily_to.setSelectedDate(self.daily_from.selectedDate())
+
+    def _daily_rows(self):
+        """Dane raportu dziennego dla zaznaczonych pracowników; None, gdy brak wyboru."""
+        ids = [self.employee_list.item(i).data(Qt.ItemDataRole.UserRole)
+               for i in range(self.employee_list.count()) if self.employee_list.item(i).isSelected()]
+        if not ids:
+            QMessageBox.warning(self, "Brak wyboru", "Wybierz co najmniej jednego pracownika.")
+            return None
+        first = self.daily_from.selectedDate().toPyDate()
+        if self.chk_whole_month.isChecked():
+            start, end = daily_range(first, True)
+        else:
+            last = max(first, self.daily_to.selectedDate().toPyDate())
+            start, end = first.isoformat(), last.isoformat()
+        return build_daily_report(ids, start, end, self.pracownik_id)
+
+    def _render_daily(self, rows):
+        display = daily_display_rows(rows)
+        self.daily_table.setRowCount(len(display))
+        for r, values in enumerate(display):
+            for c, value in enumerate(values):
+                self.daily_table.setItem(r, c, QTableWidgetItem(value))
+        self.daily_table.setMinimumHeight(min(600, 40 + 26 * len(display)))
+        self.report_status.setText("Brak zarejestrowanego czasu pracy w wybranym zakresie." if not rows
+                                   else f"Dni: {len({r['data'] for r in rows})}, pozycji: {len(rows)}.")
 
     def _profit_rows(self, selected, months):
         from app.reports.import_dao import build_profitability_report
@@ -854,6 +965,27 @@ class ReportsPage(QWidget):
         from app.utils.xlsx_safe import safe_row
 
         mode = self.mode_combo.currentText()
+
+        if mode == DAILY_MODE:
+            daily = self._daily_rows()
+            if daily is None:
+                return
+            filepath, _ = QFileDialog.getSaveFileName(
+                self, "Zapisz raport dzienny Excel", "", "Pliki Excel (*.xlsx)"
+            )
+            if not filepath:
+                return
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Raport dzienny"
+            ws.append(DAILY_HEADERS)
+            for col in range(1, len(DAILY_HEADERS) + 1):
+                ws.cell(row=1, column=col).font = Font(bold=True)
+            for values in daily_display_rows(daily):
+                ws.append(safe_row(values))
+            wb.save(filepath)
+            QMessageBox.information(self, "Sukces", f"Raport zapisany:\n{filepath}")
+            return
 
         selected = [
             self.firm_list.item(i).data(Qt.ItemDataRole.UserRole)

@@ -1,8 +1,12 @@
 """Local appearance preferences, isolated by signed-in employee."""
 from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import QApplication, QComboBox, QFormLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QComboBox, QFormLayout, QLabel,
+                             QVBoxLayout, QWidget)
 from app.preferences.checkbox_style import CheckboxStyle
+
+CUSTOM_MARKER = "__custom__"
+CUSTOM_LABEL = "Własny kolor…"
 
 ACCENTS = [("Niebieski", "#2563eb"), ("Fioletowy", "#7c3aed"),
            ("Zielony", "#047857"), ("Turkusowy", "#0e7490"),
@@ -14,8 +18,10 @@ def preferences(actor_id):
     prefix = f"users/{actor_id}/appearance/"
     mode = settings.value(prefix + "mode", "light")
     accent = settings.value(prefix + "accent", ACCENTS[0][1])
+    accent = str(accent or "")
+    valid = accent.startswith("#") and QColor(accent).isValid()
     return (mode if mode in ("light", "dark") else "light",
-            accent if accent in {value for _, value in ACCENTS} else ACCENTS[0][1])
+            QColor(accent).name() if valid else ACCENTS[0][1])
 
 
 def apply_appearance(actor_id):
@@ -110,13 +116,49 @@ class AppearanceSettings(QWidget):
             self.accent.setItemData(self.accent.count() - 1, QColor(value), Qt.ItemDataRole.DecorationRole)
         mode, accent = preferences(actor_id)
         self.mode.setCurrentIndex(self.mode.findData(mode))
+        self._custom_index = None
+        if self.accent.findData(accent) < 0:
+            self._set_custom_item(accent)
+        self.accent.addItem(CUSTOM_LABEL, CUSTOM_MARKER)
         self.accent.setCurrentIndex(self.accent.findData(accent))
+        self._last_index = self.accent.currentIndex()
         form.addRow("Motyw:", self.mode)
         form.addRow("Kolor akcentu:", self.accent)
         layout.addLayout(form)
         layout.addStretch()
         self.mode.currentIndexChanged.connect(self._save)
-        self.accent.currentIndexChanged.connect(self._save)
+        self.accent.currentIndexChanged.connect(self._accent_changed)
+
+    def _set_custom_item(self, value):
+        if self._custom_index is None:
+            self.accent.addItem(f"Własny ({value})", value)
+            self._custom_index = self.accent.count() - 1
+        else:
+            self.accent.setItemText(self._custom_index, f"Własny ({value})")
+            self.accent.setItemData(self._custom_index, value)
+        self.accent.setItemData(self._custom_index, QColor(value), Qt.ItemDataRole.DecorationRole)
+
+    def pick_custom_color(self):
+        current = self.accent.itemData(self._last_index)
+        initial = QColor(current if isinstance(current, str) and QColor(current).isValid() else ACCENTS[0][1])
+        colour = QColorDialog.getColor(initial, self, "Wybierz kolor akcentu")
+        if not colour.isValid():
+            return None
+        return colour.name()
+
+    def _accent_changed(self, index):
+        if self.accent.itemData(index) == CUSTOM_MARKER:
+            value = self.pick_custom_color()
+            self.accent.blockSignals(True)
+            if value is None:
+                self.accent.setCurrentIndex(self._last_index)
+                self.accent.blockSignals(False)
+                return
+            self._set_custom_item(value)
+            self.accent.setCurrentIndex(self._custom_index)
+            self.accent.blockSignals(False)
+        self._last_index = self.accent.currentIndex()
+        self._save()
 
     def _save(self):
         settings = QSettings("Biuro", "OfficeManager")

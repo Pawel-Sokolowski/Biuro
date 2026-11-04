@@ -159,7 +159,7 @@ class CeidgSuspensionTests(DbTestCase):
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         m = MonthlyViewModel([{
             "id": 1, "nazwa": "A", "vat_status": "czynny",
-            "vat_sprawdzono": "2026-02-19 12:23:00", "vat_sprawdzil": "Paweł S",
+            "vat_sprawdzono": "2026-02-19 12:23:00", "vat_sprawdzil": "Jan K",
             "vat_ue_status": "zwolniony",
         }], "ksiegowosc")
         self.assertEqual(m.columnCount(), 14)
@@ -167,7 +167,7 @@ class CeidgSuspensionTests(DbTestCase):
         self.assertEqual(m.data(m.index(0, 13), Qt.ItemDataRole.DisplayRole), "▲")
         tip = m.data(m.index(0, 12), Qt.ItemDataRole.ToolTipRole)
         self.assertIn("VAT czynny", tip)
-        self.assertIn("19.02.2026 12:23, Paweł S", tip)
+        self.assertIn("19.02.2026 12:23, Jan K", tip)
 
     def test_is_check_due(self):
         self.assertTrue(cs.is_check_due(date(2026, 5, 10)))

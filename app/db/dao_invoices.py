@@ -1,5 +1,6 @@
 import psycopg
 import json
+from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -87,7 +88,7 @@ def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, 
             FROM faktury f
             LEFT JOIN firmy c ON f.firma_id = c.id
             LEFT JOIN kontrahenci k ON f.kontrahent_id = k.id
-            WHERE COALESCE(f.eksportowana, 0) = 1
+            WHERE COALESCE(f.eksportowana, 0) = 1 AND f.rodzaj <> 'proforma'
         """
         params: List[Any] = []
         if pracownik_id and not (
@@ -512,8 +513,11 @@ def create_manual_invoice(
     data_sprzedazy: str,
     termin_platnosci: str,
     podstawa_zwolnienia: str = "",
+    rodzaj: str = "faktura",
 ) -> int:
-    """Tworzy robocz\u0105 faktur\u0119 r\u0119czn\u0105 dla firmy lub kontrahenta."""
+    """Tworzy robocz\u0105 faktur\u0119 r\u0119czn\u0105 (zwyk\u0142\u0105, zaliczkow\u0105 lub proforma) dla firmy lub kontrahenta."""
+    if rodzaj not in ("faktura", "zaliczkowa", "proforma"):
+        raise ValueError("Nieobs\u0142ugiwany rodzaj dokumentu.")
     if buyer_type not in ("firma", "kontrahent"):
         raise ValueError("Wybierz nabywc\u0119 faktury.")
     if not positions:
@@ -557,7 +561,7 @@ def create_manual_invoice(
         columns.append("podstawa_zwolnienia")
         columns.extend(buyer_data)
         values = [firma_id, kontrahent_id, 1, miesiac, netto, brutto, data_wystawienia,
-                  data_sprzedazy, termin_platnosci, json.dumps(normalized, ensure_ascii=False), "robocza", "faktura"]
+                  data_sprzedazy, termin_platnosci, json.dumps(normalized, ensure_ascii=False), "robocza", rodzaj]
         values.append(podstawa_zwolnienia.strip())
         values.extend(buyer_data.values())
         marks = ", ".join("%s" for _ in columns)
@@ -569,6 +573,40 @@ def create_manual_invoice(
         raise
     finally:
         conn.close()
+
+
+PAYMENT_TRIGGER_KINDS = ("zaliczkowa", "proforma")
+_COPIED_COLUMNS = (
+    "firma_id", "kontrahent_id", "kwota_netto", "kwota_brutto", "pozycje_json", "podstawa_zwolnienia",
+    "nabywca_skrocona", "nabywca_pelna", "nabywca_adres", "nabywca_kod", "nabywca_miasto", "nabywca_nip",
+    "nabywca_regon", "nabywca_kraj", "nabywca_email", "odbiorca_skrocona", "odbiorca_pelna", "odbiorca_rola",
+    "odbiorca_adres", "odbiorca_kod", "odbiorca_miasto", "odbiorca_nip", "odbiorca_regon", "odbiorca_kraj",
+    "odbiorca_email", "wystawca", "konto_bankowe", "gtu", "metoda_kasowa",
+)
+
+
+def create_draft_after_payment(conn, source_id: int) -> Optional[int]:
+    """Po pełnej zapłacie proformy/faktury zaliczkowej tworzy roboczą fakturę zwykłą (raz na dokument)."""
+    source = conn.execute("SELECT * FROM faktury WHERE id = %s", (source_id,)).fetchone()
+    source = dict(source) if source else None
+    if not source or source["rodzaj"] not in PAYMENT_TRIGGER_KINDS or source["cancelled_at"]:
+        return None
+    paid = conn.execute(
+        "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s", (source_id,)
+    ).fetchone()[0]
+    if Decimal(str(source["kwota_brutto"])) <= 0 or paid < Decimal(str(source["kwota_brutto"])) - Decimal("0.009"):
+        return None
+    if conn.execute("SELECT 1 FROM faktury WHERE dokument_zrodlowy_id = %s", (source_id,)).fetchone():
+        return None
+    columns = [c for c in _COPIED_COLUMNS if c in source]
+    today = _now_date()
+    cur = conn.execute(
+        f"INSERT INTO faktury (miesiac, reczna, data_wystawienia, data_sprzedazy, termin_platnosci, status, rodzaj, "
+        f"dokument_zrodlowy_id, {', '.join(columns)}) "
+        f"VALUES (%s, 1, %s, %s, %s, 'robocza', 'faktura', %s, {', '.join('%s' for _ in columns)}) RETURNING id",
+        (today[:7], today, today, today, source_id, *[source[c] for c in columns]),
+    )
+    return int(cur.fetchone()[0])
 
 
 def create_or_update_invoice(
@@ -1230,7 +1268,7 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
         rows = conn.execute(
             "SELECT f.id, f.numer, f.miesiac, f.kwota_brutto, f.firma_id, COALESCE(fi.nip, f.nabywca_nip) AS firma_nip "
             "FROM faktury f LEFT JOIN firmy fi ON fi.id = f.firma_id "
-            "WHERE COALESCE(f.eksportowana, 0) = 1 AND COALESCE(f.ksef_numer, '') = '' "
+            "WHERE COALESCE(f.eksportowana, 0) = 1 AND COALESCE(f.ksef_numer, '') = '' AND f.rodzaj <> 'proforma' "
             "ORDER BY f.miesiac, f.id"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1247,7 +1285,7 @@ def _assign_invoice_number(conn, invoice_id: int) -> str:
     numer = (row["numer"] or "").strip()
     if not numer:
         issued = datetime.strptime(str(row["data_wystawienia"] or _now_date())[:10], DATE_FMT)
-        prefix = "KFV" if row["rodzaj"] == "korekta" else "FV"
+        prefix = {"korekta": "KFV", "zaliczkowa": "FZ", "proforma": "PRO"}.get(row["rodzaj"], "FV")
         suffix = f"/{issued.month:02d}/{issued.year}"
         pattern = re.compile(rf"^{prefix}/(\d+){suffix}$")
         existing = conn.execute(
@@ -1292,6 +1330,71 @@ def set_invoice_number(invoice_id: int, numer: str) -> None:
         conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", (numer.strip() or None, invoice_id))
 
 
+def trash_invoice(invoice_id: int, actor_id: int) -> None:
+    """Przenosi fakturę (także wystawioną lub z KSeF) do kosza; tylko administrator."""
+    if not is_administrator(actor_id):
+        raise PermissionError("Tylko administrator może usuwać faktury do kosza.")
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
+        if not row:
+            raise ValueError("Nie znaleziono faktury.")
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s LIMIT 1", (invoice_id,)).fetchone():
+            raise InvoiceLockedError("Faktura ma zapisane płatności. Najpierw cofnij rozliczenia.")
+        conn.execute(
+            "INSERT INTO faktury_kosz (faktura_id, firma_id, miesiac, numer, ksef_numer, faktura_json, pozycje_json, deleted_by) "
+            "SELECT f.id, f.firma_id, f.miesiac, f.numer, f.ksef_numer, to_jsonb(f), "
+            "(SELECT COALESCE(jsonb_agg(to_jsonb(p)), '[]'::jsonb) FROM faktury_pozycje p "
+            " WHERE p.faktura_id = f.id OR p.invoice_id = f.id), %s FROM faktury f WHERE f.id = %s",
+            (actor_id, invoice_id),
+        )
+        conn.execute("SELECT set_config('biuro.trash_delete', '1', true)")
+        conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
+        conn.execute(
+            "INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) "
+            "VALUES ('faktury', %s, 'kosz', %s, %s)",
+            (invoice_id, actor_id, f"{row['numer'] or '(bez numeru)'} {row['ksef_numer'] or ''}".strip()),
+        )
+
+
+def list_trashed_invoices(actor_id: int) -> List[Dict[str, Any]]:
+    if not is_administrator(actor_id):
+        raise PermissionError("Tylko administrator ma dostęp do kosza faktur.")
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT k.id, k.faktura_id, k.firma_id, k.miesiac, k.numer, k.ksef_numer, k.deleted_at, "
+            "COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma "
+            "FROM faktury_kosz k LEFT JOIN firmy f ON f.id = k.firma_id "
+            "WHERE k.restored_at IS NULL ORDER BY k.id DESC").fetchall()]
+
+
+def restore_trashed_invoice(trash_id: int, actor_id: int) -> int:
+    """Przywraca fakturę z kosza z oryginalnym id, numerem i pozycjami."""
+    if not is_administrator(actor_id):
+        raise PermissionError("Tylko administrator może przywracać faktury.")
+    with get_conn() as conn:
+        entry = conn.execute(
+            "SELECT * FROM faktury_kosz WHERE id = %s AND restored_at IS NULL FOR UPDATE", (trash_id,)).fetchone()
+        if not entry:
+            raise ValueError("Pozycji nie ma w koszu.")
+        try:
+            with conn.transaction():
+                conn.execute(
+                    "INSERT INTO faktury SELECT * FROM jsonb_populate_record(NULL::faktury, %s::jsonb)",
+                    (json.dumps(entry["faktura_json"]),))
+                conn.execute(
+                    "INSERT INTO faktury_pozycje SELECT * FROM jsonb_populate_recordset(NULL::faktury_pozycje, %s::jsonb)",
+                    (json.dumps(entry["pozycje_json"] or []),))
+        except psycopg.errors.UniqueViolation:
+            raise InvoiceLockedError(
+                "Nie można przywrócić: istnieje już faktura o tym numerze lub robocza dla tej firmy i miesiąca.")
+        conn.execute(
+            "UPDATE faktury_kosz SET restored_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s", (trash_id,))
+        conn.execute(
+            "INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) "
+            "VALUES ('faktury', %s, 'przywrocenie', %s, %s)", (entry["faktura_id"], actor_id, entry["numer"] or ""))
+        return int(entry["faktura_id"])
+
+
 def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
     if not can(actor_id, "can_export_data"):
         raise PermissionError("Brak uprawnień do anulowania faktur.")
@@ -1309,12 +1412,20 @@ def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
             raise InvoiceLockedError("Dokument KSeF wymaga korekty.")
         if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s", (invoice_id,)).fetchone():
             raise InvoiceLockedError("Faktura ma historię płatności. Użyj korekty.")
-        _preserve_legacy_extra_services(conn, dict(row))
         archive_invoice_positions(conn, dict(row))
-        conn.execute("UPDATE faktury SET status = 'anulowana', cancelled_reason = %s, cancelled_by = %s, cancelled_at = now() WHERE id = %s", (reason.strip(), actor_id, invoice_id))
-        conn.execute("DELETE FROM faktury_uslugi_dodatkowe WHERE invoice_id = %s", (invoice_id,))
+        # Snapshot z numerem zostaje w archiwum i audycie; sama faktura wraca do roboczych bez numeru.
+        conn.execute("UPDATE faktury_archiwum SET restore_manual = 0 WHERE faktura_id = %s", (invoice_id,))
+        conn.execute("SELECT set_config('biuro.cancel_revert', '1', true)")
+        try:
+            conn.execute(
+                "UPDATE faktury SET numer = NULL, eksportowana = 0, status = 'robocza', data_eksportu = NULL "
+                "WHERE id = %s", (invoice_id,))
+        except psycopg.errors.UniqueViolation:
+            raise InvoiceLockedError(
+                "Dla tej firmy i miesiąca istnieje już inna faktura robocza. Usuń ją przed anulowaniem.")
         conn.execute(
             "DELETE FROM invoice_number_ledger WHERE numer = %s AND invoice_id = %s",
             (row["numer"], invoice_id),
         )
-        conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('faktury', %s, 'anulowanie', %s, %s)", (invoice_id, actor_id, reason.strip()))
+        conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('faktury', %s, 'anulowanie', %s, %s)",
+                     (invoice_id, actor_id, f"{row['numer']}: {reason.strip()}"))

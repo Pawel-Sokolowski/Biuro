@@ -76,6 +76,8 @@ class SubstitutionDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel, self
         )
+        self.btn_delete = buttons.addButton("Usuń zastępstwo", QDialogButtonBox.ButtonRole.DestructiveRole)
+        self.btn_delete.clicked.connect(self._delete)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
@@ -94,6 +96,12 @@ class SubstitutionDialog(QDialog):
         self.until_check.setChecked(bool(until))
         if until:
             self.until.setSelectedDate(QDate.fromString(until, "yyyy-MM-dd"))
+        self.btn_delete.setEnabled(current is not None)
+
+    def _delete(self):
+        from app.db.dao_monthly import clear_substitution
+        clear_substitution(self.row["id"], self.role.currentData())
+        self.accept()
 
     def _save(self):
         from app.db.dao_monthly import clear_substitution, set_substitution
@@ -1035,7 +1043,7 @@ class MonthlyViewPage(QWidget):
         services_off = bool(firma.get("uslugi_zawieszone"))
         act_suspend = QAction("Wznów wykonywanie usług" if services_off else "Zawieś wykonywanie usług", self)
         act_archive = QAction("Przenieś do archiwum", self)
-        act_activity = QAction("Pokaż aktywności", self)
+        act_activity = QAction("Czasomierz klienta…", self)
 
         menu.addAction(act_suspend)
         menu.addAction(act_archive)
@@ -1050,7 +1058,7 @@ class MonthlyViewPage(QWidget):
         act_vat.triggered.connect(lambda: self._on_check_vat(firma_id))
         act_ceidg.triggered.connect(lambda: self._on_check_ceidg(firma_id))
         menu.addSeparator()
-        act_substitute = QAction("Ustaw zastępstwo…", self)
+        act_substitute = QAction("Zastępstwa…", self)
         act_substitute.triggered.connect(lambda: self._on_set_substitution(firma_id))
         menu.addAction(act_substitute)
         menu.addSeparator()
@@ -1129,9 +1137,6 @@ class MonthlyViewPage(QWidget):
         self._reload_rows()
 
     def _on_show_activity(self, firma_id: int):
-        dlg = ActivityDialog(
-            firma_id,
-            self._current_month(),
-            parent=self,
-        )
+        from app.monthly_view.timer_records_dialog import TimerRecordsDialog
+        dlg = TimerRecordsDialog(firma_id, self.pracownik_id, parent=self)
         dlg.exec()

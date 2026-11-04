@@ -657,7 +657,10 @@ class EmailPage(QWidget):
         btn_filters.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         filters_menu = QMenu(btn_filters)
         filters_menu.addAction("Importuj filtry z Thunderbirda…").triggered.connect(self.on_import_filters)
-        filters_menu.addAction("Zastosuj filtry do folderu Odebrane").triggered.connect(self.on_apply_filters)
+        self.apply_filters_action = filters_menu.addAction("Zastosuj filtry do bieżącego folderu")
+        self.apply_filters_action.triggered.connect(self.on_apply_filters)
+        filters_menu.aboutToShow.connect(self._update_apply_filters_action)
+        self._update_apply_filters_action()
         btn_filters.setMenu(filters_menu)
         toolbar.addWidget(btn_filters)
 
@@ -2453,6 +2456,7 @@ class EmailPage(QWidget):
             subject = f"Fwd: {subject}"
         self._open_compose(
             "Przekaż wiadomość",
+            copy_folder=self._reply_copy_folder(),
             subject=subject,
             html=self._quote_html(original, "forward"),
             attachments=self._save_attachments_to_temp(original),
@@ -2877,10 +2881,18 @@ class EmailPage(QWidget):
             text += f"\n\nNieobsługiwane filtry ({len(skipped)}):\n" + "\n".join(skipped[:15])
         QMessageBox.information(self, "Filtry", text)
 
+    def _filter_target_folder(self) -> str:
+        return self.current_folder_local or "INBOX"
+
+    def _update_apply_filters_action(self) -> None:
+        label = clean_folder_label(decode_mailbox_utf7(self._filter_target_folder()))
+        self.apply_filters_action.setText(f"Zastosuj filtry do folderu: {label}")
+
     def on_apply_filters(self) -> None:
         if not self.current_account:
             return
         konto_id = self.current_account["id"]
+        folder = self._filter_target_folder()
 
         def done(res, err) -> None:
             if err is not None:
@@ -2889,7 +2901,7 @@ class EmailPage(QWidget):
                 QMessageBox.information(self, "Filtry", f"Przeniesiono wiadomości: {res}")
             self._after_change()
 
-        self._run_async(lambda: apply_rules_to_folder(konto_id, "INBOX"), done)
+        self._run_async(lambda: apply_rules_to_folder(konto_id, folder), done)
 
     def on_more(self) -> None:
         QMessageBox.information(self, "Więcej", "Dodatkowe opcje w przygotowaniu.")

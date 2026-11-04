@@ -186,9 +186,13 @@ class CompanyForm(QDialog):
 
         if is_administrator(self.actor_id):
             nazwa_saldeo = QLineEdit()
-            nazwa_saldeo.setPlaceholderText("Nazwa z Saldeo (do eksportu faktur i rozpoznawania maili)")
-            add_row(["Nazwa skrócona w Saldeo:"], [nazwa_saldeo])
+            nazwa_saldeo.setPlaceholderText("Nazwa kontrahenta z Saldeo (eksport faktur)")
+            nazwa_saldeo_firmy = QLineEdit()
+            nazwa_saldeo_firmy.setPlaceholderText("Nazwa firmy w Saldeo, np. EMKASP (rozpoznawanie maili)")
+            add_row(["Nazwa skrócona w Saldeo:", "Nazwa firmy w Saldeo (maile):"],
+                    [nazwa_saldeo, nazwa_saldeo_firmy])
             self.inputs["nazwa_saldeo"] = nazwa_saldeo
+            self.inputs["nazwa_saldeo_firmy"] = nazwa_saldeo_firmy
 
         numer_umowy = QLineEdit()
 

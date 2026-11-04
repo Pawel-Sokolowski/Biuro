@@ -4,10 +4,20 @@ import tempfile
 import unittest
 import uuid
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from app.config import get_schema, set_schema
 from app.db.dao_conn import close_pool, get_conn
 from app.db.schema import init_db
 from app.security.bootstrap import create_initial_admin
+
+# Jedna aplikacja Qt na cały proces testowy: lokalna zmienna QApplication w teście
+# niszczyła widgety (błędy "C++ object deleted") i powodowała crash przy kolejnych testach.
+try:
+    from PyQt6.QtWidgets import QApplication
+    QT_APP = QApplication.instance() or QApplication(["biuro-tests"])
+except Exception:  # środowisko bez PyQt6
+    QT_APP = None
 
 
 def create_test_schema() -> str:

@@ -33,6 +33,7 @@ INVOICE_DOWNLOAD_INTERVAL = 3.1
 RATE_LIMIT_ATTEMPTS = 6
 RATE_LIMIT_MAX_WAIT = 30.0
 RATE_LIMIT_MAX_RETRY_AFTER = 300.0
+RATE_LIMIT_GIVE_UP_AFTER = 120.0
 AUTH_POLL_SECONDS = 1.0
 AUTH_POLL_ATTEMPTS = 30
 PAGE_SIZE = 100
@@ -130,6 +131,11 @@ class KsefClient:
             if attempt + 1 >= RATE_LIMIT_ATTEMPTS:
                 raise KsefError("KSeF nadal ogranicza zapytania po automatycznych ponowieniach. Spróbuj ponownie później.")
             wait = self._retry_after_seconds(response, attempt)
+            if wait > RATE_LIMIT_GIVE_UP_AFTER:
+                raise KsefError(
+                    f"KSeF ograniczył zapytania na {int(wait)} s. Spróbuj ponownie później; "
+                    "pobrane już faktury są zapisane."
+                )
             logger.warning("KSeF HTTP 429 dla %s %s; ponowienie za %.1f s", method, path, wait)
             self._sleep(wait)
         assert response is not None

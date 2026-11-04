@@ -23,8 +23,8 @@ HEADERS = [
 ]
 
 ROW = [
-    "6741006281", "331102247", "", "", "3 PROJEKTY NORBERT KUNDERA", "Kundera Norbert ",
-    "Osoba fizyczna (KPiR)", "Skala podatkowa", "", "Norbert Kundera", "norbert.kundera@wp.pl",
+    "9240000010", "123456785", "", "", "Przykładowe Biuro", "DEMO ",
+    "Osoba fizyczna (KPiR)", "Skala podatkowa", "", "Jan Kowalski", "biuro@example.com",
     "600000001", "Testowo", "78-500", "ul. Testowa 21", "Testowo",
     "78-500", "ul. Testowa 21", "Testowo", "78-500", "ul. Testowa 21", "",
     "2000-12-20", "", "", "", "", "", "2024-09-01", "", "", "7112Z, 6820Z",
@@ -35,7 +35,7 @@ ROW = [
 class ParsingTests(unittest.TestCase):
     def test_leading_zeros_restored(self):
         self.assertEqual(normalize_identifier("674100628", {10}), "0674100628")
-        self.assertEqual(normalize_identifier(331102247, {9, 14}), "331102247")
+        self.assertEqual(normalize_identifier(123456785, {9, 14}), "123456785")
 
     def test_multi_value_split(self):
         self.assertEqual(split_multi_value("7112Z, 6820Z"), ["7112Z", "6820Z"])
@@ -59,17 +59,17 @@ class ExcelImportTests(DbTestCase):
         import_companies_from_excel_file(path, self.db_path)
 
         conn = get_conn()
-        row = conn.execute("SELECT * FROM firmy WHERE nip = '6741006281'").fetchone()
+        row = conn.execute("SELECT * FROM firmy WHERE nip = '9240000010'").fetchone()
         conn.close()
         self.assertIsNotNone(row)
         expected = {
-            "regon": "331102247",
-            "nazwa": "3 PROJEKTY NORBERT KUNDERA",
-            "nazwa_skrocona": "Kundera Norbert",
+            "regon": "123456785",
+            "nazwa": "Przykładowe Biuro",
+            "nazwa_skrocona": "DEMO",
             "forma_dzialalnosci": "Osoba fizyczna (KPiR)",
             "forma_opodatkowania": "Skala podatkowa",
-            "osoba_kontaktowa": "Norbert Kundera",
-            "adres_email": "norbert.kundera@wp.pl",
+            "osoba_kontaktowa": "Jan Kowalski",
+            "adres_email": "biuro@example.com",
             "nr_telefonu": "600000001",
             "miasto": "Testowo",
             "kod_pocztowy": "78-500",
@@ -96,7 +96,7 @@ class ExcelImportTests(DbTestCase):
         import_companies_from_excel_file(path, self.db_path)
         import_companies_from_excel_file(path, self.db_path)
         conn = get_conn()
-        count = conn.execute("SELECT COUNT(*) FROM firmy WHERE nip = '6741006281'").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM firmy WHERE nip = '9240000010'").fetchone()[0]
         conn.close()
         self.assertEqual(count, 1)
 
@@ -108,7 +108,7 @@ class ImportDetailsTests(DbTestCase):
         path = os.path.join(self._tmp, "firmy.csv")
         with open(path, "w", encoding="cp1250", newline="") as f:
             f.write("NIP;Nazwa Firmy;Cenniki usług księgowych;VAT\n")
-            f.write("6741006281;Test;Ryczałt 230,00 netto, Cena ponad limit 5 szt. 5,5 zł;Tak\n")
+            f.write("9240000010;Test;Ryczałt 230,00 netto, Cena ponad limit 5 szt. 5,5 zł;Tak\n")
         payloads, warnings = import_companies_from_excel_file_payloads(path)
         self.assertEqual(len(payloads), 1)
         parsed = payloads[0]["cennik_ksiegowy_parsed"]
@@ -123,7 +123,7 @@ class ImportDetailsTests(DbTestCase):
 
         path = os.path.join(self._tmp, "firmy2.csv")
         with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write("NIP;Nazwa Firmy;Coś nowego\n6741006281;Test;x\n")
+            f.write("NIP;Nazwa Firmy;Coś nowego\n9240000010;Test;x\n")
         _, warnings = import_companies_from_excel_file_payloads(path)
         self.assertTrue(any("Coś nowego" in w for w in warnings))
 
@@ -131,7 +131,7 @@ class ImportDetailsTests(DbTestCase):
         from app.utils.importers import save_imported_payload
 
         payload = {
-            "nazwa": "Wizard Sp.", "nip": "6741006281",
+            "nazwa": "Wizard Sp.", "nip": "9240000010",
             "dz_miasto": "Szczecin", "dz_kod": "70-001", "dz_ulica": "Długa",
             "status_vat": "Czynny", "forma_opodatkowania": "Podatek liniowy",
             "forma_dzialalnosci": "Osoba fizyczna (KPiR)",
@@ -145,7 +145,7 @@ class ImportDetailsTests(DbTestCase):
         }
         save_imported_payload(payload, self.db_path)
         conn = get_conn()
-        firm = conn.execute("SELECT * FROM firmy WHERE nip = '6741006281'").fetchone()
+        firm = conn.execute("SELECT * FROM firmy WHERE nip = '9240000010'").fetchone()
         contacts = conn.execute("SELECT * FROM company_contacts WHERE firma_id = %s", (firm["id"],)).fetchall()
         price = conn.execute("SELECT * FROM cenniki WHERE klucz = 'KPIR_T_10_350'").fetchone()
         conn.close()

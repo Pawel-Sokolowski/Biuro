@@ -52,8 +52,29 @@ class MonthlyViewLogic:
     def is_general_timer_running(self) -> bool:
         return self.czas_start_general is not None
 
+    def stop_company_timers(self) -> None:
+        """Zapisuje i zatrzymuje stopery firm (księgowość i kadry)."""
+        now = datetime.datetime.now()
+        for typ in ("ksiegowosc", "kadry"):
+            fields = self._TIMER_FIELDS[typ]
+            firma_id = getattr(self, fields[0])
+            if firma_id is None or getattr(self, fields[1]) is None:
+                continue
+            conn = get_conn()
+            try:
+                self._ensure_month_status(firma_id)
+                cur = conn.cursor()
+                self._finish_timer(typ, now, cur)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
     def start_general_timer(self, activity: Optional[Dict[str, Any]] = None) -> None:
-        """Uruchamia stoper ogólny (bez firmy); poprzedni ogólny zostaje zapisany."""
+        """Uruchamia stoper ogólny (bez firmy); działające stopery firm i poprzedni ogólny są zapisywane."""
+        self.stop_company_timers()
         if self.is_general_timer_running():
             self.stop_general_timer()
         activity = dict(activity or {})
@@ -467,6 +488,7 @@ class MonthlyViewLogic:
 
         now = datetime.datetime.now()
         self._ensure_month_status(firma_id)
+        self.stop_general_timer()
 
         conn = get_conn()
         cur = conn.cursor()

@@ -230,6 +230,11 @@ class ManualInvoiceDialog(QDialog):
         self.podstawa_zwolnienia = QLineEdit()
         self.podstawa_zwolnienia.setPlaceholderText("Np. art. 113 ust. 1 ustawy o VAT — wymagane dla zw")
         form.addRow("Podstawa zwolnienia z VAT:", self.podstawa_zwolnienia)
+        self.kind = QComboBox()
+        self.kind.addItem("Faktura VAT", "faktura")
+        self.kind.addItem("Faktura zaliczkowa", "zaliczkowa")
+        self.kind.addItem("Faktura proforma", "proforma")
+        form.insertRow(0, "Rodzaj dokumentu:", self.kind)
         layout.addLayout(form)
         self.items = QTableWidget(0, 5)
         self.items.setHorizontalHeaderLabels(["Nazwa", "Ilo\u015B\u0107", "Jednostka", "Cena netto", "VAT %"])
@@ -370,7 +375,8 @@ class ManualInvoiceDialog(QDialog):
                                   self.date_issue.date().toString("yyyy-MM-dd"),
                                   self.date_sale.date().toString("yyyy-MM-dd"),
                                   self.date_due.date().toString("yyyy-MM-dd"),
-                                  podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip())
+                                  podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
+                                  rodzaj=self.kind.currentData())
         except (ValueError, TypeError) as exc:
             QMessageBox.warning(self, "Faktura", str(exc))
             return

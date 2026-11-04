@@ -173,12 +173,12 @@ def _cell(row, idx):
     return row[idx] if idx is not None and idx < len(row) else None
 
 
-def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
+def iter_work_rows(rows: Iterable[tuple]):
     """rows: pierwszy wiersz = nagłówek. Zwraca tylko wiersze od MIN_YEAR."""
     iterator = iter(rows)
     header = next(iterator, None)
     if header is None:
-        return []
+        return
     cols = _header_map(header)
     i_firma = _find(cols, "firma")
     i_nip = _find(cols, "nip")
@@ -195,7 +195,6 @@ def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
     if i_user is None or i_data is None:
         raise ValueError("Brak kolumn „Użytkownik” i „Data” w pliku.")
 
-    out = []
     for row in iterator:
         data = parse_date(_cell(row, i_data))
         if not data or int(data[:4]) < MIN_YEAR:
@@ -208,7 +207,7 @@ def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
         od, do = parse_clock(_cell(row, i_od)), parse_clock(_cell(row, i_do))
         mdok = str(_cell(row, i_mdok) or "").strip()[:7]
         miesiac = mdok if re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", mdok) else data[:7]
-        out.append({
+        yield {
             "firma_nazwa": firma,
             "nip": digits(_cell(row, i_nip)),
             "pracownik_nazwa": pracownik,
@@ -223,16 +222,20 @@ def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
             "komentarz": str(_cell(row, i_kom) or "").strip(),
             "dzial": classify_work(firma, czynnosc, pracownik),
             "hash": row_hash("czas", firma, pracownik, data, od, do, sekundy, czynnosc),
-        })
-    return out
+        }
 
 
 
-def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -> List[Dict[str, Any]]:
+def parse_work_rows(rows: Iterable[tuple]) -> List[Dict[str, Any]]:
+    """Compatibility list API for previews and existing integrations."""
+    return list(iter_work_rows(rows))
+
+
+def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None):
     iterator = iter(rows)
     header = next(iterator, None)
     if header is None:
-        return []
+        return
     cols = _header_map(header)
     i_kontr = _find(cols, "nazwa", "kontrahenta")
     i_nip = _find(cols, "nip")
@@ -245,7 +248,6 @@ def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -
     if i_poz is None or i_net is None:
         raise ValueError("Brak kolumn „Pozycja faktury” i „Wartość netto” w pliku.")
 
-    out = []
     for row in iterator:
         pozycja = str(_cell(row, i_poz) or "").strip()
         if not pozycja:
@@ -258,7 +260,7 @@ def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -
             continue
         netto = parse_amount(_cell(row, i_net))
         kontrahent = str(_cell(row, i_kontr) or "").strip()
-        out.append({
+        yield {
             "kontrahent": kontrahent,
             "nip": digits(_cell(row, i_nip)),
             "nr_faktury": nr,
@@ -269,8 +271,11 @@ def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -
             "miesiac": miesiac,
             "rodzaj": classify_invoice_item(pozycja),
             "hash": row_hash("faktura", kontrahent, nr, pozycja, netto, miesiac),
-        })
-    return out
+        }
+
+
+def parse_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None) -> List[Dict[str, Any]]:
+    return list(iter_invoice_rows(rows, default_month))
 
 
 

@@ -38,14 +38,28 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
   selected generation, account, folder, UID and row identity still match. Hold
   folder/message locks through the write so retirement cannot interleave the
   check and insert. Preserve SELECT's UIDVALIDITY because imaplib consumes it.
+- Carry that generation through header, flag and thread-reference batches; check
+  it under a folder lock held until each write commits. Retry stale snapshots
+  once, including empty-mailbox snapshots; persistent churn remains an error.
+  Compare the pre-SELECT checkpoint during adoption so a late selector cannot
+  roll back another client's generation. Reload incremental UID mappings after
+  adoption even when another selector performed the retirement. Full header
+  refreshes continue to fetch existing UIDs.
+- Capture header row identities in their write transaction and pass them to
+  automatic mail-rule actions so a late rule cannot target replacement messages.
 - Revalidate retained mail ranges in background workers, including read flags,
   deletion, retirement and assignment/completion filters. Preserve loaded older
   pages and their selection/preview when an unchanged request refreshes.
+- Key employee/completed lists by account and filter, independently of the
+  opened message's folder, in both synchronous and asynchronous loaders. Body
+  completion resolves the current rendered item using its captured row ID.
 - Clear old items and captured message identity immediately when changing
   folders/accounts. Include assignment/completion metadata for older notification
   targets without advancing the paging cursor over unloaded messages.
 - Resolve move/permanent-delete targets from the captured row identity when
   the tree has no selection; reject missing or different-account identities.
+  Capture deletion targets before the confirmation dialog's nested event loop,
+  which may process a list refresh and destroy the original tree items.
 - Start calendar synchronization with the main window, before its first visit.
 - Reject imported-data deletion while an import is running, including an import
   started while the deletion confirmation dialog was open.
@@ -65,11 +79,12 @@ installer certification.
 
 ## Validation
 
-- Final locked-runtime results: **702 tests in 89 modules passed**, without skips,
-  across the full sweep and a focused rerun after updating the initial-sync session fixture.
-- Nineteen additional review regression cases cover SELECT/FETCH generation races,
-  atomic retirement/write serialization, retained pages and filters, stale click
-  targets, notification metadata, missing selections, calendar startup and import/deletion concurrency.
+- Full locked-runtime run: **724 tests in 89 modules passed**, without skips.
+- Forty-one review regression cases cover SELECT/FETCH generation races, guarded
+  header/flag/reference writes, atomic retirement/write serialization, checkpoint
+  adoption and bounded retries, mail-rule identities, retained/account-wide pages,
+  body callbacks, nested confirmation dialogs, notification metadata, missing
+  selections, calendar startup and import/deletion concurrency.
 - Original coverage also includes twelve optimization regressions and independent RSA/EC signature cases.
 - Ruff checks for syntax/undefined names (`E9,F63,F7,F82`) passed.
 - Installed-package compatibility and `git diff --check` passed.

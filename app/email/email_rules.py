@@ -211,7 +211,7 @@ def _active_rules(konto_id: int) -> List[Dict[str, Any]]:
     return rules
 
 
-def apply_rules(konto_id: int, folder: str, headers: List[Dict[str, Any]]) -> int:
+def apply_rules(konto_id: int, folder: str, headers: List[Dict[str, Any]], *, expected_rows=None) -> int:
     """Przenosi pasujÄ…ce wiadomoĹ›ci do folderĂłw z reguĹ‚ (pierwsza pasujÄ…ca reguĹ‚a wygrywa)."""
     from app.email.email_sync import mark_read_remote, move_emails
 
@@ -220,15 +220,20 @@ def apply_rules(konto_id: int, folder: str, headers: List[Dict[str, Any]]) -> in
         return 0
     moves: Dict[str, List[str]] = {}
     for header in headers:
+        uid = str(header["uid"])
+        if expected_rows is not None and expected_rows.get(uid) is None:
+            continue
         rule = find_rule(rules, header)
         if rule is not None and rule["target"] != folder:
             if rule.get("oznacz_jako_przeczytane") and not header.get("is_seen"):
-                mark_read_remote(konto_id, folder, header["uid"])
-            moves.setdefault(rule["target"], []).append(str(header["uid"]))
+                options = {} if expected_rows is None else {"expected_row_id": expected_rows[uid]}
+                mark_read_remote(konto_id, folder, header["uid"], **options)
+            moves.setdefault(rule["target"], []).append(uid)
     moved = 0
     for target, uids in moves.items():
         try:
-            move_emails(konto_id, folder, uids, target)
+            options = {} if expected_rows is None else {"expected_rows": {uid: expected_rows[uid] for uid in uids}}
+            move_emails(konto_id, folder, uids, target, **options)
             moved += len(uids)
         except Exception:
             logger.warning("Nie udaĹ‚o siÄ™ przenieĹ›Ä‡ wiadomoĹ›ci do %s", target, exc_info=True)

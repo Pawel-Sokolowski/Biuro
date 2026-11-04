@@ -9,6 +9,33 @@ from app.config import EMAIL_LOCAL_LIMIT
 from app.email.email_helpers import folder_role
 
 
+_UNSPECIFIED_GENERATION = object()
+
+
+class MailboxGenerationChanged(RuntimeError):
+    """A selected mailbox snapshot no longer describes the stored UID mappings."""
+
+
+def get_mailbox_generation(konto_id: int, folder: str) -> Optional[str]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT uidvalidity FROM foldery_email WHERE konto_id=%s AND server_name=%s",
+            (konto_id, folder),
+        ).fetchone()
+        return row[0] if row else None
+
+
+def _lock_mailbox_generation(conn, konto_id: int, folder_id: int, generation: Optional[str]) -> None:
+    """Keep retirement outside a write transaction after validating its snapshot."""
+    row = conn.execute(
+        "SELECT id FROM foldery_email WHERE id=%s AND konto_id=%s "
+        "AND uidvalidity IS NOT DISTINCT FROM %s FOR SHARE",
+        (folder_id, konto_id, generation),
+    ).fetchone()
+    if row is None:
+        raise MailboxGenerationChanged("Generacja folderu IMAP zmieniła się podczas synchronizacji.")
+
+
 def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
 
@@ -445,12 +472,15 @@ def save_message_headers(
     konto_id: int,
     folder_id: int,
     headers: List[Dict[str, Any]],
-) -> None:
-    """Zapisuje wiele nagłówków w jednej transakcji (znacznie szybciej niż pojedynczo)."""
-    if not headers:
-        return
+    *, expected_generation=_UNSPECIFIED_GENERATION,
+) -> Dict[str, int]:
+    """Save a batch and capture its row identities in the same transaction."""
+    if not headers and expected_generation is _UNSPECIFIED_GENERATION:
+        return {}
     conn = get_conn()
     try:
+        if expected_generation is not _UNSPECIFIED_GENERATION:
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation)
         conn.cursor().executemany(
             """
             INSERT INTO wiadomosci_email
@@ -485,7 +515,12 @@ def save_message_headers(
                 for h in headers
             ],
         )
+        rows = conn.execute(
+            "SELECT uid, id FROM wiadomosci_email WHERE konto_id=%s AND folder_id=%s AND uid=ANY(%s)",
+            (konto_id, folder_id, [str(header["uid"]) for header in headers]),
+        ).fetchall() if headers else []
         conn.commit()
+        return {str(row[0]): row[1] for row in rows}
     finally:
         conn.close()
 
@@ -503,11 +538,14 @@ def get_uids_missing_refs(konto_id: int, folder_id: int, limit: int = 400) -> Li
         conn.close()
 
 
-def save_refs(konto_id: int, folder_id: int, updates: List[Tuple[str, str]]) -> None:
+def save_refs(konto_id: int, folder_id: int, updates: List[Tuple[str, str]],
+              *, expected_generation=_UNSPECIFIED_GENERATION) -> None:
     if not updates:
         return
     conn = get_conn()
     try:
+        if expected_generation is not _UNSPECIFIED_GENERATION:
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation)
         conn.cursor().executemany(
             "UPDATE wiadomosci_email SET refs = %s WHERE konto_id = %s AND folder_id = %s AND uid = %s",
             [(refs, konto_id, folder_id, uid) for uid, refs in updates],
@@ -517,7 +555,8 @@ def save_refs(konto_id: int, folder_id: int, updates: List[Tuple[str, str]]) -> 
         conn.close()
 
 
-def record_mailbox_generation(konto_id: int, folder: str, generation: str) -> bool:
+def record_mailbox_generation(konto_id: int, folder: str, generation: str,
+                               *, expected_generation=_UNSPECIFIED_GENERATION) -> bool:
     """Retire old UID mappings atomically; retain bodies and assignment history.
 
     A missing checkpoint cannot establish the generation of legacy cached UIDs.
@@ -533,6 +572,8 @@ def record_mailbox_generation(konto_id: int, folder: str, generation: str) -> bo
         ).fetchone()
         if row is None or row[1] == str(generation):
             return False
+        if expected_generation is not _UNSPECIFIED_GENERATION and row[1] != expected_generation:
+            raise MailboxGenerationChanged("Inna synchronizacja zmieniła generację folderu IMAP.")
         retired = conn.execute(
             "UPDATE wiadomosci_email SET uid='retired:' || id::text || ':' || uid, usunieta=1 "
             "WHERE konto_id=%s AND folder_id=%s AND uid NOT LIKE 'retired:%%'",
@@ -775,12 +816,9 @@ def save_current_raw_message(konto_id: int, folder_id: int, uid: str,
     then the message, and hold both locks until the body has been committed.
     """
     with get_conn() as conn:
-        folder = conn.execute(
-            "SELECT id FROM foldery_email WHERE id=%s AND konto_id=%s "
-            "AND uidvalidity IS NOT DISTINCT FROM %s FOR SHARE",
-            (folder_id, konto_id, generation),
-        ).fetchone()
-        if folder is None:
+        try:
+            _lock_mailbox_generation(conn, konto_id, folder_id, generation)
+        except MailboxGenerationChanged:
             return False
         row = conn.execute(
             "SELECT id FROM wiadomosci_email WHERE id=%s AND konto_id=%s "
@@ -1137,10 +1175,13 @@ def apply_server_state(
     all_uids: set,
     unseen_uids: Optional[set],
     deleted_cutoff: str,
+    *, expected_generation=_UNSPECIFIED_GENERATION,
 ) -> None:
     """Przenosi stan serwera do bazy: flagi przeczytania oraz wiadomo?ci usuni?te/przeniesione poza programem."""
     conn = get_conn()
     try:
+        if expected_generation is not _UNSPECIFIED_GENERATION:
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation)
         base = "konto_id = %s AND folder_id = %s"
         if unseen_uids is not None:
             conn.execute(

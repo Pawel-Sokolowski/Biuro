@@ -1249,8 +1249,11 @@ class EmailPage(QWidget):
         if self.current_folder_local:
             self._load_mail_async()
 
-    def _mail_request(self):
-        return (self.current_account["id"], self.current_folder_local,
+    def _mail_request(self, local_folder=None):
+        # Assignment/completion filters are account-wide. Opening a result in
+        # another folder changes the message target, not the list being paged.
+        folder = None if self.employee_filter is not None or self.completed_filter else (local_folder or self.current_folder_local)
+        return (self.current_account["id"], folder,
                 self.search_input.text().strip(), self.employee_filter, self.completed_filter)
 
     def _fetch_mail_data(self, request, before=None, existing=(), through=None):
@@ -1302,7 +1305,7 @@ class EmailPage(QWidget):
             if not self.current_account or request != self._mail_request():
                 return
             self.older_messages.setEnabled(True)
-            self.load_mail_list_from_db(request[1], keep_view=keep_view or paging, _payload=payload)
+            self.load_mail_list_from_db(self.current_folder_local, keep_view=keep_view or paging, _payload=payload)
         def failed(exc):
             self.older_messages.setEnabled(True)
             logger.warning("Nie można wczytać poczty: %s", exc)
@@ -1346,7 +1349,7 @@ class EmailPage(QWidget):
             return
 
         konto_id = self.current_account["id"]
-        request = (konto_id, local_folder, self.search_input.text().strip(), self.employee_filter, self.completed_filter)
+        request = self._mail_request(local_folder)
         if _payload is None:
             self._list_jobs.invalidate()
             try:
@@ -2092,7 +2095,7 @@ class EmailPage(QWidget):
             self._render_message(msg)
 
             self._mark_opened_as_read(
-                item,
+                row_id,
                 konto_id,
                 local_folder,
                 uid,
@@ -2150,19 +2153,31 @@ class EmailPage(QWidget):
                 "Nie udało się uruchomić pobierania wiadomości."
             )
 
-    def _mark_opened_as_read(self, item: QTreeWidgetItem, konto_id: int, folder: str, uid: str) -> None:
-        if not self.unread_map.get(uid, False):
+    def _mark_opened_as_read(self, row_id: int, konto_id: int, folder: str, uid: str) -> None:
+        if row_id is None or not self.unread_map.get(uid, False):
             return
-        self.unread_map[uid] = False
-        self._style_mail_item(item, False)
         try:
-            row_id = item.data(0, ROLE_ROW_ID)
             if not update_message_read_flag(konto_id, uid, True, get_folder_id(konto_id, folder), expected_row_id=row_id):
                 self._load_mail_async()
                 return
         except Exception:
             logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
             return
+        self.unread_map[uid] = False
+        for row in self._mail_rows:
+            if row["id"] == row_id:
+                row["przeczytana"] = 1
+                break
+        # A retained-page refresh may have replaced the clicked Qt item while
+        # its body was loading. Resolve the current item from the captured ID.
+        from PyQt6.QtWidgets import QTreeWidgetItemIterator
+        iterator = QTreeWidgetItemIterator(self.mail_list)
+        while iterator.value():
+            current = iterator.value()
+            if current.data(0, ROLE_ROW_ID) == row_id:
+                self._style_mail_item(current, False)
+                break
+            iterator += 1
         self.load_folders_from_db()
         self._refresh_chips()
         self._run_async(lambda: mark_read_remote(konto_id, folder, uid, expected_row_id=row_id), lambda res, err: None)
@@ -2669,18 +2684,19 @@ class EmailPage(QWidget):
         konto_id = self.current_account["id"]
         in_trash = [r for r in refs if self._role_of(r[1]) == "trash"]
         if in_trash and len(in_trash) == len(refs):
-            noun = "wiadomość" if len(refs) == 1 else f"wiadomości ({len(refs)})"
+            # Confirmation runs a nested event loop: refreshes can destroy the
+            # items in refs. Capture plain identities before opening the dialog.
+            targets = [(folder, str(uid), self._target_row_id(item, folder, uid)) for item, folder, uid in refs]
+            if any(row_id is None for _, _, row_id in targets):
+                return
+            noun = "wiadomość" if len(targets) == 1 else f"wiadomości ({len(targets)})"
             if QMessageBox.question(self, "Usuń", f"Usunąć {noun} bezpowrotnie?") \
                     != QMessageBox.StandardButton.Yes:
                 return
 
-            expected = {(folder, str(uid)): self._target_row_id(item, folder, uid) for item, folder, uid in refs}
-            if any(row_id is None for row_id in expected.values()):
-                return
-
             def work():
-                for _, folder, uid in refs:
-                    if not delete_email_remote(konto_id, folder, uid, expected_row_id=expected[(folder, str(uid))]):
+                for folder, uid, row_id in targets:
+                    if not delete_email_remote(konto_id, folder, uid, expected_row_id=row_id):
                         raise RuntimeError("Serwer odrzucił usunięcie wiadomości.")
 
             def done(res, err) -> None:

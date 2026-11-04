@@ -3,7 +3,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QMessageBox, QTextBrowser, QTreeWidgetItem
 
 from app.config import schema_context
@@ -143,6 +143,247 @@ class BodyIdentityTests(MailboxFixture):
             self.assertTrue(retired.result(timeout=3))
         self.assertEqual(storage.load_raw_message(row_id), b"original")
         self.assertIsNone(storage.get_message_row_id(1, self.folder, "1"))
+
+
+class HeaderGenerationTests(MailboxFixture):
+    def setUp(self):
+        super().setUp()
+        storage.record_mailbox_generation(1, "INBOX", "10")
+        self.add_messages(2)
+
+    @staticmethod
+    def header(uid="1", subject="Stale", seen=False, refs="<old@review>"):
+        return {"uid": uid, "message_id": f"<{subject}-{uid}@review>",
+                "subject": subject, "sender": f"{subject}@example.com",
+                "date": "2999-01-01 10:00", "is_seen": seen, "refs": refs}
+
+    def replace_mailbox(self, generation="11"):
+        storage.record_mailbox_generation(1, "INBOX", generation)
+        storage.save_message_headers(1, self.folder, [
+            self.header(uid, "Replacement", True, "<new@review>") for uid in ("1", "2")
+        ])
+
+    def assert_replacement_unchanged(self):
+        for uid in ("1", "2"):
+            row = storage.get_message_by_uid(1, uid, self.folder)
+            self.assertEqual(row["temat"], "Replacement")
+            self.assertEqual(row["nadawca"], "Replacement@example.com")
+            self.assertEqual(row["refs"], "<new@review>")
+            self.assertTrue(row["przeczytana"])
+            self.assertFalse(row["usunieta"])
+
+    def write_batch(self, kind, generation):
+        if kind == "headers":
+            storage.save_message_headers(1, self.folder, [self.header()], expected_generation=generation)
+        elif kind == "flags":
+            storage.apply_server_state(1, self.folder, {"1"}, {"1"}, "2000-01-01", expected_generation=generation)
+        else:
+            storage.save_refs(1, self.folder, [("1", "<old@review>")], expected_generation=generation)
+
+    def test_stale_header_flag_and_reference_batches_cannot_change_replacements(self):
+        self.replace_mailbox()
+        for kind in ("headers", "flags", "refs"):
+            with self.subTest(kind=kind), self.assertRaises(storage.MailboxGenerationChanged):
+                self.write_batch(kind, "10")
+            self.assert_replacement_unchanged()
+
+    def test_missing_generation_does_not_bypass_a_known_checkpoint(self):
+        with self.assertRaises(storage.MailboxGenerationChanged):
+            storage.save_message_headers(1, self.folder, [self.header()], expected_generation=None)
+        with self.assertRaises(storage.MailboxGenerationChanged):
+            storage.apply_server_state(1, self.folder, set(), set(), "2000-01-01", expected_generation=None)
+
+    def test_empty_header_batch_still_validates_its_generation(self):
+        self.replace_mailbox()
+        with self.assertRaises(storage.MailboxGenerationChanged):
+            storage.save_message_headers(1, self.folder, [], expected_generation="10")
+        self.assert_replacement_unchanged()
+
+    def test_header_flag_and_reference_transactions_hold_the_generation_lock_through_commit(self):
+        original = storage._lock_mailbox_generation
+        for index, kind in enumerate(("headers", "flags", "refs")):
+            generation = str(10 + index)
+            self.add_messages(2)
+            locked, release, retiring = threading.Event(), threading.Event(), threading.Event()
+
+            def lock(*args):
+                original(*args)
+                locked.set()
+                if not release.wait(3):
+                    raise TimeoutError("test did not release batch writer")
+
+            def write():
+                with schema_context(self.schema_name):
+                    self.write_batch(kind, generation)
+
+            def retire():
+                with schema_context(self.schema_name):
+                    retiring.set()
+                    return storage.record_mailbox_generation(1, "INBOX", str(int(generation) + 1))
+
+            with self.subTest(kind=kind), mock.patch.object(storage, "_lock_mailbox_generation", side_effect=lock), ThreadPoolExecutor(2) as pool:
+                written = pool.submit(write)
+                try:
+                    self.assertTrue(locked.wait(3))
+                    retired = pool.submit(retire)
+                    self.assertTrue(retiring.wait(3))
+                    with self.assertRaises(TimeoutError):
+                        retired.result(timeout=0.1)
+                finally:
+                    release.set()
+                written.result(timeout=3)
+                self.assertTrue(retired.result(timeout=3))
+
+    def header_imap(self, generation=b"10", select=None, empty=False):
+        conn = mock.Mock()
+        conn.select.return_value = ("OK", [b"2"])
+        conn.select.side_effect = select
+        conn.response.side_effect = [("UIDVALIDITY", [generation]), ("UIDVALIDITY", [None])]
+
+        def uid(command, *args):
+            if command == "SEARCH":
+                return "OK", [b"" if empty or "UNSEEN" in args else b"1"]
+            return "OK", [(b"1 (UID 1 FLAGS (\\Seen) BODY[HEADER] {50}",
+                            b"Subject: Remote replacement\r\nMessage-ID: <remote@review>\r\n\r\n")]
+
+        conn.uid.side_effect = uid
+        return conn
+
+    def fetch_headers(self, conn, **kwargs):
+        with mock.patch.object(email_sync, "_get_account_info", return_value={"id": 1}), \
+                mock.patch.object(email_sync, "_connect_imap", return_value=conn):
+            return email_sync.fetch_headers(1, "INBOX", **kwargs)
+
+    def test_known_uids_are_reloaded_when_another_selector_already_adopted_the_generation(self):
+        def select(*args, **kwargs):
+            storage.record_mailbox_generation(1, "INBOX", "11")
+            return "OK", [b"1"]
+
+        flags = {}
+        conn = self.header_imap(generation=b"11", select=select)
+        rows = self.fetch_headers(conn, known_uids={"1", "2"}, flags_out=flags)
+        self.assertEqual([row["uid"] for row in rows], ["1"])
+        self.assertEqual(flags["generation"], "11")
+        conn.response.assert_called_once_with("UIDVALIDITY")
+
+    def test_full_header_refresh_does_not_skip_existing_uids(self):
+        rows = self.fetch_headers(self.header_imap(), known_uids=None)
+        self.assertEqual([row["uid"] for row in rows], ["1"])
+
+    def test_empty_search_carries_the_selected_generation(self):
+        flags = {}
+        self.assertEqual(self.fetch_headers(self.header_imap(empty=True), flags_out=flags), [])
+        self.assertEqual(flags, {"generation": "10", "all": set(), "unseen": set()})
+
+    def test_late_selector_cannot_roll_back_a_generation_adopted_during_select(self):
+        def select(*args, **kwargs):
+            self.replace_mailbox()
+            return "OK", [b"2"]
+
+        conn = self.header_imap(select=select)
+        with self.assertRaises(storage.MailboxGenerationChanged):
+            self.fetch_headers(conn)
+        self.assertEqual(storage.get_mailbox_generation(1, "INBOX"), "11")
+        self.assert_replacement_unchanged()
+
+    def test_shared_selector_cannot_roll_back_a_generation_adopted_during_select(self):
+        def select(*args, **kwargs):
+            self.replace_mailbox()
+            return "OK", [b"2"]
+
+        with self.assertRaises(storage.MailboxGenerationChanged):
+            email_sync._Session(self.header_imap(select=select), 1).select("INBOX", True)
+        self.assert_replacement_unchanged()
+
+    def check_sync_retry(self, phase, empty=False):
+        attempts = []
+
+        def fetch(*args, flags_out, **kwargs):
+            first = not attempts
+            attempts.append(True)
+            flags_out.update(generation="10" if first else "11",
+                             all=set() if first and empty else ({"1"} if first else {"1", "2"}),
+                             unseen={"1"} if first else set())
+            if first and phase == "headers":
+                self.replace_mailbox()
+            return [self.header()] if first and not empty else []
+
+        backfills = []
+
+        def backfill(*args):
+            if not backfills and phase == "flags":
+                self.replace_mailbox()
+            backfills.append(True)
+            return 0
+
+        with mock.patch.object(email_sync, "fetch_headers", side_effect=fetch), \
+                mock.patch.object(email_sync, "backfill_refs", side_effect=backfill):
+            self.assertEqual(email_sync.sync_folder(1, "INBOX"), 0)
+        self.assertEqual(len(attempts), 2)
+        self.assert_replacement_unchanged()
+
+    def test_sync_retries_headers_fetched_before_another_client_adopted_a_generation(self):
+        self.check_sync_retry("headers")
+
+    def test_sync_retries_flags_when_generation_changes_after_header_commit(self):
+        self.check_sync_retry("flags")
+
+    def test_sync_retries_an_empty_stale_snapshot_instead_of_deleting_new_messages(self):
+        self.check_sync_retry("headers", empty=True)
+
+    def test_repeated_generation_changes_fail_after_a_bounded_retry(self):
+        attempts = []
+
+        def fetch(*args, flags_out, **kwargs):
+            generation = storage.get_mailbox_generation(1, "INBOX")
+            flags_out.update(generation=generation, all=set(), unseen=set())
+            self.replace_mailbox(str(int(generation) + 1))
+            attempts.append(True)
+            return []
+
+        with mock.patch.object(email_sync, "fetch_headers", side_effect=fetch), \
+                self.assertRaises(storage.MailboxGenerationChanged):
+            email_sync.sync_folder(1, "INBOX")
+        self.assertEqual(len(attempts), 2)
+        self.assert_replacement_unchanged()
+
+    def test_reference_backfill_rejects_a_generation_changed_during_fetch(self):
+        def fetch(*args):
+            self.replace_mailbox()
+            return "OK", [(b"1 (UID 1 BODY[HEADER] {30}", b"References: <old@review>\r\n\r\n")]
+
+        self.fake_session(fetch=fetch)
+        with self.assertRaises(storage.MailboxGenerationChanged):
+            email_sync.backfill_refs(1, "INBOX", self.folder)
+        self.assert_replacement_unchanged()
+
+    def check_stale_rule_action(self, mark_read):
+        from app.email import email_rules
+        original = email_rules.apply_rules
+
+        def fetch(*args, flags_out, **kwargs):
+            flags_out.update(generation="10", all={"1", "2"}, unseen={"1"})
+            return [self.header()]
+
+        def apply_after_retirement(*args, **kwargs):
+            self.replace_mailbox()
+            return original(*args, **kwargs)
+
+        rule = {"target": "Archive", "temat_zawiera": "Stale", "oznacz_jako_przeczytane": mark_read}
+        conn = self.fake_session(generation=b"11")
+        with mock.patch.object(email_sync, "fetch_headers", side_effect=fetch), \
+                mock.patch.object(email_sync, "backfill_refs", return_value=0), \
+                mock.patch.object(email_rules, "_active_rules", return_value=[rule]), \
+                mock.patch.object(email_rules, "apply_rules", side_effect=apply_after_retirement):
+            self.assertEqual(email_sync.sync_folder(1, "INBOX", full_sync=False), 1)
+        conn.uid.assert_not_called()
+        self.assert_replacement_unchanged()
+
+    def test_rules_cannot_mark_replacements_read_using_a_stale_header_batch(self):
+        self.check_stale_rule_action(True)
+
+    def test_rules_cannot_move_replacements_using_a_stale_header_batch(self):
+        self.check_stale_rule_action(False)
 
 
 class MailListFollowupTests(MailboxFixture):
@@ -300,6 +541,114 @@ class MailListFollowupTests(MailboxFixture):
         self.set_fallback_identity()
         self.page.current_account = {"id": 2}
         self.assertEqual(self.page._targets(), [])
+
+    def prepare_account_wide_filter(self, completed):
+        self.add_messages(1002)
+        archive = storage.save_folder(1, "Archive")
+        with get_conn() as conn:
+            conn.execute("UPDATE wiadomosci_email SET folder_id=%s WHERE uid IN ('3','1001')", (archive,))
+            ids = [row[0] for row in conn.execute("SELECT id FROM wiadomosci_email")]
+        storage.set_employee_assignment(ids, 1, True)
+        storage.set_messages_completed(ids, True)
+        self.page.employee_filter = None if completed else 1
+        self.page.completed_filter = completed
+        self.page.load_mail_list_from_db("INBOX")
+
+    def click_message(self, uid):
+        item = next(self.page.mail_list.topLevelItem(i) for i in range(self.page.mail_list.topLevelItemCount())
+                    if self.page.mail_list.topLevelItem(i).data(0, self.ui.ROLE_DATA) == uid)
+        with mock.patch.object(self.page, "_run_async"):
+            self.page.on_mail_clicked(item)
+
+    def check_account_wide_refresh(self, completed):
+        self.prepare_account_wide_filter(completed)
+        self.load_older()
+        context = self.page._mail_context
+        self.click_message("3")
+        self.assertEqual(self.page.current_folder_local, "Archive")
+        cached = self.page.cached_message = object()
+        self.page.load_mail_list_from_db("Archive", keep_view=True)
+        self.assertEqual(len(self.page._mail_rows), 1000)
+        self.assertEqual(self.page._mail_context, context)
+        self.assertIs(self.page.cached_message, cached)
+        self.assertEqual(self.page.current_uid, "3")
+        self.page._load_mail_async(keep_view=True)
+        self.assertTrue(wait_until(lambda: self.page.older_messages.isEnabled()))
+        self.assertEqual(len(self.page._mail_rows), 1000)
+        self.assertIs(self.page.cached_message, cached)
+        self.load_older()
+        self.assertEqual(len(self.page._mail_rows), 1002)
+
+    def test_assignment_list_context_survives_opening_another_folder(self):
+        self.check_account_wide_refresh(False)
+
+    def test_completed_list_context_survives_opening_another_folder(self):
+        self.check_account_wide_refresh(True)
+
+    def check_pending_account_wide_page(self, completed):
+        self.prepare_account_wide_filter(completed)
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+        work, loaded, _ = submit.call_args.args
+        self.assertFalse(self.page.older_messages.isEnabled())
+        self.click_message("1001")
+        self.assertEqual(self.page.current_folder_local, "Archive")
+        loaded(work())
+        self.assertTrue(self.page.older_messages.isEnabled())
+        self.assertEqual(len(self.page._mail_rows), 1000)
+        self.load_older()
+        self.assertEqual(len(self.page._mail_rows), 1002)
+
+    def test_pending_assignment_page_completes_after_opening_another_folder(self):
+        self.check_pending_account_wide_page(False)
+
+    def test_pending_completed_page_completes_after_opening_another_folder(self):
+        self.check_pending_account_wide_page(True)
+
+    def test_body_callback_uses_current_item_after_account_wide_paging_replaced_the_clicked_item(self):
+        from email.message import EmailMessage
+        self.prepare_account_wide_filter(True)
+        item = next(self.page.mail_list.topLevelItem(i) for i in range(self.page.mail_list.topLevelItemCount())
+                    if self.page.mail_list.topLevelItem(i).data(0, self.ui.ROLE_DATA) == "1001")
+        row_id = item.data(0, self.ui.ROLE_ROW_ID)
+        with mock.patch.object(self.page, "_run_async") as run:
+            self.page.on_mail_clicked(item)
+        _, done = run.call_args.args
+        self.load_older()
+        message = EmailMessage()
+        message["Subject"] = "Loaded"
+        message.set_content("Body")
+        with mock.patch.object(self.page, "_render_message"), \
+                mock.patch.object(self.page, "_run_async"):
+            done(message, None)
+        row = next(row for row in self.page._mail_rows if row["id"] == row_id)
+        self.assertTrue(row["przeczytana"])
+        self.assertTrue(storage.get_message_by_uid(1, "1001", storage.get_folder_id(1, "Archive"))["przeczytana"])
+
+    def test_permanent_delete_uses_ids_captured_before_a_nested_dialog_refresh(self):
+        self.load_first_page(1)
+        item = self.page.mail_list.topLevelItem(0)
+        row_id = item.data(0, self.ui.ROLE_ROW_ID)
+        self.page.mail_list.blockSignals(True)
+        item.setSelected(True)
+        self.page.mail_list.blockSignals(False)
+        refreshed = []
+
+        def refresh():
+            self.page.load_mail_list_from_db("INBOX", keep_view=True)
+            refreshed.append(True)
+
+        def confirm(*args):
+            QTimer.singleShot(0, refresh)
+            self.assertTrue(wait_until(lambda: refreshed))
+            return QMessageBox.StandardButton.Yes
+
+        with mock.patch.object(self.page, "_role_of", return_value="trash"), \
+                mock.patch.object(self.page, "_run_async", side_effect=lambda work, done: work()), \
+                mock.patch.object(QMessageBox, "question", side_effect=confirm), \
+                mock.patch.object(self.ui, "delete_email_remote", return_value=True) as delete:
+            self.page.on_delete()
+        delete.assert_called_once_with(1, "INBOX", "1", expected_row_id=row_id)
 
 
 class OtherReviewFollowupTests(DbTestCase):

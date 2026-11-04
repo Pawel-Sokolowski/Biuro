@@ -34,6 +34,8 @@ from app.email.email_storage import (
     apply_server_state,
     get_account_info as _get_account_info,
     get_folder_id,
+    get_mailbox_generation,
+    MailboxGenerationChanged,
     get_folders_for_account,
     get_cached_messages,
     prune_email_storage,
@@ -142,24 +144,25 @@ class _Session:
     def __init__(self, conn: imaplib.IMAP4, konto_id: Optional[int] = None) -> None:
         self.conn = conn
         self.konto_id = konto_id
-        self.generations = {}
         self.selected: Optional[Tuple[str, bool]] = None
         self.selected_generation: Optional[str] = None
 
     def select(self, folder: str, readonly: bool) -> bool:
+        self.selected = None
+        self.selected_generation = None
+        observed = get_mailbox_generation(self.konto_id, folder) if self.konto_id is not None else None
         if _select_folder(self.conn, folder, readonly=readonly):
             generation = _uidvalidity(self.conn)
             # IMAP4.response() consumes the response. Preserve the generation
             # from this SELECT for callers that later validate a body write.
-            self.selected_generation = generation
-            if self.konto_id is not None and generation and self.generations.get(folder) != generation:
-                retired = record_mailbox_generation(self.konto_id, folder, generation)
-                self.generations[folder] = generation
+            if self.konto_id is not None and generation:
+                retired = record_mailbox_generation(self.konto_id, folder, generation, expected_generation=observed)
                 if retired:
                     self.selected = None
                     self.selected_generation = None
                     # The caller's UID list belongs to the retired generation.
                     return False
+            self.selected_generation = generation
             self.selected = (folder, readonly)
             return True
         self.selected = None
@@ -651,7 +654,7 @@ def fetch_headers(
     folder: str,
     timeout: int = 30,
     known_uids: Optional[set] = None,
-    flags_out: Optional[Dict[str, set]] = None,
+    flags_out: Optional[Dict[str, Any]] = None,
     history_days: Optional[int] = EMAIL_HISTORY_DAYS,
 ) -> List[Dict[str, Any]]:
     """
@@ -677,7 +680,7 @@ def fetch_headers(
         raise ConnectionError("Nie można połączyć się z serwerem IMAP.")
 
     try:
-
+        observed = get_mailbox_generation(konto_id, folder)
         if not _select_folder(
             imap_conn,
             folder,
@@ -686,8 +689,15 @@ def fetch_headers(
             raise RuntimeError(f"Nie można otworzyć folderu IMAP: {folder}")
 
         generation = _uidvalidity(imap_conn)
-        if generation and record_mailbox_generation(konto_id, folder, generation):
-            known_uids = set()
+        if generation:
+            record_mailbox_generation(konto_id, folder, generation, expected_generation=observed)
+        if flags_out is not None:
+            flags_out["generation"] = generation
+        if known_uids is not None:
+            # Another selector may already have adopted this generation. Its
+            # retirement boolean cannot validate the caller's earlier UID set.
+            folder_id = get_folder_id(konto_id, folder)
+            known_uids = get_known_uids(konto_id, folder_id) if folder_id else set()
 
         if history_days is None:
 
@@ -897,6 +907,8 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
     with _shared_session(konto_id, 60) as session:
         if session is None or not session.select(folder, True):
             return 0
+        generation = session.selected_generation
+        uids = get_uids_missing_refs(konto_id, folder_id, limit)
         for start in range(0, len(uids), HEADER_BATCH):
             chunk = uids[start:start + HEADER_BATCH]
             typ, data = session.conn.uid(
@@ -913,7 +925,7 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
                         seen.add(uid)
                         updates.append((uid, thread_refs(parser.parsebytes(part[1]))))
             updates += [(u, "") for u in chunk if u not in seen]
-    save_refs(konto_id, folder_id, updates)
+    save_refs(konto_id, folder_id, updates, expected_generation=generation)
     return len(updates)
 
 def sync_folder_and_prefetch_all(
@@ -1134,6 +1146,19 @@ def sync_folder(
     full_sync: bool = True,
     entire_mailbox: bool = False,
 ) -> int:
+    # A mailbox may be recreated while any remote batch is in flight. Retry the
+    # entire snapshot once; continued churn remains an error for sync callers.
+    for attempt in range(2):
+        try:
+            return _sync_folder_once(konto_id, folder, full_sync, entire_mailbox)
+        except MailboxGenerationChanged:
+            if attempt:
+                raise
+            logger.warning("%s — generacja zmieniła się, ponawiam synchronizację", folder)
+    raise AssertionError("unreachable")
+
+
+def _sync_folder_once(konto_id: int, folder: str, full_sync: bool, entire_mailbox: bool) -> int:
     history_days = None if entire_mailbox else (730 if full_sync else EMAIL_HISTORY_DAYS)
 
     folder_id = get_folder_id(konto_id, folder)
@@ -1145,8 +1170,8 @@ def sync_folder(
             decode_mailbox_utf7(folder),
         )
 
-    flags: Dict[str, set] = {}
-    known = set()
+    flags: Dict[str, Any] = {}
+    known = None
 
     if not full_sync and not entire_mailbox:
         known = get_known_uids(konto_id, folder_id)
@@ -1159,10 +1184,11 @@ def sync_folder(
         history_days=history_days,
     )
 
-    save_message_headers(
+    header_rows = save_message_headers(
         konto_id,
         folder_id,
         headers,
+        expected_generation=flags.get("generation"),
     )
 
     try:
@@ -1171,26 +1197,13 @@ def sync_folder(
             folder,
             folder_id,
         )
+    except MailboxGenerationChanged:
+        raise
     except Exception:
         logger.warning(
             "Nie udało się pobrać nagłówków wątków",
             exc_info=True,
         )
-
-    if known and headers and folder.upper() == "INBOX":
-        try:
-            from app.email.email_rules import apply_rules
-
-            apply_rules(
-                konto_id,
-                folder,
-                headers,
-            )
-        except Exception:
-            logger.warning(
-                "Nie udało się zastosować filtrów",
-                exc_info=True,
-            )
 
     if "all" in flags:
         cutoff = (
@@ -1205,7 +1218,16 @@ def sync_folder(
             flags["all"],
             flags.get("unseen"),
             cutoff,
+            expected_generation=flags.get("generation"),
         )
+
+    if known and headers and folder.upper() == "INBOX":
+        try:
+            from app.email.email_rules import apply_rules
+
+            apply_rules(konto_id, folder, headers, expected_rows=header_rows)
+        except Exception:
+            logger.warning("Nie udało się zastosować filtrów", exc_info=True)
 
     return len(headers)
 

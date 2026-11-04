@@ -39,3 +39,5 @@ saldeo_probe_raw/
 /ksef/
 inspect_export.log
 /.idea
+/tmp_pay.log
+/tmp_pay_out.log

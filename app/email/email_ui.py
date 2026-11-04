@@ -1,4 +1,4 @@
-﻿# app/email/email_page.py
+# app/email/email_page.py
 from __future__ import annotations
 
 import base64
@@ -99,6 +99,8 @@ from app.email.email_helpers import (
     safe_attachment_name,
 )
 import logging
+from app.utils.background import TaskRunner
+from app.email.email_storage import get_mail_page
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +443,10 @@ class EmailPage(QWidget):
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
+        self._list_jobs = TaskRunner(self)
+        self._mail_rows = []
+        self._mail_cursor = None
+        self._mail_context = None
         self.accounts = get_email_accounts_for_employee(pracownik_id)
         self.current_account: Optional[Dict[str, Any]] = None
         self.current_folder_local: Optional[str] = None
@@ -600,6 +606,8 @@ class EmailPage(QWidget):
         self._timer.stop()
         self._assignment_timer.stop()
         self._headers_refresh_timer.stop()
+        self._search_timer.stop()
+        self._list_jobs.invalidate()
 
     def _on_sync_failed(self, message):
         self._last_sync_error = message
@@ -623,7 +631,7 @@ class EmailPage(QWidget):
             return
         self.load_folders_from_db()
         if self.current_folder_local:
-            self.load_mail_list_from_db(self.current_folder_local, keep_view=True)
+            self._load_mail_async(keep_view=True)
 
     def _on_sync_finished(self, ok: bool) -> None:
         self._headers_refresh_timer.stop()
@@ -667,10 +675,11 @@ class EmailPage(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Szukaj w temacie, nadawcy lub odbiorcy...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.textChanged.connect(
-            lambda: self.load_mail_list_from_db(self.current_folder_local)
-            if self.current_folder_local else None
-        )
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self._search_mail)
+        self.search_input.textChanged.connect(self._queue_search)
         toolbar.addWidget(self.search_input, 2)
 
         toolbar.addStretch()
@@ -814,6 +823,10 @@ class EmailPage(QWidget):
         self.mail_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.mail_list.customContextMenuRequested.connect(self._on_mail_context_menu)
         right_layout.addWidget(self.mail_list)
+        self.older_messages = QPushButton("Wczytaj starsze wiadomości")
+        self.older_messages.setVisible(False)
+        self.older_messages.clicked.connect(lambda: self._load_mail_async(more=True))
+        right_layout.addWidget(self.older_messages)
 
         splitter.addWidget(right_container)
 
@@ -1210,7 +1223,7 @@ class EmailPage(QWidget):
         self.current_uid = None
         self.employee_filter = None
         self.completed_filter = False
-        self.load_mail_list_from_db(server_name)
+        self._load_mail_async()
         self.start_background_sync()
 
     def _style_mail_item(self, item: QTreeWidgetItem, unread: bool) -> None:
@@ -1228,11 +1241,58 @@ class EmailPage(QWidget):
         except Exception:
             return {}
 
+    def _queue_search(self):
+        self._list_jobs.invalidate()
+        self._search_timer.start()
+
+    def _search_mail(self):
+        if self.current_folder_local:
+            self._load_mail_async()
+
+    def _mail_request(self):
+        return (self.current_account["id"], self.current_folder_local,
+                self.search_input.text().strip(), self.employee_filter, self.completed_filter)
+
+    def _fetch_mail_data(self, request, before=None, existing=()):
+        account, folder, query, employee, completed = request
+        rows, more, cursor = get_mail_page(account, folder, phrase=query, before=before,
+                                          employee_id=employee, completed=completed)
+        rows = list(existing) + rows
+        # A new message can arrive while paging; never render the same row twice.
+        rows = list({row["id"]: row for row in rows}.values())
+        ids = [row["id"] for row in rows]
+        return (rows, more, cursor, self._folder_roles(account),
+                get_assignment_map(ids), get_completed_map(ids))
+
+    def _load_mail_async(self, *, more=False, keep_view=False):
+        if not self.current_account or not self.current_folder_local:
+            return
+        request = self._mail_request()
+        paging = more and request == self._mail_context
+        if not keep_view and not paging:
+            self._load_token += 1
+            self._loading_message_key = None
+            self.cached_message = None
+            self._clear_view()
+        cursor = self._mail_cursor if paging else None
+        existing = tuple(self._mail_rows) if paging else ()
+        self.older_messages.setEnabled(False)
+        def loaded(payload):
+            if not self.current_account or request != self._mail_request():
+                return
+            self.older_messages.setEnabled(True)
+            self.load_mail_list_from_db(request[1], keep_view=keep_view or paging, _payload=payload)
+        def failed(exc):
+            self.older_messages.setEnabled(True)
+            logger.warning("Nie można wczytać poczty: %s", exc)
+        self._list_jobs.submit(lambda: self._fetch_mail_data(request, cursor, existing), loaded, failed)
+
     def load_mail_list_from_db(
             self,
             local_folder: str,
             keep_view: bool = False,
             ensure_row: Optional[Dict[str, Any]] = None,
+            _payload=None,
     ) -> None:
 
         selected_uids = {
@@ -1265,69 +1325,31 @@ class EmailPage(QWidget):
             return
 
         konto_id = self.current_account["id"]
-        roles = self._folder_roles(konto_id)
-
-        try:
-            if self.completed_filter:
-                rows = list_completed_rows(konto_id)
-            elif self.employee_filter:
-                rows = list_assigned_rows(
-                    konto_id,
-                    self.employee_filter,
-                )
-            else:
-                rows = refresh_email_list(
-                    konto_id,
-                    local_folder,
-                )
-        except Exception:
-            logger.exception("Nie można wczytać listy wiadomości")
-            rows = []
-
+        request = (konto_id, local_folder, self.search_input.text().strip(), self.employee_filter, self.completed_filter)
+        if _payload is None:
+            self._list_jobs.invalidate()
+            try:
+                _payload = self._fetch_mail_data(request)
+            except Exception:
+                logger.exception("Nie można wczytać listy wiadomości")
+                _payload = ([], False, None, {}, {}, set())
+        rows, more, cursor, roles, self.assign_map, self.completed_map = _payload
+        current_row_id = getattr(self, "_current_message_row_id", None)
+        if keep_view and current_row_id is not None and current_row_id not in {row["id"] for row in rows}:
+            # A reused UID is a different message. Never restore its predecessor's
+            # preview or let an older body-loading callback render over it.
+            self._load_token += 1
+            self._loading_message_key = None
+            self.current_uid = selected_uid = None
+            selected_uids.clear()
+            self.cached_message = None
+            self._clear_view()
+        self._mail_rows = list(rows)
+        self._mail_cursor = cursor
+        self._mail_context = request
+        self.older_messages.setVisible(more)
         if ensure_row is not None and ensure_row.get("konto_id") == konto_id and not any(row["id"] == ensure_row["id"] for row in rows):
-            rows.append(ensure_row)
-        query = self.search_input.text().strip().casefold()
-
-        if query:
-            rows = [
-                row
-                for row in rows
-                if query in " ".join(
-                    str(row.get(field) or "")
-                    for field in (
-                        "temat",
-                        "nadawca",
-                        "od",
-                        "do",
-                    )
-                ).casefold()
-            ]
-
-        try:
-            self.assign_map = get_assignment_map(
-                [
-                    r["id"]
-                    for r in rows
-                    if r.get("id")
-                ]
-            )
-        except Exception:
-            self.assign_map = {}
-
-        try:
-            self.completed_map = get_completed_map(
-                [
-                    r["id"]
-                    for r in rows
-                    if r.get("id")
-                ]
-            )
-        except Exception:
-            logger.warning(
-                "Nie można wczytać statusu ukończenia wiadomości",
-                exc_info=True,
-            )
-            self.completed_map = set()
+            rows = [*rows, ensure_row]
 
         by_id = {
             e["id"]: e
@@ -1883,11 +1905,14 @@ class EmailPage(QWidget):
         if not refs or not self.current_account:
             return
         konto_id = self.current_account["id"]
+        remote_refs = []
         for item, folder, uid in refs:
             self.unread_map[uid] = not read
             self._style_mail_item(item, not read)
             try:
-                update_message_read_flag(konto_id, uid, read, get_folder_id(konto_id, folder))
+                row_id = item.data(0, ROLE_ROW_ID)
+                if update_message_read_flag(konto_id, uid, read, get_folder_id(konto_id, folder), expected_row_id=row_id):
+                    remote_refs.append((folder, uid, row_id))
             except Exception:
                 logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
         self.load_folders_from_db()
@@ -1895,7 +1920,7 @@ class EmailPage(QWidget):
 
         def work():
             remote = mark_read_remote if read else mark_unread_remote
-            return [remote(konto_id, folder, uid) for _, folder, uid in refs]
+            return [remote(konto_id, folder, uid, expected_row_id=row_id) for folder, uid, row_id in remote_refs]
 
         self._run_async(work, lambda res, err: None)
 
@@ -1959,6 +1984,7 @@ class EmailPage(QWidget):
             konto_id,
             str(local_folder),
             str(uid),
+            item.data(0, ROLE_ROW_ID),
         )
 
         # Nie uruchamiaj ponownie pobierania tej samej wiadomości,
@@ -1971,6 +1997,7 @@ class EmailPage(QWidget):
         self.cached_message = None
 
         row_id = item.data(0, ROLE_ROW_ID)
+        self._current_message_row_id = row_id
 
         by_id = {
             employee["id"]: employee
@@ -2076,6 +2103,7 @@ class EmailPage(QWidget):
                     konto_id,
                     local_folder,
                     uid,
+                    expected_row_id=row_id,
                 ),
                 done,
             )
@@ -2098,12 +2126,16 @@ class EmailPage(QWidget):
         self.unread_map[uid] = False
         self._style_mail_item(item, False)
         try:
-            update_message_read_flag(konto_id, uid, True, get_folder_id(konto_id, folder))
+            row_id = item.data(0, ROLE_ROW_ID)
+            if not update_message_read_flag(konto_id, uid, True, get_folder_id(konto_id, folder), expected_row_id=row_id):
+                self._load_mail_async()
+                return
         except Exception:
             logger.warning("Nie można zapisać flagi przeczytania", exc_info=True)
+            return
         self.load_folders_from_db()
         self._refresh_chips()
-        self._run_async(lambda: mark_read_remote(konto_id, folder, uid), lambda res, err: None)
+        self._run_async(lambda: mark_read_remote(konto_id, folder, uid, expected_row_id=row_id), lambda res, err: None)
 
     def _render_message(self, msg: email.message.Message) -> None:
         self.cached_message = msg
@@ -2552,12 +2584,14 @@ class EmailPage(QWidget):
             return
         konto_id = self.current_account["id"]
         by_folder: Dict[str, List[str]] = {}
-        for _, folder, uid in refs:
+        expected = {}
+        for item, folder, uid in refs:
+            expected.setdefault(folder, {})[str(uid)] = item.data(0, ROLE_ROW_ID)
             by_folder.setdefault(folder, []).append(uid)
 
         def work():
             for folder, uids in by_folder.items():
-                move_emails(konto_id, folder, uids, target)
+                move_emails(konto_id, folder, uids, target, expected_rows=expected[folder])
 
         def done(res, err) -> None:
             if err is not None:
@@ -2599,9 +2633,11 @@ class EmailPage(QWidget):
                     != QMessageBox.StandardButton.Yes:
                 return
 
+            expected = {(folder, str(uid)): item.data(0, ROLE_ROW_ID) for item, folder, uid in refs}
+
             def work():
                 for _, folder, uid in refs:
-                    if not delete_email_remote(konto_id, folder, uid):
+                    if not delete_email_remote(konto_id, folder, uid, expected_row_id=expected[(folder, str(uid))]):
                         raise RuntimeError("Serwer odrzucił usunięcie wiadomości.")
 
             def done(res, err) -> None:

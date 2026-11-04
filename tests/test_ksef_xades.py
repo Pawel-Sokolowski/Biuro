@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, ec, utils
 
 from app.invoices.ksef_client import KsefClient
 from app.invoices.ksef_xades import sign_auth_request
@@ -19,6 +19,31 @@ NS = {"ds": "http://www.w3.org/2000/09/xmldsig#", "x": "http://uri.etsi.org/0190
 
 
 class XadesTests(unittest.TestCase):
+    def test_ec_signature_and_digests_with_escaped_text(self):
+        import datetime
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "KSeF & <Test>")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+                .serial_number(17).not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1))
+                .sign(key, hashes.SHA256()))
+        root = etree.fromstring(sign_auth_request("A & <B>\r\nC", "9240000010", cert, key).encode())
+        sig = root.find("ds:Signature", NS)
+        info = sig.find("ds:SignedInfo", NS)
+        value = base64.b64decode(sig.find("ds:SignatureValue", NS).text)
+        self.assertEqual(len(value), 64)
+        der = utils.encode_dss_signature(int.from_bytes(value[:32], "big"), int.from_bytes(value[32:], "big"))
+        key.public_key().verify(der, etree.tostring(info, method="c14n", exclusive=True), ec.ECDSA(hashes.SHA256()))
+        refs = info.findall("ds:Reference", NS)
+        props = sig.find(".//x:SignedProperties", NS)
+        expected = base64.b64encode(hashlib.sha256(etree.tostring(props, method="c14n", exclusive=True)).digest()).decode()
+        self.assertEqual(expected, refs[1].find("ds:DigestValue", NS).text)
+        root.remove(sig)
+        expected = base64.b64encode(hashlib.sha256(etree.tostring(root, method="c14n", exclusive=True)).digest()).decode()
+        self.assertEqual(expected, refs[0].find("ds:DigestValue", NS).text)
+
     @unittest.skipIf(etree is None, "brak lxml")
     def test_signature_matches_exclusive_c14n(self):
         cert, key = make_pair()

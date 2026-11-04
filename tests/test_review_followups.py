@@ -422,7 +422,7 @@ class MailListFollowupTests(MailboxFixture):
         rows = {r["id"]: r for r in self.page._mail_rows}
         self.assertTrue(rows[read_id]["przeczytana"])
         self.assertNotIn(deleted_id, rows)
-        self.assertFalse(self.page.unread_map[rows[read_id]["uid"]])
+        self.assertFalse(self.page.unread_map[read_id])
 
     def test_paging_does_not_keep_retired_generation(self):
         storage.record_mailbox_generation(1, "INBOX", "10")

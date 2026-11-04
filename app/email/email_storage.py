@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import psycopg
+from contextlib import contextmanager, nullcontext
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,14 @@ _UNSPECIFIED_GENERATION = object()
 
 class MailboxGenerationChanged(RuntimeError):
     """A selected mailbox snapshot no longer describes the stored UID mappings."""
+
+
+@contextmanager
+def mail_read_snapshot():
+    """Read ranges and their metadata from one cut without blocking writers."""
+    with get_conn() as conn:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        yield conn
 
 
 def get_mailbox_generation(konto_id: int, folder: str) -> Optional[str]:
@@ -348,8 +357,9 @@ def get_folder_id(
 
 def get_folders_for_account(
     konto_id: int,
+    *, connection=None,
 ) -> List[Dict[str, Any]]:
-    conn = get_conn()
+    conn = get_conn() if connection is None else connection
 
     try:
         cur = conn.cursor()
@@ -368,7 +378,8 @@ def get_folders_for_account(
         return [dict(r) for r in cur.fetchall()]
 
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def account_has_headers(konto_id: int) -> bool:
@@ -1204,11 +1215,11 @@ def apply_server_state(
         conn.close()
 
 
-def get_assignment_map(row_ids: List[int]) -> Dict[int, List[int]]:
+def get_assignment_map(row_ids: List[int], *, connection=None) -> Dict[int, List[int]]:
     """{id wiadomo?ci: [id pracownik?w]}; przypisanie pod??a za wiadomo?ci? po Message-ID (np. po przeniesieniu)."""
     if not row_ids:
         return {}
-    conn = get_conn()
+    conn = get_conn() if connection is None else connection
     try:
         rows = conn.execute(
             f"""
@@ -1226,7 +1237,8 @@ def get_assignment_map(row_ids: List[int]) -> Dict[int, List[int]]:
             result.setdefault(int(rid), []).append(int(emp))
         return result
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def set_employee_assignment(row_ids: List[int], employee_id: int, assigned: bool) -> None:
@@ -1261,10 +1273,10 @@ def set_employee_assignment(row_ids: List[int], employee_id: int, assigned: bool
         conn.close()
 
 
-def get_completed_map(row_ids: List[int]) -> set[int]:
+def get_completed_map(row_ids: List[int], *, connection=None) -> set[int]:
     if not row_ids:
         return set()
-    conn = get_conn()
+    conn = get_conn() if connection is None else connection
     try:
         rows = conn.execute(
             f"""
@@ -1277,7 +1289,8 @@ def get_completed_map(row_ids: List[int]) -> set[int]:
         ).fetchall()
         return {int(row[0]) for row in rows}
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def set_messages_completed(row_ids: List[int], completed: bool) -> None:
@@ -1408,7 +1421,7 @@ def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> Lis
 
 
 def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 500,
-                  before=None, employee_id=None, completed=False, through=None, include_ids=()):
+                  before=None, employee_id=None, completed=False, through=None, include_ids=(), connection=None):
     """Read one page, or revalidate the already loaded range through a keyset."""
     limit = max(1, min(int(limit), 500))
     where = ["we.konto_id=%s", "COALESCE(we.usunieta,0)=0"]
@@ -1431,7 +1444,7 @@ def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 
     sql = ("SELECT we.*, fe.server_name FROM wiadomosci_email we "
            "JOIN foldery_email fe ON fe.id=we.folder_id WHERE " + " AND ".join(where))
     order = " ORDER BY COALESCE(we.data,'') DESC, we.id DESC"
-    with get_conn() as conn:
+    with (mail_read_snapshot() if connection is None else nullcontext(connection)) as conn:
         if through is not None:
             rows = [dict(r) for r in conn.execute(
                 sql + " AND ((COALESCE(we.data,''), we.id) >= (%s,%s) OR we.id=ANY(%s))" + order,
@@ -1447,10 +1460,14 @@ def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 
                            if (row.get("data") or "", row["id"]) >= through), None)
             return rows, more, cursor
         rows = [dict(r) for r in conn.execute(sql + order + " LIMIT %s", [*params, limit + 1])]
-    more = len(rows) > limit
-    rows = rows[:limit]
-    cursor = (rows[-1].get("data") or "", rows[-1]["id"]) if rows else None
-    return rows, more, cursor
+        more = len(rows) > limit
+        rows = rows[:limit]
+        cursor = (rows[-1].get("data") or "", rows[-1]["id"]) if rows else None
+        extra_ids = set(include_ids) - {row["id"] for row in rows}
+        if extra_ids:
+            rows.extend(dict(r) for r in conn.execute(sql + " AND we.id=ANY(%s)" + order,
+                                                     [*params, list(extra_ids)]))
+        return rows, more, cursor
 
 
 def refresh_email_list(

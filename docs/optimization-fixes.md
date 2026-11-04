@@ -50,6 +50,18 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
 - Revalidate retained mail ranges in background workers, including read flags,
   deletion, retirement and assignment/completion filters. Preserve loaded older
   pages and their selection/preview when an unchanged request refreshes.
+- Read the requested page, retained range, notification targets, folder roles,
+  and assignment/completion maps from one read-only REPEATABLE READ transaction.
+  Concurrent retirement/deletion cannot produce a payload made from incompatible
+  database snapshots; transaction settings do not persist on pooled connections.
+- Capture and restore selected rows and the focused item by database row ID.
+  Keep focus separate from selection, and retain surviving selections when a
+  preview row is retired. Unread state and preview-change detection also use row
+  IDs, so equal UIDs in different folders remain independent.
+- Successful read/unread mutations invalidate pending list results and restart
+  the requested page with the updated database state. Obsolete completion/error
+  callbacks cannot alter the newer request. Applying any completed list payload,
+  including a synchronous filter reload, re-enables the paging control.
 - Key employee/completed lists by account and filter, independently of the
   opened message's folder, in both synchronous and asynchronous loaders. Body
   completion resolves the current rendered item using its captured row ID.
@@ -79,12 +91,16 @@ installer certification.
 
 ## Validation
 
-- Full locked-runtime run: **724 tests in 89 modules passed**, without skips.
-- Forty-one review regression cases cover SELECT/FETCH generation races, guarded
+- Full locked-runtime run: **745 tests in 90 modules passed**, without skips.
+- Sixty-two review regression cases cover SELECT/FETCH generation races, guarded
   header/flag/reference writes, atomic retirement/write serialization, checkpoint
   adoption and bounded retries, mail-rule identities, retained/account-wide pages,
   body callbacks, nested confirmation dialogs, notification metadata, missing
-  selections, calendar startup and import/deletion concurrency.
+  selections, calendar startup and import/deletion concurrency. This includes
+  twenty-one selection/snapshot cases covering duplicate-UID move/delete targets,
+  consistent ranges and metadata, stale notification targets, pooled transaction
+  settings, real worker completion races, successive read/unread changes and
+  paging controls after synchronous reloads.
 - Original coverage also includes twelve optimization regressions and independent RSA/EC signature cases.
 - Ruff checks for syntax/undefined names (`E9,F63,F7,F82`) passed.
 - Installed-package compatibility and `git diff --check` passed.

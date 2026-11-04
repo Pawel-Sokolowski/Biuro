@@ -28,6 +28,7 @@ APP = ROOT / "app"
 
 datas = [
     (str(APP / "icons"), "app/icons"),
+    (str(APP / "db" / "migrations"), "app/db/migrations"),
     (str(APP / "invoices" / "schemas"), "app/invoices/schemas"),
 ]
 CALDAV_PACKAGES = ["caldav", "icalendar", "icalendar_searcher", "recurring_ical_events", "niquests", "lxml"]
@@ -68,6 +69,9 @@ a = Analysis(
         "encodings.iso8859_2",
         "encodings.cp852",
         *PSYCOPG_HIDDEN,
+        "psycopg_pool",
+        "imapclient.imap_utf7",
+        "sqlalchemy.dialects.postgresql.psycopg",
         *[m for pkg in CALDAV_PACKAGES
           for m in collect_submodules(
               pkg, filter=lambda name: not name.startswith(("caldav.jmap", "niquests.extensions.pyodide")))],

@@ -66,41 +66,71 @@ def _seed_company_snapshot(conn, year: int, company: dict) -> None:
     )
 
 
-def list_year_end(year: int) -> List[Dict]:
-    """Use a durable snapshot of each year's company obligations."""
-    conn = get_conn()
-    try:
-        conn.execute("SELECT pg_advisory_xact_lock(748204)")
-        companies_to_seed = conn.execute("""
-            SELECT * FROM firmy
-            WHERE COALESCE(status, 'Aktywne') = 'Aktywne'
-               OR id IN (SELECT firma_id FROM zakonczenie_roku WHERE rok = %s)
-               OR id IN (SELECT firma_id FROM owner_year_declarations WHERE rok = %s)
-        """, (year, year)).fetchall()
-        for row in companies_to_seed:
-            _seed_company_snapshot(conn, year, dict(row))
-        conn.execute(
-            "INSERT INTO year_end_snapshot_years(rok) VALUES (%s) ON CONFLICT DO NOTHING",
-            (year,),
+def _ensure_year_snapshots(conn, year: int, firma_id: Optional[int] = None) -> None:
+    # Check missing snapshots in a batch. Existing snapshots are immutable here.
+    params = [year, year, year]
+    sql = """SELECT f.* FROM firmy f
+             WHERE (COALESCE(f.status, 'Aktywne') = 'Aktywne'
+                    OR f.id IN (SELECT firma_id FROM zakonczenie_roku WHERE rok=%s)
+                    OR f.id IN (SELECT firma_id FROM owner_year_declarations WHERE rok=%s))
+               AND NOT EXISTS (SELECT 1 FROM year_end_snapshots s WHERE s.rok=%s AND s.firma_id=f.id)"""
+    if firma_id is not None:
+        sql += " AND f.id=%s"
+        params.append(firma_id)
+    missing = conn.execute(sql, params).fetchall()
+    if not missing:
+        return
+    conn.execute("SELECT pg_advisory_xact_lock(748204)")
+    # A concurrent editor may have created snapshots while we waited.
+    missing = conn.execute(sql, params).fetchall()
+    filed = {}
+    for row in conn.execute(
+        "SELECT firma_id, deklaracja FROM zakonczenie_roku WHERE rok=%s AND owner_key=0", (year,)
+    ):
+        filed.setdefault(row[0], []).append(row[1])
+    payloads = []
+    for row in missing:
+        company = dict(row)
+        codes = company_declarations(company)
+        codes += [code for code in filed.get(company["id"], []) if code not in codes]
+        company["declaration_codes"] = codes
+        payloads.append((year, company["id"], json.dumps(company, ensure_ascii=False, default=str)))
+    if payloads:
+        conn.cursor().executemany(
+            "INSERT INTO year_end_snapshots(rok, firma_id, company_json) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+            payloads,
         )
-        companies = [json.loads(row[0]) for row in conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s ORDER BY firma_id", (year,)).fetchall()]
-        owners = [dict(r) for r in conn.execute("SELECT * FROM owner_year_declarations WHERE rok = %s", (year,)).fetchall()]
-        conn.commit()
-        saved = {}
-        for row in conn.execute("SELECT * FROM zakonczenie_roku WHERE rok = %s", (year,)).fetchall():
-            saved[(row["firma_id"], row["deklaracja"], row["owner_key"]) ] = dict(row)
-    finally:
-        conn.close()
+    conn.execute("INSERT INTO year_end_snapshot_years(rok) VALUES (%s) ON CONFLICT DO NOTHING", (year,))
+
+
+def ensure_company_year_snapshot(firma_id: int, year: int) -> None:
+    with get_conn() as conn:
+        _ensure_year_snapshots(conn, year, firma_id)
+
+
+def list_year_end(year: int) -> List[Dict]:
+    """Use durable annual snapshots without per-company queries on every read."""
+    with get_conn() as conn:
+        _ensure_year_snapshots(conn, year)
+        companies = [json.loads(r[0]) for r in conn.execute(
+            "SELECT company_json FROM year_end_snapshots WHERE rok=%s ORDER BY firma_id", (year,)
+        )]
+        owners = {}
+        for r in conn.execute("SELECT * FROM owner_year_declarations WHERE rok=%s", (year,)):
+            owners.setdefault(r["firma_id"], []).append(dict(r))
+        saved, saved_codes = {}, {}
+        for r in conn.execute("SELECT * FROM zakonczenie_roku WHERE rok=%s", (year,)):
+            saved[(r["firma_id"], r["deklaracja"], r["owner_key"])] = dict(r)
+            saved_codes.setdefault((r["firma_id"], r["owner_key"]), []).append(r["deklaracja"])
     result = []
     for company in companies:
-        company = dict(company)
-        declarations = []
-        for code in company.get("declaration_codes", company_declarations(company)):
-            declarations.append({"kod": code, **saved.get((company["id"], code, 0), {})})
-        owner_rows = [r for r in owners if r["firma_id"] == company["id"]]
-        for owner in owner_rows:
+        declarations = [
+            {"kod": code, **saved.get((company["id"], code, 0), {})}
+            for code in company.get("declaration_codes", company_declarations(company))
+        ]
+        for owner in owners.get(company["id"], []):
             codes = json.loads(owner["declarations_json"])
-            codes += [code for (fid, code, oid) in saved if fid == company["id"] and oid == owner["owner_id"] and code not in codes]
+            codes += [code for code in saved_codes.get((company["id"], owner["owner_id"]), []) if code not in codes]
             for code in codes:
                 declarations.append({"kod": code, "owner_key": owner["owner_id"], "owner_name": owner["owner_name"], **saved.get((company["id"], code, owner["owner_id"]), {})})
         company["deklaracje"] = declarations
@@ -109,7 +139,7 @@ def list_year_end(year: int) -> List[Dict]:
 
 
 def set_company_declarations(firma_id: int, main: str, extra: str, *, year: int, actor_id: int) -> None:
-    list_year_end(year)  # Ensure the initial year snapshot exists.
+    ensure_company_year_snapshot(firma_id, year)
     with get_conn() as conn:
         row = conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s AND firma_id = %s FOR UPDATE", (year, firma_id)).fetchone()
         if not row:
@@ -128,7 +158,7 @@ def set_company_declarations(firma_id: int, main: str, extra: str, *, year: int,
 def save_declaration(actor_id: int, firma_id: int, year: int, code: str, *,
                      filed: bool, filed_date: Optional[str] = None,
                      amount: Optional[float] = None, upo: str = "", notes: str = "", owner_key: int = 0) -> None:
-    list_year_end(year)
+    ensure_company_year_snapshot(firma_id, year)
     conn = get_conn()
     try:
         conn.execute(

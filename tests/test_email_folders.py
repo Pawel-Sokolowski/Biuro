@@ -212,6 +212,8 @@ class EmailPageTests(DbTestCase):
             self.assertEqual(top.childCount(), 0)
             self.assertEqual(account.child(1).text(0), "Wysłane")
             page.folder_tree.setCurrentItem(top)  # pojedyncze kliknięcie wystarcza
+            from tests.test_review_optimizations import wait_until
+            self.assertTrue(wait_until(lambda: page.mail_list.topLevelItemCount() == 1))
             self.assertEqual(page.mail_list.topLevelItemCount(), 1)
             item = page.mail_list.topLevelItem(0)
             self.assertTrue(item.font(0).bold())

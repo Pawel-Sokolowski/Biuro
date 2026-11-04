@@ -1,8 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import datetime
+from calendar import monthrange
 import psycopg
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from app.db.dao_conn import get_conn
@@ -46,6 +47,7 @@ class MonthlyViewLogic:
 
         self.czas_start_general: Optional[datetime.datetime] = None
         self.general_activity: Optional[Dict[str, Any]] = None
+        self._timer_label_cache = {}
 
         self._auto_check_suspension()
 
@@ -321,35 +323,31 @@ class MonthlyViewLogic:
         ]
 
     def get_active_timer_details(self) -> List[Dict[str, str]]:
-        details: List[Dict[str, str]] = []
+        details = []
+        active_keys = set()
         for typ, label in (("ksiegowosc", "Księgowość"), ("kadry", "Kadry")):
             fields = self._TIMER_FIELDS[typ]
             firma_id = getattr(self, fields[0])
             if firma_id is None:
                 continue
-            conn = get_conn()
-            try:
-                company = conn.execute(
-                    "SELECT COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa "
-                    "FROM firmy WHERE id = %s",
-                    (firma_id,),
-                ).fetchone()
-                activity = getattr(self, fields[2]) or {}
-                task_name = activity.get("task_title")
-                if not task_name and activity.get("task_id"):
-                    task = conn.execute(
-                        "SELECT tytul FROM zadania WHERE id = %s",
-                        (activity["task_id"],),
+            activity = getattr(self, fields[2]) or {}
+            key = (typ, firma_id, getattr(self, fields[1]), activity.get("task_id"), activity.get("task_title"))
+            active_keys.add(key)
+            cached = self._timer_label_cache.get(key)
+            if cached is None:
+                with get_conn() as conn:
+                    company = conn.execute(
+                        "SELECT COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa FROM firmy WHERE id = %s",
+                        (firma_id,),
                     ).fetchone()
-                    task_name = task["tytul"] if task else None
-                details.append({
-                    "task": task_name or label,
-                    "company": company["nazwa"] if company else "Nieznana firma",
-                    "department": label,
-                    "elapsed": self.format_seconds(self.get_running_seconds(typ)),
-                })
-            finally:
-                conn.close()
+                    task_name = activity.get("task_title")
+                    if not task_name and activity.get("task_id"):
+                        task = conn.execute("SELECT tytul FROM zadania WHERE id = %s", (activity["task_id"],)).fetchone()
+                        task_name = task["tytul"] if task else None
+                cached = {"task": task_name or label, "company": company["nazwa"] if company else "Nieznana firma", "department": label}
+                self._timer_label_cache[key] = cached
+            details.append({**cached, "elapsed": self.format_seconds(self.get_running_seconds(typ))})
+        self._timer_label_cache = {key: value for key, value in self._timer_label_cache.items() if key in active_keys}
         general = self.get_general_timer_detail()
         if general:
             details.append(general)
@@ -613,5 +611,4 @@ class MonthlyViewLogic:
         from app.utils.ceidg_suspension import run_in_background
         run_in_background()
     def _last_day_of_month(self, d: date) -> int:
-        next_month = d.replace(day=28) + timedelta(days=4)
-        return (next_month - timedelta(days=next_month.day)).day
+        return monthrange(d.year, d.month)[1]

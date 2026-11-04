@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -15,6 +17,7 @@ EMAIL_HISTORY_DAYS = int(os.getenv("EMAIL_HISTORY_DAYS", "365"))
 EMAIL_LOCAL_LIMIT = int(os.getenv("EMAIL_LOCAL_LIMIT", "300"))
 
 _schema: str | None = None
+_schema_override = ContextVar("biuro_schema", default=...)
 
 
 def get_data_dir() -> Path:
@@ -53,4 +56,15 @@ def set_schema(name: str | None) -> None:
 
 
 def get_schema() -> str | None:
-    return _schema
+    override = _schema_override.get()
+    return _schema if override is ... else override
+
+
+@contextmanager
+def schema_context(name: str | None):
+    """Keep a background operation on its originating schema during UI/test changes."""
+    token = _schema_override.set(name)
+    try:
+        yield
+    finally:
+        _schema_override.reset(token)

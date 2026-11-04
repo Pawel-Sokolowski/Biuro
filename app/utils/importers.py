@@ -209,10 +209,14 @@ def _load_rows_from_file(filepath: str) -> Tuple[List[str], List[Any]]:
         header = next(reader, None)
         rows = list(reader)
     else:
-        workbook = openpyxl.load_workbook(filepath, data_only=True)
-        worksheet = workbook.active
-        header = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
-        rows = list(worksheet.iter_rows(min_row=2, values_only=True))
+        workbook = openpyxl.load_workbook(filepath, data_only=True, read_only=True)
+        try:
+            worksheet = workbook.active
+            iterator = worksheet.iter_rows(values_only=True)
+            header = next(iterator, None)
+            rows = list(iterator)
+        finally:
+            workbook.close()
 
     if not header:
         raise ValueError("Brak nagłówków w pliku.")
@@ -1008,8 +1012,7 @@ def import_companies_fast_from_excel_file(
         return {"created": 0, "updated": 0, "warnings": [f"Plik nie mógł zostać wczytany: {exc}"]}
 
     header_index = {header: idx for idx, header in enumerate(headers)}
-    conn = get_conn()
-    cursor = conn.cursor()
+    conn = None
     created = 0
     updated = 0
     warnings: List[str] = []
@@ -1029,6 +1032,8 @@ def import_companies_fast_from_excel_file(
                 warnings.append(f"Wiersz {row_number}: nie pobrano danych z rejestrów ({problem}).")
             registry = "CEIDG/KRS/GUS: błąd" if problem else "CEIDG/KRS/GUS: zrobione"
             report(f"{head}\n{registry}\nZapisywanie...")
+            conn = get_conn()
+            cursor = conn.cursor()
             if _apply_payload_to_db(cursor, payload, row_number, warnings):
                 created += 1
             else:
@@ -1040,20 +1045,25 @@ def import_companies_fast_from_excel_file(
             if nip:
                 cursor.execute("SELECT id FROM firmy WHERE nip = %s", (nip,))
                 found = cursor.fetchone()
+                conn.close()
+                conn = None
                 if found:
                     report(f"{head}\n{registry}\nStatus w CEIDG: sprawdzanie...")
                     ceidg_state = check_ceidg_status_for_company(int(found[0]), warnings, row_number)
                     report(f"{head}\n{registry}\nStatus w CEIDG: {ceidg_state}\nVAT: sprawdzanie...")
                     check_vat_for_company(nip, int(found[0]), warnings, row_number)
                     vat_state = "zrobione"
+            if conn is not None:
+                conn.close()
+                conn = None
             report(f"{head}\n{registry}\nStatus w CEIDG: {ceidg_state}\nVAT: {vat_state}")
 
-        conn.commit()
         result = {"created": created, "updated": updated, "warnings": warnings}
         record_import("firmy_fast", filepath, result)
         return result
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 # ============================================================

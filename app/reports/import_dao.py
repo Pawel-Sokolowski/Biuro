@@ -1,6 +1,6 @@
 # app/reports/import_dao.py
 """Import czasu pracy i faktur z Excela oraz raport rentowności (czas × stawka vs cena usługi)."""
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 import re
 
 from app.db.dao_conn import get_conn
@@ -18,12 +18,12 @@ from app.reports.import_parse import (
 from app.reports.reports_logic import _authorized_company_ids
 
 
-def read_sheet_rows(path: str) -> List[tuple]:
+def read_sheet_rows(path: str) -> Iterator[tuple]:
     import openpyxl
 
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
-        return [tuple(r) for r in wb.active.iter_rows(values_only=True)]
+        yield from wb.active.iter_rows(values_only=True)
     finally:
         wb.close()
 
@@ -55,6 +55,24 @@ def _match_company(index, nip: str, *names: str) -> Optional[int]:
     return None
 
 
+class _BatchWriter:
+    """psycopg executemany uses pipeline mode; bound each parameter batch."""
+    def __init__(self, conn, sql):
+        self.conn, self.sql, self.pending, self.count = conn, sql, [], 0
+
+    def add(self, params):
+        self.pending.append(params)
+        if len(self.pending) >= 500:
+            self.flush()
+
+    def flush(self):
+        if self.pending:
+            with self.conn.cursor() as cursor:
+                cursor.executemany(self.sql, self.pending)
+                self.count += cursor.rowcount
+            self.pending.clear()
+
+
 def import_work_file(path: str) -> Dict[str, int]:
     rows = parse_work_rows(read_sheet_rows(path))
     conn = get_conn()
@@ -65,12 +83,7 @@ def import_work_file(path: str) -> Dict[str, int]:
             fold(f"{r['imie']} {r['nazwisko']}"): r["id"]
             for r in conn.execute("SELECT id, imie, nazwisko FROM pracownicy").fetchall()
         }
-        for r in rows:
-            firma_id = _match_company(index, r["nip"], r["firma_nazwa"])
-            if firma_id is None:
-                unmatched += 1
-            cur = conn.execute(
-                """
+        batch = _BatchWriter(conn, """
                 INSERT INTO import_czas_pracy
                     (hash, firma_id, firma_nazwa, nip, pracownik_id, pracownik_nazwa, miesiac_dok,
                      data, miesiac, od, do_, sekundy, pauza_sekundy, czynnosc, komentarz, dzial)
@@ -78,20 +91,25 @@ def import_work_file(path: str) -> Dict[str, int]:
                 ON CONFLICT (hash) DO UPDATE SET
                     firma_id = EXCLUDED.firma_id, miesiac = EXCLUDED.miesiac,
                     dzial = EXCLUDED.dzial, pracownik_id = EXCLUDED.pracownik_id
-                """,
-                (
+                """)
+        for r in rows:
+            firma_id = _match_company(index, r["nip"], r["firma_nazwa"])
+            if firma_id is None:
+                unmatched += 1
+            batch.add((
                     r["hash"], firma_id, r["firma_nazwa"], r["nip"],
                     employees.get(fold(r["pracownik_nazwa"])), r["pracownik_nazwa"], r["miesiac_dok"],
                     r["data"], r["miesiac"], r["od"], r["do"], r["sekundy"], r["pauza_sekundy"],
                     r["czynnosc"], r["komentarz"], r["dzial"],
-                ),
-            )
-            inserted += cur.rowcount
+                ))
+        batch.flush()
+        inserted = batch.count
         conn.commit()
     finally:
         conn.close()
     return {"wiersze": len(rows), "dodane": inserted, "pominiete": len(rows) - inserted,
             "bez_firmy": unmatched}
+
 
 
 def import_invoices_file(path: str, default_month: Optional[str], overwrite: bool = False) -> Dict[str, int]:
@@ -104,12 +122,7 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
     last_month = ""
     try:
         index = _company_index(conn)
-        for r in rows:
-            firma_id = _match_company(index, r["nip"], r["kontrahent"])
-            if firma_id is None:
-                unmatched += 1
-            cur = conn.execute(
-                """
+        batch = _BatchWriter(conn, """
                 INSERT INTO import_faktury_pozycje
                     (hash, firma_id, kontrahent, nip, nr_faktury, pozycja, indeks,
                      wartosc_netto, waluta, miesiac, rodzaj)
@@ -117,13 +130,15 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
                 ON CONFLICT (hash) DO UPDATE SET
                     firma_id = EXCLUDED.firma_id, miesiac = EXCLUDED.miesiac,
                     rodzaj = EXCLUDED.rodzaj
-                """,
-                (
+                """)
+        for r in rows:
+            firma_id = _match_company(index, r["nip"], r["kontrahent"])
+            if firma_id is None:
+                unmatched += 1
+            batch.add((
                     r["hash"], firma_id, r["kontrahent"], r["nip"], r["nr_faktury"], r["pozycja"],
                     r["indeks"], r["wartosc_netto"], r["waluta"], r["miesiac"], r["rodzaj"],
-                ),
-            )
-            inserted += cur.rowcount
+                ))
             if firma_id is not None and r["miesiac"]:
                 seen_firms.add(firma_id)
                 last_month = max(last_month, r["miesiac"])
@@ -138,6 +153,8 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
             if firma_id is not None and typ and r["miesiac"] and r["wartosc_netto"] > 0:
                 key = (firma_id, typ, r["miesiac"])
                 kadry_totals[key] = kadry_totals.get(key, 0.0) + float(r["wartosc_netto"])
+        batch.flush()
+        inserted = batch.count
         updated = _apply_kadry_contracts(conn, kadry_totals)
         backfill = {
             (fid, m) for fid in seen_firms
@@ -149,6 +166,7 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
         conn.close()
     return {"wiersze": len(rows), "dodane": inserted, "pominiete": len(rows) - inserted,
             "bez_firmy": unmatched, "ceny_kadry": updated, "ilosc_dok": docs_set}
+
 
 
 def _apply_document_counts(conn, over_limit: Dict[Tuple[int, str], Tuple[float, Optional[int]]],

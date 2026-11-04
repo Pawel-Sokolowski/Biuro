@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import date, timedelta
+from datetime import date
+from calendar import monthrange
 from typing import Callable, Dict, List, Optional, Tuple
 
 from app.db.dao_app_settings import get_setting, set_setting
@@ -20,8 +21,7 @@ _lock = threading.Lock()
 
 
 def _last_day(d: date) -> int:
-    nxt = d.replace(day=28) + timedelta(days=4)
-    return (nxt - timedelta(days=nxt.day)).day
+    return monthrange(d.year, d.month)[1]
 
 
 def is_check_due(today: Optional[date] = None) -> bool:

@@ -34,8 +34,17 @@ def get_mailbox_generation(konto_id: int, folder: str) -> Optional[str]:
         return row[0] if row else None
 
 
-def _lock_mailbox_generation(conn, konto_id: int, folder_id: int, generation: Optional[str]) -> None:
+def lock_account_revision(conn, konto_id, revision):
+    if revision is None:
+        return
+    if conn.execute("SELECT id FROM konta_email WHERE id=%s AND connection_revision=%s FOR SHARE",
+                    (konto_id, revision)).fetchone() is None:
+        raise MailboxGenerationChanged("Konfiguracja konta IMAP zmieniła się podczas synchronizacji.")
+
+
+def _lock_mailbox_generation(conn, konto_id: int, folder_id: int, generation: Optional[str], expected_account_revision=None) -> None:
     """Keep retirement outside a write transaction after validating its snapshot."""
+    lock_account_revision(conn, konto_id, expected_account_revision)
     row = conn.execute(
         "SELECT id FROM foldery_email WHERE id=%s AND konto_id=%s "
         "AND uidvalidity IS NOT DISTINCT FROM %s FOR SHARE",
@@ -483,7 +492,7 @@ def save_message_headers(
     konto_id: int,
     folder_id: int,
     headers: List[Dict[str, Any]],
-    *, expected_generation=_UNSPECIFIED_GENERATION,
+    *, expected_generation=_UNSPECIFIED_GENERATION, expected_account_revision=None,
 ) -> Dict[str, int]:
     """Save a batch and capture its row identities in the same transaction."""
     if not headers and expected_generation is _UNSPECIFIED_GENERATION:
@@ -491,7 +500,7 @@ def save_message_headers(
     conn = get_conn()
     try:
         if expected_generation is not _UNSPECIFIED_GENERATION:
-            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation)
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation, expected_account_revision)
         conn.cursor().executemany(
             """
             INSERT INTO wiadomosci_email
@@ -550,13 +559,13 @@ def get_uids_missing_refs(konto_id: int, folder_id: int, limit: int = 400) -> Li
 
 
 def save_refs(konto_id: int, folder_id: int, updates: List[Tuple[str, str]],
-              *, expected_generation=_UNSPECIFIED_GENERATION) -> None:
+              *, expected_generation=_UNSPECIFIED_GENERATION, expected_account_revision=None) -> None:
     if not updates:
         return
     conn = get_conn()
     try:
         if expected_generation is not _UNSPECIFIED_GENERATION:
-            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation)
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation, expected_account_revision)
         conn.cursor().executemany(
             "UPDATE wiadomosci_email SET refs = %s WHERE konto_id = %s AND folder_id = %s AND uid = %s",
             [(refs, konto_id, folder_id, uid) for uid, refs in updates],
@@ -567,7 +576,7 @@ def save_refs(konto_id: int, folder_id: int, updates: List[Tuple[str, str]],
 
 
 def record_mailbox_generation(konto_id: int, folder: str, generation: str,
-                               *, expected_generation=_UNSPECIFIED_GENERATION) -> bool:
+                               *, expected_generation=_UNSPECIFIED_GENERATION, expected_account_revision=None) -> bool:
     """Retire old UID mappings atomically; retain bodies and assignment history.
 
     A missing checkpoint cannot establish the generation of legacy cached UIDs.
@@ -577,6 +586,7 @@ def record_mailbox_generation(konto_id: int, folder: str, generation: str,
     if not str(generation).isdigit():
         raise ValueError("Nieprawidłowe UIDVALIDITY.")
     with get_conn() as conn:
+        lock_account_revision(conn, konto_id, expected_account_revision)
         row = conn.execute(
             "SELECT id, uidvalidity FROM foldery_email WHERE konto_id=%s AND server_name=%s FOR UPDATE",
             (konto_id, folder),
@@ -819,7 +829,7 @@ def _write_raw_message(conn, message_row_id: int, raw_eml: bytes) -> None:
 
 
 def save_current_raw_message(konto_id: int, folder_id: int, uid: str,
-                             message_row_id: int, generation: Optional[str], raw_eml: bytes) -> bool:
+                             message_row_id: int, generation: Optional[str], raw_eml: bytes, *, expected_account_revision=None) -> bool:
     """Save only to the mapping selected for FETCH, serialized with retirement.
 
     A check followed by a separate write is insufficient: another sync may retire
@@ -828,7 +838,7 @@ def save_current_raw_message(konto_id: int, folder_id: int, uid: str,
     """
     with get_conn() as conn:
         try:
-            _lock_mailbox_generation(conn, konto_id, folder_id, generation)
+            _lock_mailbox_generation(conn, konto_id, folder_id, generation, expected_account_revision)
         except MailboxGenerationChanged:
             return False
         row = conn.execute(
@@ -1186,13 +1196,13 @@ def apply_server_state(
     all_uids: set,
     unseen_uids: Optional[set],
     deleted_cutoff: str,
-    *, expected_generation=_UNSPECIFIED_GENERATION,
+    *, expected_generation=_UNSPECIFIED_GENERATION, expected_account_revision=None,
 ) -> None:
     """Przenosi stan serwera do bazy: flagi przeczytania oraz wiadomo?ci usuni?te/przeniesione poza programem."""
     conn = get_conn()
     try:
         if expected_generation is not _UNSPECIFIED_GENERATION:
-            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation)
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation, expected_account_revision)
         base = "konto_id = %s AND folder_id = %s"
         if unseen_uids is not None:
             conn.execute(

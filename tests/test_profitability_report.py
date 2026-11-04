@@ -94,9 +94,10 @@ class ProfitabilityReportTests(DbTestCase):
         self.page.firm_list.selectAll()
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "rentownosc.xlsx")
-            with mock.patch.object(ReportsPage, "_profit_rows", return_value=ROWS), \
+            with mock.patch("app.reports.import_dao.build_profitability_report", return_value=ROWS), \
                     mock.patch.object(QFileDialog, "getSaveFileName", return_value=(path, "")):
                 self.page._export_to_excel()
+                QMessageBox.critical.assert_not_called()
             sheet = openpyxl.load_workbook(path).active
             data = [list(r) for r in sheet.iter_rows(values_only=True)]
         self.assertEqual(sheet.title, "Rentowność")

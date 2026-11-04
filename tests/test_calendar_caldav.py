@@ -52,7 +52,7 @@ class FakeCalendar:
         for e in self.events:
             if f"UID:{uid}" in e.data:
                 return e
-        raise KeyError(uid)
+        raise caldav_sync.NotFoundError(uid)
 
 
 class FakeClient:

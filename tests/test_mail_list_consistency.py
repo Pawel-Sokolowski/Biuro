@@ -3,7 +3,7 @@ import threading
 from unittest import mock
 
 from PyQt6.QtCore import QItemSelectionModel
-from PyQt6.QtWidgets import QMessageBox, QTextBrowser, QTreeWidgetItemIterator
+from PyQt6.QtWidgets import QMessageBox, QTextBrowser
 
 from app.db.dao_conn import get_conn
 from app.email import email_storage as storage, email_ui
@@ -52,11 +52,8 @@ class MailListConsistencyTests(MailboxFixture):
 
     def items(self):
         result = {}
-        iterator = QTreeWidgetItemIterator(self.page.mail_list)
-        while iterator.value():
-            item = iterator.value()
+        for item in self.page.mail_list.all_items():
             result[item.data(0, email_ui.ROLE_ROW_ID)] = item
-            iterator += 1
         return result
 
     def select(self, row_ids, *, current=None):

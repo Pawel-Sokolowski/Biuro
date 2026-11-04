@@ -357,10 +357,10 @@ class MailListConsistencyTests(MailboxFixture):
             self.assertFalse(self.page.older_messages.isEnabled())
             self.page.load_mail_list_from_db("INBOX", keep_view=True)
             self.assertTrue(self.page.older_messages.isEnabled())
-            self.assertFalse(self.page.older_messages.isHidden())
+            self.assertTrue(self.page.older_messages.isHidden())
             old_loaded(stale)
-            self.assertEqual(len(self.page._mail_rows), 500)
-        self.older()
+            self.assertEqual(len(self.page._mail_rows), 504)
+            self.assertTrue(self.page.older_messages.isHidden())
 
     def test_synchronous_filter_reload_reenables_paging(self):
         self.load()
@@ -371,3 +371,159 @@ class MailListConsistencyTests(MailboxFixture):
         self.assertTrue(self.page.older_messages.isEnabled())
         self.assertFalse(self.page.older_messages.isHidden())
         self.older()
+
+    def check_refresh_preserves_paging(self, refresh):
+        self.load()
+        row_id = self.ids[self.folder, "502"]
+        self.select([row_id])
+        cached = self.page.cached_message
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            old_work, old_loaded, old_failed = submit.call_args.args
+            stale = old_work()
+            refresh()
+            self.assertEqual(submit.call_count, 2)
+            self.assertTrue(self.page._pending_mail_load[1])
+            old_loaded(stale)
+            old_failed(RuntimeError("obsolete page request"))
+            self.assertFalse(self.page.older_messages.isEnabled())
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 504)
+        self.assertEqual(self.selected_ids(), {row_id})
+        self.assertIs(self.page.cached_message, cached)
+        self.assertTrue(self.page.older_messages.isEnabled())
+
+    def test_header_refresh_preserves_the_pending_older_page(self):
+        self.check_refresh_preserves_paging(self.page._on_headers_ready)
+
+    def test_successful_sync_completion_preserves_the_pending_older_page(self):
+        self.check_refresh_preserves_paging(lambda: self.page._on_sync_finished(True))
+
+    def test_failed_sync_completion_preserves_the_pending_older_page(self):
+        self.check_refresh_preserves_paging(lambda: self.page._on_sync_finished(False))
+
+    def test_direct_preserving_refresh_keeps_the_pending_older_page(self):
+        self.check_refresh_preserves_paging(lambda: self.page._load_mail_async(keep_view=True))
+
+    def test_assignment_refresh_fulfills_the_pending_older_page(self):
+        self.load(account_wide=False)
+        row_id = self.ids[self.folder, "502"]
+        self.select([row_id])
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            old_work, old_loaded, _ = submit.call_args.args
+            stale = old_work()
+            self.page._assign_selected(1, False)
+            self.assertEqual(len(self.page._mail_rows), 502)
+            self.assertNotIn(row_id, self.page.assign_map)
+            old_loaded(stale)
+            self.assertEqual(len(self.page._mail_rows), 502)
+            self.assertNotIn(row_id, self.page.assign_map)
+        self.assertTrue(self.page.older_messages.isEnabled())
+
+    def test_completion_refresh_fulfills_the_pending_older_page(self):
+        self.load()
+        row_id = self.ids[self.folder, "502"]
+        self.select([row_id])
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            old_work, old_loaded, _ = submit.call_args.args
+            stale = old_work()
+            self.page._set_selected_completed(False)
+            self.assertEqual(len(self.page._mail_rows), 503)
+            self.assertNotIn(row_id, self.items())
+            old_loaded(stale)
+            self.assertEqual(len(self.page._mail_rows), 503)
+            self.assertNotIn(row_id, self.items())
+        self.assertTrue(self.page.older_messages.isEnabled())
+
+    def test_repeated_refreshes_advance_the_requested_page_once(self):
+        storage.save_message_headers(1, self.folder, [
+            {"uid": str(uid), "message_id": f"<older-{uid}@review>", "date": "2026-09-01 10:00"}
+            for uid in range(503, 1003)
+        ])
+        # Use the folder view so the added rows need no label/completion state.
+        self.load(account_wide=False)
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            first_work, first_loaded, _ = submit.call_args.args
+            first = first_work()
+            self.page._on_headers_ready()
+            second_work, second_loaded, _ = submit.call_args.args
+            second = second_work()
+            self.page._on_sync_finished(True)
+            first_loaded(first)
+            second_loaded(second)
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+            self.assertEqual(len(self.page._mail_rows), 1000)
+            self.assertFalse(self.page.older_messages.isHidden())
+            # Once the click is fulfilled, later refreshes must not request an
+            # extra page on the user's behalf.
+            self.page._on_headers_ready()
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+            self.assertEqual(len(self.page._mail_rows), 1000)
+            self.page._load_mail_async(more=True)
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 1002)
+        self.assertTrue(self.page.older_messages.isHidden())
+
+    def test_refresh_does_not_carry_paging_into_a_different_list_context(self):
+        self.load()
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            old_work, old_loaded, _ = submit.call_args.args
+            stale = old_work()
+            self.page.completed_filter = False
+            self.page._on_headers_ready()
+            self.assertFalse(self.page._pending_mail_load[1])
+            old_loaded(stale)
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 500)
+        self.assertEqual(self.page._mail_context, self.page._mail_request())
+
+    def test_explicit_nonpreserving_reload_cancels_pending_paging(self):
+        self.load()
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            self.page._load_mail_async()
+            self.assertFalse(self.page._pending_mail_load[1])
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 500)
+
+    def test_real_worker_refresh_keeps_the_older_page_and_reloads_new_headers(self):
+        self.load(account_wide=False)
+        captured, release = threading.Event(), threading.Event()
+        original = self.page._fetch_mail_data
+        counter_lock, calls = threading.Lock(), []
+
+        def fetch(*args, **kwargs):
+            with counter_lock:
+                first = not calls
+                calls.append(True)
+            payload = original(*args, **kwargs)
+            if first:
+                captured.set()
+                if not release.wait(3):
+                    raise TimeoutError("test did not release the superseded older-page result")
+            return payload
+
+        with mock.patch.object(self.page, "_fetch_mail_data", side_effect=fetch):
+            try:
+                self.page._load_mail_async(more=True)
+                self.assertTrue(wait_until(captured.is_set))
+                storage.save_message_headers(1, self.folder, [{
+                    "uid": "503", "message_id": "<incoming@review>", "date": "2026-11-02 10:00",
+                }])
+                self.page._on_sync_finished(True)
+                self.assertTrue(wait_until(lambda: len(self.page._mail_rows) == 503 and self.page.older_messages.isEnabled()))
+            finally:
+                release.set()
+            self.assertTrue(wait_until(lambda: not self.page._list_jobs._jobs))
+        self.assertEqual(len(self.page._mail_rows), 503)
+        self.assertIn("503", {row["uid"] for row in self.page._mail_rows})

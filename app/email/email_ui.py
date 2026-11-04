@@ -1297,11 +1297,19 @@ class EmailPage(QWidget):
         else:
             self.older_messages.setEnabled(True)
 
+    def _mail_paging_requested(self, request, *, more=False, keep_view=False):
+        if request != self._mail_context:
+            return False
+        pending = self._pending_mail_load
+        # A preserving refresh supersedes the snapshot, not the user's pending
+        # page request. Scope changes and explicit resets must start afresh.
+        return more or bool(keep_view and pending and pending[0] == request and pending[1])
+
     def _load_mail_async(self, *, more=False, keep_view=False):
         if not self.current_account or not self.current_folder_local:
             return
         request = self._mail_request()
-        paging = more and request == self._mail_context
+        paging = self._mail_paging_requested(request, more=more, keep_view=keep_view)
         existing = tuple(self._mail_rows) if request == self._mail_context and (paging or keep_view) else ()
         through = self._mail_cursor if existing else None
         if not keep_view and not paging:
@@ -1376,10 +1384,11 @@ class EmailPage(QWidget):
         konto_id = self.current_account["id"]
         request = self._mail_request(local_folder)
         if _payload is None:
+            paging = self._mail_paging_requested(request, keep_view=keep_view)
             self._cancel_mail_load()
             try:
                 existing = tuple(self._mail_rows) if request == self._mail_context else ()
-                _payload = self._fetch_mail_data(request, existing=existing,
+                _payload = self._fetch_mail_data(request, before=self._mail_cursor if paging else None, existing=existing,
                                                  through=self._mail_cursor if existing else None, ensure_row=ensure_row)
             except Exception:
                 logger.exception("Nie można wczytać listy wiadomości")

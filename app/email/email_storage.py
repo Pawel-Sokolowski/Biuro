@@ -750,46 +750,48 @@ def save_raw_message(
     raw_eml: bytes,
 ) -> None:
 
-    conn = get_conn()
+    with get_conn() as conn:
+        _write_raw_message(conn, message_row_id, raw_eml)
 
-    try:
-        cur = conn.cursor()
 
-        cur.execute(
-            """
-            INSERT INTO email_raw_messages
-            (
-                wiadomosc_id,
-                raw_eml,
-                size_bytes
-            )
-            VALUES
-            (
-                %s,
-                %s,
-                %s
-            )
+def _write_raw_message(conn, message_row_id: int, raw_eml: bytes) -> None:
+    conn.execute(
+        """INSERT INTO email_raw_messages (wiadomosc_id, raw_eml, size_bytes)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (wiadomosc_id) DO UPDATE SET
+               raw_eml = EXCLUDED.raw_eml,
+               size_bytes = EXCLUDED.size_bytes,
+               downloaded_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')""",
+        (message_row_id, raw_eml, len(raw_eml)),
+    )
 
-            ON CONFLICT (wiadomosc_id)
-            DO UPDATE SET
-                raw_eml = EXCLUDED.raw_eml,
-                size_bytes = EXCLUDED.size_bytes,
-                downloaded_at = to_char(
-                    now(),
-                    'YYYY-MM-DD HH24:MI:SS'
-                )
-            """,
-            (
-                message_row_id,
-                raw_eml,
-                len(raw_eml),
-            ),
-        )
 
-        conn.commit()
+def save_current_raw_message(konto_id: int, folder_id: int, uid: str,
+                             message_row_id: int, generation: Optional[str], raw_eml: bytes) -> bool:
+    """Save only to the mapping selected for FETCH, serialized with retirement.
 
-    finally:
-        conn.close()
+    A check followed by a separate write is insufficient: another sync may retire
+    the UID in between. Lock the folder first, in the same order as retirement,
+    then the message, and hold both locks until the body has been committed.
+    """
+    with get_conn() as conn:
+        folder = conn.execute(
+            "SELECT id FROM foldery_email WHERE id=%s AND konto_id=%s "
+            "AND uidvalidity IS NOT DISTINCT FROM %s FOR SHARE",
+            (folder_id, konto_id, generation),
+        ).fetchone()
+        if folder is None:
+            return False
+        row = conn.execute(
+            "SELECT id FROM wiadomosci_email WHERE id=%s AND konto_id=%s "
+            "AND folder_id=%s AND uid=%s AND COALESCE(usunieta,0)=0 FOR UPDATE",
+            (message_row_id, konto_id, folder_id, str(uid)),
+        ).fetchone()
+        if row is None:
+            return False
+        _write_raw_message(conn, message_row_id, raw_eml)
+        return True
+
 
 def get_message_cache_states(konto_id: int, folder_id: int, uids: List[str]):
     """Inspect cached bodies in one query without transferring attachment blobs."""
@@ -800,7 +802,8 @@ def get_message_cache_states(konto_id: int, folder_id: int, uids: List[str]):
         rows = conn.execute("""SELECT we.uid, we.id, COALESCE(raw.size_bytes,0) > 0 AS cached
                                FROM wiadomosci_email we
                                LEFT JOIN email_raw_messages raw ON raw.wiadomosc_id=we.id
-                               WHERE we.konto_id=%s AND we.folder_id=%s AND we.uid=ANY(%s)""",
+                               WHERE we.konto_id=%s AND we.folder_id=%s AND we.uid=ANY(%s)
+                                 AND COALESCE(we.usunieta,0)=0""",
                             (konto_id,folder_id,[str(uid) for uid in uids])).fetchall()
         return {str(row[0]):(int(row[1]),bool(row[2])) for row in rows}
     finally:
@@ -1364,8 +1367,8 @@ def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> Lis
 
 
 def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 500,
-                  before=None, employee_id=None, completed=False):
-    """Bounded, stable keyset pagination; search before limiting the result set."""
+                  before=None, employee_id=None, completed=False, through=None, include_ids=()):
+    """Read one page, or revalidate the already loaded range through a keyset."""
     limit = max(1, min(int(limit), 500))
     where = ["we.konto_id=%s", "COALESCE(we.usunieta,0)=0"]
     params = [konto_id]
@@ -1384,12 +1387,25 @@ def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 
     if before is not None:
         where.append("(COALESCE(we.data,''), we.id) < (%s,%s)")
         params.extend(before)
-    params.append(limit + 1)
+    sql = ("SELECT we.*, fe.server_name FROM wiadomosci_email we "
+           "JOIN foldery_email fe ON fe.id=we.folder_id WHERE " + " AND ".join(where))
+    order = " ORDER BY COALESCE(we.data,'') DESC, we.id DESC"
     with get_conn() as conn:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT we.*, fe.server_name FROM wiadomosci_email we JOIN foldery_email fe ON fe.id=we.folder_id WHERE "
-            + " AND ".join(where) + " ORDER BY COALESCE(we.data,'') DESC, we.id DESC LIMIT %s", params
-        )]
+        if through is not None:
+            rows = [dict(r) for r in conn.execute(
+                sql + " AND ((COALESCE(we.data,''), we.id) >= (%s,%s) OR we.id=ANY(%s))" + order,
+                [*params, *through, list(include_ids)],
+            )]
+            more = conn.execute(
+                sql + " AND (COALESCE(we.data,''), we.id) < (%s,%s) LIMIT 1",
+                [*params, *through],
+            ).fetchone() is not None
+            # Notification targets outside the range must not advance paging
+            # past messages the user has never loaded.
+            cursor = next(((row.get("data") or "", row["id"]) for row in reversed(rows)
+                           if (row.get("data") or "", row["id"]) >= through), None)
+            return rows, more, cursor
+        rows = [dict(r) for r in conn.execute(sql + order + " LIMIT %s", [*params, limit + 1])]
     more = len(rows) > limit
     rows = rows[:limit]
     cursor = (rows[-1].get("data") or "", rows[-1]["id"]) if rows else None

@@ -50,7 +50,7 @@ from app.email.email_storage import (
     get_message_row_id,
     load_raw_message,
     get_message_cache_states,
-    save_raw_message,
+    save_current_raw_message,
     record_mailbox_generation,
 )
 from app.utils.crypto import decrypt_password
@@ -144,20 +144,26 @@ class _Session:
         self.konto_id = konto_id
         self.generations = {}
         self.selected: Optional[Tuple[str, bool]] = None
+        self.selected_generation: Optional[str] = None
 
     def select(self, folder: str, readonly: bool) -> bool:
         if _select_folder(self.conn, folder, readonly=readonly):
             generation = _uidvalidity(self.conn)
+            # IMAP4.response() consumes the response. Preserve the generation
+            # from this SELECT for callers that later validate a body write.
+            self.selected_generation = generation
             if self.konto_id is not None and generation and self.generations.get(folder) != generation:
                 retired = record_mailbox_generation(self.konto_id, folder, generation)
                 self.generations[folder] = generation
                 if retired:
                     self.selected = None
+                    self.selected_generation = None
                     # The caller's UID list belongs to the retired generation.
                     return False
             self.selected = (folder, readonly)
             return True
         self.selected = None
+        self.selected_generation = None
         return False
 
     def close(self) -> None:
@@ -369,7 +375,11 @@ def fetch_message_from_imap(
             ):
                 return None
 
-            if expected_row_id is not None and get_message_row_id(konto_id, folder_id, str(uid)) != expected_row_id:
+            # Bind the downloaded bytes to the mapping and generation selected
+            # here; never look up a replacement row after FETCH has finished.
+            generation = session.selected_generation
+            row_id = get_message_row_id(konto_id, folder_id, str(uid)) if folder_id else None
+            if expected_row_id is not None and row_id != expected_row_id:
                 return None
 
             typ, data = session.conn.uid(
@@ -394,21 +404,8 @@ def fetch_message_from_imap(
         )
         return None
 
-    if folder_id:
-
-        row_id = get_message_row_id(
-            konto_id,
-            folder_id,
-            str(uid),
-        )
-        if expected_row_id is not None and row_id != expected_row_id:
-            return None
-
-        if row_id:
-            save_raw_message(
-                row_id,
-                raw_bytes,
-            )
+    if row_id and not save_current_raw_message(konto_id, folder_id, str(uid), row_id, generation, raw_bytes):
+        return None
 
     return parse_message(
         raw_bytes,
@@ -472,6 +469,10 @@ def prefetch_messages(
                     raise RuntimeError(f"Nie można otworzyć folderu IMAP: {folder}")
                 return 0
 
+            generation = session.selected_generation
+            # SELECT can adopt a generation already recorded by another sync,
+            # in which case its success says nothing about the captured IDs.
+            cache_states = get_message_cache_states(konto_id, folder_id, unique_uids)
             for index, uid in enumerate(unique_uids, start=1):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("Synchronizacja przerwana; zostanie wznowiona po uruchomieniu aplikacji.")
@@ -504,8 +505,11 @@ def prefetch_messages(
                                 uid, folder,
                             )
                         else:
-                            save_raw_message(row_id, raw)
-                            fetched += 1
+                            if save_current_raw_message(konto_id, folder_id, uid, row_id, generation, raw):
+                                fetched += 1
+                            else:
+                                failed += 1
+                                logger.warning("Zmieniono mapowanie UID podczas pobierania: %s/%s", folder, uid)
 
                 except Exception:
                     failed += 1

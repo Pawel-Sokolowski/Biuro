@@ -16,7 +16,7 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
 | Imports | Read optimized workbook rows directly into the report parser, close workbooks, and batch parameter writes (500 at a time) using psycopg executemany/pipeline. Return DB connections before registry requests. The preview wizard retains its list API; this is not a promise of constant memory for every import. |
 | Monetary arithmetic | Use Decimal/HALF_UP explicitly in XML quantizers and report pricing calculations. Retain existing invoice JSON/UI float interfaces and historical document amounts; an end-to-end serialization/data-type migration is intentionally separate. |
 | KSeF package memory | Incrementally decrypt/hash HTTP chunks into spooled temporary storage; verify declared sizes/hashes, aggregate ZIP expansion and file-count limits. Preserve the existing dictionary return API and submission retry protections. |
-| Startup | Defer six main pages until accessed. Keep dashboard, monthly timers, mail and chat available for current background monitoring. Permissions are applied before a deferred page is selected. |
+| Startup | Defer five main pages until accessed. Keep dashboard, monthly timers, mail, chat and calendar available for current background monitoring. Permissions are applied before a deferred page is selected. |
 | Old reports | Remove unreachable UI renderers and imports. Retain public legacy calculation helpers for compatibility; they are not called by the current report UI. |
 | Dependencies/repository | Remove django-qrcode, declare directly imported calendar packages, add pool/migration/IMAP codec dependencies, lock the cross-platform Python 3.11 graph with hashes, use the lock in CI, and remove 58 tracked bytecode artifacts. |
 | Date helpers | Use calendar.monthrange for all three last-day calculations. |
@@ -31,6 +31,24 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
 - Keep **openpyxl and XlsxWriter**: the latter still implements a specific Saldeo export. Consolidation would need export-format validation and provides less value than fixing the active I/O paths.
 - Keep WebEngine's restricted profile and Qt's PDF renderer. Changing the HTML engine changes mail rendering; it is not a transparent package-size optimization.
 - Keep financial authorization, audit records, accepted-XML PDFs, uncertain KSeF/SMTP state handling and manual payment confirmation.
+
+## PR review follow-ups
+
+- Re-read UID mappings after SELECT and save downloaded bodies only while the
+  selected generation, account, folder, UID and row identity still match. Hold
+  folder/message locks through the write so retirement cannot interleave the
+  check and insert. Preserve SELECT's UIDVALIDITY because imaplib consumes it.
+- Revalidate retained mail ranges in background workers, including read flags,
+  deletion, retirement and assignment/completion filters. Preserve loaded older
+  pages and their selection/preview when an unchanged request refreshes.
+- Clear old items and captured message identity immediately when changing
+  folders/accounts. Include assignment/completion metadata for older notification
+  targets without advancing the paging cursor over unloaded messages.
+- Resolve move/permanent-delete targets from the captured row identity when
+  the tree has no selection; reject missing or different-account identities.
+- Start calendar synchronization with the main window, before its first visit.
+- Reject imported-data deletion while an import is running, including an import
+  started while the deletion confirmation dialog was open.
 
 ## Deployment and limits
 
@@ -47,9 +65,12 @@ installer certification.
 
 ## Validation
 
-- Full locked-runtime run: **683 tests in 88 modules passed**, without skips.
-- After the final row-identity guards, all **21 affected mail/KSeF/regression modules passed** again.
-- New coverage includes twelve regression tests and independent RSA/EC signature cases.
+- Final locked-runtime results: **702 tests in 89 modules passed**, without skips,
+  across the full sweep and a focused rerun after updating the initial-sync session fixture.
+- Nineteen additional review regression cases cover SELECT/FETCH generation races,
+  atomic retirement/write serialization, retained pages and filters, stale click
+  targets, notification metadata, missing selections, calendar startup and import/deletion concurrency.
+- Original coverage also includes twelve optimization regressions and independent RSA/EC signature cases.
 - Ruff checks for syntax/undefined names (`E9,F63,F7,F82`) passed.
 - Installed-package compatibility and `git diff --check` passed.
 - Python 3.11, PyQt6 6.11.0 and the committed hash-locked runtime were used.

@@ -537,22 +537,23 @@ class OfficeManagerApp(QMainWindow):
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
         self.page_dashboard = DashboardPage(self.pracownik_id)
-        # Mail/chat monitoring and the timer remain available before their tab opens.
+        # These pages own background monitoring and must start before tab visits.
         self.page_email = EmailPage(self.pracownik_id)
         self.page_email.folder_visibility_changed.connect(self._update_email_badge)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_chat.unread_changed.connect(self._set_chat_badge)
         self.page_chat._refresh_unread_marks()
+        self.page_calendar = CalendarPage(self.pracownik_id)
         self._loaded_pages = {}
         self._lazy_pages = {
             "page_companies": (2, lambda: CompanyUI(self.pracownik_id, self)),
             "page_faktury": (5, lambda: FakturyPage(self.pracownik_id)),
             "page_raporty": (6, lambda: ReportsPage(self.pracownik_id)),
             "page_tasks": (7, lambda: TasksPage(self.pracownik_id)),
-            "page_calendar": (8, lambda: CalendarPage(self.pracownik_id)),
             "page_settings": (9, lambda: GlobalSettingsPage(self.pracownik_id, True, self)),
         }
-        eager = {0: self.page_dashboard, 1: self.page_monthly, 3: self.page_email, 4: self.page_chat}
+        eager = {0: self.page_dashboard, 1: self.page_monthly, 3: self.page_email,
+                 4: self.page_chat, 8: self.page_calendar}
         for row in range(10):
             self.pages.addWidget(eager[row] if row in eager else QWidget())
 
@@ -607,10 +608,6 @@ class OfficeManagerApp(QMainWindow):
     @property
     def page_tasks(self):
         return self._ensure_page("page_tasks")
-
-    @property
-    def page_calendar(self):
-        return self._ensure_page("page_calendar")
 
     @property
     def page_settings(self):

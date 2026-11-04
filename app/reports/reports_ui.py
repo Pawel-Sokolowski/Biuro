@@ -680,6 +680,9 @@ class ReportsPage(QWidget):
         from PyQt6.QtWidgets import QInputDialog
         from app.reports import import_dao
 
+        if self._import_busy:
+            self.report_status.setText("Poczekaj na zakończenie importu przed usunięciem danych.")
+            return
         if not self._can_import():
             QMessageBox.warning(self, "Usuwanie", "Brak uprawnień do usuwania danych.")
             return
@@ -701,6 +704,11 @@ class ReportsPage(QWidget):
             f"Usunąć „{choice}” z zakresu {months[0]} – {months[-1]} dla {scope}?\n"
             "Tej operacji nie można cofnąć.",
         ) != QMessageBox.StandardButton.Yes:
+            return
+        # Modal dialogs process events; an import may have started while the
+        # deletion choices or confirmation were open.
+        if self._import_busy:
+            self.report_status.setText("Poczekaj na zakończenie importu przed usunięciem danych.")
             return
         try:
             deleted = import_dao.delete_imported(labels[choice], months, selected or None)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
+from calendar import monthrange
 
 
 def previous_month(month: str) -> str:
@@ -20,11 +21,7 @@ def default_month_for_monthly_view(today: date | None = None) -> str:
 
 
 def _last_day_of_month(year: int, month: int) -> int:
-    if month == 12:
-        next_month = date(year + 1, 1, 1)
-    else:
-        next_month = date(year, month + 1, 1)
-    return (next_month - timedelta(days=1)).day
+    return monthrange(year, month)[1]
 
 
 def month_bounds(month: str) -> tuple[str, str]:

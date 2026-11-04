@@ -53,7 +53,7 @@ Program czyta logi kopii (Cobian Backup, mail „Backup 11 (ENOVA)”) z pliku a
 
 - Python 3.11
 - PostgreSQL
-- Zależności: `pip install -r requirements.txt`
+- Zależności: `pip install --require-hashes -r requirements.lock`
 
 ## Konfiguracja
 
@@ -69,12 +69,21 @@ Skopiuj `.env.example` jako `.env` (katalog projektu albo `%LOCALAPPDATA%\Biuro\
 ## Uruchomienie
 
 ```powershell
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 python migrate_db.py   # tworzy/aktualizuje schemat bazy
 python main.py
 ```
 
-`migrate_db.py` kończy się sukcesem tylko wtedy, gdy schemat jest aktualny (`SCHEMA_VERSION` w `app\db\schema.py`). Zmiana struktury bazy wymaga podbicia tej wersji.
+`migrate_db.py` uruchamia wersjonowane migracje Alembic i sprawdza aktualność schematu.
+Pierwszy przebieg zachowuje dane i aktualizuje starszą bazę przez zamrożony bootstrap;
+kolejne uruchomienie nie wykonuje go ponownie. Nowe zmiany struktury dodawaj jako
+rewizje w `app/db/migrations/versions`, wraz z aktualizacją kontroli wersji schematu.
+Po instalacji tej wersji uruchom migrację przed logowaniem: dodaje ona identyfikator
+generacji folderów IMAP, aby ponownie użyty UID nie wskazywał treści starej wiadomości.
+
+Lista poczty wczytuje po 500 wiadomości; przycisk **Wczytaj starsze wiadomości**
+udostępnia kolejne strony. Wyszukiwanie obejmuje również starsze wiadomości,
+w tym pole odbiorcy, i nie wykonuje zapytania po każdym pojedynczym znaku.
 
 ## Poczta i powiadomienia
 

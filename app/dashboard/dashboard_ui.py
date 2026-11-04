@@ -11,6 +11,7 @@ from app.security.authorization import is_administrator
 from app.utils.backup_mail import refresh_backup_log_from_mail
 from app.utils.backup_status import get_backup_status
 from app.db.dao_dashboard import format_duration, format_event_time, get_dashboard_data
+from app.utils.background import TaskRunner
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,14 @@ class DashboardPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.cards: dict[str, QLabel] = {}
+        self._refresh_jobs = TaskRunner(self)
 
         layout = QVBoxLayout(self)
         header = QHBoxLayout()
         self.title = QLabel("Pulpit")
         self.title.setStyleSheet("font-size: 20px; font-weight: bold;")
         refresh = QPushButton("Odśwież")
-        refresh.clicked.connect(self.refresh)
+        refresh.clicked.connect(self.refresh_async)
         header.addWidget(self.title)
         header.addStretch()
         header.addWidget(refresh)
@@ -114,7 +116,7 @@ class DashboardPage(QWidget):
         layout.addLayout(lists, 1)
 
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(lambda: self.refresh_async() if self.isVisible() else None)
         self._timer.start(REFRESH_INTERVAL_MS)
         self._mail_timer = QTimer(self)
         self._mail_timer.timeout.connect(self.refresh_backup_from_mail)
@@ -123,7 +125,7 @@ class DashboardPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.refresh()
+        self.refresh_async()
         if not self._mail_checked_once:
             self._mail_checked_once = True
             self.refresh_backup_from_mail()
@@ -161,6 +163,14 @@ class DashboardPage(QWidget):
 
     def refresh(self):
         data = get_dashboard_data(self.pracownik_id)
+        self._render_data(data)
+
+    def refresh_async(self):
+        actor_id = self.pracownik_id
+        self._refresh_jobs.submit(lambda: get_dashboard_data(actor_id), self._render_data,
+                                  lambda exc: logger.warning("Nie można odświeżyć pulpitu: %s", exc))
+
+    def _render_data(self, data):
         self.title.setText(f"Pulpit — rozliczany miesiąc {data['miesiac']}")
         for key, label in self.cards.items():
             label.setText(str(data.get(key, 0)))

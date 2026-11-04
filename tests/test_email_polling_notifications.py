@@ -109,6 +109,12 @@ class AutomaticSyncTests(unittest.TestCase):
         self.assertEqual(run(), [])
         status['Clients'] = 'MESSAGES=3,UIDNEXT=4'
         self.assertEqual(run(), [['Clients']])
+        # Stable aggregate counters cannot identify swapped read/unread flags.
+        # Reconciliation must run after ten passes even without a STATUS change.
+        for _ in range(7):
+            self.assertEqual(run(), [])
+        self.assertEqual(run(), [['INBOX', 'Clients', 'Archive']])
+
 
     def test_manual_sync_requests_all_two_year_messages_only_for_selected_accounts(self):
         with patch.object(email_sync,'set_setting') as setting, patch.object(email_sync,'sync_and_prefetch') as sync:

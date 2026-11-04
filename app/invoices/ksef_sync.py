@@ -9,7 +9,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -67,7 +67,7 @@ def _decimal(value: Any, field: str, *, money=True) -> Decimal:
         number = Decimal(str(value).replace(",", "."))
         if not number.is_finite():
             raise InvalidOperation
-        return number.quantize(Decimal("0.01")) if money else number
+        return number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if money else number
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise KsefError(f"Faktura KSeF ma nieprawidłową wartość pola {field}.") from exc
 
@@ -133,7 +133,7 @@ def parse_fa3_invoice(xml: str, *, allow_buyer_without_nip=False) -> Dict[str, A
         "account": _text(_child(fa, "RachunekBankowy"), "NrRB"),
         "buyer_country": _text(address_pol, "KodKraju", "PL"),
         "buyer_address": _text(address_pol, "AdresL1"), "buyer_address_2": _text(address_pol, "AdresL2"),
-        "net": total_net.quantize(Decimal("0.01")), "gross": total_gross,
+        "net": total_net.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "gross": total_gross,
         "positions": positions, "kind": _text(fa, "RodzajFaktury", "VAT"),
         "correction_reason": _text(fa, "PrzyczynaKorekty"),
         "corrected_number": _text(fa, "NrFaKorygowanej"),
@@ -502,10 +502,10 @@ def _take_match(
         logger.warning("NO MATCH invoice=%s nip=%s", invoice_number, buyer_nip)
         return None
     try:
-        gross = Decimal(str(meta.get("grossAmount"))).quantize(Decimal("0.01"))
+        gross = Decimal(str(meta.get("grossAmount"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         matches = [invoice for invoice in candidates
                    if _digits(invoice.get("firma_nip")) == buyer_nip
-                   and Decimal(str(invoice.get("kwota_brutto"))).quantize(Decimal("0.01")) == gross]
+                   and Decimal(str(invoice.get("kwota_brutto"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == gross]
     except (InvalidOperation, TypeError, ValueError):
         logger.warning("NO MATCH invoice=%s nip=%s: nieprawidłowa kwota", invoice_number, buyer_nip)
         return None

@@ -175,9 +175,11 @@ def _cell(row, idx):
 
 def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
     """rows: pierwszy wiersz = nagłówek. Zwraca tylko wiersze od MIN_YEAR."""
-    if not rows:
+    iterator = iter(rows)
+    header = next(iterator, None)
+    if header is None:
         return []
-    cols = _header_map(rows[0])
+    cols = _header_map(header)
     i_firma = _find(cols, "firma")
     i_nip = _find(cols, "nip")
     i_user = _find(cols, "uzytkownik")
@@ -194,7 +196,7 @@ def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
         raise ValueError("Brak kolumn „Użytkownik” i „Data” w pliku.")
 
     out = []
-    for row in rows[1:]:
+    for row in iterator:
         data = parse_date(_cell(row, i_data))
         if not data or int(data[:4]) < MIN_YEAR:
             continue
@@ -225,10 +227,13 @@ def parse_work_rows(rows: List[tuple]) -> List[Dict[str, Any]]:
     return out
 
 
+
 def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -> List[Dict[str, Any]]:
-    if not rows:
+    iterator = iter(rows)
+    header = next(iterator, None)
+    if header is None:
         return []
-    cols = _header_map(rows[0])
+    cols = _header_map(header)
     i_kontr = _find(cols, "nazwa", "kontrahenta")
     i_nip = _find(cols, "nip")
     i_nr = _find(cols, "nr", "faktury") or _find(cols, "numer", "faktury")
@@ -241,7 +246,7 @@ def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -
         raise ValueError("Brak kolumn „Pozycja faktury” i „Wartość netto” w pliku.")
 
     out = []
-    for row in rows[1:]:
+    for row in iterator:
         pozycja = str(_cell(row, i_poz) or "").strip()
         if not pozycja:
             continue
@@ -266,6 +271,7 @@ def parse_invoice_rows(rows: List[tuple], default_month: Optional[str] = None) -
             "hash": row_hash("faktura", kontrahent, nr, pozycja, netto, miesiac),
         })
     return out
+
 
 
 # ------------------------------------------------------------------

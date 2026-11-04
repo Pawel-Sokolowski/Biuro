@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import json
 import logging
 import os
 import time
 import zipfile
+import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
@@ -47,6 +47,41 @@ SUBJECT_RECEIVED = "Subject2"
 
 class KsefError(RuntimeError):
     pass
+
+
+def _stream_export_part(response, part, key, iv, archive):
+    """Bound memory and verify both encrypted and decrypted streams before ZIP use."""
+    expected_encrypted, expected_plain = int(part["encryptedPartSize"]), int(part["partSize"])
+    if not 0 < expected_encrypted <= MAX_EXPORT_BYTES + 16 or not 0 <= expected_plain <= MAX_EXPORT_BYTES:
+        raise KsefError("Nieprawidłowy rozmiar części eksportu KSeF.")
+    encrypted_hash, plain_hash = hashlib.sha256(), hashlib.sha256()
+    encrypted_size = plain_size = 0
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    unpadder = PKCS7(128).unpadder()
+    chunks = response.iter_content(chunk_size=65536) if callable(getattr(response, "iter_content", None)) else (response.content,)
+    def write_plain(raw):
+        nonlocal plain_size
+        plain_size += len(raw)
+        if plain_size > expected_plain or archive.tell() + len(raw) > MAX_EXPORT_BYTES:
+            raise KsefError("Odszyfrowana paczka KSeF przekracza zadeklarowany rozmiar.")
+        plain_hash.update(raw)
+        archive.write(raw)
+    try:
+        for chunk in chunks:
+            if not chunk:
+                continue
+            encrypted_size += len(chunk)
+            if encrypted_size > expected_encrypted:
+                raise KsefError("Zaszyfrowana paczka KSeF przekracza zadeklarowany rozmiar.")
+            encrypted_hash.update(chunk)
+            write_plain(unpadder.update(decryptor.update(chunk)))
+        write_plain(unpadder.update(decryptor.finalize()) + unpadder.finalize())
+    except ValueError as exc:
+        raise KsefError("Nie udało się odszyfrować paczki KSeF.") from exc
+    if encrypted_size != expected_encrypted or base64.b64encode(encrypted_hash.digest()).decode() != part["encryptedPartHash"]:
+        raise KsefError("Zaszyfrowana paczka KSeF ma nieprawidłowy rozmiar lub skrót.")
+    if plain_size != expected_plain or base64.b64encode(plain_hash.digest()).decode() != part["partHash"]:
+        raise KsefError("Odszyfrowana paczka KSeF ma nieprawidłowy rozmiar lub skrót.")
 
 
 def encrypt_token(token: str, timestamp_ms: int, certificate_der: bytes) -> str:
@@ -303,45 +338,48 @@ class KsefClient:
             raise KsefError("Paczka KSeF została obcięta. Zawęź zakres synchronizacji.")
         if int(package.get("size") or 0) > MAX_EXPORT_BYTES:
             raise KsefError("Paczka faktur KSeF przekracza bezpieczny limit 256 MB.")
-        decrypted_parts = []
-        for part in sorted(package.get("parts") or [], key=lambda item: item.get("ordinalNumber", 0)):
-            if progress:
-                progress(f"Pobieranie paczki KSeF: część {part.get('ordinalNumber', '?')}")
+        parts = sorted(package.get("parts") or [], key=lambda item: item.get("ordinalNumber", 0))
+        if len(parts) > 4096 or sum(int(p["partSize"]) for p in parts) > MAX_EXPORT_BYTES:
+            raise KsefError("Paczka eksportu KSeF przekracza limit rozmiaru lub liczby części.")
+        files, metadata = {}, []
+        with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as archive:
+            for part in parts:
+                if progress:
+                    progress(f"Pobieranie paczki KSeF: część {part.get('ordinalNumber', '?')}")
+                response = None
+                try:
+                    response = self.http.request(part.get("method") or "GET", part["url"], timeout=TIMEOUT, stream=True)
+                    if not response.ok:
+                        raise KsefError(f"Nie udało się pobrać paczki KSeF: HTTP {response.status_code}")
+                    _stream_export_part(response, part, key, iv, archive)
+                except requests.RequestException as exc:
+                    raise KsefError(f"Błąd pobierania paczki KSeF: {exc}") from exc
+                finally:
+                    if response is not None and callable(getattr(response, "close", None)):
+                        response.close()
+            archive.seek(0)
             try:
-                response = self.http.request(part.get("method") or "GET", part["url"], timeout=TIMEOUT)
-            except requests.RequestException as exc:
-                raise KsefError(f"Błąd pobierania paczki KSeF: {exc}") from exc
-            if not response.ok:
-                raise KsefError(f"Nie udało się pobrać paczki KSeF: HTTP {response.status_code}")
-            encrypted = response.content
-            if len(encrypted) != int(part["encryptedPartSize"]) or base64.b64encode(hashlib.sha256(encrypted).digest()).decode("ascii") != part["encryptedPartHash"]:
-                raise KsefError("Zaszyfrowana paczka KSeF ma nieprawidłowy rozmiar lub skrót.")
-            decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-            padded = decryptor.update(encrypted) + decryptor.finalize()
-            try:
-                unpadder = PKCS7(128).unpadder()
-                raw = unpadder.update(padded) + unpadder.finalize()
-            except ValueError as exc:
-                raise KsefError("Nie udało się odszyfrować paczki KSeF.") from exc
-            if len(raw) != int(part["partSize"]) or base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii") != part["partHash"]:
-                raise KsefError("Odszyfrowana paczka KSeF ma nieprawidłowy rozmiar lub skrót.")
-            decrypted_parts.append(raw)
-        archive = b"".join(decrypted_parts)
-        files: Dict[str, bytes] = {}
-        metadata: List[Dict[str, Any]] = []
-        try:
-            with zipfile.ZipFile(io.BytesIO(archive)) as package_zip:
-                for info in package_zip.infolist():
-                    if info.is_dir() or info.file_size > 10 * 1024 * 1024:
-                        continue
-                    content = package_zip.read(info)
-                    name = info.filename.rsplit("/", 1)[-1]
-                    if name.lower() == "_metadata.json":
-                        metadata.extend((json.loads(content.decode("utf-8-sig")) or {}).get("invoices", []))
-                    elif name.lower().endswith(".xml"):
-                        files[name[:-4]] = content
-        except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise KsefError("Paczka eksportu KSeF jest uszkodzona.") from exc
+                with zipfile.ZipFile(archive) as package_zip:
+                    infos = package_zip.infolist()
+                    if len(infos) > 10000 or sum(info.file_size for info in infos) > MAX_EXPORT_BYTES:
+                        raise KsefError("Rozpakowana paczka KSeF przekracza limit rozmiaru lub liczby plików.")
+                    for info in infos:
+                        if info.is_dir():
+                            continue
+                        if info.file_size > 10 * 1024 * 1024:
+                            raise KsefError("Plik w paczce KSeF przekracza limit 10 MB.")
+                        name = info.filename.rsplit("/", 1)[-1]
+                        if name.lower() != "_metadata.json" and not name.lower().endswith(".xml"):
+                            continue
+                        content = package_zip.read(info)
+                        if name.lower() == "_metadata.json":
+                            metadata.extend((json.loads(content.decode("utf-8-sig")) or {}).get("invoices", []))
+                        elif name[:-4] in files:
+                            raise KsefError("Paczka KSeF zawiera powtórzoną nazwę faktury.")
+                        else:
+                            files[name[:-4]] = content
+            except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise KsefError("Paczka eksportu KSeF jest uszkodzona.") from exc
         return {"reference": reference, "metadata": metadata, "files": files}
 
     def send_fa3_xml(

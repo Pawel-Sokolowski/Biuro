@@ -6,12 +6,12 @@ Najlepiej, gdy inni użytkownicy nie są w tym czasie zalogowani.
 """
 import sys
 
-from app.db.schema import init_db, schema_is_current
+from app.db.schema import upgrade_database, schema_is_current
 
 
 def main() -> int:
     print("Aktualizacja bazy danych...")
-    init_db()
+    upgrade_database()
     if schema_is_current():
         print("Gotowe - baza jest aktualna.")
         return 0

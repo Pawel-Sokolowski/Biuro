@@ -11,15 +11,12 @@ from PyQt6.QtCharts import (
 from PyQt6.QtGui import QPainter
 import datetime
 import logging
+from app.utils.background import TaskRunner
 
 from app.reports.reports_logic import (
     get_all_companies,
     get_months_range,
     build_report,
-    build_yearly_report,
-    compare_companies,
-    build_profit_report,
-    build_summary_report,
     build_daily_report,
 )
 from app.reports.import_parse import SEKCJE, SEKCJA_LABELS
@@ -83,7 +80,16 @@ class ReportsPage(QWidget):
     def __init__(self, pracownik_id):
         super().__init__()
         self.pracownik_id = pracownik_id
+        self._report_jobs = TaskRunner(self)
+        self._import_jobs = TaskRunner(self)
+        self._import_busy = False
         self._build_ui()
+        for signal in (self.mode_combo.currentTextChanged, self.month_start.currentTextChanged,
+                       self.month_end.currentTextChanged, self.year_combo.currentTextChanged,
+                       self.firm_list.itemSelectionChanged, self.employee_list.itemSelectionChanged,
+                       self.daily_from.selectionChanged, self.daily_to.selectionChanged,
+                       self.chk_whole_month.toggled):
+            signal.connect(lambda *_: self._report_jobs.invalidate())
 
     def _build_ui(self):
         from PyQt6.QtWidgets import QScrollArea
@@ -178,7 +184,7 @@ class ReportsPage(QWidget):
 
         btn = QPushButton("Generuj raport")
         btn.setProperty("class", "primary")
-        btn.clicked.connect(self._generate_report)
+        btn.clicked.connect(self._generate_report_async)
         layout.addWidget(btn)
 
         btn_export = QPushButton("Eksport do Excel")
@@ -328,40 +334,42 @@ class ReportsPage(QWidget):
         self.chart_top.setVisible(not summary and not daily)
         self.chart_bottom.setVisible(not summary and not daily)
 
-    def _generate_report(self):
+    def _generate_report_async(self):
+        self._generate_report(background=True)
+
+    def _generate_report(self, background=False):
         mode = self.mode_combo.currentText()
+        actor_id = self.pracownik_id
         if mode == DAILY_MODE:
-            rows = self._daily_rows()
-            if rows is not None:
-                self._render_daily(rows)
-            return
-
-        selected = [
-            self.firm_list.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.firm_list.count())
-            if self.firm_list.item(i).isSelected()
-        ]
-
-        if not selected:
-            QMessageBox.warning(self, "Brak wyboru", "Wybierz co najmniej jedną firmę.")
-            return
-
-        if mode == "Raport miesięczny":
-            start = self.month_start.currentText()
-            end = self.month_end.currentText()
-            months = get_months_range(start, end)
-            data = build_report(selected, months, self.pracownik_id)
-            self._render_mixed(data, selected, months)
-
-        elif mode == "Raport roczny":
-            year = int(self.year_combo.currentText())
-            months = [f"{year}-{m:02d}" for m in range(1, 13)]
-            data = build_report(selected, months, self.pracownik_id)
-            self._render_mixed(data, selected, months)
-
-        elif mode == PROFIT_MODE:
-            months = get_months_range(self.month_start.currentText(), self.month_end.currentText())
-            self._render_import_report(self._profit_rows(selected, months))
+            request = self._daily_request()
+            if request is None:
+                return
+            ids, start, end = request
+            work = lambda: build_daily_report(ids, start, end, actor_id)
+            render = self._render_daily
+        else:
+            selected = [self.firm_list.item(i).data(Qt.ItemDataRole.UserRole)
+                        for i in range(self.firm_list.count()) if self.firm_list.item(i).isSelected()]
+            if not selected:
+                QMessageBox.warning(self, "Brak wyboru", "Wybierz co najmniej jedną firmę.")
+                return
+            if mode == "Raport roczny":
+                year = int(self.year_combo.currentText())
+                months = [f"{year}-{m:02d}" for m in range(1, 13)]
+            else:
+                months = get_months_range(self.month_start.currentText(), self.month_end.currentText())
+            if mode == PROFIT_MODE:
+                from app.reports.import_dao import build_profitability_report
+                work = lambda: build_profitability_report(selected, months, actor_id)
+                render = self._render_import_report
+            else:
+                work = lambda: build_report(selected, months, actor_id)
+                render = lambda data: self._render_mixed(data, selected, months)
+        if background:
+            self.report_status.setText("Przygotowywanie raportu…")
+            self._report_jobs.submit(work, render, lambda exc: QMessageBox.warning(self, "Raport", str(exc)))
+        else:
+            render(work())
 
     def _reportable_employees(self):
         from app.db.dao_conn import get_conn
@@ -382,7 +390,7 @@ class ReportsPage(QWidget):
         if self.daily_to.selectedDate() < self.daily_from.selectedDate():
             self.daily_to.setSelectedDate(self.daily_from.selectedDate())
 
-    def _daily_rows(self):
+    def _daily_request(self):
         """Dane raportu dziennego dla zaznaczonych pracowników; None, gdy brak wyboru."""
         ids = [self.employee_list.item(i).data(Qt.ItemDataRole.UserRole)
                for i in range(self.employee_list.count()) if self.employee_list.item(i).isSelected()]
@@ -395,7 +403,11 @@ class ReportsPage(QWidget):
         else:
             last = max(first, self.daily_to.selectedDate().toPyDate())
             start, end = first.isoformat(), last.isoformat()
-        return build_daily_report(ids, start, end, self.pracownik_id)
+        return ids, start, end
+
+    def _daily_rows(self):
+        request = self._daily_request()
+        return build_daily_report(*request, self.pracownik_id) if request is not None else None
 
     def _render_daily(self, rows):
         display = daily_display_rows(rows)
@@ -623,47 +635,68 @@ class ReportsPage(QWidget):
         from PyQt6.QtWidgets import QFileDialog, QInputDialog
         from app.reports import import_dao
 
+        if self._import_busy:
+            self.report_status.setText("Import jest już w toku…")
+            return
         if not self._can_import():
             QMessageBox.warning(self, "Import", "Brak uprawnień do importu danych.")
             return
-        path, _ = QFileDialog.getOpenFileName(
-            self, f"Wybierz plik Excel ({kind})", "", "Pliki Excel (*.xlsx)"
-        )
-        if not path:
-            return
+        # Modal dialogs dispatch events. Reserve the workflow before opening
+        # one so a nested invocation cannot supersede or overlap a write job.
+        self._import_busy = True
+        submitted = False
         try:
+            path, _ = QFileDialog.getOpenFileName(
+                self, f"Wybierz plik Excel ({kind})", "", "Pliki Excel (*.xlsx)"
+            )
+            if not path:
+                return
             if kind == "faktury":
                 options = [self.month_start.itemText(i) for i in range(self.month_start.count())]
-                month, ok = QInputDialog.getItem(
-                    self, "Miesiąc faktur",
-                    "Miesiąc dla faktur, w których numerze nie ma miesiąca (np. FV/0001/01/2026):",
-                    options, 0, False,
-                )
+                month, ok = QInputDialog.getItem(self, "Miesiąc faktur", "Miesiąc dla faktur bez miesiąca w numerze:", options, 0, False)
                 if not ok:
                     return
-                result = import_dao.import_invoices_file(path, month, self.chk_overwrite.isChecked())
+                overwrite = self.chk_overwrite.isChecked()
+                work = lambda: import_dao.import_invoices_file(path, month, overwrite)
             else:
-                result = import_dao.import_work_file(path)
+                work = lambda: import_dao.import_work_file(path)
+            self._import_jobs.submit(work, self._import_finished, self._import_failed)
+            submitted = True
         except Exception as exc:
-            logging.getLogger(__name__).exception("Import raportów nie powiódł się")
+            self._import_failed(exc)
+        finally:
+            if not submitted:
+                self._import_busy = False
+
+    def _import_failed(self, exc):
+        try:
             QMessageBox.critical(self, "Import", f"Nie udało się zaimportować pliku:\n{exc}")
-            return
-        QMessageBox.information(
-            self, "Import",
-            f"Wczytano wierszy (od 2026): {result['wiersze']}\n"
-            f"Dodano: {result['dodane']}\n"
-            f"Pominięto (już zaimportowane): {result['pominiete']}\n"
-            f"Bez dopasowanej firmy: {result['bez_firmy']}"
-            + (f"\nZaktualizowano cenniki kadr (UoP/UZ/UoD) w firmach: {result['ceny_kadry']}"
-               if result.get("ceny_kadry") else "")
-            + (f"\nUzupełniono ilość dokumentów w widoku miesięcznym: {result['ilosc_dok']}"
-               if result.get("ilosc_dok") else ""),
-        )
+        finally:
+            self._import_busy = False
+
+    def _import_finished(self, result):
+        try:
+            QMessageBox.information(
+                self, "Import",
+                f"Wczytano wierszy (od 2026): {result['wiersze']}\n"
+                f"Dodano: {result['dodane']}\n"
+                f"Pominięto (już zaimportowane): {result['pominiete']}\n"
+                f"Bez dopasowanej firmy: {result['bez_firmy']}"
+                + (f"\nZaktualizowano cenniki kadr (UoP/UZ/UoD) w firmach: {result['ceny_kadry']}"
+                   if result.get("ceny_kadry") else "")
+                + (f"\nUzupełniono ilość dokumentów w widoku miesięcznym: {result['ilosc_dok']}"
+                   if result.get("ilosc_dok") else ""),
+            )
+        finally:
+            self._import_busy = False
 
     def _delete_imported(self):
         from PyQt6.QtWidgets import QInputDialog
         from app.reports import import_dao
 
+        if self._import_busy:
+            self.report_status.setText("Poczekaj na zakończenie importu przed usunięciem danych.")
+            return
         if not self._can_import():
             QMessageBox.warning(self, "Usuwanie", "Brak uprawnień do usuwania danych.")
             return
@@ -685,6 +718,11 @@ class ReportsPage(QWidget):
             f"Usunąć „{choice}” z zakresu {months[0]} – {months[-1]} dla {scope}?\n"
             "Tej operacji nie można cofnąć.",
         ) != QMessageBox.StandardButton.Yes:
+            return
+        # Modal dialogs process events; an import may have started while the
+        # deletion choices or confirmation were open.
+        if self._import_busy:
+            self.report_status.setText("Poczekaj na zakończenie importu przed usunięciem danych.")
             return
         try:
             deleted = import_dao.delete_imported(labels[choice], months, selected or None)
@@ -737,26 +775,6 @@ class ReportsPage(QWidget):
                 return
             rates[table.item(i, 0).data(Qt.ItemDataRole.UserRole)] = value
         import_dao.set_employee_rates(rates)
-
-    def _render_summary(self, rows):
-        self.summary_table.setRowCount(0)
-        for item in rows:
-            row = self.summary_table.rowCount()
-            self.summary_table.insertRow(row)
-            values = [
-                item["klient"],
-                item["ksiegowa"],
-                item["miesiac"],
-                "Kadry" if item["typ"] == "kadry" else "Księgowość",
-                format_hours(item["sekundy"]),
-                f"{item['cena_za_usluge']:.2f} zł",
-            ]
-            for col, value in enumerate(values):
-                self.summary_table.setItem(row, col, QTableWidgetItem(str(value)))
-
-    # ============================================================
-    # WYKRES MIESZANY — SŁUPKI (KWOTA) + LINIA (CZAS)
-    # ============================================================
 
     def _render_mixed(self, data, selected, months):
         selected = [fid for fid in selected if fid in data]
@@ -870,92 +888,6 @@ class ReportsPage(QWidget):
 
     # ============================================================
     # ZAROBEK NA GODZINĘ — SŁUPKI
-    # ============================================================
-
-    def _render_profit(self, data, selected, months):
-        categories = months
-
-        chart_kadry = QChart()
-        chart_kadry.setTitle("Zarobek na godzinę — Kadry")
-
-        series_kadry = QBarSeries()
-
-        for fid in selected:
-            bar = QBarSet(f"Firma {fid}")
-            for m in months:
-                bar.append(data[fid][m]["profit_kadry"])
-            series_kadry.append(bar)
-
-        chart_kadry.addSeries(series_kadry)
-
-        axis_x = QBarCategoryAxis()
-        axis_x.append(categories)
-        chart_kadry.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
-        series_kadry.attachAxis(axis_x)
-
-        axis_y = QValueAxis()
-        axis_y.setTitleText("Zł / godz")
-        chart_kadry.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
-        series_kadry.attachAxis(axis_y)
-
-        self.chart_top.setChart(chart_kadry)
-
-        chart_ks = QChart()
-        chart_ks.setTitle("Zarobek na godzinę — Księgowość")
-
-        series_ks = QBarSeries()
-
-        for fid in selected:
-            bar = QBarSet(f"Firma {fid}")
-            for m in months:
-                bar.append(data[fid][m]["profit_ksiegowosc"])
-            series_ks.append(bar)
-
-        chart_ks.addSeries(series_ks)
-
-        axis_x2 = QBarCategoryAxis()
-        axis_x2.append(categories)
-        chart_ks.addAxis(axis_x2, Qt.AlignmentFlag.AlignBottom)
-        series_ks.attachAxis(axis_x2)
-
-        axis_y2 = QValueAxis()
-        axis_y2.setTitleText("Zł / godz")
-        chart_ks.addAxis(axis_y2, Qt.AlignmentFlag.AlignLeft)
-        series_ks.attachAxis(axis_y2)
-
-        self.chart_bottom.setChart(chart_ks)
-
-    # ============================================================
-    # PORÓWNANIE FIRM — LINIOWY
-    # ============================================================
-
-    def _render_compare(self, data, selected, miesiac):
-        chart_top = QChart()
-        chart_top.setTitle(f"Kadry — porównanie firm ({miesiac})")
-
-        chart_bottom = QChart()
-        chart_bottom.setTitle(f"Księgowość — porównanie firm ({miesiac})")
-
-        s_kadry = QLineSeries()
-        s_ksieg = QLineSeries()
-
-        x = 1
-        for firma_id in selected:
-            s_kadry.append(x, data[firma_id]["koszt_na_godzine_kadry"])
-            s_ksieg.append(x, data[firma_id]["koszt_na_godzine_ksiegowosc"])
-            x += 1
-
-        chart_top.addSeries(s_kadry)
-        chart_bottom.addSeries(s_ksieg)
-
-        chart_top.createDefaultAxes()
-        chart_bottom.createDefaultAxes()
-
-        self.chart_top.setChart(chart_top)
-        self.chart_bottom.setChart(chart_bottom)
-
-    # ============================================================
-    # EKSPORT DO EXCELA
     # ============================================================
 
     def _export_to_excel(self):

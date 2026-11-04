@@ -274,16 +274,19 @@ def load_message(
     konto_id: int,
     folder: str,
     uid: str,
+    *, expected_row_id: Optional[int] = None,
 ) -> Optional[email.message.Message]:
     """
     IMAP-first.
     Nie korzysta już z SQLite.
     """
 
+    options = {} if expected_row_id is None else {"expected_row_id": expected_row_id}
     return fetch_message_from_imap(
         konto_id,
         folder,
         uid,
+        **options,
     )
 
 

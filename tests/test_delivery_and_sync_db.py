@@ -154,7 +154,9 @@ class DeliveryAndSyncDbTests(DbTestCase):
         def headers(account,folder,**kwargs):
             self.assertEqual(kwargs['history_days'],730)
             return [self.header('1',f'<{folder}-new@example.com>',400),self.header('2',f'<{folder}-old@example.com>',800)]
-        session=Mock();session.select.return_value=True
+        session=email_sync._Session(Mock(), self.account)
+        session.conn.select.return_value=('OK',[b'1'])
+        session.conn.response.return_value=('UIDVALIDITY',[None])
         session.conn.uid.side_effect=lambda *args:('OK',[(b'1 (UID 1 BODY[] {42}',b'From: sender@example.com\r\n\r\nFull body')])
         @contextmanager
         def shared(*args,**kwargs):yield session

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import email.policy
 import imaplib
@@ -34,6 +34,8 @@ from app.email.email_storage import (
     apply_server_state,
     get_account_info as _get_account_info,
     get_folder_id,
+    get_mailbox_generation,
+    MailboxGenerationChanged,
     get_folders_for_account,
     get_cached_messages,
     prune_email_storage,
@@ -50,7 +52,8 @@ from app.email.email_storage import (
     get_message_row_id,
     load_raw_message,
     get_message_cache_states,
-    save_raw_message,
+    save_current_raw_message,
+    record_mailbox_generation,
 )
 from app.utils.crypto import decrypt_password
 
@@ -138,17 +141,32 @@ def _supports_move(imap_conn: imaplib.IMAP4) -> bool:
 class _Session:
     """Współdzielone połączenie IMAP konta (unika logowania przy każdej akcji)."""
 
-    def __init__(self, conn: imaplib.IMAP4) -> None:
+    def __init__(self, conn: imaplib.IMAP4, konto_id: Optional[int] = None) -> None:
         self.conn = conn
+        self.konto_id = konto_id
         self.selected: Optional[Tuple[str, bool]] = None
+        self.selected_generation: Optional[str] = None
 
     def select(self, folder: str, readonly: bool) -> bool:
-        if self.selected and self.selected[0] == folder and (self.selected[1] == readonly or not self.selected[1]):
-            return True
+        self.selected = None
+        self.selected_generation = None
+        observed = get_mailbox_generation(self.konto_id, folder) if self.konto_id is not None else None
         if _select_folder(self.conn, folder, readonly=readonly):
+            generation = _uidvalidity(self.conn)
+            # IMAP4.response() consumes the response. Preserve the generation
+            # from this SELECT for callers that later validate a body write.
+            if self.konto_id is not None and generation:
+                retired = record_mailbox_generation(self.konto_id, folder, generation, expected_generation=observed)
+                if retired:
+                    self.selected = None
+                    self.selected_generation = None
+                    # The caller's UID list belongs to the retired generation.
+                    return False
+            self.selected_generation = generation
             self.selected = (folder, readonly)
             return True
         self.selected = None
+        self.selected_generation = None
         return False
 
     def close(self) -> None:
@@ -181,7 +199,7 @@ def _shared_session(konto_id: int, timeout: int = 30):
             account = _get_account_info(konto_id)
             conn = _connect_imap(account, timeout) if account else None
             if conn is not None:
-                session = _Session(conn)
+                session = _Session(conn, konto_id)
                 _sessions[konto_id] = session
         try:
             yield session
@@ -314,12 +332,15 @@ def fetch_message_from_imap(
     folder: str,
     uid: str,
     timeout: int = 30,
+    expected_row_id: Optional[int] = None,
 ) -> Optional[Message]:
 
     folder_id = get_folder_id(
         konto_id,
         folder,
     )
+    if expected_row_id is not None and not folder_id:
+        return None
 
     if folder_id:
 
@@ -328,6 +349,8 @@ def fetch_message_from_imap(
             folder_id,
             str(uid),
         )
+        if expected_row_id is not None and row_id != expected_row_id:
+            return None
 
         if row_id:
 
@@ -355,6 +378,13 @@ def fetch_message_from_imap(
             ):
                 return None
 
+            # Bind the downloaded bytes to the mapping and generation selected
+            # here; never look up a replacement row after FETCH has finished.
+            generation = session.selected_generation
+            row_id = get_message_row_id(konto_id, folder_id, str(uid)) if folder_id else None
+            if expected_row_id is not None and row_id != expected_row_id:
+                return None
+
             typ, data = session.conn.uid(
                 "FETCH",
                 str(uid),
@@ -377,19 +407,8 @@ def fetch_message_from_imap(
         )
         return None
 
-    if folder_id:
-
-        row_id = get_message_row_id(
-            konto_id,
-            folder_id,
-            str(uid),
-        )
-
-        if row_id:
-            save_raw_message(
-                row_id,
-                raw_bytes,
-            )
+    if row_id and not save_current_raw_message(konto_id, folder_id, str(uid), row_id, generation, raw_bytes):
+        return None
 
     return parse_message(
         raw_bytes,
@@ -453,6 +472,10 @@ def prefetch_messages(
                     raise RuntimeError(f"Nie można otworzyć folderu IMAP: {folder}")
                 return 0
 
+            generation = session.selected_generation
+            # SELECT can adopt a generation already recorded by another sync,
+            # in which case its success says nothing about the captured IDs.
+            cache_states = get_message_cache_states(konto_id, folder_id, unique_uids)
             for index, uid in enumerate(unique_uids, start=1):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("Synchronizacja przerwana; zostanie wznowiona po uruchomieniu aplikacji.")
@@ -485,8 +508,11 @@ def prefetch_messages(
                                 uid, folder,
                             )
                         else:
-                            save_raw_message(row_id, raw)
-                            fetched += 1
+                            if save_current_raw_message(konto_id, folder_id, uid, row_id, generation, raw):
+                                fetched += 1
+                            else:
+                                failed += 1
+                                logger.warning("Zmieniono mapowanie UID podczas pobierania: %s/%s", folder, uid)
 
                 except Exception:
                     failed += 1
@@ -608,12 +634,27 @@ def prefetch_all_messages(
 
     return downloaded
 
+def _uidvalidity(conn) -> Optional[str]:
+    """Read SELECT's UIDVALIDITY response without assuming test/server extensions."""
+    try:
+        _, values = conn.response("UIDVALIDITY")
+        if isinstance(values, (list, tuple)) and values:
+            value = values[-1]
+            if isinstance(value, bytes):
+                value = value.decode("ascii")
+            if isinstance(value, str) and value.isdigit():
+                return value
+    except (AttributeError, TypeError, ValueError, UnicodeError):
+        pass
+    return None
+
+
 def fetch_headers(
     konto_id: int,
     folder: str,
     timeout: int = 30,
     known_uids: Optional[set] = None,
-    flags_out: Optional[Dict[str, set]] = None,
+    flags_out: Optional[Dict[str, Any]] = None,
     history_days: Optional[int] = EMAIL_HISTORY_DAYS,
 ) -> List[Dict[str, Any]]:
     """
@@ -639,13 +680,24 @@ def fetch_headers(
         raise ConnectionError("Nie można połączyć się z serwerem IMAP.")
 
     try:
-
+        observed = get_mailbox_generation(konto_id, folder)
         if not _select_folder(
             imap_conn,
             folder,
             readonly=True,
         ):
             raise RuntimeError(f"Nie można otworzyć folderu IMAP: {folder}")
+
+        generation = _uidvalidity(imap_conn)
+        if generation:
+            record_mailbox_generation(konto_id, folder, generation, expected_generation=observed)
+        if flags_out is not None:
+            flags_out["generation"] = generation
+        if known_uids is not None:
+            # Another selector may already have adopted this generation. Its
+            # retirement boolean cannot validate the caller's earlier UID set.
+            folder_id = get_folder_id(konto_id, folder)
+            known_uids = get_known_uids(konto_id, folder_id) if folder_id else set()
 
         if history_days is None:
 
@@ -855,6 +907,8 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
     with _shared_session(konto_id, 60) as session:
         if session is None or not session.select(folder, True):
             return 0
+        generation = session.selected_generation
+        uids = get_uids_missing_refs(konto_id, folder_id, limit)
         for start in range(0, len(uids), HEADER_BATCH):
             chunk = uids[start:start + HEADER_BATCH]
             typ, data = session.conn.uid(
@@ -871,7 +925,7 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
                         seen.add(uid)
                         updates.append((uid, thread_refs(parser.parsebytes(part[1]))))
             updates += [(u, "") for u in chunk if u not in seen]
-    save_refs(konto_id, folder_id, updates)
+    save_refs(konto_id, folder_id, updates, expected_generation=generation)
     return len(updates)
 
 def sync_folder_and_prefetch_all(
@@ -897,17 +951,34 @@ def append_message(konto_id: int, folder: str, raw: bytes, seen: bool = True, ti
         return typ == "OK"
 
 
+def _assert_selected_rows(konto_id, folder, expected_rows):
+    """A stale UI UID must never move/delete/mark a replacement message."""
+    if expected_rows is None:
+        return
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT w.uid, w.id FROM wiadomosci_email w JOIN foldery_email f ON f.id=w.folder_id "
+            "WHERE w.konto_id=%s AND f.server_name=%s AND w.uid=ANY(%s) AND COALESCE(w.usunieta,0)=0",
+            (konto_id, folder, list(expected_rows)),
+        ).fetchall()
+    current = {str(row[0]): row[1] for row in rows}
+    if any(current.get(str(uid)) != row_id or row_id is None for uid, row_id in expected_rows.items()):
+        raise RuntimeError("Wiadomość zmieniła identyfikator na serwerze. Odśwież listę przed ponowieniem operacji.")
+
+
 def move_message(
     konto_id: int,
     uid: str,
     source_folder: str,
     dest_folder: str,
     timeout: int = 30,
+    expected_rows=None,
 ) -> bool:
     """Przenosi wiadomo??; `uid` mo?e by? list? oddzielonych przecinkami UID-?w."""
     with _shared_session(konto_id, timeout) as session:
         if session is None or not session.select(source_folder, False):
             return False
+        _assert_selected_rows(konto_id, source_folder, expected_rows)
         conn = session.conn
         if _supports_move(conn):
             typ, _ = conn.uid("MOVE", uid, quote_mailbox(dest_folder))
@@ -926,10 +997,12 @@ def delete_message(
     uid: str,
     folder: str,
     timeout: int = 30,
+    expected_row_id=None,
 ) -> bool:
     with _shared_session(konto_id, timeout) as session:
         if session is None or not session.select(folder, False):
             return False
+        _assert_selected_rows(konto_id, folder, None if expected_row_id is None else {str(uid): expected_row_id})
         typ, _ = session.conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
         if typ != "OK":
             return False
@@ -1047,8 +1120,9 @@ def mark_unread_remote(
     folder: str,
     uid: str,
     timeout: int = 30,
+    *, expected_row_id=None,
 ) -> bool:
-    return _set_seen_remote(konto_id, folder, uid, False, timeout)
+    return _set_seen_remote(konto_id, folder, uid, False, timeout, expected_row_id=expected_row_id)
 
 def archive_message(
     konto_id: int,
@@ -1072,6 +1146,19 @@ def sync_folder(
     full_sync: bool = True,
     entire_mailbox: bool = False,
 ) -> int:
+    # A mailbox may be recreated while any remote batch is in flight. Retry the
+    # entire snapshot once; continued churn remains an error for sync callers.
+    for attempt in range(2):
+        try:
+            return _sync_folder_once(konto_id, folder, full_sync, entire_mailbox)
+        except MailboxGenerationChanged:
+            if attempt:
+                raise
+            logger.warning("%s — generacja zmieniła się, ponawiam synchronizację", folder)
+    raise AssertionError("unreachable")
+
+
+def _sync_folder_once(konto_id: int, folder: str, full_sync: bool, entire_mailbox: bool) -> int:
     history_days = None if entire_mailbox else (730 if full_sync else EMAIL_HISTORY_DAYS)
 
     folder_id = get_folder_id(konto_id, folder)
@@ -1083,8 +1170,8 @@ def sync_folder(
             decode_mailbox_utf7(folder),
         )
 
-    flags: Dict[str, set] = {}
-    known = set()
+    flags: Dict[str, Any] = {}
+    known = None
 
     if not full_sync and not entire_mailbox:
         known = get_known_uids(konto_id, folder_id)
@@ -1097,10 +1184,11 @@ def sync_folder(
         history_days=history_days,
     )
 
-    save_message_headers(
+    header_rows = save_message_headers(
         konto_id,
         folder_id,
         headers,
+        expected_generation=flags.get("generation"),
     )
 
     try:
@@ -1109,26 +1197,13 @@ def sync_folder(
             folder,
             folder_id,
         )
+    except MailboxGenerationChanged:
+        raise
     except Exception:
         logger.warning(
             "Nie udało się pobrać nagłówków wątków",
             exc_info=True,
         )
-
-    if known and headers and folder.upper() == "INBOX":
-        try:
-            from app.email.email_rules import apply_rules
-
-            apply_rules(
-                konto_id,
-                folder,
-                headers,
-            )
-        except Exception:
-            logger.warning(
-                "Nie udało się zastosować filtrów",
-                exc_info=True,
-            )
 
     if "all" in flags:
         cutoff = (
@@ -1143,7 +1218,16 @@ def sync_folder(
             flags["all"],
             flags.get("unseen"),
             cutoff,
+            expected_generation=flags.get("generation"),
         )
+
+    if known and headers and folder.upper() == "INBOX":
+        try:
+            from app.email.email_rules import apply_rules
+
+            apply_rules(konto_id, folder, headers, expected_rows=header_rows)
+        except Exception:
+            logger.warning("Nie udało się zastosować filtrów", exc_info=True)
 
     return len(headers)
 
@@ -1394,10 +1478,12 @@ def _set_seen_remote(
     uid: str,
     seen: bool,
     timeout: int = 30,
+    expected_row_id=None,
 ) -> bool:
     with _shared_session(konto_id, timeout) as session:
         if session is None or not session.select(folder, False):
             return False
+        _assert_selected_rows(konto_id, folder, None if expected_row_id is None else {str(uid): expected_row_id})
         typ, _ = session.conn.uid(
             "STORE",
             str(uid),
@@ -1406,12 +1492,12 @@ def _set_seen_remote(
         )
         if typ != "OK":
             return False
-    update_message_read_flag(konto_id, str(uid), seen, get_folder_id(konto_id, folder))
+    update_message_read_flag(konto_id, str(uid), seen, get_folder_id(konto_id, folder), expected_row_id=expected_row_id)
     return True
 
 
-def mark_read_remote(konto_id: int, folder: str, uid: str, timeout: int = 30) -> bool:
-    return _set_seen_remote(konto_id, folder, uid, True, timeout)
+def mark_read_remote(konto_id: int, folder: str, uid: str, timeout: int = 30, *, expected_row_id=None) -> bool:
+    return _set_seen_remote(konto_id, folder, uid, True, timeout, expected_row_id=expected_row_id)
 
 
 def list_folders_from_imap_and_store(konto_id: int) -> bool:
@@ -1435,11 +1521,12 @@ def fetch_message_from_imap_and_store(konto_id: int, folder: str, uid: str) -> b
     return fetch_message_from_imap(konto_id, folder, uid) is not None
 
 
-def delete_email_remote(konto_id: int, folder: str, uid: str) -> bool:
-    ok = delete_message(konto_id, uid, folder)
+def delete_email_remote(konto_id: int, folder: str, uid: str, *, expected_row_id=None) -> bool:
+    options = {} if expected_row_id is None else {"expected_row_id": expected_row_id}
+    ok = delete_message(konto_id, uid, folder, **options)
 
     if ok:
-        mark_deleted(konto_id, str(uid), get_folder_id(konto_id, folder))
+        mark_deleted(konto_id, str(uid), get_folder_id(konto_id, folder), expected_row_id=expected_row_id)
         email_cache.remove_message(konto_id, folder, str(uid))
     return ok
 
@@ -1466,16 +1553,18 @@ def move_emails(
     source_folder: str,
     uids: List[str],
     dest_folder: str,
+    *, expected_rows=None,
 ) -> None:
     """Przenosi wiele wiadomo?ci jednym poleceniem IMAP i odnotowuje to w bazie lokalnej."""
     uids = [str(u) for u in uids]
     if not uids or source_folder == dest_folder:
         return
-    if not move_message(konto_id, ",".join(uids), source_folder, dest_folder):
+    options = {} if expected_rows is None else {"expected_rows": expected_rows}
+    if not move_message(konto_id, ",".join(uids), source_folder, dest_folder, **options):
         raise RuntimeError("Serwer odrzuci? przeniesienie wiadomo?ci.")
     folder_id = get_folder_id(konto_id, source_folder)
     for uid in uids:
-        mark_deleted(konto_id, uid, folder_id)
+        mark_deleted(konto_id, uid, folder_id, expected_row_id=expected_rows.get(uid) if expected_rows is not None else None)
         email_cache.remove_message(konto_id, source_folder, uid)
 
 
@@ -1646,10 +1735,12 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
                 raise RuntimeError("Brak wybieralnych folderów IMAP.")
             sweep_key = f"email_full_sweep_{konto_id}"
             today = datetime.now().strftime("%Y-%m-%d")
-            full_sweep = get_setting(sweep_key) != today
+            run_number = _auto_runs.get(konto_id, 0)
+            full_sweep = get_setting(sweep_key) != today or run_number % FULL_SWEEP_EVERY == 0
             changed, snapshot = _changed_folders(konto_id, folders, force_full=full_sweep)
             logger.info("Konto %s: zmienione foldery %s z %s", konto_id, len(changed), len(folders))
             if not changed:
+                _auto_runs[konto_id] = run_number + 1
                 if full_sweep:
                     set_setting(sweep_key, today)
                 return konto_id, [], None
@@ -1657,6 +1748,7 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
             if cancel_event is not None:
                 options["cancel_event"] = cancel_event
             sync_and_prefetch(konto_id, changed, **options)
+            _auto_runs[konto_id] = run_number + 1
             if snapshot:
                 set_setting(f"email_status_snapshot_{konto_id}", json.dumps(snapshot))
             if full_sweep:

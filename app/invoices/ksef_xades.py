@@ -1,7 +1,6 @@
 """Podpis XAdES-BES (enveloped) dokumentu AuthTokenRequest dla uwierzytelniania certyfikatem w KSeF.
 
-Dokument jest budowany ręcznie w postaci kanonicznej (Exclusive C14N), dzięki czemu
-nie potrzeba dodatkowych bibliotek XML.
+Drzewo XML jest kanonizowane przez lxml (Exclusive C14N) przed obliczeniem skrótów i podpisu.
 """
 
 from __future__ import annotations
@@ -9,7 +8,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 from typing import Optional
-from xml.sax.saxutils import escape
+from lxml import etree as E
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -45,67 +44,69 @@ def _sign(private_key, data: bytes) -> tuple[str, bytes]:
     raise ValueError("Nieobsługiwany typ klucza (wymagany RSA lub EC).")
 
 
+def _node(parent, namespace, name, text=None, **attrs):
+    node = E.SubElement(parent, E.QName(namespace, name), **attrs)
+    if text is not None:
+        node.text = str(text)
+    return node
+
+
+def _auth_tree(challenge, nip):
+    root = E.Element(E.QName(NS_AUTH, "AuthTokenRequest"), nsmap={None: NS_AUTH})
+    _node(root, NS_AUTH, "Challenge", challenge)
+    context = _node(root, NS_AUTH, "ContextIdentifier")
+    _node(context, NS_AUTH, "Nip", nip)
+    _node(root, NS_AUTH, "SubjectIdentifierType", "certificateSubject")
+    return root
+
+
+def _canonical(node):
+    return E.tostring(node, method="c14n", exclusive=True, with_comments=False)
+
+
 def build_auth_request(challenge: str, nip: str) -> str:
-    return (
-        f'<AuthTokenRequest xmlns="{NS_AUTH}"><Challenge>{escape(challenge)}</Challenge>'
-        f"<ContextIdentifier><Nip>{escape(nip)}</Nip></ContextIdentifier>"
-        "<SubjectIdentifierType>certificateSubject</SubjectIdentifierType>"
-    )
+    return E.tostring(_auth_tree(challenge, nip), encoding="unicode")
 
 
-def sign_auth_request(
-    challenge: str,
-    nip: str,
-    certificate: x509.Certificate,
-    private_key,
-    signing_time: Optional[datetime] = None,
-) -> str:
-    body = build_auth_request(challenge, nip)
-    document_c14n = body + "</AuthTokenRequest>"
-    doc_digest = _b64(_sha256(document_c14n.encode("utf-8")))
-
+def sign_auth_request(challenge: str, nip: str, certificate: x509.Certificate,
+                      private_key, signing_time: Optional[datetime] = None) -> str:
+    root = _auth_tree(challenge, nip)
+    doc_digest = _b64(_sha256(_canonical(root)))
     cert_der = certificate.public_bytes(serialization.Encoding.DER)
     when = (signing_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    issuer = escape(certificate.issuer.rfc4514_string())
-    signed_props = (
-        f'<xades:SignedProperties xmlns:xades="{NS_XADES}" Id="SignedProperties">'
-        "<xades:SignedSignatureProperties>"
-        f"<xades:SigningTime>{when:%Y-%m-%dT%H:%M:%SZ}</xades:SigningTime>"
-        "<xades:SigningCertificate><xades:Cert><xades:CertDigest>"
-        f'<ds:DigestMethod xmlns:ds="{NS_DS}" Algorithm="{ALG_SHA256}"></ds:DigestMethod>'
-        f'<ds:DigestValue xmlns:ds="{NS_DS}">{_b64(_sha256(cert_der))}</ds:DigestValue>'
-        "</xades:CertDigest><xades:IssuerSerial>"
-        f'<ds:X509IssuerName xmlns:ds="{NS_DS}">{issuer}</ds:X509IssuerName>'
-        f'<ds:X509SerialNumber xmlns:ds="{NS_DS}">{certificate.serial_number}</ds:X509SerialNumber>'
-        "</xades:IssuerSerial></xades:Cert></xades:SigningCertificate>"
-        "</xades:SignedSignatureProperties></xades:SignedProperties>"
-    )
-    props_digest = _b64(_sha256(signed_props.encode("utf-8")))
-
-    sig_alg = ALG_RSA_SHA256 if isinstance(private_key, rsa.RSAPrivateKey) else ALG_ECDSA_SHA256
-    signed_info = (
-        f'<ds:SignedInfo xmlns:ds="{NS_DS}">'
-        f'<ds:CanonicalizationMethod Algorithm="{ALG_C14N}"></ds:CanonicalizationMethod>'
-        f'<ds:SignatureMethod Algorithm="{sig_alg}"></ds:SignatureMethod>'
-        '<ds:Reference URI="">'
-        f'<ds:Transforms><ds:Transform Algorithm="{ALG_ENVELOPED}"></ds:Transform>'
-        f'<ds:Transform Algorithm="{ALG_C14N}"></ds:Transform></ds:Transforms>'
-        f'<ds:DigestMethod Algorithm="{ALG_SHA256}"></ds:DigestMethod>'
-        f"<ds:DigestValue>{doc_digest}</ds:DigestValue></ds:Reference>"
-        '<ds:Reference Type="http://uri.etsi.org/01903#SignedProperties" URI="#SignedProperties">'
-        f'<ds:Transforms><ds:Transform Algorithm="{ALG_C14N}"></ds:Transform></ds:Transforms>'
-        f'<ds:DigestMethod Algorithm="{ALG_SHA256}"></ds:DigestMethod>'
-        f"<ds:DigestValue>{props_digest}</ds:DigestValue></ds:Reference>"
-        "</ds:SignedInfo>"
-    )
-    _, signature = _sign(private_key, signed_info.encode("utf-8"))
-
-    signature_xml = (
-        f'<ds:Signature xmlns:ds="{NS_DS}" Id="Signature">'
-        f"{signed_info}"
-        f"<ds:SignatureValue>{_b64(signature)}</ds:SignatureValue>"
-        f"<ds:KeyInfo><ds:X509Data><ds:X509Certificate>{_b64(cert_der)}</ds:X509Certificate></ds:X509Data></ds:KeyInfo>"
-        f'<ds:Object><xades:QualifyingProperties xmlns:xades="{NS_XADES}" Target="#Signature">'
-        f"{signed_props}</xades:QualifyingProperties></ds:Object></ds:Signature>"
-    )
-    return '<?xml version="1.0" encoding="utf-8"?>' + body + signature_xml + "</AuthTokenRequest>"
+    # Keep an explicit ds prefix: reference/profile interoperability is unchanged.
+    signature = E.SubElement(root, E.QName(NS_DS, "Signature"), nsmap={"ds": NS_DS}, Id="Signature")
+    info = _node(signature, NS_DS, "SignedInfo")
+    _node(info, NS_DS, "CanonicalizationMethod", Algorithm=ALG_C14N)
+    algorithm = ALG_RSA_SHA256 if isinstance(private_key, rsa.RSAPrivateKey) else ALG_ECDSA_SHA256
+    _node(info, NS_DS, "SignatureMethod", Algorithm=algorithm)
+    doc_ref = _node(info, NS_DS, "Reference", URI="")
+    transforms = _node(doc_ref, NS_DS, "Transforms")
+    for transform in (ALG_ENVELOPED, ALG_C14N):
+        _node(transforms, NS_DS, "Transform", Algorithm=transform)
+    _node(doc_ref, NS_DS, "DigestMethod", Algorithm=ALG_SHA256)
+    _node(doc_ref, NS_DS, "DigestValue", doc_digest)
+    props_ref = _node(info, NS_DS, "Reference", Type="http://uri.etsi.org/01903#SignedProperties", URI="#SignedProperties")
+    transforms = _node(props_ref, NS_DS, "Transforms")
+    _node(transforms, NS_DS, "Transform", Algorithm=ALG_C14N)
+    _node(props_ref, NS_DS, "DigestMethod", Algorithm=ALG_SHA256)
+    props_digest = _node(props_ref, NS_DS, "DigestValue")
+    sig_value = _node(signature, NS_DS, "SignatureValue")
+    cert_data = _node(_node(signature, NS_DS, "KeyInfo"), NS_DS, "X509Data")
+    _node(cert_data, NS_DS, "X509Certificate", _b64(cert_der))
+    obj = _node(signature, NS_DS, "Object")
+    qual = E.SubElement(obj, E.QName(NS_XADES, "QualifyingProperties"), nsmap={"xades": NS_XADES}, Target="#Signature")
+    props = _node(qual, NS_XADES, "SignedProperties", Id="SignedProperties")
+    signed = _node(props, NS_XADES, "SignedSignatureProperties")
+    _node(signed, NS_XADES, "SigningTime", when.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    cert = _node(_node(signed, NS_XADES, "SigningCertificate"), NS_XADES, "Cert")
+    digest = _node(cert, NS_XADES, "CertDigest")
+    _node(digest, NS_DS, "DigestMethod", Algorithm=ALG_SHA256)
+    _node(digest, NS_DS, "DigestValue", _b64(_sha256(cert_der)))
+    issuer = _node(cert, NS_XADES, "IssuerSerial")
+    _node(issuer, NS_DS, "X509IssuerName", certificate.issuer.rfc4514_string())
+    _node(issuer, NS_DS, "X509SerialNumber", certificate.serial_number)
+    props_digest.text = _b64(_sha256(_canonical(props)))
+    _, value = _sign(private_key, _canonical(info))
+    sig_value.text = _b64(value)
+    return E.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")

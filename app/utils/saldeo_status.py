@@ -27,7 +27,7 @@ MONTHS = {
 }
 
 SUBJECT_RE = re.compile(
-    r"^(?P<name>.+?)\s+Rozliczenie\s+(?P<kind>wyników\s+firmy,\s*podatków|ZUS)\s+"
+    r"^(?P<name>.+?)\s+Rozliczenie\s+(?P<kind>wyników\s+firmy,\s*podatków(?:\s*,\s*ZUS)?|ZUS)\s+"
     r"za\s+miesiąc\s+(?P<month>[^\W\d_]+)\s+(?P<year>\d{4})\s*$",
     re.IGNORECASE,
 )
@@ -49,7 +49,8 @@ def parse_subject(subject: str) -> Optional[Tuple[str, str, str]]:
     month = MONTHS.get(match.group("month").casefold())
     if not month:
         return None
-    column = "etap_kadry" if match.group("kind").upper() == "ZUS" else "etap"
+    kind = match.group("kind").upper()
+    column = "etap_kadry" if kind == "ZUS" else "etap,etap_kadry" if "ZUS" in kind else "etap"
     return match.group("name").strip(), f"{int(match.group('year')):04d}-{month:02d}", column
 
 
@@ -85,17 +86,18 @@ def apply_saldeo_emails() -> int:
             firma_id = companies.get(_fold(parsed[0]))
             if not firma_id:
                 continue
-            cur.execute(
-                f"""
-                INSERT INTO statusy_miesieczne (firma_id, miesiac, {parsed[2]})
-                VALUES (%s, %s, %s)
-                ON CONFLICT (firma_id, miesiac)
-                DO UPDATE SET {parsed[2]} = excluded.{parsed[2]}
-                WHERE statusy_miesieczne.{parsed[2]} IS DISTINCT FROM excluded.{parsed[2]}
-                """,
-                (firma_id, parsed[1], ETAP),
-            )
-            changed += cur.rowcount or 0
+            for column in parsed[2].split(","):
+                cur.execute(
+                    f"""
+                    INSERT INTO statusy_miesieczne (firma_id, miesiac, {column})
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (firma_id, miesiac)
+                    DO UPDATE SET {column} = excluded.{column}
+                    WHERE statusy_miesieczne.{column} IS DISTINCT FROM excluded.{column}
+                    """,
+                    (firma_id, parsed[1], ETAP),
+                )
+                changed += cur.rowcount or 0
         conn.commit()
     finally:
         conn.close()

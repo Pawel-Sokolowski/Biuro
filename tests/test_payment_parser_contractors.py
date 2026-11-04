@@ -142,7 +142,7 @@ class ContractorImportTests(DbTestCase):
             self.assertEqual(import_mt940_file(str(path), 1, "cp1250")["new"], 2)
             self.assertNotEqual(list_unsettled_transfers(1)[0]["kontrahent"], "Żółć Łęska Śląsk")
             report = import_mt940_file(str(path), 1, "iso-8859-2")
-            self.assertEqual(report, {"all": 2, "new": 0, "duplicates": 2})
+            self.assertEqual(report, {"all": 2, "new": 0, "duplicates": 2, "own": 0})
         entries = list_unsettled_transfers(1)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["kontrahent"], "Żółć Łęska Śląsk")

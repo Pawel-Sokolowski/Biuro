@@ -96,6 +96,33 @@ class MonthlyViewLogic:
         self.general_activity = None
         return delta
 
+    def stop_all_timers(self) -> None:
+        """Zapisuje wszystkie działające stopery (np. przy zamykaniu programu)."""
+        errors = []
+        now = datetime.datetime.now()
+        for typ in ("ksiegowosc", "kadry"):
+            fields = self._TIMER_FIELDS[typ]
+            firma_id = getattr(self, fields[0])
+            if firma_id is None or getattr(self, fields[1]) is None:
+                continue
+            conn = get_conn()
+            try:
+                self._ensure_month_status(firma_id)
+                cur = conn.cursor()
+                self._finish_timer(typ, now, cur)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                errors.append(exc)
+            finally:
+                conn.close()
+        try:
+            self.stop_general_timer()
+        except Exception as exc:
+            errors.append(exc)
+        if errors:
+            raise errors[0]
+
     def get_general_timer_detail(self) -> Optional[Dict[str, str]]:
         if self.czas_start_general is None:
             return None
@@ -189,6 +216,8 @@ class MonthlyViewLogic:
 
         from app.db.dao_payments import monthly_invoice_payments
         invoices_by_company = monthly_invoice_payments(selected_month)
+        from app.db.dao_monthly import list_active_substitutions
+        substitutions = list_active_substitutions()
 
         for r in rows:
             invoices = invoices_by_company.get(r["id"], [])
@@ -209,8 +238,16 @@ class MonthlyViewLogic:
                     continue
 
             if selected_employee:
-                if selected_employee not in (r.get("ksiegowa_id"), r.get("kadrowa_id")):
+                subs = (
+                    (substitutions.get((r["id"], "ksiegowosc")) or {}).get("zastepca_id"),
+                    (substitutions.get((r["id"], "kadry")) or {}).get("zastepca_id"),
+                )
+                if selected_employee not in (r.get("ksiegowa_id"), r.get("kadrowa_id"), *subs):
                     continue
+            for role, key in (("ksiegowosc", "zast_ks"), ("kadry", "zast_kadry")):
+                sub = substitutions.get((r["id"], role))
+                r[f"{key}_id"] = sub["zastepca_id"] if sub else None
+                r[f"{key}_za"] = (sub.get("zastepowany_nazwa") or "") if sub else ""
 
             note = notes_map.get(r["id"])
             if note:

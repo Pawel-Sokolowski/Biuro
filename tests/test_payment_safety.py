@@ -128,7 +128,34 @@ class PaymentSafetyTests(DbTestCase):
                 path.write_bytes(content)
                 self.assertEqual(import_mt940_file(str(path), 1)["new"], 1)
             path.write_bytes(first + second)
-            self.assertEqual(import_mt940_file(str(path), 1), {"all": 2, "new": 0, "duplicates": 2})
+            self.assertEqual(import_mt940_file(str(path), 1), {"all": 2, "new": 0, "duplicates": 2, "own": 0})
+
+    def test_transfers_between_own_accounts_are_skipped_on_import(self):
+        a, b, external = ("44105000997603123456789123", "22105000997603123456789123",
+                          "11105000997603123456789123")
+
+        def entry(sign, amount, ref, partner):
+            return (f":61:2610131013{sign}{amount}S0{ref}\n"
+                    f":86:034~00XX20PRZELEW~20{ref}~32KTOS~38PL{partner}\n")
+
+        text = (
+            f":20:A\n:25:/PL{a}\n:28C:1\n:60F:C261013PLN0,00\n"
+            + entry("D", "100,00", "1111", b) + entry("C", "50,00", "2222", external)
+            + ":62F:C261013PLN0,00\n"
+            + f":20:B\n:25:/PL{b}\n:28C:1\n:60F:C261013PLN0,00\n"
+            + entry("C", "100,00", "3333", a) + ":62F:C261013PLN0,00\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "own.sta"
+            path.write_bytes(text.encode("cp1250"))
+            report = import_mt940_file(str(path), 1)
+            self.assertEqual(report, {"all": 3, "new": 1, "duplicates": 0, "own": 2})
+            conn = get_conn()
+            try:
+                rows = conn.execute("SELECT kwota FROM bank_transakcje").fetchall()
+            finally:
+                conn.close()
+            self.assertEqual([Decimal(str(r[0])) for r in rows], [Decimal("50.00")])
 
     def test_employee_without_finance_permission_cannot_add_payment(self):
         employee = self.make_employee()

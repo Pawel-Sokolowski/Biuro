@@ -48,6 +48,67 @@ from app.monthly_view.notes_window import NotesWindow
 
 COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
 ETAP_CHOICES = ["Brak", "Zatwierdzone", "Zaksięgowane", "Wysłane wyniki"]
+STAGE_FILTER = ["Wszystkie", "Dostarczone", "Niedostarczone"] + ETAP_CHOICES
+
+
+class SubstitutionDialog(QDialog):
+    """Wybór pracownika zastępującego księgową/kadrową w danej firmie."""
+
+    def __init__(self, row: Dict[str, Any], employees: List, parent=None):
+        super().__init__(parent)
+        self.row = row
+        self.setWindowTitle(f"Zastępstwo — {row.get('nazwa', '')}")
+        layout = QFormLayout(self)
+        self.role = QComboBox()
+        self.role.addItem("Księgowość", "ksiegowosc")
+        self.role.addItem("Kadry", "kadry")
+        layout.addRow("Dział:", self.role)
+        self.substitute = QComboBox()
+        self.substitute.addItem("— brak zastępstwa —", None)
+        for emp_id, label in employees:
+            if emp_id:
+                self.substitute.addItem(label, emp_id)
+        layout.addRow("Zastępuje:", self.substitute)
+        self.until_check = QCheckBox("Do dnia:")
+        self.until = QCalendarWidget()
+        self.until.setSelectedDate(QDate.currentDate())
+        layout.addRow(self.until_check, self.until)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel, self
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+        self.role.currentIndexChanged.connect(self._load_current)
+        self._load_current()
+
+    def _owner_id(self) -> Optional[int]:
+        return self.row.get("ksiegowa_id" if self.role.currentData() == "ksiegowosc" else "kadrowa_id")
+
+    def _load_current(self):
+        from app.db.dao_monthly import list_active_substitutions
+        current = list_active_substitutions().get((self.row["id"], self.role.currentData()))
+        idx = self.substitute.findData(current["zastepca_id"]) if current else 0
+        self.substitute.setCurrentIndex(max(idx, 0))
+        until = (current or {}).get("do_dnia")
+        self.until_check.setChecked(bool(until))
+        if until:
+            self.until.setSelectedDate(QDate.fromString(until, "yyyy-MM-dd"))
+
+    def _save(self):
+        from app.db.dao_monthly import clear_substitution, set_substitution
+        role = self.role.currentData()
+        substitute = self.substitute.currentData()
+        try:
+            if substitute is None:
+                clear_substitution(self.row["id"], role)
+            else:
+                until = self.until.selectedDate().toString("yyyy-MM-dd") if self.until_check.isChecked() else None
+                set_substitution(self.row["id"], role, int(substitute), self._owner_id(), until)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zastępstwo", str(exc))
+            return
+        self.accept()
 
 
 class EtapComboDelegate(QStyledItemDelegate):
@@ -123,8 +184,7 @@ class IconButtonDelegate(QStyledItemDelegate):
         # stały rozmiar przycisku, także w wyższych wierszach (kilka faktur)
         size = min(rect.height(), 24)
         rect = QRect(rect.center().x() - 22, rect.center().y() - size // 2, 44, size)
-        if option.state & QStyle.StateFlag.State_MouseOver:
-            bg = QColor("#d0d0d0")
+        bg = QColor("#d0d0d0") if option.state & QStyle.StateFlag.State_MouseOver else QColor("#ececec")
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(bg)
@@ -538,6 +598,11 @@ class MonthlyViewPage(QWidget):
         filters_layout.addWidget(QLabel("Status:"))
         filters_layout.addWidget(self.status_combo)
 
+        self.stage_combo = QComboBox()
+        self.stage_combo.addItems(STAGE_FILTER)
+        filters_layout.addWidget(QLabel("Etap:"))
+        filters_layout.addWidget(self.stage_combo)
+
         filters_layout.addStretch()
 
         self.btn_refresh = QPushButton("Odśwież")
@@ -611,6 +676,7 @@ class MonthlyViewPage(QWidget):
         self.tabs.currentChanged.connect(self._on_month_tab_changed)
         self.employee_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.status_combo.currentIndexChanged.connect(self._on_filters_changed)
+        self.stage_combo.currentIndexChanged.connect(self._reload_rows)
         self.btn_refresh.clicked.connect(self._reload_rows)
 
     def eventFilter(self, obj, event):
@@ -671,6 +737,10 @@ class MonthlyViewPage(QWidget):
                     else QHeaderView.ResizeMode.ResizeToContents,
                 )
             etap_col = table.model()._etap_col()
+            icon_cols = (9, 10, 11) if table is self.table_ks else (9, 10)
+            for col in icon_cols:
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+                table.setColumnWidth(col, 56)
             metrics = header.fontMetrics()
             etap_width = max(metrics.horizontalAdvance(text) for text in ETAP_CHOICES) + 40
             header.setSectionResizeMode(etap_col, QHeaderView.ResizeMode.Fixed)
@@ -765,8 +835,10 @@ class MonthlyViewPage(QWidget):
             rr.setdefault("uod", 0)
             rows_prepared.append(rr)
 
-        ks_rows = [r for r in rows_prepared if self._row_in_tab(r, "ksiegowa_id")]
-        kadry_rows = [r for r in rows_prepared if self._row_in_tab(r, "kadrowa_id")]
+        ks_rows = [self._mark_substitution(r, "ksiegowosc") for r in rows_prepared
+                   if self._row_in_tab(r, "ksiegowa_id") and self._stage_matches(r, "etap")]
+        kadry_rows = [self._mark_substitution(r, "kadry") for r in rows_prepared
+                      if self._row_in_tab(r, "kadrowa_id") and self._stage_matches(r, "etap_kadry")]
         self.model_ks.set_rows(ks_rows)
         self.model_kadry.set_rows(kadry_rows)
         for idx, row in enumerate(ks_rows):
@@ -775,11 +847,38 @@ class MonthlyViewPage(QWidget):
         total = sum(int(r.get("ilosc_dok") or 0) for r in ks_rows)
         self.activity_label.setText(f"Aktywność pracownika: {total}")
 
+    def _stage_matches(self, row: Dict[str, Any], stage_field: str) -> bool:
+        choice = self.stage_combo.currentText()
+        if choice == "Wszystkie":
+            return True
+        if choice == "Dostarczone":
+            return bool(row.get("dokumenty_dostarczone"))
+        if choice == "Niedostarczone":
+            return not row.get("dokumenty_dostarczone")
+        return (row.get(stage_field) or "Brak") == choice
+
+    _SUBSTITUTION_FIELDS = {
+        "ksiegowa_id": ("zast_ks_id", "zast_ks_za", "ksiegowosc"),
+        "kadrowa_id": ("zast_kadry_id", "zast_kadry_za", "kadry"),
+    }
+
     def _row_in_tab(self, row: Dict[str, Any], role_field: str) -> bool:
         emp_id = self._current_employee_id()
         if not emp_id:
             return True
+        substitute = row.get(self._SUBSTITUTION_FIELDS[role_field][0])
+        if substitute:
+            return substitute == emp_id
         return row.get(role_field) == emp_id
+
+    def _mark_substitution(self, row: Dict[str, Any], role: str) -> Dict[str, Any]:
+        field = "zast_ks" if role == "ksiegowosc" else "zast_kadry"
+        if not row.get(f"{field}_id"):
+            return row
+        marked = dict(row)
+        marked["zastepstwo"] = True
+        marked["zastepstwo_za"] = row.get(f"{field}_za") or ""
+        return marked
 
     def _update_running_timer(self):
         if self.logic.aktywna_firma_stoper_ks and self.logic.czas_start_ks:
@@ -951,6 +1050,10 @@ class MonthlyViewPage(QWidget):
         act_vat.triggered.connect(lambda: self._on_check_vat(firma_id))
         act_ceidg.triggered.connect(lambda: self._on_check_ceidg(firma_id))
         menu.addSeparator()
+        act_substitute = QAction("Ustaw zastępstwo…", self)
+        act_substitute.triggered.connect(lambda: self._on_set_substitution(firma_id))
+        menu.addAction(act_substitute)
+        menu.addSeparator()
         menu.addAction(act_activity)
 
         act_suspend.triggered.connect(lambda: self._on_toggle_services(firma_id, not services_off))
@@ -958,6 +1061,14 @@ class MonthlyViewPage(QWidget):
         act_activity.triggered.connect(lambda: self._on_show_activity(firma_id))
 
         menu.exec(QCursor.pos())
+
+    def _on_set_substitution(self, firma_id: int):
+        row = next((r for r in self._rows if r["id"] == firma_id), None)
+        if row is None:
+            return
+        dlg = SubstitutionDialog(row, self.logic.get_employee_filter_list(), self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._reload_rows()
 
     def _on_check_vat(self, firma_id: int):
         try:

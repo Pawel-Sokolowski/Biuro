@@ -61,6 +61,65 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
     conn.close()
 
 
+SUBSTITUTION_ROLES = ("ksiegowosc", "kadry")
+
+
+def list_active_substitutions(today=None) -> Dict[tuple, Dict[str, Any]]:
+    """{(firma_id, rola): zastępstwo} dla zastępstw bez daty końca lub jeszcze obowiązujących."""
+    import datetime
+    today = (today or datetime.date.today()).isoformat()
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT z.firma_id, z.rola, z.zastepca_id, z.zastepowany_id, z.do_dnia,
+                   TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')) AS zastepowany_nazwa,
+                   TRIM(COALESCE(s.imie, '') || ' ' || COALESCE(s.nazwisko, '')) AS zastepca_nazwa
+            FROM zastepstwa_firm z
+            LEFT JOIN pracownicy p ON p.id = z.zastepowany_id
+            LEFT JOIN pracownicy s ON s.id = z.zastepca_id
+            WHERE z.do_dnia IS NULL OR z.do_dnia = '' OR z.do_dnia >= %s
+            """,
+            (today,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {(r["firma_id"], r["rola"]): dict(r) for r in rows}
+
+
+def set_substitution(firma_id: int, rola: str, zastepca_id: int,
+                     zastepowany_id: Optional[int], do_dnia: Optional[str] = None) -> None:
+    if rola not in SUBSTITUTION_ROLES:
+        raise ValueError(f"Nieznana rola zastępstwa: {rola}")
+    if zastepowany_id is not None and zastepowany_id == zastepca_id:
+        raise ValueError("Pracownik nie może zastępować samego siebie.")
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO zastepstwa_firm (firma_id, rola, zastepca_id, zastepowany_id, do_dnia)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (firma_id, rola) DO UPDATE SET
+                zastepca_id = excluded.zastepca_id,
+                zastepowany_id = excluded.zastepowany_id,
+                do_dnia = excluded.do_dnia
+            """,
+            (firma_id, rola, zastepca_id, zastepowany_id, do_dnia or None),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_substitution(firma_id: int, rola: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM zastepstwa_firm WHERE firma_id = %s AND rola = %s", (firma_id, rola))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def count_documents_for_month(firma_id: int, miesiac: str) -> int:
     conn = get_conn()
     cur = conn.cursor()

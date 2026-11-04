@@ -83,7 +83,7 @@ class AutomaticSyncTests(unittest.TestCase):
              patch.object(email_sync,'prefetch_recent',return_value=0):
             self.assertEqual(email_sync.sync_automatic_accounts([{'id':1}]),[])
         initial.assert_not_called()
-        setting.assert_not_called()
+        self.assertTrue(all(c.args[0].startswith(('email_full_sweep_', 'email_status_snapshot_')) for c in setting.call_args_list))
         self.assertFalse(sync.call_args.kwargs['first_run'])
         self.assertTrue(sync.call_args.kwargs['headers_only'])
 

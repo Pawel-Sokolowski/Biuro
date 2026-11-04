@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QFont
 import datetime
 import logging
 
@@ -99,6 +99,19 @@ class MonthlyViewModel(QAbstractTableModel):
 
         row = self._rows[index.row()]
         col = index.column()
+
+        if col == 0 and row.get("zastepstwo"):
+            if role == Qt.ItemDataRole.DisplayRole:
+                return "↪ " + (row.get("nazwa") or "")
+            if role == Qt.ItemDataRole.ToolTipRole:
+                who = row.get("zastepstwo_za")
+                return f"Zastępstwo za: {who}" if who else "Zastępstwo"
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QColor("#1a5fb4")
+            if role == Qt.ItemDataRole.FontRole:
+                font = QFont()
+                font.setItalic(True)
+                return font
 
         if self._mode == "ksiegowosc" and col in (1, 2) and role == Qt.ItemDataRole.ToolTipRole:
             return row.get("faktura_platnosci_tooltip", "")

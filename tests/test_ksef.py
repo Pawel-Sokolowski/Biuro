@@ -136,6 +136,39 @@ class KsefRateLimitTests(unittest.TestCase):
             client._request("POST", "/sessions/online/X/invoices", token="access", json={})
         self.assertEqual(client.http.calls, 1)
 
+    def test_expired_access_token_reauthenticates_and_retries_read_once(self):
+        client = self.client([FakeResponse(status=401), FakeResponse(content=b"<Faktura/>")])
+        client._access_valid_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+
+        def relogin():
+            client._access_token = "fresh"
+            client._access_valid_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+            return "fresh"
+
+        with mock.patch.object(client, "authenticate", side_effect=relogin) as auth:
+            self.assertEqual(client.download_invoice_xml("KSEF-1"), "<Faktura/>")
+        auth.assert_called_once()
+        self.assertEqual(client.http.calls, 2)
+
+    def test_persistent_401_is_reported_after_a_single_retry(self):
+        client = self.client([FakeResponse(status=401), FakeResponse(status=401)])
+
+        def relogin():
+            client._access_token = "fresh"
+            client._access_valid_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+            return "fresh"
+
+        with mock.patch.object(client, "authenticate", side_effect=relogin):
+            with self.assertRaisesRegex(ksef_client.KsefError, "401"):
+                client.download_invoice_xml("KSEF-1")
+        self.assertEqual(client.http.calls, 2)
+
+    def test_401_during_write_is_not_retried(self):
+        client = self.client([FakeResponse(status=401)])
+        with self.assertRaisesRegex(ksef_client.KsefError, "operacji zapisu"):
+            client._request("POST", "/sessions/online/X/invoices", token="access", json={})
+        self.assertEqual(client.http.calls, 1)
+
     def test_batch_export_decrypts_and_verifies_zip_package(self):
         _private, der = _make_cert()
         key, iv = b"K" * 32, b"I" * 16
@@ -282,6 +315,29 @@ class KsefTests(DbTestCase):
         self.assertEqual(resumed["znalezione"], 1)
         self.assertEqual(resumed["pominiete"], ["1234567890-20261015-AAAAAA-BB"])
         self.assertFalse(any(path.startswith("/invoices/ksef/") for _method, path in session.calls))
+
+    def test_sync_creates_invoice_for_contractor_matched_by_nip(self):
+        from app.db.dao_conn import get_conn
+        _key, der = _make_cert()
+        conn = get_conn()
+        kid = conn.execute(
+            "INSERT INTO kontrahenci (typ, nazwa, nip) VALUES ('firma', 'ENIGMA', '5252525252') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+        conn.close()
+        session = FakeSession(der, [{
+            "ksefNumber": "1234567890-20261015-EEEEEE-FF", "invoiceNumber": "9/10/2026",
+            "buyer": {"identifier": {"type": "Nip", "value": "5252525252"}},
+        }])
+        client = ksef_client.KsefClient("1234567890", "TOKEN", "test", session=session)
+        result = ksef_sync.sync_month("2026-10", client=client)
+        self.assertEqual(result["utworzone"], ["1234567890-20261015-EEEEEE-FF"])
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT firma_id, kontrahent_id FROM faktury WHERE numer = '7/10/2026'"
+        ).fetchone()
+        conn.close()
+        self.assertEqual((row[0], row[1]), (None, kid))
 
     def test_sync_does_not_import_when_buyer_nip_is_not_a_unique_company(self):
         _key, der = _make_cert()

@@ -171,11 +171,16 @@ class KsefUnmatchedDialog(QDialog):
             companies = [dict(row) for row in conn.execute(
                 "SELECT id, nazwa, nazwa_skrocona, nip FROM firmy ORDER BY COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)"
             ).fetchall()]
+            contractors = [dict(row) for row in conn.execute(
+                "SELECT id, nazwa, nip FROM kontrahenci ORDER BY nazwa"
+            ).fetchall()]
         finally:
             conn.close()
         if not (is_administrator(actor_id) or can(actor_id, "can_view_finances")):
             companies = [company for company in companies if can_access_invoice(actor_id, company["id"])]
-        self.companies = companies
+            contractors = []
+        self.companies = [dict(c, kind="firma") for c in companies] + [
+            dict(c, kind="kontrahent", nazwa_skrocona=None) for c in contractors]
         for item in self.items:
             self._add_row(item)
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
@@ -190,10 +195,12 @@ class KsefUnmatchedDialog(QDialog):
         company = QComboBox(self.table)
         company.setEditable(True)
         company.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        company.addItem("— Wybierz firmę —", None)
+        company.addItem("— Wybierz firmę lub kontrahenta —", None)
         for candidate in self.companies:
             name = candidate.get("nazwa_skrocona") or candidate["nazwa"]
-            company.addItem(f"{name} — NIP {candidate.get('nip') or 'brak'}", candidate["id"])
+            label = " (kontrahent)" if candidate["kind"] == "kontrahent" else ""
+            company.addItem(f"{name}{label} — NIP {candidate.get('nip') or 'brak'}",
+                            (candidate["kind"], candidate["id"]))
         completer = company.completer()
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         completer.setFilterMode(Qt.MatchFlag.MatchContains)
@@ -204,13 +211,18 @@ class KsefUnmatchedDialog(QDialog):
         self.table.setCellWidget(row, 5, assign)
 
     def _assign(self, row):
-        company_id = self.table.cellWidget(row, 4).currentData()
-        if company_id is None:
-            QMessageBox.warning(self, "KSeF", "Wybierz firmę z listy.")
+        choice = self.table.cellWidget(row, 4).currentData()
+        if choice is None:
+            QMessageBox.warning(self, "KSeF", "Wybierz firmę lub kontrahenta z listy.")
             return
+        kind, owner_id = choice
         item = self.items[row]
         try:
-            action, _invoice_id = assign_downloaded_invoice(item["data"], item["ksef_number"], int(company_id))
+            action, _invoice_id = assign_downloaded_invoice(
+                item["data"], item["ksef_number"],
+                company_id=int(owner_id) if kind == "firma" else None,
+                contractor_id=int(owner_id) if kind == "kontrahent" else None,
+            )
         except Exception:
             logger.exception("Błąd ręcznego przypisania faktury KSeF")
             QMessageBox.warning(self, "KSeF", "Nie udało się przypisać faktury. Szczegóły zapisano w logach.")
@@ -597,7 +609,7 @@ class FakturyPage(QWidget):
 
     def _download_one_from_ksef(self):
         """Pobiera/sprawdza w KSeF jedną fakturę lub wszystkie faktury jednej firmy z bieżącego miesiąca."""
-        if self._ksef_send_worker is not None or self._ksef_thread is not None:
+        if self._ksef_send_worker is not None or self._sync_running():
             QMessageBox.information(self, "KSeF", "Poczekaj na zakończenie bieżącej operacji KSeF.")
             return
         if not ksef_configured():
@@ -632,7 +644,7 @@ class FakturyPage(QWidget):
         self._start_ksef_download(month, buyer_nip=nip, invoice_number=number.strip() or None, force=True)
 
     def _start_ksef_download(self, month, **filters):
-        if self._ksef_thread is not None:
+        if self._sync_running():
             QMessageBox.information(self, "KSeF", "Synchronizacja KSeF już trwa.")
             return
         self.btn_ksef_download.setEnabled(False)
@@ -656,6 +668,7 @@ class FakturyPage(QWidget):
         self._ksef_worker.finished.connect(self._ksef_worker.deleteLater)
         self._ksef_worker.failed.connect(self._ksef_worker.deleteLater)
         self._ksef_thread.finished.connect(self._cleanup_ksef_sync)
+        self._ksef_thread.finished.connect(self._ksef_thread.deleteLater)
         self._ksef_thread.start()
 
     def _update_ksef_progress(self, done, total, text):
@@ -665,7 +678,20 @@ class FakturyPage(QWidget):
         self._ksef_progress.setValue(min(done, total) if total else 0)
         self._ksef_progress.setLabelText(text)
 
+    def _sync_running(self):
+        thread = self._ksef_thread
+        if thread is None:
+            return False
+        try:
+            if thread.isRunning():
+                return True
+        except RuntimeError:
+            pass
+        self._cleanup_ksef_sync()
+        return False
+
     def _ksef_sync_failed(self, message, expected):
+        self._cleanup_ksef_sync()
         if expected:
             QMessageBox.critical(self, "KSeF", message)
         else:
@@ -675,8 +701,6 @@ class FakturyPage(QWidget):
         if self._ksef_progress:
             self._ksef_progress.close()
             self._ksef_progress.deleteLater()
-        if self._ksef_thread:
-            self._ksef_thread.deleteLater()
         self._ksef_progress = None
         self._ksef_worker = None
         self._ksef_thread = None
@@ -684,6 +708,7 @@ class FakturyPage(QWidget):
         self.btn_ksef_download_one.setEnabled(True)
 
     def _ksef_sync_finished(self, month, result):
+        self._cleanup_ksef_sync()
         self.refresh()
         message = (f"Miesiąc {month}\nZnaleziono w KSeF: {result.get('znalezione', len(result.get('dopasowane', [])))}"
                    f"\nJuż zapisane lokalnie: {len(result.get('pominiete', []))}"
@@ -739,7 +764,7 @@ class FakturyPage(QWidget):
     def _send_selected_to_ksef(self, *, drafts=False):
         if not self._can_export():
             return
-        if self._ksef_send_worker is not None or self._ksef_thread is not None:
+        if self._ksef_send_worker is not None or self._sync_running():
             QMessageBox.information(self, "KSeF", "Obsługa wysyłki KSeF już trwa.")
             return
         table = self.draft_table if drafts else self.issued_table
@@ -789,7 +814,7 @@ class FakturyPage(QWidget):
         self._start_ksef_batch(ids, send=True)
 
     def _email_selected_pdfs(self):
-        if not self._can_export() or self._ksef_send_worker is not None or self._ksef_thread is not None:
+        if not self._can_export() or self._ksef_send_worker is not None or self._sync_running():
             return
         ids = self._selected_ids(self.issued_table)
         if not ids:
@@ -815,7 +840,7 @@ class FakturyPage(QWidget):
         if self._ksef_send_worker is not None:
             return
         self._ksef_poll_timer.stop()
-        if self._ksef_thread is not None:
+        if self._sync_running():
             self._ksef_poll_timer.start()
             return
         self.btn_email_pdf.setEnabled(False)
@@ -846,7 +871,8 @@ class FakturyPage(QWidget):
         self._ksef_pending.update(pending)
         for invoice_id in pending:
             self._ksef_poll_counts[invoice_id] = self._ksef_poll_counts.get(invoice_id, 0) + 1
-        accepted = ", ".join(str(entry["number"]) for entry in result["accepted"])
+        accepted_numbers = [str(entry["number"]) for entry in result["accepted"]]
+        accepted = ", ".join(accepted_numbers[:5]) + (f" i {len(accepted_numbers) - 5} innych" if len(accepted_numbers) > 5 else "")
         message = f"Przyjęte i pobrane: {len(result['accepted'])}. Oczekujące: {len(self._ksef_pending)}. Odrzucone: {len(result['rejected'])}."
         emailed = sum(bool(entry.get("delivery")) and entry["delivery"].get("status") == "sent" for entry in result["accepted"])
         if emailed:
@@ -869,7 +895,7 @@ class FakturyPage(QWidget):
             self._start_ksef_batch(ids, send=False)
 
     def _check_ksef_submission(self):
-        if not self._can_export() or self._ksef_send_worker is not None or self._ksef_thread is not None:
+        if not self._can_export() or self._ksef_send_worker is not None or self._sync_running():
             return
         ids = self._selected_ids(self.issued_table)
         if not ids:

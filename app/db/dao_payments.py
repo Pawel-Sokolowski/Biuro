@@ -95,10 +95,14 @@ def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, A
     datę księgowania (jeśli jest obecna); data waluty pozostaje w ewidencji.
     """
     source = None
-    encodings = (encoding,) if encoding else ("utf-8-sig", "cp1250")
+    encodings = (encoding,) if encoding else ("utf-8-sig", "cp1250", "cp852")
     for selected_encoding in encodings:
         try:
             source = raw.decode(selected_encoding)
+            # Znaki sterujące C1 oznaczają błędne kodowanie (np. CP852 odczytany jako Latin-2).
+            if not encoding and re.search("[\x80-\x9f]", source):
+                source = None
+                continue
             break
         except UnicodeDecodeError:
             continue
@@ -177,6 +181,13 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
     conn = get_conn()
     inserted = 0
     try:
+        # Przelewy własne: kontrahent to jeden z rachunków biura (z plików lub już zaimportowanych).
+        own_accounts = {_normalize_account(e["account"]) for e in records} - {""}
+        own_accounts |= {_normalize_account(r[0]) for r in
+                         conn.execute("SELECT DISTINCT rachunek FROM bank_transakcje").fetchall()} - {""}
+        own = [e for e in records if e["contractor_account"] in own_accounts and e["contractor_account"] != _normalize_account(e["account"])]
+        records_all = len(records)
+        records = [e for e in records if e not in own]
         for entry in records:
             # Rozliczenie również blokuje ten wiersz. Kolejne zapytanie widzi
             # już zatwierdzone wpłaty po ewentualnym oczekiwaniu na ich commit.
@@ -206,7 +217,7 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
         raise
     finally:
         conn.close()
-    return {"all": len(records), "new": inserted, "duplicates": len(records) - inserted}
+    return {"all": records_all, "new": inserted, "duplicates": len(records) - inserted, "own": len(own)}
 
 
 def list_unsettled_transfers(actor_id: int) -> list[dict[str, Any]]:
@@ -248,14 +259,18 @@ def list_invoice_choices(
         rows = conn.execute(
             """
             SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto,
-                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
-                   COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, '') AS nip,
-                   f.nazwa AS buyer_full_name, f.konto_bankowe AS buyer_account,
+                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
+                   COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, k.nip, '') AS nip,
+                   COALESCE(f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa) AS buyer_full_name,
+                   f.konto_bankowe AS buyer_account,
                    CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i
 
             LEFT JOIN firmy f
                 ON f.id = i.firma_id
+
+            LEFT JOIN kontrahenci k
+                ON k.id = i.kontrahent_id
 
             LEFT JOIN (
                 SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
@@ -563,10 +578,12 @@ def list_company_choices(actor_id: int) -> list[dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, COALESCE(NULLIF(nazwa_skrocona, ''), nazwa, '') AS buyer, nip FROM firmy "
-            "ORDER BY LOWER(COALESCE(NULLIF(nazwa_skrocona, ''), nazwa, ''))"
+            "SELECT 'firma' AS kind, id, COALESCE(NULLIF(nazwa_skrocona, ''), nazwa, '') AS buyer, nip FROM firmy "
+            "UNION ALL SELECT 'kontrahent', id, COALESCE(nazwa, ''), nip FROM kontrahenci "
+            "ORDER BY 3"
         ).fetchall()
-        return [dict(row) for row in rows if row["buyer"] and can_access_invoice(actor_id, row["id"])]
+        return [dict(row) for row in rows if row["buyer"] and (
+            can_access_invoice(actor_id, row["id"]) if row["kind"] == "firma" else can_access_invoice(actor_id, None))]
     finally:
         conn.close()
 

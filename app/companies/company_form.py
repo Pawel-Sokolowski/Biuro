@@ -882,6 +882,37 @@ class CompanyForm(QDialog):
 
         main_layout.addWidget(not_box)
 
+        # SEKCJA: CZASOMIERZ (zapisana firma, zalogowany pracownik)
+        timers_box = None
+        if self.firma_id and self.actor_id:
+            timers_box = QWidget()
+            timers_layout = QVBoxLayout(timers_box)
+            title_timers = QLabel("Czasomierz — rekordy czasu pracy")
+            title_timers.setStyleSheet("font-weight: bold; font-size: 16px;")
+            timers_layout.addWidget(title_timers)
+            self.timers_table = QTableWidget(0, 7)
+            self.timers_table.setHorizontalHeaderLabels(
+                ["Źródło", "Miesiąc", "Początek", "Koniec", "Pracownik", "Dział / opis", "Czas"])
+            self.timers_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            self.timers_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            self.timers_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            self.timers_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            self.timers_table.horizontalHeader().setStretchLastSection(True)
+            self.timers_table.setMinimumHeight(350)
+            timers_layout.addWidget(self.timers_table)
+            self.timers_total = QLabel("")
+            timers_layout.addWidget(self.timers_total)
+            timers_buttons = QHBoxLayout()
+            btn_timers_delete = QPushButton("Usuń zaznaczone rekordy")
+            btn_timers_refresh = QPushButton("Odśwież")
+            timers_buttons.addWidget(btn_timers_delete)
+            timers_buttons.addWidget(btn_timers_refresh)
+            timers_buttons.addStretch()
+            timers_layout.addLayout(timers_buttons)
+            btn_timers_delete.clicked.connect(self._delete_timers)
+            btn_timers_refresh.clicked.connect(self._load_timers)
+            main_layout.addWidget(timers_box)
+
         # ============================================================
         # PRZYCISKI ZAPISZ / ANULUJ
         # ============================================================
@@ -905,12 +936,15 @@ class CompanyForm(QDialog):
         self.inputs["email_faktury"].setPlaceholderText("np. invoices@firma.com")
         self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy.")
         billing_layout.addWidget(self.inputs["email_faktury"])
-        for label, sections in (
+        sections_list = [
             ("Firma", [dane_box]), ("Adresy", [adresy_box]),
             ("Faktury i ceny", [billing_box, cenniki_box]), ("Kadry", [kadry_box]),
             ("Kontakty", [kontakty_box]), ("Pełnomocnictwa", [pel_box]),
             ("Filtry poczty", [email_box]), ("Wspólnicy", [wsp_box]), ("Notatki", [not_box]),
-        ):
+        ]
+        if timers_box is not None:
+            sections_list.append(("Czasomierz", [timers_box]))
+        for label, sections in sections_list:
             page = QWidget()
             page_layout = QVBoxLayout(page)
             for section in sections:
@@ -961,7 +995,8 @@ class CompanyForm(QDialog):
             self._load_email_filters()
             self._load_partners()
             self._load_notes()
-        else:
+            if hasattr(self, "timers_table"):
+                self._load_timers()
             self._refresh_cennik_options()
 
         for name in ("forma_opodatkowania", "status_vat"):
@@ -1669,6 +1704,53 @@ class CompanyForm(QDialog):
             return False
 
         return True
+
+    # ============================================================
+    # CZASOMIERZ
+    # ============================================================
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        hours, rest = divmod(max(0, int(seconds)), 3600)
+        return f"{hours}:{rest // 60:02d}:{rest % 60:02d}"
+
+    def _load_timers(self):
+        from app.db.dao_timers import SOURCE_IMPORT, list_company_timers
+        rows = list_company_timers(self.firma_id)
+        self._timer_rows = rows
+        self.timers_table.setRowCount(0)
+        for entry in rows:
+            row = self.timers_table.rowCount()
+            self.timers_table.insertRow(row)
+            source = "Import" if entry["zrodlo"] == SOURCE_IMPORT else "Stoper"
+            description = " — ".join(filter(None, [entry["dzial"], entry["opis"]]))
+            for col, text in enumerate([source, entry["miesiac"], entry["start"], entry["koniec"],
+                                        entry["pracownik"], description, self._format_duration(entry["sekundy"])]):
+                self.timers_table.setItem(row, col, QTableWidgetItem(str(text)))
+        total = sum(entry["sekundy"] for entry in rows)
+        self.timers_total.setText(f"Rekordów: {len(rows)}, łączny czas: {self._format_duration(total)}")
+
+    def _delete_timers(self):
+        from app.db.dao_timers import delete_company_timers
+        selected = sorted({index.row() for index in self.timers_table.selectedIndexes()})
+        if not selected:
+            QMessageBox.information(self, "Czasomierz", "Zaznacz rekordy do usunięcia.")
+            return
+        items = [(self._timer_rows[row]["zrodlo"], self._timer_rows[row]["id"]) for row in selected]
+        seconds = sum(self._timer_rows[row]["sekundy"] for row in selected)
+        answer = QMessageBox.question(
+            self, "Usuń rekordy czasu",
+            f"Usunąć zaznaczone rekordy ({len(items)}, łącznie {self._format_duration(seconds)})?\n\n"
+            "Czas stopera zostanie odjęty od sumy w widoku miesięcznym. "
+            "Pozycji faktur dodanych ze stopera ta operacja nie zmienia.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_company_timers(self.firma_id, items, self.actor_id)
+        except Exception as exc:
+            QMessageBox.critical(self, "Czasomierz", f"Nie udało się usunąć rekordów: {exc}")
+            return
+        self._load_timers()
 
     # ============================================================
     # NOTATKI

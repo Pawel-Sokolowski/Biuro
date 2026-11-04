@@ -1,10 +1,11 @@
 # app/chat/chat_ui.py
+import os
 import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox,
     QScrollArea, QSizePolicy, QFrame, QDialog, QDialogButtonBox, QFormLayout,
-    QApplication
+    QApplication, QFileDialog
 )
 
 from PyQt6.QtGui import QFont, QColor
@@ -17,9 +18,18 @@ from app.chat.chat_model import (
     update_conversation, can_manage_conversation, is_participant,
     get_direct_conversations, get_latest_message_ids, get_unread_counts,
     mark_conversation_read, delete_conversation,
+    add_message_with_attachments, get_attachments, get_attachment_data, MAX_ATTACHMENT_BYTES,
 )
 
 import psycopg
+
+
+def _format_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{n} B"
 
 
 class ChatMessageEdit(QTextEdit):
@@ -64,7 +74,7 @@ class ChatPage(QWidget):
         self.current_pracownik_id = pracownik_id  # alias used in rendering
         self._seen_ids = {}
         self._unread = {}
-
+        self._pending_files = []
         self._build_ui()
         self.refresh_chat_conversations()
         self._poll_timer = QTimer(self)
@@ -175,6 +185,10 @@ class ChatPage(QWidget):
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         right_layout.addWidget(self.scroll_area)
 
+        self.pending_label = QLabel("")
+        self.pending_label.setVisible(False)
+        right_layout.addWidget(self.pending_label)
+
         bottom = QHBoxLayout()
         self.chat_input = ChatMessageEdit()
         self.chat_input.setAcceptRichText(False)
@@ -182,6 +196,11 @@ class ChatPage(QWidget):
         self.chat_input.setPlaceholderText("Napisz wiadomość...")
         self.chat_input.send_requested.connect(self.send_message)
         bottom.addWidget(self.chat_input)
+
+        self.btn_attach = QPushButton("📎")
+        self.btn_attach.setToolTip("Dołącz pliki (kliknij ponownie, aby wyczyścić wybór)")
+        self.btn_attach.clicked.connect(self.attach_files)
+        bottom.addWidget(self.btn_attach)
 
         btn_send = QPushButton("Wyślij")
         btn_send.clicked.connect(self.send_message)
@@ -313,8 +332,11 @@ class ChatPage(QWidget):
         Consecutive messages from same sender on same date are shown under one header.
         """
         self._clear_messages()
+        try:
+            attachments = get_attachments([m["id"] for m in messages if m.get("id")])
+        except Exception:
+            attachments = {}
 
-        last_sender_id = None
         last_date = None
         group_layout = None
 
@@ -366,32 +388,46 @@ class ChatPage(QWidget):
 
                 last_sender_id = sender_id
 
-            # message bubble
-            text_label = QLabel(msg.get("tresc") or "")
-            text_label.setWordWrap(True)
-            text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            text_label.setStyleSheet("""
-                background: palette(alternate-base);
-                border-radius: 8px;
-                padding: 8px;
-                margin-bottom: 4px;
-            """)
-            max_w = max(400, int(self.scroll_area.viewport().width() * 0.85))
-            text_w = max((text_label.fontMetrics().horizontalAdvance(line)
-                          for line in (msg.get("tresc") or "").split("\n")), default=0) + 40
-            text_label.setMaximumWidth(max_w)
-            text_label.setMinimumWidth(min(text_w, max_w))
+            # bąbelek tylko gdy jest tekst
+            if (msg.get("tresc") or "").strip():
+                text_label = QLabel(msg.get("tresc") or "")
+                text_label.setWordWrap(True)
+                text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                text_label.setStyleSheet("""
+                    background: palette(alternate-base);
+                    border-radius: 8px;
+                    padding: 8px;
+                    margin-bottom: 4px;
+                """)
+                max_w = max(400, int(self.scroll_area.viewport().width() * 0.85))
+                text_w = max((text_label.fontMetrics().horizontalAdvance(line)
+                              for line in (msg.get("tresc") or "").split("\n")), default=0) + 40
+                text_label.setMaximumWidth(max_w)
+                text_label.setMinimumWidth(min(text_w, max_w))
 
-            # alignment wrapper
-            wrapper = QHBoxLayout()
-            if sender_id == self.current_pracownik_id:
-                wrapper.addStretch()
-                wrapper.addWidget(text_label)
-            else:
-                wrapper.addWidget(text_label)
-                wrapper.addStretch()
+                wrapper = QHBoxLayout()
+                if sender_id == self.current_pracownik_id:
+                    wrapper.addStretch()
+                    wrapper.addWidget(text_label)
+                else:
+                    wrapper.addWidget(text_label)
+                    wrapper.addStretch()
 
-            group_layout.addLayout(wrapper)
+                group_layout.addLayout(wrapper)
+            for att in attachments.get(msg.get("id"), []):
+                btn = QPushButton(f"📎 {att['nazwa']} ({_format_size(att['rozmiar'])})")
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setToolTip("Kliknij, aby zapisać plik")
+                btn.setStyleSheet("text-align: left; padding: 6px 10px;")
+                btn.clicked.connect(lambda _=False, a=att: self.download_attachment(a))
+                att_wrapper = QHBoxLayout()
+                if sender_id == self.current_pracownik_id:
+                    att_wrapper.addStretch()
+                    att_wrapper.addWidget(btn)
+                else:
+                    att_wrapper.addWidget(btn)
+                    att_wrapper.addStretch()
+                group_layout.addLayout(att_wrapper)
 
         # stretch at the end to push content up if few messages
         self.messages_layout.addStretch()
@@ -416,7 +452,8 @@ class ChatPage(QWidget):
     # ============================================================
     def send_message(self):
         text = self.chat_input.toPlainText().strip()
-        if not text:
+        files = list(self._pending_files)
+        if not text and not files:
             return
 
         if not self.current_konwersacja:
@@ -428,14 +465,57 @@ class ChatPage(QWidget):
             return
 
         try:
-            add_message(self.current_konwersacja, self.pracownik_id, text)
+            payload = []
+            for path in files:
+                with open(path, "rb") as fh:
+                    payload.append({"nazwa": os.path.basename(path), "dane": fh.read()})
+            add_message_with_attachments(self.current_konwersacja, self.pracownik_id, text, payload)
         except Exception as e:
             QMessageBox.critical(self, "Błąd zapisu", f"Nie udało się wysłać wiadomości: {e}")
             return
 
         self.chat_input.clear()
+        self._set_pending_files([])
         # reload messages (keeps grouping)
         self.load_messages()
+
+    def attach_files(self):
+        if self._pending_files:
+            self._set_pending_files([])
+            return
+        paths, _ = QFileDialog.getOpenFileNames(self, "Wybierz pliki do wysłania")
+        too_big = [os.path.basename(p) for p in paths if os.path.getsize(p) > MAX_ATTACHMENT_BYTES]
+        if too_big:
+            QMessageBox.warning(
+                self, "Za duży plik",
+                f"Maksymalny rozmiar pliku to {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB:\n" + "\n".join(too_big))
+            paths = [p for p in paths if os.path.basename(p) not in too_big]
+        self._set_pending_files(paths)
+
+    def _set_pending_files(self, paths):
+        self._pending_files = list(paths)
+        self.pending_label.setVisible(bool(paths))
+        self.pending_label.setText("📎 " + ", ".join(os.path.basename(p) for p in paths))
+        self.btn_attach.setToolTip(
+            "Wyczyść wybrane pliki" if paths else "Dołącz pliki")
+
+    def download_attachment(self, att):
+        try:
+            data = get_attachment_data(att["id"], self.pracownik_id)
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się pobrać pliku: {e}")
+            return
+        if not data:
+            QMessageBox.warning(self, "Brak pliku", "Załącznik nie istnieje.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Zapisz plik", data["nazwa"])
+        if not path:
+            return
+        try:
+            with open(path, "wb") as fh:
+                fh.write(data["dane"])
+        except OSError as e:
+            QMessageBox.critical(self, "Błąd zapisu", f"Nie udało się zapisać pliku: {e}")
 
     # ============================================================
     # CREATE NEW CONVERSATION

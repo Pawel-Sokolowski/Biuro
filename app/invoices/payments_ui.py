@@ -141,7 +141,8 @@ class BankPaymentReview(QDialog):
             self, "Wyciąg MT940",
             f"Transakcje w pliku: {report['all']}\n"
             f"Nowe: {report['new']}\n"
-            f"Już importowane: {report['duplicates']}\n\n"
+            f"Już importowane: {report['duplicates']}\n"
+            f"Pominięte przelewy własne: {report.get('own', 0)}\n\n"
             "Operacje wymagają potwierdzenia na liście przed rozliczeniem.",
         )
         self.refresh()
@@ -192,10 +193,11 @@ class BankPaymentReview(QDialog):
                 seen.add(key)
                 contractor.addItem(invoice.get("buyer") or "(bez nazwy)", _contractor_data(invoice))
             for company in self.companies:
-                key = ("firma", company["id"])
+                kind = company.get("kind", "firma")
+                key = (kind, company["id"])
                 if key not in seen:
                     seen.add(key)
-                    contractor.addItem(company["buyer"], f"firma:{company['id']}")
+                    contractor.addItem(company["buyer"], f"{kind}:{company['id']}")
             if match.get("confident"):
                 kind, value = match["company_key"]
                 contractor.setCurrentIndex(max(0, contractor.findData(f"{kind}:{value}")))
@@ -220,6 +222,7 @@ class BankPaymentReview(QDialog):
             self._restore_choices(idx, saved_choices.get(entry["id"]))
             override.toggled.connect(lambda _checked, row=idx: self._override_filter_changed(row))
             contractor.currentIndexChanged.connect(lambda _index, row=idx: self._contractor_changed(row))
+            contractor.lineEdit().editingFinished.connect(lambda row=idx: self._contractor_text_entered(row))
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, self.COL_SETTLEMENT))
         if self.transactions:
@@ -233,7 +236,10 @@ class BankPaymentReview(QDialog):
             contractor = self.table.cellWidget(row, self.COL_CONTRACTOR)
             amount = self.table.cellWidget(row, self.COL_SETTLEMENT)
             override = self.table.cellWidget(row, self.COL_FILTER)
-            if None in (invoice, contractor, amount, override) or invoice.currentData() is None:
+            if None in (invoice, contractor, amount, override):
+                continue
+            partly_settled = Decimal(str(entry["kwota"])) != Decimal(str(entry["remaining"]))
+            if invoice.currentData() is None and not partly_settled:
                 continue
             saved[entry["id"]] = {
                 "invoice": invoice.currentData(), "contractor": contractor.currentData(),
@@ -245,14 +251,14 @@ class BankPaymentReview(QDialog):
         if not saved:
             return
         invoice_id = saved["invoice"]
-        if not any(item["id"] == invoice_id for item in self.invoices):
-            return
         contractor = self.table.cellWidget(row, self.COL_CONTRACTOR)
         index = contractor.findData(saved["contractor"])
         if index >= 0:
             contractor.setCurrentIndex(index)
         self.table.cellWidget(row, self.COL_FILTER).setChecked(saved["override"])
         self._populate_invoice_choices(row)
+        if invoice_id is None or not any(item["id"] == invoice_id for item in self.invoices):
+            return
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         index = combo.findData(invoice_id)
         if index < 0:
@@ -297,6 +303,17 @@ class BankPaymentReview(QDialog):
     def _override_filter_changed(self, row):
         self._populate_invoice_choices(row)
         self.table.setCurrentCell(row, self.COL_INVOICE)
+
+    def _contractor_text_entered(self, row):
+        combo = self.table.cellWidget(row, self.COL_CONTRACTOR)
+        text = combo.currentText().strip()
+        if not text:
+            return
+        index = combo.findText(text, Qt.MatchFlag.MatchFixedString)
+        if index < 0:
+            index = combo.findText(text, Qt.MatchFlag.MatchContains)
+        if index >= 0 and index != combo.currentIndex():
+            combo.setCurrentIndex(index)
 
     def _contractor_changed(self, row):
         override = self.table.cellWidget(row, self.COL_FILTER)

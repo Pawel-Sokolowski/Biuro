@@ -62,6 +62,10 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
   the requested page with the updated database state. Obsolete completion/error
   callbacks cannot alter the newer request. Applying any completed list payload,
   including a synchronous filter reload, re-enables the paging control.
+- Preserving refreshes of an unchanged list carry forward its pending older-page
+  request, including header/sync completion and synchronous assignment/completion
+  reloads. Repeated refreshes fulfill that page once. Subsequent refreshes keep
+  the loaded range; changed contexts and explicit resets do not inherit paging.
 - Key employee/completed lists by account and filter, independently of the
   opened message's folder, in both synchronous and asynchronous loaders. Body
   completion resolves the current rendered item using its captured row ID.
@@ -91,16 +95,17 @@ installer certification.
 
 ## Validation
 
-- Full locked-runtime run: **745 tests in 90 modules passed**, without skips.
-- Sixty-two review regression cases cover SELECT/FETCH generation races, guarded
+- Full locked-runtime run: **755 tests in 90 modules passed**, without skips.
+- Seventy-two review regression cases cover SELECT/FETCH generation races, guarded
   header/flag/reference writes, atomic retirement/write serialization, checkpoint
   adoption and bounded retries, mail-rule identities, retained/account-wide pages,
   body callbacks, nested confirmation dialogs, notification metadata, missing
   selections, calendar startup and import/deletion concurrency. This includes
-  twenty-one selection/snapshot cases covering duplicate-UID move/delete targets,
+  thirty-one selection/snapshot cases covering duplicate-UID move/delete targets,
   consistent ranges and metadata, stale notification targets, pooled transaction
   settings, real worker completion races, successive read/unread changes and
-  paging controls after synchronous reloads.
+  paging controls after synchronous reloads and preservation of pending older
+  pages across header, sync and assignment/completion refreshes.
 - Original coverage also includes twelve optimization regressions and independent RSA/EC signature cases.
 - Ruff checks for syntax/undefined names (`E9,F63,F7,F82`) passed.
 - Installed-package compatibility and `git diff --check` passed.

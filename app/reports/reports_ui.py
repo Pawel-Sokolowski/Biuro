@@ -641,40 +641,54 @@ class ReportsPage(QWidget):
         if not self._can_import():
             QMessageBox.warning(self, "Import", "Brak uprawnień do importu danych.")
             return
-        path, _ = QFileDialog.getOpenFileName(
-            self, f"Wybierz plik Excel ({kind})", "", "Pliki Excel (*.xlsx)"
-        )
-        if not path:
-            return
-        if kind == "faktury":
-            options = [self.month_start.itemText(i) for i in range(self.month_start.count())]
-            month, ok = QInputDialog.getItem(self, "Miesiąc faktur", "Miesiąc dla faktur bez miesiąca w numerze:", options, 0, False)
-            if not ok:
-                return
-            overwrite = self.chk_overwrite.isChecked()
-            work = lambda: import_dao.import_invoices_file(path, month, overwrite)
-        else:
-            work = lambda: import_dao.import_work_file(path)
+        # Modal dialogs dispatch events. Reserve the workflow before opening
+        # one so a nested invocation cannot supersede or overlap a write job.
         self._import_busy = True
-        self._import_jobs.submit(work, self._import_finished, self._import_failed)
+        submitted = False
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self, f"Wybierz plik Excel ({kind})", "", "Pliki Excel (*.xlsx)"
+            )
+            if not path:
+                return
+            if kind == "faktury":
+                options = [self.month_start.itemText(i) for i in range(self.month_start.count())]
+                month, ok = QInputDialog.getItem(self, "Miesiąc faktur", "Miesiąc dla faktur bez miesiąca w numerze:", options, 0, False)
+                if not ok:
+                    return
+                overwrite = self.chk_overwrite.isChecked()
+                work = lambda: import_dao.import_invoices_file(path, month, overwrite)
+            else:
+                work = lambda: import_dao.import_work_file(path)
+            self._import_jobs.submit(work, self._import_finished, self._import_failed)
+            submitted = True
+        except Exception as exc:
+            self._import_failed(exc)
+        finally:
+            if not submitted:
+                self._import_busy = False
 
     def _import_failed(self, exc):
-        self._import_busy = False
-        QMessageBox.critical(self, "Import", f"Nie udało się zaimportować pliku:\n{exc}")
+        try:
+            QMessageBox.critical(self, "Import", f"Nie udało się zaimportować pliku:\n{exc}")
+        finally:
+            self._import_busy = False
 
     def _import_finished(self, result):
-        self._import_busy = False
-        QMessageBox.information(
-            self, "Import",
-            f"Wczytano wierszy (od 2026): {result['wiersze']}\n"
-            f"Dodano: {result['dodane']}\n"
-            f"Pominięto (już zaimportowane): {result['pominiete']}\n"
-            f"Bez dopasowanej firmy: {result['bez_firmy']}"
-            + (f"\nZaktualizowano cenniki kadr (UoP/UZ/UoD) w firmach: {result['ceny_kadry']}"
-               if result.get("ceny_kadry") else "")
-            + (f"\nUzupełniono ilość dokumentów w widoku miesięcznym: {result['ilosc_dok']}"
-               if result.get("ilosc_dok") else ""),
-        )
+        try:
+            QMessageBox.information(
+                self, "Import",
+                f"Wczytano wierszy (od 2026): {result['wiersze']}\n"
+                f"Dodano: {result['dodane']}\n"
+                f"Pominięto (już zaimportowane): {result['pominiete']}\n"
+                f"Bez dopasowanej firmy: {result['bez_firmy']}"
+                + (f"\nZaktualizowano cenniki kadr (UoP/UZ/UoD) w firmach: {result['ceny_kadry']}"
+                   if result.get("ceny_kadry") else "")
+                + (f"\nUzupełniono ilość dokumentów w widoku miesięcznym: {result['ilosc_dok']}"
+                   if result.get("ilosc_dok") else ""),
+            )
+        finally:
+            self._import_busy = False
 
     def _delete_imported(self):
         from PyQt6.QtWidgets import QInputDialog

@@ -1321,6 +1321,11 @@ class EmailPage(QWidget):
             self._current_message_account_id = None
             self.mail_list.clear()
             self._mail_rows = []
+            # The cursor belongs to displayed rows. Keeping it after replacing
+            # the view lets a failed reload's retry skip the recent messages.
+            self._mail_cursor = None
+            self._mail_context = None
+            self.older_messages.hide()
             self.unread_map.clear()
             self.assign_map = {}
             self.completed_map = set()

@@ -66,6 +66,9 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
   request, including header/sync completion and synchronous assignment/completion
   reloads. Repeated refreshes fulfill that page once. Subsequent refreshes keep
   the loaded range; changed contexts and explicit resets do not inherit paging.
+- A fresh mail load clears its old rows, cursor, context and paging control
+  together. If that load fails, retrying starts from the newest messages. Failed
+  preserving refreshes retain the valid displayed range and can retry its page.
 - Key employee/completed lists by account and filter, independently of the
   opened message's folder, in both synchronous and asynchronous loaders. Body
   completion resolves the current rendered item using its captured row ID.
@@ -79,6 +82,10 @@ Base: `ffef491` (4 November 2026). Fix branch: `fix/review-optimizations`.
 - Start calendar synchronization with the main window, before its first visit.
 - Reject imported-data deletion while an import is running, including an import
   started while the deletion confirmation dialog was open.
+- Reserve the import workflow before file/month dialogs and hold it through
+  worker completion and result notification. Nested dialog events cannot enqueue
+  an import that cancels or overlaps another write. Cancellation, setup/submission
+  failures and notification errors release the reservation so a retry can start.
 
 ## Deployment and limits
 
@@ -95,17 +102,20 @@ installer certification.
 
 ## Validation
 
-- Full locked-runtime run: **755 tests in 90 modules passed**, without skips.
-- Seventy-two review regression cases cover SELECT/FETCH generation races, guarded
+- Full locked-runtime run: **773 tests in 91 modules passed**, without skips.
+- Ninety review regression cases cover SELECT/FETCH generation races, guarded
   header/flag/reference writes, atomic retirement/write serialization, checkpoint
   adoption and bounded retries, mail-rule identities, retained/account-wide pages,
   body callbacks, nested confirmation dialogs, notification metadata, missing
   selections, calendar startup and import/deletion concurrency. This includes
-  thirty-one selection/snapshot cases covering duplicate-UID move/delete targets,
+  thirty-seven selection/snapshot cases covering duplicate-UID move/delete targets,
   consistent ranges and metadata, stale notification targets, pooled transaction
   settings, real worker completion races, successive read/unread changes and
   paging controls after synchronous reloads and preservation of pending older
-  pages across header, sync and assignment/completion refreshes.
+  pages across header, sync and assignment/completion refreshes, plus failed-load
+  retries and their recent-message coverage. Twelve import-workflow cases cover
+  nested file/month dialogs, queued/active workers, result notifications,
+  cancellation, setup/submission errors and deletion during import setup.
 - Original coverage also includes twelve optimization regressions and independent RSA/EC signature cases.
 - Ruff checks for syntax/undefined names (`E9,F63,F7,F82`) passed.
 - Installed-package compatibility and `git diff --check` passed.

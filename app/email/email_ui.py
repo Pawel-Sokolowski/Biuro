@@ -1421,6 +1421,14 @@ class EmailPage(QWidget):
         self.older_messages.setEnabled(True)
         self.older_messages.setVisible(more)
         if unchanged:
+            restore = self.mail_list.model().items.get(restore_id)
+            if restore is not None:
+                parent = restore.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                self.mail_list.setCurrentItem(restore, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
+                self.mail_list.verticalScrollBar().setValue(scroll)
             self._mail_rows = list(rows)
             self.mail_list.blockSignals(False)
             self._refresh_chips()

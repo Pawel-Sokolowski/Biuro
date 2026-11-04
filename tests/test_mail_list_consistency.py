@@ -527,3 +527,88 @@ class MailListConsistencyTests(MailboxFixture):
             self.assertTrue(wait_until(lambda: not self.page._list_jobs._jobs))
         self.assertEqual(len(self.page._mail_rows), 503)
         self.assertIn("503", {row["uid"] for row in self.page._mail_rows})
+
+    def test_fresh_reload_clears_the_previous_cursor_and_paging_controls_immediately(self):
+        self.load(account_wide=False)
+        self.assertIsNotNone(self.page._mail_cursor)
+        with mock.patch.object(self.page._list_jobs, "submit"):
+            self.page._load_mail_async()
+        self.assertEqual(self.page._mail_rows, [])
+        self.assertIsNone(self.page._mail_cursor)
+        self.assertIsNone(self.page._mail_context)
+        self.assertTrue(self.page.older_messages.isHidden())
+
+    def test_failed_fresh_reload_retries_from_the_top_and_includes_recent_messages(self):
+        self.load(account_wide=False)
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async()
+            _, _, failed = submit.call_args.args
+            failed(RuntimeError("reload failed"))
+            storage.save_message_headers(1, self.folder, [{
+                "uid": "503", "message_id": "<recent@review>", "date": "2026-11-02 10:00",
+            }])
+            self.page._load_mail_async(more=True)
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 500)
+        self.assertIn("503", {row["uid"] for row in self.page._mail_rows})
+
+    def test_failed_preserving_refresh_retains_its_valid_range_for_retry(self):
+        self.load(account_wide=False)
+        previous = {row["id"] for row in self.page._mail_rows}
+        cursor, context = self.page._mail_cursor, self.page._mail_context
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(keep_view=True)
+            _, _, failed = submit.call_args.args
+            failed(RuntimeError("refresh failed"))
+            self.assertEqual(self.page._mail_cursor, cursor)
+            self.assertEqual(self.page._mail_context, context)
+            self.assertEqual({row["id"] for row in self.page._mail_rows}, previous)
+            storage.save_message_headers(1, self.folder, [{
+                "uid": "503", "message_id": "<recent@review>", "date": "2026-11-02 10:00",
+            }])
+            self.page._load_mail_async(more=True)
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 503)
+        self.assertIn("503", {row["uid"] for row in self.page._mail_rows})
+
+    def test_late_page_completion_cannot_restore_state_after_a_failed_fresh_reload(self):
+        self.load(account_wide=False)
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            self.page._load_mail_async(more=True)
+            old_work, old_loaded, _ = submit.call_args.args
+            old = old_work()
+            self.page._load_mail_async()
+            _, _, failed = submit.call_args.args
+            failed(RuntimeError("fresh reload failed"))
+            old_loaded(old)
+        self.assertEqual(self.page._mail_rows, [])
+        self.assertIsNone(self.page._mail_cursor)
+        self.assertIsNone(self.page._mail_context)
+        self.assertTrue(self.page.older_messages.isHidden())
+
+    def check_failed_scope_reload(self, *, account=False):
+        self.load(account_wide=False)
+        original_account = self.page.current_account
+        with mock.patch.object(self.page._list_jobs, "submit") as submit:
+            if account:
+                self.page.current_account = {"id": 2, "email": "second@example.com"}
+            else:
+                self.page.current_folder_local = "Archive"
+            self.page._load_mail_async()
+            _, _, failed = submit.call_args.args
+            failed(RuntimeError("new scope failed"))
+            self.page.current_account = original_account
+            self.page.current_folder_local = "INBOX"
+            self.page._load_mail_async(more=True)
+            work, loaded, _ = submit.call_args.args
+            loaded(work())
+        self.assertEqual(len(self.page._mail_rows), 500)
+        self.assertIn("502", {row["uid"] for row in self.page._mail_rows})
+
+    def test_failed_folder_reload_cannot_reuse_the_previous_folders_cursor(self):
+        self.check_failed_scope_reload()
+
+    def test_failed_account_reload_cannot_reuse_the_previous_accounts_cursor(self):
+        self.check_failed_scope_reload(account=True)

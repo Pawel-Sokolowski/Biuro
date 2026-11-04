@@ -1253,13 +1253,25 @@ class EmailPage(QWidget):
         return (self.current_account["id"], self.current_folder_local,
                 self.search_input.text().strip(), self.employee_filter, self.completed_filter)
 
-    def _fetch_mail_data(self, request, before=None, existing=()):
+    def _fetch_mail_data(self, request, before=None, existing=(), through=None):
         account, folder, query, employee, completed = request
         rows, more, cursor = get_mail_page(account, folder, phrase=query, before=before,
                                           employee_id=employee, completed=completed)
-        rows = list(existing) + rows
-        # A new message can arrive while paging; never render the same row twice.
-        rows = list({row["id"]: row for row in rows}.values())
+        if existing:
+            # Retained dicts are snapshots. Re-read their entire loaded range so
+            # read flags, moves, deletions and filter changes cannot be undone.
+            tail = through or min((row.get("data") or "", row["id"]) for row in existing)
+            extra_ids = [row["id"] for row in existing if (row.get("data") or "", row["id"]) < tail]
+            retained, retained_more, retained_cursor = get_mail_page(
+                account, folder, phrase=query, employee_id=employee,
+                completed=completed, through=tail, include_ids=extra_ids,
+            )
+            if retained_cursor is not None and (cursor is None or retained_cursor < cursor):
+                more = retained_more
+                cursor = retained_cursor
+            rows = [*rows, *retained]
+        rows = sorted({row["id"]: row for row in rows}.values(),
+                      key=lambda row: (row.get("data") or "", row["id"]), reverse=True)
         ids = [row["id"] for row in rows]
         return (rows, more, cursor, self._folder_roles(account),
                 get_assignment_map(ids), get_completed_map(ids))
@@ -1269,13 +1281,22 @@ class EmailPage(QWidget):
             return
         request = self._mail_request()
         paging = more and request == self._mail_context
+        existing = tuple(self._mail_rows) if request == self._mail_context and (paging or keep_view) else ()
+        through = self._mail_cursor if existing else None
         if not keep_view and not paging:
             self._load_token += 1
             self._loading_message_key = None
             self.cached_message = None
+            self.current_uid = None
+            self._current_message_row_id = None
+            self._current_message_account_id = None
+            self.mail_list.clear()
+            self._mail_rows = []
+            self.unread_map.clear()
+            self.assign_map = {}
+            self.completed_map = set()
             self._clear_view()
         cursor = self._mail_cursor if paging else None
-        existing = tuple(self._mail_rows) if paging else ()
         self.older_messages.setEnabled(False)
         def loaded(payload):
             if not self.current_account or request != self._mail_request():
@@ -1285,7 +1306,7 @@ class EmailPage(QWidget):
         def failed(exc):
             self.older_messages.setEnabled(True)
             logger.warning("Nie można wczytać poczty: %s", exc)
-        self._list_jobs.submit(lambda: self._fetch_mail_data(request, cursor, existing), loaded, failed)
+        self._list_jobs.submit(lambda: self._fetch_mail_data(request, cursor, existing, through), loaded, failed)
 
     def load_mail_list_from_db(
             self,
@@ -1329,11 +1350,19 @@ class EmailPage(QWidget):
         if _payload is None:
             self._list_jobs.invalidate()
             try:
-                _payload = self._fetch_mail_data(request)
+                existing = tuple(self._mail_rows) if request == self._mail_context else ()
+                _payload = self._fetch_mail_data(request, existing=existing,
+                                                 through=self._mail_cursor if existing else None)
             except Exception:
                 logger.exception("Nie można wczytać listy wiadomości")
                 _payload = ([], False, None, {}, {}, set())
         rows, more, cursor, roles, self.assign_map, self.completed_map = _payload
+        if ensure_row is not None and ensure_row.get("konto_id") == konto_id and not any(row["id"] == ensure_row["id"] for row in rows):
+            rows = [*rows, ensure_row]
+            # Notification targets can be older than the loaded keyset. Include
+            # their labels before rendering and retain them on later refreshes.
+            self.assign_map.update(get_assignment_map([ensure_row["id"]]))
+            self.completed_map.update(get_completed_map([ensure_row["id"]]))
         current_row_id = getattr(self, "_current_message_row_id", None)
         if keep_view and current_row_id is not None and current_row_id not in {row["id"] for row in rows}:
             # A reused UID is a different message. Never restore its predecessor's
@@ -1341,6 +1370,8 @@ class EmailPage(QWidget):
             self._load_token += 1
             self._loading_message_key = None
             self.current_uid = selected_uid = None
+            self._current_message_row_id = None
+            self._current_message_account_id = None
             selected_uids.clear()
             self.cached_message = None
             self._clear_view()
@@ -1348,8 +1379,6 @@ class EmailPage(QWidget):
         self._mail_cursor = cursor
         self._mail_context = request
         self.older_messages.setVisible(more)
-        if ensure_row is not None and ensure_row.get("konto_id") == konto_id and not any(row["id"] == ensure_row["id"] for row in rows):
-            rows = [*rows, ensure_row]
 
         by_id = {
             e["id"]: e
@@ -1998,6 +2027,7 @@ class EmailPage(QWidget):
 
         row_id = item.data(0, ROLE_ROW_ID)
         self._current_message_row_id = row_id
+        self._current_message_account_id = konto_id
 
         by_id = {
             employee["id"]: employee
@@ -2541,9 +2571,17 @@ class EmailPage(QWidget):
     def _current_folder_role(self) -> Optional[str]:
         return self._role_of(self.current_folder_local) if self.current_folder_local else None
 
-    def _targets(self) -> List[Tuple[QTreeWidgetItem, str, str]]:
+    def _target_row_id(self, item, folder, uid):
+        if item is not None:
+            return item.data(0, ROLE_ROW_ID)
+        if (self.current_account and self.current_account["id"] == getattr(self, "_current_message_account_id", None)
+                and folder == self.current_folder_local and str(uid) == str(self.current_uid)):
+            return getattr(self, "_current_message_row_id", None)
+        return None
+
+    def _targets(self) -> List[Tuple[Optional[QTreeWidgetItem], str, str]]:
         refs = self._selected_refs()
-        if not refs and self.current_uid and self.current_folder_local:
+        if not refs and self.current_uid and self.current_folder_local and self._target_row_id(None, self.current_folder_local, self.current_uid):
             refs = [(None, self.current_folder_local, self.current_uid)]
         return refs
 
@@ -2586,7 +2624,10 @@ class EmailPage(QWidget):
         by_folder: Dict[str, List[str]] = {}
         expected = {}
         for item, folder, uid in refs:
-            expected.setdefault(folder, {})[str(uid)] = item.data(0, ROLE_ROW_ID)
+            row_id = self._target_row_id(item, folder, uid)
+            if row_id is None:
+                return
+            expected.setdefault(folder, {})[str(uid)] = row_id
             by_folder.setdefault(folder, []).append(uid)
 
         def work():
@@ -2633,7 +2674,9 @@ class EmailPage(QWidget):
                     != QMessageBox.StandardButton.Yes:
                 return
 
-            expected = {(folder, str(uid)): item.data(0, ROLE_ROW_ID) for item, folder, uid in refs}
+            expected = {(folder, str(uid)): self._target_row_id(item, folder, uid) for item, folder, uid in refs}
+            if any(row_id is None for row_id in expected.values()):
+                return
 
             def work():
                 for _, folder, uid in refs:

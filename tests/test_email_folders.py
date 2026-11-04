@@ -25,7 +25,7 @@ _app = QApplication.instance() or QApplication(["biuro-tests"])
 
 class MailboxNameTests(unittest.TestCase):
     def test_utf7_roundtrip(self):
-        for text in ("Łącka-Zabłocka Olga", "Urząd", "A & B", "Sokołowski Paweł"):
+        for text in ("Łącka-Zabłocka Olga", "Urząd", "A & B", "Kołodziej Jan"):
             self.assertEqual(decode_mailbox_utf7(encode_mailbox_utf7(text)), text)
 
     def test_decode_server_names(self):
@@ -39,9 +39,9 @@ class MailboxNameTests(unittest.TestCase):
         self.assertEqual(info["name"], "INBOX.Sent")
         self.assertEqual(info["delimiter"], ".")
         self.assertIn("\\Sent", info["flags"])
-        slash = parse_list_response(b'(\\HasNoChildren) "/" INBOX/3 Pracownicy/Sokolowski')
+        slash = parse_list_response(b'(\\HasNoChildren) "/" INBOX/3 Pracownicy/Kolodziej')
         self.assertEqual(slash["delimiter"], "/")
-        self.assertEqual(slash["name"], "INBOX/3 Pracownicy/Sokolowski")
+        self.assertEqual(slash["name"], "INBOX/3 Pracownicy/Kolodziej")
 
     def test_parse_list_literal(self):
         info = parse_list_response((b'(\\HasNoChildren) "." {9}', b"INBOX.a b"))
@@ -70,7 +70,7 @@ class FolderTreeTests(DbTestCase):
                 ("INBOX", ""),
                 ("INBOX.Sent", "\\Sent"),
                 ("INBOX.3 Pracownicy", ""),
-                ("INBOX.3 Pracownicy.Sokołowski Paweł".replace("ł", "&AUI-"), ""),
+                ("INBOX.3 Pracownicy.Kołodziej Jan".replace("ł", "&AUI-"), ""),
                 ("INBOX.10 Inne", ""),
                 ("INBOX.2 Dostawcy", ""),
             ]
@@ -82,7 +82,7 @@ class FolderTreeTests(DbTestCase):
         labels = [c["label"] for c in children[1:]]
         self.assertEqual(labels, ["2 Dostawcy", "3 Pracownicy", "10 Inne"])
         employees = children[2]["children"]
-        self.assertEqual(employees[0]["label"], "Sokołowski Paweł")
+        self.assertEqual(employees[0]["label"], "Kołodziej Jan")
 
     def test_save_folder_updates_metadata_and_special_lookup(self):
         from app.db.dao_conn import get_conn
@@ -114,6 +114,36 @@ class CacheTests(DbTestCase):
 
 
 class EmailPageTests(DbTestCase):
+    def test_filters_apply_to_current_folder(self):
+        from app.db.dao_conn import get_conn
+        from app.email.email_storage import save_folder
+
+        conn = get_conn()
+        conn.execute("INSERT INTO konta_email (id, email) VALUES (1, 'a@b.pl')")
+        conn.commit()
+        conn.close()
+        save_folder(1, "INBOX", "INBOX", ".", "")
+        save_folder(1, "INBOX.Faktury", "Faktury", ".", "")
+        calls = []
+        with mock.patch.object(
+            email_ui, "get_email_accounts_for_employee",
+            return_value=[{"id": 1, "email": "a@b.pl"}],
+        ), mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
+                mock.patch.object(email_ui, "MailBrowser", QTextBrowser), \
+                mock.patch.object(email_ui, "get_setting", return_value="{}"), \
+                mock.patch.object(email_ui, "apply_rules_to_folder",
+                                  side_effect=lambda konto, folder: calls.append((konto, folder)) or 0), \
+                mock.patch.object(email_ui.EmailPage, "_run_async",
+                                  lambda self, fn, done: done(fn(), None)), \
+                mock.patch.object(email_ui.EmailPage, "_after_change"), \
+                mock.patch.object(email_ui.QMessageBox, "information"):
+            page = email_ui.EmailPage(5)
+            page.current_folder_local = "INBOX.Faktury"
+            page._update_apply_filters_action()
+            self.assertIn("Faktury", page.apply_filters_action.text())
+            page.on_apply_filters()
+            self.assertEqual(calls, [(1, "INBOX.Faktury")])
+
     def test_folder_visibility_is_saved_and_applied_to_tree(self):
         from app.db.dao_conn import get_conn
         from app.email.email_storage import save_folder
@@ -249,8 +279,8 @@ class EmailPageTests(DbTestCase):
         from app.email import email_sync
 
         self.assertEqual(clean_folder_label("3 Pracownicy"), "Pracownicy")
-        emps = [{"imie": "Paweł", "nazwisko": "Sokołowski"}]
-        self.assertEqual(employee_label(clean_folder_label("EM-KA Sokolowski Paweł"), emps), "Paweł Sokołowski")
+        emps = [{"imie": "Jan", "nazwisko": "Kołodziej"}]
+        self.assertEqual(employee_label(clean_folder_label("EM-KA Kolodziej Jan"), emps), "Jan Kołodziej")
 
         class FakeImap:
             calls = []

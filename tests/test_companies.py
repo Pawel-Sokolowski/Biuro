@@ -11,17 +11,17 @@ class PelUplTests(DbTestCase):
     def test_initials_listed_per_company(self):
         firma = self.make_company("ABC")
         a = self.make_employee("a@x.pl", "Anna", "Zielińska")
-        b = self.make_employee("b@x.pl", "Paweł", "Sokołowski")
+        b = self.make_employee("b@x.pl", "Jan", "Kołodziej")
         set_pelnomocnictwa(firma, "PEL", [a, b])
         set_pelnomocnictwa(firma, "UPL", [b])
         row = next(c for c in list_companies() if c["id"] == firma)
-        self.assertEqual(sorted(row["pel"].split()), ["AZ", "PS"])
-        self.assertEqual(row["upl"], "PS")
+        self.assertEqual(sorted(row["pel"].split()), ["AZ", "JK"])
+        self.assertEqual(row["upl"], "JK")
 
     def test_set_replaces_previous_assignments(self):
         firma = self.make_company()
         a = self.make_employee("a@x.pl", "Anna", "Zielińska")
-        b = self.make_employee("b@x.pl", "Paweł", "Sokołowski")
+        b = self.make_employee("b@x.pl", "Jan", "Kołodziej")
         set_pelnomocnictwa(firma, "PEL", [a, b])
         set_pelnomocnictwa(firma, "PEL", [b])
         self.assertEqual(get_pelnomocnictwa(firma)["PEL"], [b])

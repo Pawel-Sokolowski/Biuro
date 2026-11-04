@@ -1,6 +1,7 @@
 import logging
 import math
 from datetime import datetime
+from decimal import Decimal
 
 from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QRunnable, QThreadPool
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
@@ -75,7 +76,8 @@ def _fmt_date(value):
 
 
 def _kind_label(invoice):
-    return "Korekta" if invoice.get("rodzaj") == "korekta" else "Faktura"
+    return {"korekta": "Korekta", "zaliczkowa": "Zaliczkowa", "proforma": "Proforma"}.get(
+        invoice.get("rodzaj"), "Faktura")
 
 
 class QuantityDelegate(QStyledItemDelegate):
@@ -241,11 +243,14 @@ class FakturyPage(QWidget):
     DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
     ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Podgląd", "Kwota netto", "Kwota brutto",
-                      "Data zapłaty", "Data eksportu", "Numer KSeF", "Status KSeF", "E-mail faktury"]
+                      "Zapłacono", "Pozostało", "Data zapłaty", "Data eksportu", "Numer KSeF", "Status KSeF",
+                      "E-mail faktury"]
     ISSUED_NUMBER_COLUMN = 4
     ISSUED_PREVIEW_COLUMN = 5
-    ISSUED_PAID_COLUMN = 8
-    ISSUED_KSEF_COLUMN = 10
+    ISSUED_PAID_AMOUNT_COLUMN = 8
+    ISSUED_REMAINING_COLUMN = 9
+    ISSUED_PAID_COLUMN = 10
+    ISSUED_KSEF_COLUMN = 12
     SETTLEMENT_HEADERS = ["ID", "Data zapłaty", "Numer faktury", "Data wystawienia", "Nabywca", "Kwota",
                           "Sposób", "Przelew / tytuł", "Zaksięgował"]
 
@@ -333,7 +338,6 @@ class FakturyPage(QWidget):
         controls.addWidget(self.btn_contractors)
         self.btn_generate_all = QPushButton("Generuj faktury")
         self.btn_generate_all.clicked.connect(self._on_generate_clicked)
-        controls.addWidget(self.btn_generate_all)
         btn_refresh = QPushButton("Odśwież")
         btn_refresh.clicked.connect(self.refresh)
         controls.addWidget(btn_refresh)
@@ -355,7 +359,8 @@ class FakturyPage(QWidget):
         self.btn_delete.clicked.connect(self._delete_selected_draft)
         self.btn_saldeo_correction = QPushButton("Korekta w Saldeo...")
         self.btn_saldeo_correction.clicked.connect(self._prepare_saldeo_correction)
-        for button in (self.btn_edit, self.btn_header, self.btn_issue_ksef, self.btn_export, self.btn_saldeo_correction, self.btn_delete):
+        for button in (self.btn_generate_all, self.btn_export, self.btn_edit, self.btn_header, self.btn_issue_ksef,
+                       self.btn_saldeo_correction, self.btn_delete):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -425,7 +430,7 @@ class FakturyPage(QWidget):
         self.btn_ksef.clicked.connect(self._edit_ksef_number)
         self.btn_ksef_download = QPushButton("Pobierz z KSeF")
         self.btn_ksef_download.clicked.connect(self._download_from_ksef)
-        self.btn_ksef_download_one = QPushButton("Pobierz fakturę z KSeF...")
+        self.btn_ksef_download_one = QPushButton("Pobierz fakturę z KSeF")
         self.btn_ksef_download_one.setToolTip("Pobierz lub sprawdź jedną fakturę (albo faktury jednej firmy wybranej w filtrze)")
         self.btn_ksef_download_one.clicked.connect(self._download_one_from_ksef)
         self.btn_send_ksef = QPushButton("Wyślij zaznaczone do KSeF")
@@ -438,20 +443,27 @@ class FakturyPage(QWidget):
         self.btn_cash.clicked.connect(self._mark_cash_payment)
         self.btn_delete_issued = QPushButton("Anuluj fakturę")
         self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
-        for button in (self.btn_view, self.btn_reexport, self.btn_jpk, self.btn_correction, self.btn_ksef,
-                       self.btn_delete_issued):
+        self.btn_view.setText("Podgląd faktury")
+        self.btn_jpk.setText("JPK_V7M")
+        self.btn_bank.setText("Rozlicz MT940")
+        self.btn_cash.setText("Rozlicz gotówką")
+        self.btn_email_pdf = QPushButton("Wyślij pdf e-mailem")
+        self.btn_email_pdf.clicked.connect(self._email_selected_pdfs)
+        self.btn_trash = QPushButton("Przenieś do kosza")
+        self.btn_trash.setToolTip("Przenosi zaznaczone faktury (także wystawione i z KSeF) do kosza; można je przywrócić.")
+        self.btn_trash.clicked.connect(self._trash_selected_issued)
+        self.btn_trash_bin = QPushButton("Kosz…")
+        self.btn_trash_bin.clicked.connect(self._open_trash)
+        for button in (self.btn_trash, self.btn_trash_bin):
+            button.setVisible(is_administrator(self.pracownik_id))
+        for button in (self.btn_view, self.btn_jpk, self.btn_correction, self.btn_delete_issued,
+                       self.btn_ksef_download, self.btn_ksef_download_one, self.btn_send_ksef,
+                       self.btn_bank, self.btn_cash, self.btn_email_pdf, self.btn_trash, self.btn_trash_bin):
             buttons.addWidget(button)
+        for button in (self.btn_reexport, self.btn_ksef, self.btn_status_ksef):
+            button.setVisible(False)
         buttons.addStretch()
         layout.addLayout(buttons)
-        settlement_buttons = QHBoxLayout()
-        for button in (self.btn_ksef_download, self.btn_ksef_download_one, self.btn_send_ksef, self.btn_status_ksef,
-                       self.btn_bank, self.btn_cash):
-            settlement_buttons.addWidget(button)
-        self.btn_email_pdf = QPushButton("Wyślij PDF e-mailem")
-        self.btn_email_pdf.clicked.connect(self._email_selected_pdfs)
-        settlement_buttons.addWidget(self.btn_email_pdf)
-        settlement_buttons.addStretch()
-        layout.addLayout(settlement_buttons)
 
         self.send_pdf_after_ksef = QCheckBox("Po przyjęciu w KSeF wyślij PDF do klienta")
         layout.addWidget(self.send_pdf_after_ksef)
@@ -475,7 +487,8 @@ class FakturyPage(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # nabywca wypełnia wolne miejsce
         widths = {
             0: 52, 1: 72, 3: 72, 4: 155, self.ISSUED_PREVIEW_COLUMN: 82,
-            6: 88, 7: 88, 8: 100, 9: 142, self.ISSUED_KSEF_COLUMN: 360, 11: 150, 12: 150,
+            6: 88, 7: 88, 8: 88, 9: 88, self.ISSUED_PAID_COLUMN: 100, 11: 142,
+            self.ISSUED_KSEF_COLUMN: 360, 13: 150, 14: 150,
         }
         for column, width in widths.items():
             self.issued_table.setColumnWidth(column, width)
@@ -594,10 +607,25 @@ class FakturyPage(QWidget):
         if not ksef_configured():
             QMessageBox.warning(self, "KSeF", "Skonfiguruj NIP oraz certyfikat z kluczem prywatnym w ustawieniach. Token nie jest używany.")
             return
-        month = self._current_month()
+        month = self._current_period()
+        firma_id = self._selected_company_id()
+        buyer_nip, company_label = None, "wszystkich firm"
+        if firma_id is not None:
+            conn = get_conn()
+            try:
+                row = conn.execute("SELECT nip, nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
+            finally:
+                conn.close()
+            nip = "".join(ch for ch in str((row or {}).get("nip") or "") if ch.isdigit()) if row else ""
+            if len(nip) != 10:
+                QMessageBox.warning(self, "KSeF", "Wybrana firma nie ma poprawnego NIP-u.")
+                return
+            buyer_nip, company_label = nip, f"firmy {row['nazwa']} (NIP {nip})"
         answer = QMessageBox.question(
             self, "Pobierz faktury sprzedaży z KSeF",
-            f"Pobrać faktury sprzedaży za {month}?\n\n"
+            f"Pobrać faktury sprzedaży {company_label} za {month}?\n\n"
+            + ("Cały rok zostanie pobrany osobno miesiąc po miesiącu (limit zakresu KSeF).\n\n"
+               if len(month) == 4 else "") +
             "Firma zostanie dopasowana po NIP-ie. Dane istniejącej faktury o tym samym numerze "
             "zostaną zastąpione treścią z KSeF. Historia płatności pozostanie bez zmian.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -605,7 +633,7 @@ class FakturyPage(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._start_ksef_download(month)
+        self._start_ksef_download(month, **({"buyer_nip": buyer_nip} if buyer_nip else {}))
 
     def _download_one_from_ksef(self):
         """Pobiera/sprawdza w KSeF jedną fakturę lub wszystkie faktury jednej firmy z bieżącego miesiąca."""
@@ -616,7 +644,7 @@ class FakturyPage(QWidget):
             QMessageBox.warning(self, "KSeF", "Skonfiguruj NIP oraz certyfikat z kluczem prywatnym w ustawieniach. Token nie jest używany.")
             return
         firma_id = self._selected_company_id()
-        month = self._current_month()
+        month = self._current_period()
         if firma_id is None:
             number, ok = QInputDialog.getText(
                 self, "Pobierz fakturę z KSeF",
@@ -1018,11 +1046,14 @@ class FakturyPage(QWidget):
             self.issued_table.insertRow(row)
             paid = payments.get(inv["id"], [])
             paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
+            paid_sum = sum((Decimal(str(p["kwota"] or 0)) for p in paid), Decimal("0"))
+            remaining = max(Decimal(str(inv["kwota_brutto"] or 0)) - paid_sum, Decimal("0"))
             values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
-                      f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}", paid_text,
+                      f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
+                      f"{paid_sum:.2f}", f"{remaining:.2f}", paid_text,
                       inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
             for column, value in enumerate(values):
-                self.issued_table.setItem(row, column, _cell(value, column in (6, 7)))
+                self.issued_table.setItem(row, column, _cell(value, column in (6, 7, 8, 9)))
             if paid:
                 lines = "\n".join(f"{_fmt_date(p['data_zaplaty'])} — {p['kwota']:.2f} zł" for p in paid)
                 self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Zapłacono:\n" + lines)
@@ -1258,6 +1289,30 @@ class FakturyPage(QWidget):
                     QMessageBox.warning(self, "Faktura", str(exc))
         self.refresh()
 
+    def _trash_selected_issued(self):
+        ids = self._selected_ids(self.issued_table)
+        if not ids:
+            QMessageBox.information(self, "Kosz", "Zaznacz faktury do przeniesienia do kosza.")
+            return
+        if QMessageBox.question(
+            self, "Kosz", f"Przenieść zaznaczone faktury ({len(ids)}) do kosza?\n"
+            "Faktury znikną z list i raportów, ale można je przywrócić przyciskiem „Kosz…”.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        from app.db.dao_invoices import trash_invoice
+        for invoice_id in ids:
+            try:
+                trash_invoice(invoice_id, self.pracownik_id)
+            except (ValueError, PermissionError) as exc:
+                QMessageBox.warning(self, "Kosz", str(exc))
+        self.refresh()
+
+    def _open_trash(self):
+        from app.invoices.invoice_trash_dialog import InvoiceTrashDialog
+        InvoiceTrashDialog(self.pracownik_id, self).exec()
+        self.refresh()
+
     def _delete_selected_issued(self):
         ids = self._selected_ids(self.issued_table)
         if not ids:
@@ -1265,7 +1320,7 @@ class FakturyPage(QWidget):
             return
         if not self._can_export():
             return
-        reason, ok = QInputDialog.getText(self, "Anulowanie faktur", "Przyczyna anulowania (tylko dokumenty niewprowadzone do obrotu):")
+        reason, ok = QInputDialog.getText(self, "Anulowanie faktur", "Przyczyna anulowania (faktura wróci do roboczych bez numeru; dokumenty z numerem KSeF wymagają korekty):")
         if not ok or not reason.strip():
             return
         from app.db.dao_invoices import cancel_invoice

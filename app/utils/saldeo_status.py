@@ -54,6 +54,83 @@ def parse_subject(subject: str) -> Optional[Tuple[str, str, str]]:
     return match.group("name").strip(), f"{int(match.group('year')):04d}-{month:02d}", column
 
 
+def _mark_complete(cur, firma_id: int, month: str) -> None:
+    """Po wysłaniu wyników zaznacza „Komplet”, jeśli nie był uzupełniony."""
+    import datetime
+    cur.execute(
+        "UPDATE statusy_miesieczne SET dokumenty_dostarczone = 1, "
+        "data_dostarczenia = COALESCE(NULLIF(data_dostarczenia, ''), %s) "
+        "WHERE firma_id = %s AND miesiac = %s AND COALESCE(dokumenty_dostarczone, 0) = 0",
+        (datetime.date.today().isoformat(), firma_id, month),
+    )
+
+
+def rescan_saldeo_emails(months: Optional[set] = None) -> Dict[str, int]:
+    """Jednorazowo przegląda wszystkie maile z rozliczeniami i uzupełnia etapy.
+
+    Domyślnie obejmuje rozliczenia za bieżący i poprzedni miesiąc (maile z
+    bieżącego miesiąca dotyczą zwykle poprzedniego). Nie zmienia znacznika
+    ostatnio przetworzonej wiadomości.
+    """
+    import datetime
+    if months is None:
+        today = datetime.date.today()
+        previous = (today.replace(day=1) - datetime.timedelta(days=1))
+        months = {today.strftime("%Y-%m"), previous.strftime("%Y-%m")}
+    result = {"checked": 0, "matched": 0, "unknown_company": 0, "changed": 0}
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, nazwa_saldeo_firmy AS nazwa FROM firmy "
+            "WHERE COALESCE(TRIM(nazwa_saldeo_firmy), '') <> ''"
+        )
+        companies = {_fold(r["nazwa"]): r["id"] for r in cur.fetchall()}
+        cur.execute(
+            "SELECT temat FROM wiadomosci_email WHERE COALESCE(usunieta, 0) = 0 AND temat ILIKE %s ORDER BY id",
+            ("%Rozliczenie%",),
+        )
+        for row in cur.fetchall():
+            parsed = parse_subject(row["temat"] or "")
+            if not parsed or parsed[1] not in months:
+                continue
+            result["checked"] += 1
+            firma_id = companies.get(_fold(parsed[0]))
+            if not firma_id:
+                result["unknown_company"] += 1
+                continue
+            result["matched"] += 1
+            for column in parsed[2].split(","):
+                cur.execute(
+                    f"""
+                    INSERT INTO statusy_miesieczne (firma_id, miesiac, {column})
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (firma_id, miesiac)
+                    DO UPDATE SET {column} = excluded.{column}
+                    WHERE statusy_miesieczne.{column} IS DISTINCT FROM excluded.{column}
+                    """,
+                    (firma_id, parsed[1], ETAP),
+                )
+                result["changed"] += cur.rowcount or 0
+            _mark_complete(cur, firma_id, parsed[1])
+        conn.commit()
+    finally:
+        conn.close()
+    return result
+
+
+_startup_rescan_done = False
+
+
+def rescan_on_startup() -> Optional[Dict[str, int]]:
+    """Raz na uruchomienie programu uzupełnia statusy z maili o rozliczeniach."""
+    global _startup_rescan_done
+    if _startup_rescan_done:
+        return None
+    _startup_rescan_done = True
+    return rescan_saldeo_emails()
+
+
 def apply_saldeo_emails() -> int:
     """Przetwarza nowe maile z Saldeo; zwraca liczbę zmienionych statusów."""
     try:
@@ -66,8 +143,8 @@ def apply_saldeo_emails() -> int:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, nazwa_saldeo, id AS firma_id FROM firmy "
-            "WHERE COALESCE(TRIM(nazwa_saldeo), '') <> ''"
+            "SELECT id, nazwa_saldeo_firmy AS nazwa_saldeo, id AS firma_id FROM firmy "
+            "WHERE COALESCE(TRIM(nazwa_saldeo_firmy), '') <> ''"
         )
         companies: Dict[str, int] = {_fold(r["nazwa_saldeo"]): r["firma_id"] for r in cur.fetchall()}
 
@@ -98,6 +175,7 @@ def apply_saldeo_emails() -> int:
                     (firma_id, parsed[1], ETAP),
                 )
                 changed += cur.rowcount or 0
+            _mark_complete(cur, firma_id, parsed[1])
         conn.commit()
     finally:
         conn.close()

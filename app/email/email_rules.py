@@ -143,13 +143,16 @@ def _norm(value: Any) -> str:
     return (value or "").casefold()
 
 
-def rule_matches(rule: Dict[str, Any], header: Dict[str, Any]) -> bool:
+def rule_matches(rule: Dict[str, Any], header: Dict[str, Any], via_recipient: bool = False) -> bool:
+    # via_recipient: warunki "od/nadawca" sprawdzane wśród odbiorców (To i DW),
+    # by rozpoznać wiadomość wychodzącą do klienta albo przesłaną przez Saldeo do klienta.
     """Wszystkie wypeĹ‚nione pola reguĹ‚y muszÄ… pasowaÄ‡ (reguĹ‚y z treĹ›ciÄ… wiadomoĹ›ci pomijamy)."""
     if _norm(rule.get("tresc_zawiera")):
         return False
+    sender = header.get("recipient") if via_recipient else header.get("sender")
     checks = (
-        ("od", header.get("sender")),
-        ("nadawca_zawiera", header.get("sender")),
+        ("od", sender),
+        ("nadawca_zawiera", sender),
         ("do", header.get("recipient")),
         ("temat_zawiera", header.get("subject")),
     )
@@ -161,6 +164,16 @@ def rule_matches(rule: Dict[str, Any], header: Dict[str, Any]) -> bool:
             if needle not in _norm(haystack):
                 return False
     return used
+
+
+def find_rule(rules: List[Dict[str, Any]], header: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Reguła klienta (jego adres wśród odbiorców) wygrywa z regułą po nadawcy, np. Saldeo."""
+    for rule in rules:
+        if rule_matches(rule, header, via_recipient=True) or (
+            _norm(rule.get("do")).strip() and rule_matches(rule, header)
+        ):
+            return rule
+    return next((rule for rule in rules if rule_matches(rule, header)), None)
 
 
 def _active_rules(konto_id: int) -> List[Dict[str, Any]]:
@@ -207,12 +220,11 @@ def apply_rules(konto_id: int, folder: str, headers: List[Dict[str, Any]]) -> in
         return 0
     moves: Dict[str, List[str]] = {}
     for header in headers:
-        for rule in rules:
-            if rule["target"] != folder and rule_matches(rule, header):
-                if rule.get("oznacz_jako_przeczytane") and not header.get("is_seen"):
-                    mark_read_remote(konto_id, folder, header["uid"])
-                moves.setdefault(rule["target"], []).append(str(header["uid"]))
-                break
+        rule = find_rule(rules, header)
+        if rule is not None and rule["target"] != folder:
+            if rule.get("oznacz_jako_przeczytane") and not header.get("is_seen"):
+                mark_read_remote(konto_id, folder, header["uid"])
+            moves.setdefault(rule["target"], []).append(str(header["uid"]))
     moved = 0
     for target, uids in moves.items():
         try:

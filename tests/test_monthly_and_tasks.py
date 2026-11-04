@@ -124,7 +124,7 @@ class MonthlyStatusTests(DbTestCase):
         save_month_status(firma, "2026-01", {"etap": "Zatwierdzone", "dokumenty_dostarczone": 1})
         save_month_status(firma, "2026-01", {"etap": "Wysłane wyniki", "dokumenty_dostarczone": 0})
         row = get_month_status(firma, "2026-01")
-        self.assertEqual((row["etap"], row["dokumenty_dostarczone"]), ("Wysłane wyniki", 0))
+        self.assertEqual((row["etap"], row["dokumenty_dostarczone"]), ("Wysłane wyniki", 1))
 
 
 class MonthlyContractDefaultsTests(DbTestCase):

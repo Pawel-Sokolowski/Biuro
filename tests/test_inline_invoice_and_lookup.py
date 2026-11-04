@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QWidget, QTableWidgetItem, QLineEdit, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QWidget, QTableWidgetItem, QLineEdit, QFileDialog, QMessageBox, QPushButton
 from app.invoices import faktury_ui as ui
 from app.invoices.manual_invoice_dialog import KontrahentDialog
 from app.invoices.invoice_preview import InvoicePreviewDialog
@@ -31,6 +31,7 @@ class InlineInvoiceTests(unittest.TestCase):
         self.addCleanup(self.page.close)
         self.page.pracownik_id = 1
         self.page.tab_robocze = QWidget(self.page)
+        self.page.btn_generate_all = QPushButton("Generuj faktury", self.page)
         self.page._build_tab_robocze()
         self.page.refresh = self.page._show_draft_positions
         mocks = [patch.object(ui, "get_invoice_by_id", side_effect=lambda _: dict(self.invoice)),

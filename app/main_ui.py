@@ -728,6 +728,9 @@ class OfficeManagerApp(QMainWindow):
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
                 logic.start_general_timer(dialog.activity())
+                reload_rows = getattr(self.page_monthly, "_reload_rows", None)
+                if callable(reload_rows):
+                    reload_rows()
         except Exception as exc:
             logger.warning("Stoper ogólny: błąd", exc_info=True)
             QMessageBox.warning(self, "Stoper", f"Nie udało się zmienić stanu stopera: {exc}")

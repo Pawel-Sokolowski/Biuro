@@ -39,26 +39,29 @@ class InvoiceHistoryTests(DbTestCase):
         with self.assertRaises(ValueError):
             set_invoice_number(second, number)
 
-    def test_cancel_retains_complete_document_and_audit(self):
+    def test_cancel_returns_invoice_to_drafts_without_number_and_keeps_audit(self):
         invoice = self.draft()
         mark_exported([invoice], 1)
         before = get_invoice_by_id(invoice)
         cancel_invoice(invoice, 1, "Dokument niewprowadzony do obrotu")
         after = get_invoice_by_id(invoice)
-        self.assertEqual(after['numer'], before['numer'])
-        self.assertEqual(after['status'], 'anulowana')
+        self.assertFalse(after['numer'])
+        self.assertEqual(after['status'], 'robocza')
+        self.assertFalse(after['eksportowana'])
+        self.assertIn(invoice, [i['id'] for i in list_invoices(1, False)])
+        self.assertNotIn(invoice, [i['id'] for i in list_invoices(1, True)])
         with get_conn() as conn:
             archived = conn.execute('SELECT document_json FROM faktury_archiwum WHERE faktura_id=%s', (invoice,)).fetchone()
             self.assertEqual(json.loads(archived[0])['numer'], before['numer'])
-            self.assertEqual(conn.execute("SELECT uzytkownik_id FROM audit_log WHERE akcja='anulowanie'").fetchone()[0], 1)
-        with self.assertRaises(InvoiceLockedError):
-            delete_issued_invoice(invoice)
-        with self.assertRaises(InvoiceLockedError):
-            set_invoice_number(invoice, 'ZMIANA')
-        for sql in ('DELETE FROM faktury WHERE id=%s', "UPDATE faktury SET numer='ZMIANA' WHERE id=%s"):
-            with self.assertRaises(psycopg.Error):
-                with get_conn() as conn:
-                    conn.execute(sql, (invoice,))
+            audit = conn.execute("SELECT uzytkownik_id, szczegoly FROM audit_log WHERE akcja='anulowanie'").fetchone()
+            self.assertEqual(audit[0], 1)
+            self.assertIn(before['numer'], audit[1])
+        # Zwykła zmiana wystawionej faktury nadal jest blokowana przez trigger.
+        other = self.draft("Inny")
+        mark_exported([other], 1)
+        with self.assertRaises(psycopg.Error):
+            with get_conn() as conn:
+                conn.execute("UPDATE faktury SET numer='ZMIANA' WHERE id=%s", (other,))
 
     def test_cancel_releases_number_for_another_invoice(self):
         first = self.draft("Anulowany")
@@ -68,7 +71,7 @@ class InvoiceHistoryTests(DbTestCase):
 
         second = self.draft("Nowy klient")
         self.assertEqual(assign_invoice_number(second), number)
-        self.assertEqual(get_invoice_by_id(first)["numer"], number)
+        self.assertFalse(get_invoice_by_id(first)["numer"])
 
     def test_cancel_requires_access_to_the_locked_invoice(self):
         invoice = self.draft()
@@ -77,7 +80,16 @@ class InvoiceHistoryTests(DbTestCase):
                 patch("app.db.dao_invoices.can_access_invoice", return_value=False):
             with self.assertRaises(PermissionError):
                 cancel_invoice(invoice, 999, "Niedozwolone")
-        self.assertIsNone(get_invoice_by_id(invoice)["cancelled_at"])
+        self.assertTrue(get_invoice_by_id(invoice)["eksportowana"])
+
+    def test_invoice_with_ksef_number_cannot_be_cancelled(self):
+        invoice = self.draft()
+        mark_exported([invoice], 1)
+        with get_conn() as conn:
+            conn.execute("UPDATE faktury SET ksef_numer='5260250274-20261104-AAAAAA-BB' WHERE id=%s", (invoice,))
+        with self.assertRaises(InvoiceLockedError):
+            cancel_invoice(invoice, 1, "Pomyłka")
+        self.assertTrue(get_invoice_by_id(invoice)["numer"])
 
     def test_ui_issues_without_a_file_dialog(self):
         from app.invoices.faktury_ui import FakturyPage

@@ -34,6 +34,14 @@ def invoice(invoice_id, company_id, number, buyer, **kwargs):
 
 
 class IngContractorParserTests(unittest.TestCase):
+    def test_name_continued_in_field_33_is_joined(self):
+        cases = (("Usługi transportowo spedycyjne", "Jan Kowalski", "Usługi transportowo spedycyjne Jan Kowalski"),
+                 ("Biuro Rachunkowe EM-", "KA Spółka z o.o.", "Biuro Rachunkowe EM-KA Spółka z o.o."))
+        for first, second, expected in cases:
+            with self.subTest(expected=expected):
+                text = ing_statement(name=first).replace("UL. PRZYKŁADOWA 1", second)
+                self.assertEqual(parse_ing_mt940(text.encode("cp1250"))[0]["contractor"], expected)
+
     def test_repeated_86_and_multiline_purpose_are_separate_from_sender_and_account(self):
         for marker in ("~", "?", ">"):
             with self.subTest(marker=marker):
@@ -79,6 +87,14 @@ class IngContractorParserTests(unittest.TestCase):
 
 
 class ContractorMatchingTests(unittest.TestCase):
+    def test_bank_name_matches_short_or_full_name_by_fragments(self):
+        rows = [invoice(1, 10, "FV/1/10/2026", "Jan Kowalski"), invoice(2, 20, "FV/2/10/2026", "INNA FIRMA")]
+        rows[0]["buyer_full_name"] = "Usługi transportowo spedycyjne i inne Jan Kowalski"
+        match = match_invoice_contractor({"tytul": "Zaplata", "kontrahent": "Biuro EM-KA Jan Kowalski"}, rows)
+        self.assertTrue(match["confident"])
+        self.assertEqual(match["company_key"], ("firma", 10))
+        match = match_invoice_contractor({"tytul": "Zaplata", "kontrahent": "Usługi transportowo spedycyjne"}, rows[:1])
+        self.assertTrue(match["confident"])  # ucięta nazwa banku pasuje do pełnej nazwy
     def test_exact_september_invoice_wins_over_different_person_payer_name(self):
         transaction = parse_ing_mt940(ing_statement().encode("cp1250"))[0]
         rows = [invoice(1, 10, "FV/0091/09/2026", "FIRMA SP.J."),

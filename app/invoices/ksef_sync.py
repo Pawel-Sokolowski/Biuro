@@ -530,10 +530,46 @@ def _take_match(
     return matches[0]
 
 
+def _merge_sync_results(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {key: [] for key in (
+        "dopasowane", "utworzone", "zaktualizowane", "pominiete", "niedopasowane", "niedopasowane_szczegoly")}
+    merged["znalezione"] = 0
+    for part in parts:
+        for key in merged:
+            if key == "znalezione":
+                merged[key] += int(part.get(key) or 0)
+            else:
+                merged[key].extend(part.get(key) or [])
+    return merged
+
+
+def months_of_period(period: str, today: Optional[datetime] = None) -> List[str]:
+    """'RRRR-MM' -> [miesiąc]; 'RRRR' -> kolejne miesiące roku (bez przyszłych)."""
+    if len(period) == 7:
+        return [period]
+    today = today or datetime.now(timezone.utc)
+    year = int(period[:4])
+    last = 12 if year < today.year else (today.month if year == today.year else 0)
+    return [f"{year:04d}-{month:02d}" for month in range(1, last + 1)]
+
+
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None,
                progress=None, **filters) -> Dict[str, Any]:
-    """miesiac w formacie RRRR-MM; pobiera faktury sprzedaży wystawione w tym miesiącu."""
-    start = datetime.strptime(miesiac, "%Y-%m").replace(tzinfo=timezone.utc)
-    end = (start + timedelta(days=32)).replace(day=1)
-    return sync_issued_invoices(start, end - timedelta(seconds=1), client=client, xml_dir=xml_dir,
-                                progress=progress, **filters)
+    """miesiac: 'RRRR-MM' albo 'RRRR'. Cały rok jest pobierany osobno miesiąc po miesiącu,
+    bo KSeF ogranicza zakres pojedynczego zapytania do 3 miesięcy."""
+    months = months_of_period(miesiac)
+    if len(miesiac) != 7:
+        if not months:
+            raise KsefError("Nie można pobierać faktur z przyszłego roku.")
+        client = client or client_from_settings()
+    parts = []
+    for index, month in enumerate(months):
+        start = datetime.strptime(month, "%Y-%m").replace(tzinfo=timezone.utc)
+        end = (start + timedelta(days=32)).replace(day=1)
+        month_progress = progress
+        if progress and len(months) > 1:
+            def month_progress(done, total, text, _month=month, _index=index):
+                progress(done, total, f"[{_month}, {_index + 1}/{len(months)}] {text}")
+        parts.append(sync_issued_invoices(start, end - timedelta(seconds=1), client=client, xml_dir=xml_dir,
+                                          progress=month_progress, **filters))
+    return parts[0] if len(parts) == 1 else _merge_sync_results(parts)

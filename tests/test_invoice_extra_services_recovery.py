@@ -144,9 +144,13 @@ class ExtraServicesInvoiceRecoveryTests(DbTestCase):
         mark_exported([original], 1)
         cancel_invoice(original, 1, "Do ponownego wystawienia")
 
-        self.assertIsNone(get_invoice_for_company_month(self.firma, self.MONTH))
+        # Anulowana faktura wraca do roboczych bez numeru.
+        returned = get_invoice_for_company_month(self.firma, self.MONTH)
+        self.assertEqual(returned["id"], original)
+        self.assertIsNone(returned["numer"])
+        self.assertEqual(returned["status"], "robocza")
         replacement = self._generate()
-        self.assertNotEqual(replacement, original)
+        self.assertEqual(replacement, original)
         services = [p for p in self._positions(replacement) if p.get("usluga_id") == self.service]
         self.assertEqual(len(services), 1)
         self.assertEqual(services[0]["netto"], 60.0)

@@ -92,6 +92,52 @@ class CompanyTimerRecordsTests(DbTestCase):
         self.assertEqual(len(list_company_timers(self.firma)), 3)
         self.assertEqual(delete_company_timers(self.firma, [(SOURCE_TIMER, self.timer_ks)], self.emp), 1)
 
+    def test_edit_changes_time_and_department_and_adjusts_monthly_totals(self):
+        from app.db.dao_timers import update_company_timer
+        self.assertTrue(update_company_timer(self.firma, SOURCE_TIMER, self.timer_ks, "kadry", "Poprawka", 1800, self.emp))
+        self.assertEqual(self._status_seconds(), (1400, 2700))
+        row = next(r for r in list_company_timers(self.firma) if r["id"] == self.timer_ks)
+        self.assertEqual((row["dzial"], row["opis"], row["sekundy"]), ("kadry", "Poprawka", 1800))
+
+    def test_edit_other_department_and_import_record(self):
+        from app.db.dao_timers import update_company_timer
+        update_company_timer(self.firma, SOURCE_TIMER, self.timer_kadry, "dodatkowe", "", 60, self.emp)
+        self.assertEqual(self._status_seconds(), (5000, 300))
+        update_company_timer(self.firma, SOURCE_IMPORT, self.imported, "ogolne", "Inne sprawy", 120, self.emp)
+        row = next(r for r in list_company_timers(self.firma) if r["zrodlo"] == SOURCE_IMPORT)
+        self.assertEqual((row["dzial"], row["sekundy"]), ("ogolne", 120))
+
+    def test_edit_rejects_anonymous_other_company_and_bad_department(self):
+        from app.db.dao_timers import update_company_timer
+        with self.assertRaises(PermissionError):
+            update_company_timer(self.firma, SOURCE_TIMER, self.timer_ks, "kadry", "", 1, None)
+        with self.assertRaises(ValueError):
+            update_company_timer(self.firma, SOURCE_TIMER, self.timer_ks, "xyz", "", 1, self.emp)
+        self.assertFalse(update_company_timer(self.firma, SOURCE_TIMER, self.timer_other, "kadry", "", 1, self.emp))
+        self.assertEqual(self._status_seconds(), (5000, 900))
+
+    def test_edit_to_extra_activity_stores_catalogue_service(self):
+        from app.db.dao_timers import add_extra_service_to_catalogue, update_company_timer
+        service = add_extra_service_to_catalogue("Zmiana adresu", self.emp)
+        self.assertEqual(add_extra_service_to_catalogue("zmiana adresu", self.emp), service)
+        update_company_timer(self.firma, SOURCE_TIMER, self.timer_ks, "dodatkowe", "", 600, self.emp, service)
+        row = next(r for r in list_company_timers(self.firma) if r["id"] == self.timer_ks)
+        self.assertEqual((row["usluga_id"], row["usluga"]), (service, "Zmiana adresu"))
+        update_company_timer(self.firma, SOURCE_TIMER, self.timer_ks, "kadry", "", 600, self.emp, service)
+        row = next(r for r in list_company_timers(self.firma) if r["id"] == self.timer_ks)
+        self.assertIsNone(row["usluga_id"])
+        with self.assertRaises(PermissionError):
+            add_extra_service_to_catalogue("X", None)
+
+    def test_records_dialog_lists_and_deletes(self):
+        from app.monthly_view.timer_records_dialog import TimerRecordsDialog
+        dialog = TimerRecordsDialog(self.firma, self.emp)
+        self.assertEqual(dialog.table.rowCount(), 3)
+        dialog.table.selectRow(0)
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            dialog.delete_selected()
+        self.assertEqual(dialog.table.rowCount(), 2)
+
     def test_unknown_source_rolls_back_whole_deletion(self):
         with self.assertRaises(ValueError):
             delete_company_timers(self.firma, [(SOURCE_TIMER, self.timer_ks), ("xyz", 1)], 1)
@@ -159,6 +205,36 @@ class StopAllTimersOnExitTests(DbTestCase):
         self.assertGreaterEqual(rows[0][0], 120)
         self.assertGreaterEqual(total, 120)
         self.assertIsNone(logic.aktywna_firma_stoper_ks)
+
+
+class TimerExclusivityTests(DbTestCase):
+    def setUp(self):
+        super().setUp()
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+        self.emp = self.make_employee("ola@x.pl", "Ola", "Nowak")
+        self.firma = self.make_company("Gama")
+        self.logic = MonthlyViewLogic(self.emp)
+
+    def _count(self, typ):
+        conn = get_conn()
+        try:
+            return conn.execute("SELECT COUNT(*) FROM czasomierze WHERE typ = %s", (typ,)).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_starting_general_timer_stops_company_timer(self):
+        self.logic.toggle_stoper(self.firma, "ksiegowosc")
+        self.logic.start_general_timer({})
+        self.assertIsNone(self.logic.aktywna_firma_stoper_ks)
+        self.assertTrue(self.logic.is_general_timer_running())
+        self.assertEqual(self._count("ksiegowosc"), 1)
+
+    def test_starting_company_timer_stops_general_timer(self):
+        self.logic.start_general_timer({})
+        self.logic.toggle_stoper(self.firma, "kadry")
+        self.assertFalse(self.logic.is_general_timer_running())
+        self.assertEqual(self.logic.aktywna_firma_stoper_kadry, self.firma)
+        self.assertEqual(self._count("ogolne"), 1)
 
 
 if __name__ == "__main__":

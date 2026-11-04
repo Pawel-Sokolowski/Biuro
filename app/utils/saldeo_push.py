@@ -45,7 +45,7 @@ def mark_documents_complete(name: str, month: str, today: Optional[datetime.date
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, nazwa_saldeo FROM firmy WHERE COALESCE(TRIM(nazwa_saldeo), '') <> ''"
+            "SELECT id, nazwa_saldeo_firmy AS nazwa_saldeo FROM firmy WHERE COALESCE(TRIM(nazwa_saldeo_firmy), '') <> ''"
         )
         firma_id = next((r["id"] for r in cur.fetchall() if _fold(r["nazwa_saldeo"]) == _fold(name)), None)
         if firma_id is None:

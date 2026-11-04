@@ -62,6 +62,7 @@ FIRMA_FIELDS = [
     "fakturowac_ksiegowosc", "fakturowac_kadry",
     "stala_kwota_ksiegowosc", "stala_kwota_kadry",
     "nazwa_saldeo",
+    "nazwa_saldeo_firmy",
 
     "adres_doreczen_elektronicznych",
     "urzad_skarbowy",
@@ -451,6 +452,7 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
     # (actor_id=None) korzystają z osobnych, zaufanych ścieżek.
     if actor_id is not None and not is_administrator(actor_id):
         data.pop("nazwa_saldeo", None)
+        data.pop("nazwa_saldeo_firmy", None)
     from app.companies.company_names import clean_company_name
 
     for name_field in ("nazwa", "nazwa_skrocona"):

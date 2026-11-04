@@ -128,6 +128,15 @@ class CompaniesSettings(QWidget):
             btn_saldeo.clicked.connect(self._import_saldeo_contractors)
             btn_row.addWidget(btn_saldeo)
 
+            btn_saldeo_names = QPushButton("Importuj nazwy firm Saldeo (maile)")
+            btn_saldeo_names.setToolTip("Kolumny: Nazwa firmy, Nazwa skrócona, Login (emka-NIP)")
+            btn_saldeo_names.clicked.connect(self._import_saldeo_company_names)
+            btn_row.addWidget(btn_saldeo_names)
+
+            btn_saldeo_rescan = QPushButton("Sprawdź maile Saldeo (bieżący miesiąc)")
+            btn_saldeo_rescan.setToolTip("Jednorazowo przegląda maile z rozliczeniami i uzupełnia „Wysłane wyniki”")
+            btn_saldeo_rescan.clicked.connect(self._rescan_saldeo_emails)
+            btn_row.addWidget(btn_saldeo_rescan)
         btn_roles = QPushButton("Importuj przypisania księgowych/kadrowych")
         btn_roles.clicked.connect(self._import_role_assignments)
         btn_row.addWidget(btn_roles)
@@ -379,6 +388,53 @@ class CompaniesSettings(QWidget):
             summary += "\n\nOstrzeżenia:\n" + "\n".join(result["warnings"][:15])
         QMessageBox.information(self, "Import Saldeo", summary)
         self._refresh()
+
+    def _import_saldeo_company_names(self):
+        from app.utils.saldeo_contractors_import import import_saldeo_company_names
+
+        if not is_administrator(self.pracownik_id):
+            QMessageBox.warning(self, "Saldeo", "Ta funkcja wymaga uprawnień administratora.")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Wybierz plik z nazwami firm w Saldeo", "", "Pliki (*.xlsx *.csv)")
+        if not path:
+            return
+        try:
+            result = import_saldeo_company_names(path, actor_id=self.pracownik_id)
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd importu Saldeo", str(exc))
+            return
+        summary = (
+            f"Wiersze: {result['total']}\n"
+            f"Zaktualizowano: {result['updated']}\n"
+            f"Bez zmian: {result['unchanged']}\n"
+            f"Nie znaleziono firmy o NIP z loginu: {result['missing_company']}\n"
+            f"Niejednoznaczne: {result['ambiguous']}\n"
+            f"Login bez NIP: {result['invalid_login']}\n"
+            f"Puste nazwy: {result['empty_name']}"
+        )
+        if result["warnings"]:
+            summary += "\n\nOstrzeżenia:\n" + "\n".join(result["warnings"][:15])
+        QMessageBox.information(self, "Import Saldeo", summary)
+        self._refresh()
+
+    def _rescan_saldeo_emails(self):
+        from app.utils.saldeo_status import rescan_saldeo_emails
+
+        if not is_administrator(self.pracownik_id):
+            QMessageBox.warning(self, "Saldeo", "Ta funkcja wymaga uprawnień administratora.")
+            return
+        try:
+            result = rescan_saldeo_emails()
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd sprawdzania maili Saldeo", str(exc))
+            return
+        QMessageBox.information(
+            self, "Maile Saldeo",
+            f"Sprawdzone maile z rozliczeniami: {result['checked']}\n"
+            f"Dopasowane do firm: {result['matched']}\n"
+            f"Nieznana nazwa firmy w Saldeo: {result['unknown_company']}\n"
+            f"Uzupełnione statusy: {result['changed']}")
 
     def _import_role_assignments(self):
         from app.utils.import_assignments import import_role_assignments_from_file

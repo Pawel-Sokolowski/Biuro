@@ -13,12 +13,15 @@ from typing import Any
 import mt940
 
 from app.db.dao_conn import get_conn
-from app.db.dao_invoices import can_access_invoice
+from app.db.dao_invoices import can_access_invoice, create_draft_after_payment
 from app.security.authorization import can, is_administrator
 
 
 class PaymentError(ValueError):
     pass
+
+
+PAYABLE_KINDS = ("faktura", "zaliczkowa", "proforma")
 
 
 def _allowed(actor_id: int) -> bool:
@@ -56,6 +59,10 @@ def _normalize_account(value: Any) -> str:
     return value if re.fullmatch(r"\d{26}", value) else ""
 
 
+def _looks_like_address(text: str) -> bool:
+    return bool(re.search(r"\b(?:ul|al|pl|os)\b\.?\s|\d", text, re.IGNORECASE))
+
+
 def _description_details(raw_text: str) -> dict[str, str]:
     """Pola ING :86: (~, ? lub >); 20–25 to tytuł, 32 nazwa, 38 rachunek."""
     fields: dict[str, list[str]] = {}
@@ -71,7 +78,14 @@ def _description_details(raw_text: str) -> dict[str, str]:
         title = " ".join(part for part in (operation_text, remittance) if part)
     if re.fullmatch(r"\d{3}", title):
         title = ""
-    contractor = " ".join(fields.get("32", []))
+    contractor = ""
+    for code in ("32", "33"):
+        for part in fields.get(code, []):
+            # Pole 33 bywa ciągiem dalszym nazwy, ale w części eksportów zawiera adres.
+            if not part or (code == "33" and _looks_like_address(part)):
+                continue
+            # Nazwa bywa przecięta w środku wyrazu przy myślniku (np. "EM-" + "KA").
+            contractor = f"{contractor}{part}" if contractor.endswith("-") else f"{contractor} {part}".strip()
     if not contractor:
         name = re.search(r"/(?:NAME|NAZWA)/(.+?)(?=/[A-Z]{2,8}/|$)", raw_text, re.IGNORECASE)
         contractor = " ".join(name[1].split()) if name else ""
@@ -262,6 +276,8 @@ def list_invoice_choices(
                    COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
                    COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, k.nip, '') AS nip,
                    COALESCE(f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa) AS buyer_full_name,
+                   f.nazwa_skrocona AS buyer_short_name, i.nabywca_pelna AS buyer_invoice_name,
+                   k.nazwa AS buyer_contractor_name,
                    f.konto_bankowe AS buyer_account,
                    CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i
@@ -275,7 +291,7 @@ def list_invoice_choices(
             LEFT JOIN (
                 SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
             ) p ON p.faktura_id = i.id
-            WHERE i.rodzaj = 'faktura' AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
+            WHERE i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma') AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
               AND CAST(i.kwota_brutto AS NUMERIC(14,2)) > COALESCE(p.paid, 0)
             ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
             """
@@ -331,9 +347,13 @@ def _contractor_name_matches(bank_name: str, invoice_name: str) -> bool:
         return False
     if bank_name == invoice_name:
         return True
-    bank_tokens = {token for token in bank_name.split() if len(token) >= 2}
-    invoice_tokens = {token for token in invoice_name.split() if len(token) >= 2}
-    return len(invoice_tokens) >= 2 and invoice_tokens.issubset(bank_tokens)
+    stop = {"SP", "Z", "O", "J", "K", "SA", "S", "A", "I", "W", "ZOO", "SPOLKA"}
+    bank_tokens = {token for token in bank_name.split() if len(token) >= 2 and token not in stop}
+    invoice_tokens = {token for token in invoice_name.split() if len(token) >= 2 and token not in stop}
+    if len(invoice_tokens) >= 2 and invoice_tokens.issubset(bank_tokens):
+        return True
+    # Bank często ucina nazwę, więc dopuszczamy też odwrotny kierunek.
+    return len(bank_tokens) >= 2 and bank_tokens.issubset(invoice_tokens)
 
 
 def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
@@ -378,7 +398,8 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     name = _normalize_contractor_name(transaction.get("kontrahent") or transaction.get("contractor") or details["contractor"])
     name_keys = {_contractor_key(inv) for inv in invoices if name and any(
         _contractor_name_matches(name, candidate)
-        for candidate in (inv.get("buyer"), inv.get("buyer_full_name"))
+        for candidate in (inv.get("buyer"), inv.get("buyer_full_name"), inv.get("buyer_short_name"),
+                          inv.get("buyer_invoice_name"), inv.get("buyer_contractor_name"))
     )}
     return resolved(name_keys, "Dopasowano kontrahenta po nazwie nadawcy.") if name_keys else unresolved
 
@@ -438,7 +459,7 @@ def get_invoice_payment_summary(invoice_id: int, actor_id: int) -> dict[str, Any
         invoice = conn.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
         if not invoice or not can_access_invoice(actor_id, invoice["firma_id"]):
             raise PaymentError("Nie znaleziono dostępnej faktury.")
-        if invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
+        if invoice["rodzaj"] not in PAYABLE_KINDS or not invoice["eksportowana"]:
             raise PaymentError("Rozliczać można tylko wystawione faktury.")
         payments = [dict(row) for row in conn.execute(
             "SELECT * FROM faktury_platnosci WHERE faktura_id = %s ORDER BY data_zaplaty, id",
@@ -461,7 +482,7 @@ def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
             SELECT i.id, i.firma_id, i.numer, i.kwota_brutto,
                    p.id AS payment_id, p.kwota, p.data_zaplaty, p.sposob
             FROM faktury i LEFT JOIN faktury_platnosci p ON p.faktura_id = i.id
-            WHERE i.miesiac = %s AND i.rodzaj = 'faktura'
+            WHERE i.miesiac = %s AND i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma')
               AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL AND i.firma_id IS NOT NULL
             ORDER BY i.id, p.data_zaplaty, p.id
         """, (month,)).fetchall()
@@ -506,7 +527,7 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
             raise PaymentError("Rozliczać można tylko zwykły wpływ, bez storna i zwrotów.")
         if invoice["cancelled_at"]:
             raise PaymentError("Faktura jest anulowana.")
-        if transfer["kwota"] <= 0 or invoice["rodzaj"] != "faktura" or not invoice["eksportowana"]:
+        if transfer["kwota"] <= 0 or invoice["rodzaj"] not in PAYABLE_KINDS or not invoice["eksportowana"]:
             raise PaymentError("Można rozliczyć tylko wpływ na właściwą fakturę.")
         already_transfer = conn.execute(
             "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE transakcja_id = %s",
@@ -528,6 +549,7 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
             """,
             (invoice_id, transaction_id, transfer["data_operacji"], amount, actor_id),
         )
+        create_draft_after_payment(conn, invoice_id)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -546,7 +568,7 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
     conn = get_conn()
     try:
         inv = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
-        if not inv or inv["rodzaj"] != "faktura" or not can_access_invoice(actor_id, inv["firma_id"]):
+        if not inv or inv["rodzaj"] not in PAYABLE_KINDS or not can_access_invoice(actor_id, inv["firma_id"]):
             raise PaymentError("Nie znaleziono dostępnej faktury.")
         if inv["cancelled_at"]:
             raise PaymentError("Faktura jest anulowana.")
@@ -565,6 +587,7 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
             VALUES (%s, %s, %s, 'gotowka', %s)
             """, (invoice_id, when, payment, actor_id),
         )
+        create_draft_after_payment(conn, invoice_id)
         conn.commit()
     except Exception:
         conn.rollback()

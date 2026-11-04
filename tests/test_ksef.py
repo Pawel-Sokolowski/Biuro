@@ -136,6 +136,21 @@ class KsefRateLimitTests(unittest.TestCase):
             client._request("POST", "/sessions/online/X/invoices", token="access", json={})
         self.assertEqual(client.http.calls, 1)
 
+    def test_very_long_retry_after_gives_up_instead_of_waiting(self):
+        client = self.client([FakeResponse(status=429, headers={"Retry-After": "300"})])
+        with self.assertRaisesRegex(ksef_client.KsefError, "ograniczył zapytania na 300 s"):
+            list(client.query_invoices(dt.datetime(2026, 10, 1)))
+        self.assertEqual(client.http.calls, 1)
+        client._sleep.assert_not_called()
+
+    def test_short_retry_after_is_still_waited_out(self):
+        client = self.client([
+            FakeResponse(status=429, headers={"Retry-After": "60"}),
+            FakeResponse(data={"hasMore": False, "invoices": []}),
+        ])
+        self.assertEqual(list(client.query_invoices(dt.datetime(2026, 10, 1))), [])
+        self.assertTrue(any(call.args == (60.0,) for call in client._sleep.call_args_list))
+
     def test_expired_access_token_reauthenticates_and_retries_read_once(self):
         client = self.client([FakeResponse(status=401), FakeResponse(content=b"<Faktura/>")])
         client._access_valid_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)

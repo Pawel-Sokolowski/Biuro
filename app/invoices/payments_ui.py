@@ -61,7 +61,7 @@ class BankPaymentReview(QDialog):
         self.companies = []
         self.transactions = []
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
-        self.resize(1400, 700)
+        self.resize(1600, 1000)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             "Wybierz przelew, sprawdź proponowaną fakturę i kwotę, "
@@ -209,7 +209,7 @@ class BankPaymentReview(QDialog):
             completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
             self.table.setCellWidget(idx, self.COL_CONTRACTOR, contractor)
             choices = QComboBox(self.table)
-            # Sugestia jest tylko wizualna; nie wybieramy faktury automatycznie.
+            # Sugestia (★) jest podstawiana, ale nie rozliczana bez zatwierdzenia.
             self.table.setCellWidget(idx, self.COL_INVOICE, choices)
             amount = QLineEdit(money_text(entry["remaining"]), self.table)
             self.table.setCellWidget(idx, self.COL_SETTLEMENT, amount)
@@ -220,6 +220,7 @@ class BankPaymentReview(QDialog):
             self.table.setCellWidget(idx, self.COL_FILTER, override)
             self._populate_invoice_choices(idx)
             self._restore_choices(idx, saved_choices.get(entry["id"]))
+            self._preselect_suggestion(idx)
             override.toggled.connect(lambda _checked, row=idx: self._override_filter_changed(row))
             contractor.currentIndexChanged.connect(lambda _index, row=idx: self._contractor_changed(row))
             contractor.lineEdit().editingFinished.connect(lambda row=idx: self._contractor_text_entered(row))
@@ -240,6 +241,9 @@ class BankPaymentReview(QDialog):
                 continue
             partly_settled = Decimal(str(entry["kwota"])) != Decimal(str(entry["remaining"]))
             if invoice.currentData() is None and not partly_settled:
+                continue
+            if (invoice.currentData() == invoice.property("auto_selected") and not partly_settled
+                    and amount.text() == invoice.property("auto_amount")):
                 continue
             saved[entry["id"]] = {
                 "invoice": invoice.currentData(), "contractor": contractor.currentData(),
@@ -324,11 +328,26 @@ class BankPaymentReview(QDialog):
 
     def _invoice_choice_changed(self, row):
         self.table.setCurrentCell(row, self.COL_INVOICE)
+        self.table.cellWidget(row, self.COL_INVOICE).setProperty("auto_selected", None)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
         invoice = next((item for item in self.invoices if item["id"] == invoice_id), None)
         if invoice is not None:
             amount = min(Decimal(str(self.transactions[row]["remaining"])), Decimal(str(invoice["balance"])))
             self.table.cellWidget(row, self.COL_SETTLEMENT).setText(money_text(amount))
+
+    def _preselect_suggestion(self, row):
+        """Podstawia fakturę oznaczoną gwiazdką; rozliczenie nadal wymaga zatwierdzenia."""
+        combo = self.table.cellWidget(row, self.COL_INVOICE)
+        if combo.currentData() is not None or combo.count() < 2 or not combo.itemText(1).startswith("★"):
+            return
+        invoice = next((item for item in self.invoices if item["id"] == combo.itemData(1)), None)
+        if invoice is None:
+            return
+        combo.setCurrentIndex(1)
+        combo.setProperty("auto_selected", combo.currentData())
+        amount = min(Decimal(str(self.transactions[row]["remaining"])), Decimal(str(invoice["balance"])))
+        self.table.cellWidget(row, self.COL_SETTLEMENT).setText(money_text(amount))
+        combo.setProperty("auto_amount", money_text(amount))
 
     def _confirm(self):
         selected = self.table.currentRow()

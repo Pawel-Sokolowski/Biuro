@@ -36,11 +36,11 @@ sys.excepthook = excepthook
 if __name__ == "__main__":
     if "--migrate" in sys.argv:
         # Biuro.exe --migrate: aktualizacja schematu bazy (bez okna logowania)
-        from app.db.schema import init_db, schema_is_current
+        from app.db.schema import upgrade_database, schema_is_current
         from PyQt6.QtWidgets import QMessageBox
         app = QApplication(sys.argv)
         try:
-            init_db()
+            upgrade_database()
             ok = schema_is_current()
             msg = "Baza danych jest aktualna." if ok else "Aktualizacja bazy nie powiodła się."
         except Exception as exc:

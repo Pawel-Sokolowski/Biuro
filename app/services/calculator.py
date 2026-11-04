@@ -3,6 +3,7 @@ import psycopg
 from typing import Dict, Any
 from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
+from app.invoices.positions import decimal_value, money
 
 
 
@@ -117,7 +118,7 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
     # defensywne rzutowania
     def _f(x):
         try:
-            return float(x) if x is not None else 0.0
+            return decimal_value(x)
         except Exception:
             return 0.0
 
@@ -148,20 +149,11 @@ def oblicz_miesieczny_koszt(firma_id: int, miesiac: str) -> Dict[str, float]:
     pricing = _get_pricing_for_key(klucz)
 
     limit = int(firma.get("limit_dokumentow") or 0)
-    za_przekroczenie = float(pricing.get("cena_za_dokument_ponad_limit") or 0.0)
-    netto_podstawowe = float(pricing.get("netto") or pricing.get("cena_netto_ksiegowosc") or 0.0)
-    zdrowotna = float(pricing.get("zdrowotna") or 0.0)
-
-    extra_cost = 0.0
-    if limit and docs_count > limit:
-        extra_docs = docs_count - limit
-        extra_cost = extra_docs * za_przekroczenie
-
-    netto = netto_podstawowe + extra_cost
-    brutto = float(pricing.get("brutto") or pricing.get("cena_brutto_ksiegowosc") or (netto * 1.23))
-
-    return {
-        "netto": round(netto, 2),
-        "brutto": round(brutto, 2),
-        "zdrowotna": round(zdrowotna, 2),
-    }
+    unit = decimal_value(pricing.get("cena_za_dokument_ponad_limit"))
+    base = decimal_value(pricing.get("netto") or pricing.get("cena_netto_ksiegowosc"))
+    extra = max(0, docs_count - limit) * unit if limit else decimal_value(0)
+    netto = money(base + extra)
+    brutto = decimal_value(pricing.get("brutto") or pricing.get("cena_brutto_ksiegowosc") or netto * decimal_value("1.23"))
+    # Preserve the public reporting/UI API; calculations above remain decimal.
+    return {"netto": float(netto), "brutto": float(money(brutto)),
+            "zdrowotna": float(money(decimal_value(pricing.get("zdrowotna"))))}

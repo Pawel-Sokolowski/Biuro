@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from email.message import Message
+from imapclient import imap_utf7
 
 
 SERVER_TO_LOCAL = {
@@ -57,20 +58,11 @@ def parse_mailbox_name(raw: bytes) -> str:
 
 
 def decode_mailbox_utf7(name: str) -> str:
-    """Dekoduje nazwę skrzynki IMAP (zmodyfikowany UTF-7, RFC 3501) do tekstu."""
-
-    def _chunk(match: "re.Match[str]") -> str:
-        body = match.group(1)
-        if not body:
-            return "&"
-        raw = body.replace(",", "/")
-        raw += "=" * (-len(raw) % 4)
-        try:
-            return base64.b64decode(raw).decode("utf-16-be")
-        except Exception:
-            return match.group(0)
-
-    return re.sub(r"&([^-]*)-", _chunk, name or "")
+    """Decode IMAP modified UTF-7, preserving malformed server names for display."""
+    try:
+        return imap_utf7.decode((name or "").encode("ascii"))
+    except (UnicodeError, ValueError):
+        return name or ""
 
 
 def friendly_folder_name(name: str) -> str:
@@ -82,24 +74,7 @@ def friendly_folder_name(name: str) -> str:
 
 
 def encode_mailbox_utf7(text: str) -> str:
-    """Koduje tekst do zmodyfikowanego UTF-7 używanego w nazwach skrzynek IMAP."""
-    out: List[str] = []
-    pending: List[str] = []
-
-    def flush() -> None:
-        if pending:
-            raw = "".join(pending).encode("utf-16-be")
-            out.append("&" + base64.b64encode(raw).decode().rstrip("=").replace("/", ",") + "-")
-            pending.clear()
-
-    for ch in text:
-        if " " <= ch <= "~":
-            flush()
-            out.append("&-" if ch == "&" else ch)
-        else:
-            pending.append(ch)
-    flush()
-    return "".join(out)
+    return imap_utf7.encode(text or "").decode("ascii")
 
 
 def quote_mailbox(name: str) -> str:

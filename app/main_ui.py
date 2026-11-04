@@ -537,33 +537,29 @@ class OfficeManagerApp(QMainWindow):
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
         self.page_dashboard = DashboardPage(self.pracownik_id)
-        self.page_companies = CompanyUI(self.pracownik_id, self)
+        # Mail/chat monitoring and the timer remain available before their tab opens.
         self.page_email = EmailPage(self.pracownik_id)
         self.page_email.folder_visibility_changed.connect(self._update_email_badge)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_chat.unread_changed.connect(self._set_chat_badge)
         self.page_chat._refresh_unread_marks()
-        self.page_faktury = FakturyPage(self.pracownik_id)
-        self.page_raporty = ReportsPage(self.pracownik_id)
-        self.page_tasks = TasksPage(self.pracownik_id)
-        self.page_calendar = CalendarPage(self.pracownik_id)
-        self.page_settings = GlobalSettingsPage(self.pracownik_id, True, self)
-
-        self.pages.addWidget(self.page_dashboard)
-        self.pages.addWidget(self.page_monthly)
-        self.pages.addWidget(self.page_companies)
-        self.pages.addWidget(self.page_email)
-        self.pages.addWidget(self.page_chat)
-        self.pages.addWidget(self.page_faktury)
-        self.pages.addWidget(self.page_raporty)
-        self.pages.addWidget(self.page_tasks)
-        self.pages.addWidget(self.page_calendar)
-        self.pages.addWidget(self.page_settings)
+        self._loaded_pages = {}
+        self._lazy_pages = {
+            "page_companies": (2, lambda: CompanyUI(self.pracownik_id, self)),
+            "page_faktury": (5, lambda: FakturyPage(self.pracownik_id)),
+            "page_raporty": (6, lambda: ReportsPage(self.pracownik_id)),
+            "page_tasks": (7, lambda: TasksPage(self.pracownik_id)),
+            "page_calendar": (8, lambda: CalendarPage(self.pracownik_id)),
+            "page_settings": (9, lambda: GlobalSettingsPage(self.pracownik_id, True, self)),
+        }
+        eager = {0: self.page_dashboard, 1: self.page_monthly, 3: self.page_email, 4: self.page_chat}
+        for row in range(10):
+            self.pages.addWidget(eager[row] if row in eager else QWidget())
 
         self.sidebar.setCurrentRow(0)
         self.pages.setCurrentIndex(0)
-        self._apply_tab_permissions()
         self.pages.currentChanged.connect(self._refresh_current_page)
+        self._apply_tab_permissions()
 
         # Timer aktualizujący nagłówek co sekundę
         self._header_timer = QTimer(self)
@@ -579,6 +575,46 @@ class OfficeManagerApp(QMainWindow):
         self._mail_toaster = MailToaster(self, self._show_email_tab)
         self._update_email_badge()
         self._start_saldeo_push_watcher()
+
+    def _ensure_page(self, name):
+        if name in self._loaded_pages:
+            return self._loaded_pages[name]
+        row, factory = self._lazy_pages[name]
+        page = factory()
+        placeholder = self.pages.widget(row)
+        current = self.pages.currentIndex()
+        blocked = self.pages.blockSignals(True)
+        self.pages.removeWidget(placeholder)
+        self.pages.insertWidget(row, page)
+        self.pages.setCurrentIndex(current)
+        self.pages.blockSignals(blocked)
+        placeholder.deleteLater()
+        self._loaded_pages[name] = page
+        return page
+
+    @property
+    def page_companies(self):
+        return self._ensure_page("page_companies")
+
+    @property
+    def page_faktury(self):
+        return self._ensure_page("page_faktury")
+
+    @property
+    def page_raporty(self):
+        return self._ensure_page("page_raporty")
+
+    @property
+    def page_tasks(self):
+        return self._ensure_page("page_tasks")
+
+    @property
+    def page_calendar(self):
+        return self._ensure_page("page_calendar")
+
+    @property
+    def page_settings(self):
+        return self._ensure_page("page_settings")
 
     def _start_saldeo_push_watcher(self):
         import threading
@@ -755,7 +791,6 @@ class OfficeManagerApp(QMainWindow):
                     self.lbl_live_timer.setText("Brak aktywnego stoperu")
                 return
 
-            labels = logic.get_active_timer_labels()
             details = logic.get_active_timer_details()
             if details:
                 first = details[0]
@@ -778,7 +813,11 @@ class OfficeManagerApp(QMainWindow):
     def _refresh_current_page(self, index: int):
         """Odświeża dane widoku po przełączeniu, żeby zmiany z innych widoków były widoczne."""
         page = self.pages.widget(index)
-        for name in ("_reload_rows", "_refresh", "refresh", "_refresh_all", "refresh_all"):
+        for name, (row, _) in self._lazy_pages.items():
+            if row == index:
+                page = self._ensure_page(name)
+                break
+        for name in ("refresh_async", "_reload_rows", "_refresh", "refresh", "_refresh_all", "refresh_all"):
             action = getattr(page, name, None)
             if callable(action):
                 try:

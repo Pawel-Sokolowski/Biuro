@@ -1,6 +1,6 @@
 """Generate and validate domestic PLN FA(3) invoices from stored invoice data."""
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import lru_cache
 from pathlib import Path
 from lxml import etree as E
@@ -37,7 +37,7 @@ def _amount(value):
         amount = Decimal(str(value))
         if not amount.is_finite():
             raise InvalidOperation
-        return amount.quantize(Decimal('0.01'))
+        return amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise KsefError('Nieprawidłowa kwota faktury.') from exc
 

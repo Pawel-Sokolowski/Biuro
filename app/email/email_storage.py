@@ -517,11 +517,36 @@ def save_refs(konto_id: int, folder_id: int, updates: List[Tuple[str, str]]) -> 
         conn.close()
 
 
+def record_mailbox_generation(konto_id: int, folder: str, generation: str) -> bool:
+    """Retire old UID mappings atomically; retain bodies and assignment history.
+
+    A missing checkpoint cannot establish the generation of legacy cached UIDs.
+    Those mappings are retired on first adoption too. Message-ID can still link
+    assignments to the same real message after its headers are downloaded again.
+    """
+    if not str(generation).isdigit():
+        raise ValueError("Nieprawidłowe UIDVALIDITY.")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, uidvalidity FROM foldery_email WHERE konto_id=%s AND server_name=%s FOR UPDATE",
+            (konto_id, folder),
+        ).fetchone()
+        if row is None or row[1] == str(generation):
+            return False
+        retired = conn.execute(
+            "UPDATE wiadomosci_email SET uid='retired:' || id::text || ':' || uid, usunieta=1 "
+            "WHERE konto_id=%s AND folder_id=%s AND uid NOT LIKE 'retired:%%'",
+            (konto_id, row[0]),
+        ).rowcount
+        conn.execute("UPDATE foldery_email SET uidvalidity=%s WHERE id=%s", (str(generation), row[0]))
+        return bool(retired)
+
+
 def get_known_uids(konto_id: int, folder_id: int) -> set:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT uid FROM wiadomosci_email WHERE konto_id = %s AND folder_id = %s",
+            "SELECT uid FROM wiadomosci_email WHERE konto_id = %s AND folder_id = %s AND uid NOT LIKE 'retired:%%'",
             (konto_id, folder_id),
         ).fetchall()
         return {str(r[0]) for r in rows}
@@ -849,17 +874,19 @@ def update_message_read_flag(
     uid: str,
     read: bool,
     folder_id: Optional[int] = None,
-) -> None:
+    *, expected_row_id=None,
+) -> bool:
     conn = get_conn()
 
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE wiadomosci_email
             SET przeczytana = %s
             WHERE konto_id = %s
               AND uid = %s
               AND (%s::integer IS NULL OR folder_id = %s)
+              AND (%s::integer IS NULL OR id = %s)
             """,
             (
                 1 if read else 0,
@@ -867,10 +894,13 @@ def update_message_read_flag(
                 uid,
                 folder_id,
                 folder_id,
+                expected_row_id,
+                expected_row_id,
             ),
         )
 
         conn.commit()
+        return cursor.rowcount > 0
 
     finally:
         conn.close()
@@ -879,6 +909,7 @@ def mark_deleted(
     konto_id: int,
     uid: str,
     folder_id: Optional[int] = None,
+    *, expected_row_id=None,
 ) -> None:
     conn = get_conn()
 
@@ -890,12 +921,15 @@ def mark_deleted(
             WHERE konto_id = %s
               AND uid = %s
               AND (%s::integer IS NULL OR folder_id = %s)
+              AND (%s::integer IS NULL OR id = %s)
             """,
             (
                 konto_id,
                 uid,
                 folder_id,
                 folder_id,
+                expected_row_id,
+                expected_row_id,
             ),
         )
 
@@ -1329,6 +1363,39 @@ def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> Lis
         conn.close()
 
 
+def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 500,
+                  before=None, employee_id=None, completed=False):
+    """Bounded, stable keyset pagination; search before limiting the result set."""
+    limit = max(1, min(int(limit), 500))
+    where = ["we.konto_id=%s", "COALESCE(we.usunieta,0)=0"]
+    params = [konto_id]
+    if completed:
+        where.append(f"EXISTS (SELECT 1 FROM wiadomosci_email w2 WHERE w2.konto_id=we.konto_id AND {_SAME_MESSAGE} AND COALESCE(w2.email_done,0)=1)")
+    elif employee_id:
+        where.append(f"EXISTS (SELECT 1 FROM wiadomosci_email w2 JOIN email_message_assignments a ON a.message_id=w2.id WHERE w2.konto_id=we.konto_id AND {_SAME_MESSAGE} AND a.employee_id=%s)")
+        params.append(employee_id)
+    else:
+        where.append("fe.server_name=%s")
+        params.append(folder)
+    if phrase:
+        query = "%" + phrase.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        where.append("(COALESCE(we.temat,'') ILIKE %s OR COALESCE(we.nadawca,'') ILIKE %s OR COALESCE(we.odbiorca,'') ILIKE %s)")
+        params.extend([query] * 3)
+    if before is not None:
+        where.append("(COALESCE(we.data,''), we.id) < (%s,%s)")
+        params.extend(before)
+    params.append(limit + 1)
+    with get_conn() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT we.*, fe.server_name FROM wiadomosci_email we JOIN foldery_email fe ON fe.id=we.folder_id WHERE "
+            + " AND ".join(where) + " ORDER BY COALESCE(we.data,'') DESC, we.id DESC LIMIT %s", params
+        )]
+    more = len(rows) > limit
+    rows = rows[:limit]
+    cursor = (rows[-1].get("data") or "", rows[-1]["id"]) if rows else None
+    return rows, more, cursor
+
+
 def refresh_email_list(
     konto_id: int,
     server_folder: str,
@@ -1337,13 +1404,6 @@ def refresh_email_list(
     rows = get_cached_messages_by_folder_name(
         konto_id,
         server_folder,
-    )
-
-    print(
-        "REFRESH_EMAIL_LIST",
-        konto_id,
-        server_folder,
-        len(rows),
     )
 
     return rows

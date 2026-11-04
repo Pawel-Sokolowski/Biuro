@@ -10,7 +10,8 @@ For this PyQt6 desktop application, the recommended release format is:
 From the repository root in a Windows Python environment:
 
 ```powershell
-python -m pip install -r requirements.txt pyinstaller
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install pyinstaller
 python -m pip check
 python -c "import mt940; from importlib.metadata import version; print('mt-940', version('mt-940')); assert callable(mt940.parse)"
 python -m PyInstaller --clean --noconfirm packaging\biuro.spec
@@ -35,3 +36,11 @@ The installer preserves this configuration. After an application update, use
 the **Biuro - aktualizacja bazy** shortcut to migrate the database before
 logging in. An import failure dialog provides expandable exception details;
 copy those details when reporting a failure that persists after rebuilding.
+
+Runtime dependencies are resolved for Python 3.11 across platforms in
+`requirements.lock`. Update them deliberately with
+`uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes -o requirements.lock`,
+then rerun the full suite before building. The spec includes the Alembic scripts,
+psycopg pool, and IMAP UTF-7 codec. Exercise `Biuro.exe --migrate` twice: the second
+run must be a no-op. The first Alembic upgrade of an older installation reuses the
+frozen accounting bootstrap; subsequent changes belong in new revisions.

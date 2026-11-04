@@ -133,6 +133,20 @@ class KsefClient:
             logger.warning("KSeF HTTP 429 dla %s %s; ponowienie za %.1f s", method, path, wait)
             self._sleep(wait)
         assert response is not None
+        if response.status_code == 401 and token and token == self._access_token and not path.startswith("/auth/"):
+            # Token dostępowy wygasł lub został unieważniony - logujemy się ponownie i ponawiamy raz.
+            if not self._can_retry_rate_limit(method, path):
+                self._access_token = None
+                raise KsefError("Sesja KSeF wygasła podczas operacji zapisu. Sprawdź stan przed ponowieniem.")
+            logger.warning("KSeF HTTP 401 dla %s %s; ponowne uwierzytelnienie", method, path)
+            self._access_token = None
+            self._access_valid_until = None
+            headers["Authorization"] = f"Bearer {self._access()}"
+            self._throttle_read(method, path)
+            try:
+                response = self.http.request(method, self.base_url + path, headers=headers, timeout=TIMEOUT, **kwargs)
+            except requests.RequestException as exc:
+                raise KsefError(f"Błąd połączenia z KSeF: {exc}") from exc
         if not response.ok:
             raise KsefError(f"KSeF {method} {path}: HTTP {response.status_code} {response.text[:300]}")
         return response

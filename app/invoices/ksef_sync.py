@@ -143,6 +143,7 @@ def parse_fa3_invoice(xml: str, *, allow_buyer_without_nip=False) -> Dict[str, A
 
 def _upsert_downloaded_invoice(
     data: Dict[str, Any], ksef_number: str, company_id: Optional[int] = None,
+    contractor_id: Optional[int] = None,
 ) -> tuple[str, int]:
     """Zastępuje lokalną treść dokumentem KSeF, zachowując jego ID i płatności."""
     ksef_number = _valid_ksef_number(ksef_number)
@@ -151,13 +152,24 @@ def _upsert_downloaded_invoice(
     ksef_date = data.get("ksef_date") or ksef_number_date(ksef_number)
     conn = get_conn()
     try:
-        if company_id is not None:
+        owner_column = "firma_id"
+        if contractor_id is not None:
+            companies = conn.execute("SELECT * FROM kontrahenci WHERE id = %s FOR UPDATE", (contractor_id,)).fetchall()
+            owner_column = "kontrahent_id"
+        elif company_id is not None:
             companies = conn.execute("SELECT * FROM firmy WHERE id = %s FOR UPDATE", (company_id,)).fetchall()
         else:
             companies = conn.execute(
                 "SELECT * FROM firmy WHERE regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g') = %s ORDER BY id FOR UPDATE",
                 (data["buyer_nip"],),
             ).fetchall()
+            if not companies and data["buyer_nip"]:
+                # Sprzedaż dla podmiotu spoza klientów biura: dopasowanie do kartoteki kontrahentów.
+                companies = conn.execute(
+                    "SELECT * FROM kontrahenci WHERE regexp_replace(COALESCE(nip, ''), '[^0-9]', '', 'g') = %s "
+                    "ORDER BY id FOR UPDATE", (data["buyer_nip"],),
+                ).fetchall()
+                owner_column = "kontrahent_id"
         if len(companies) != 1:
             conn.rollback()
             return ("brak_firmy" if not companies else "niejednoznaczna_firma", 0)
@@ -172,7 +184,7 @@ def _upsert_downloaded_invoice(
         ).fetchall()
         if not existing:
             numbered = conn.execute(
-                "SELECT * FROM faktury WHERE firma_id = %s AND rodzaj = %s "
+                f"SELECT * FROM faktury WHERE {owner_column} = %s AND rodzaj = %s "
                 "AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
                 "ORDER BY (miesiac = %s) DESC, (COALESCE(ksef_numer, '') = '') DESC, id DESC FOR UPDATE",
                 (company["id"], local_kind, data["number"], data["month"]),
@@ -185,7 +197,7 @@ def _upsert_downloaded_invoice(
             # Używamy NIP-u (firma_id) i miesiąca tylko wtedy, gdy pozostał
             # dokładnie jeden dokument, który nie był wcześniej zsynchronizowany.
             existing = conn.execute(
-                "SELECT * FROM faktury WHERE firma_id = %s AND miesiac = %s "
+                f"SELECT * FROM faktury WHERE {owner_column} = %s AND miesiac = %s "
                 "AND rodzaj = %s AND COALESCE(ksef_numer, '') = '' ORDER BY id FOR UPDATE",
                 (company["id"], data["month"], local_kind),
             ).fetchall()
@@ -201,14 +213,16 @@ def _upsert_downloaded_invoice(
         corrected_invoice_id = None
         if local_kind == "korekta" and data.get("corrected_number"):
             corrected = conn.execute(
-                "SELECT id FROM faktury WHERE firma_id = %s AND cancelled_at IS NULL "
+                f"SELECT id FROM faktury WHERE {owner_column} = %s AND cancelled_at IS NULL "
                 "AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
                 "ORDER BY id LIMIT 1",
                 (company["id"], data["corrected_number"]),
             ).fetchone()
             corrected_invoice_id = corrected["id"] if corrected else None
         values = (
-            company["id"], data["month"], float(data["net"]), float(data["gross"]),
+            company["id"] if owner_column == "firma_id" else None,
+            company["id"] if owner_column == "kontrahent_id" else None,
+            data["month"], float(data["net"]), float(data["gross"]),
             data["issue_date"], data["sale_date"], data["due_date"],
             company.get("nazwa_skrocona") or data["buyer_name"], data["buyer_name"], address,
             postal, city, data["buyer_nip"], data["buyer_country"],
@@ -230,13 +244,13 @@ def _upsert_downloaded_invoice(
             action = "zaktualizowane"
         else:
             invoice_id = conn.execute("""
-                INSERT INTO faktury (firma_id, reczna, miesiac, kwota_netto, kwota_brutto,
+                INSERT INTO faktury (firma_id, kontrahent_id, reczna, miesiac, kwota_netto, kwota_brutto,
                     data_wystawienia, data_sprzedazy, termin_platnosci, nabywca_skrocona,
                     nabywca_pelna, nabywca_adres, nabywca_kod, nabywca_miasto, nabywca_nip,
                     nabywca_kraj, pozycje_json, numer, ksef_numer, ksef_nip_wysylki,
                     ksef_hash_faktury, rodzaj, korygowana_faktura_id, przyczyna_korekty,
                     ksef_data, eksportowana, status, data_eksportu)
-                VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                VALUES (%s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, 1,
                     'wystawiona', to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
             """, values + (ksef_date,)).fetchone()[0]
@@ -250,9 +264,12 @@ def _upsert_downloaded_invoice(
         conn.close()
 
 
-def assign_downloaded_invoice(data: Dict[str, Any], ksef_number: str, company_id: int) -> tuple[str, int]:
-    """Ręcznie przypisuje pobrany dokument KSeF do firmy wybranej przez użytkownika."""
-    return _upsert_downloaded_invoice(data, ksef_number, company_id=company_id)
+def assign_downloaded_invoice(
+    data: Dict[str, Any], ksef_number: str, company_id: Optional[int] = None,
+    contractor_id: Optional[int] = None,
+) -> tuple[str, int]:
+    """Ręcznie przypisuje pobrany dokument KSeF do firmy lub kontrahenta wybranego przez użytkownika."""
+    return _upsert_downloaded_invoice(data, ksef_number, company_id=company_id, contractor_id=contractor_id)
 
 
 def save_ksef_credentials(nip: str, token: Optional[str], environment: str = "prod") -> None:

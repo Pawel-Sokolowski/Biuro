@@ -14,6 +14,10 @@ class SaldeoSubjectTests(unittest.TestCase):
             ("Kowalski", "2027-01", "etap_kadry"),
         )
 
+    def test_combined_subject_sets_both_stages(self):
+        subject = "Rosolska Rozliczenie wyników firmy, podatków, ZUS za miesiąc październik 2026"
+        self.assertEqual(parse_subject(subject), ("Rosolska", "2026-10", "etap,etap_kadry"))
+
     def test_other_subject(self):
         self.assertIsNone(parse_subject("Faktura za wrzesień 2026"))
 

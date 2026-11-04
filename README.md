@@ -310,7 +310,7 @@ Skrypt tworzy tymczasowy schemat z fikcyjnymi firmami, zapisuje obrazy w `docs\s
 
 ## Instalator
 
-Skrypt Inno Setup: `installer\biuro.iss` (wersja 1.3.7). Specyfikacja PyInstallera: `packaging\biuro.spec` (opis w `packaging\README.md`).
+Skrypt Inno Setup: `installer\biuro.iss` (wersja 1.3.8). Specyfikacja PyInstallera: `packaging\biuro.spec` (opis w `packaging\README.md`).
 
 ## Struktura
 

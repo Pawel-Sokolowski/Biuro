@@ -6,6 +6,100 @@ from app.db.dao_tasks import delete_tasks, list_tasks, list_tasks_for_timer, sav
 from tests.base import DbTestCase
 
 
+class SubstitutionTests(DbTestCase):
+    def test_substitute_sees_company_and_original_owner_filter_does_not(self):
+        from app.db.dao_monthly import clear_substitution, set_substitution
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+
+        kasia = self.make_employee(email="kasia@example.com")
+        pawel = self.make_employee(email="pawel@example.com")
+        firma = self.make_company("Firma A", ksiegowa_id=kasia)
+        logic = MonthlyViewLogic(pawel)
+        self.assertEqual(logic.get_monthly_rows("2026-10", pawel, "Wszystkie"), [])
+        set_substitution(firma, "ksiegowosc", pawel, kasia)
+        rows = logic.get_monthly_rows("2026-10", pawel, "Wszystkie")
+        self.assertEqual([r["id"] for r in rows], [firma])
+        self.assertEqual(rows[0]["zast_ks_id"], pawel)
+        with self.assertRaises(ValueError):
+            set_substitution(firma, "ksiegowosc", kasia, kasia)
+        set_substitution(firma, "ksiegowosc", pawel, kasia, "2000-01-01")
+        self.assertEqual(logic.get_monthly_rows("2026-10", pawel, "Wszystkie"), [])
+        clear_substitution(firma, "ksiegowosc")
+
+
+class MonthlyStageFilterAndSubstitutionDisplayTests(unittest.TestCase):
+    def _page(self, choice, employee_id=None):
+        from types import SimpleNamespace
+        from app.monthly_view.monthly_view_ui import MonthlyViewPage
+        stub = SimpleNamespace(
+            stage_combo=SimpleNamespace(currentText=lambda: choice),
+            _current_employee_id=lambda: employee_id,
+            _SUBSTITUTION_FIELDS=MonthlyViewPage._SUBSTITUTION_FIELDS,
+        )
+        return stub, MonthlyViewPage
+
+    def test_stage_filter_options(self):
+        rows = {
+            "ok": {"etap": "Zatwierdzone", "dokumenty_dostarczone": 1},
+            "none": {"etap": None, "dokumenty_dostarczone": 0},
+            "booked": {"etap": "Zaksięgowane", "dokumenty_dostarczone": 0},
+        }
+        expected = {
+            "Wszystkie": {"ok", "none", "booked"},
+            "Dostarczone": {"ok"},
+            "Niedostarczone": {"none", "booked"},
+            "Brak": {"none"},
+            "Zatwierdzone": {"ok"},
+            "Zaksięgowane": {"booked"},
+            "Wysłane wyniki": set(),
+        }
+        for choice, names in expected.items():
+            stub, cls = self._page(choice)
+            got = {k for k, r in rows.items() if cls._stage_matches(stub, r, "etap")}
+            self.assertEqual(got, names, choice)
+
+    def test_stage_filter_uses_stage_field_of_the_given_tab(self):
+        stub, cls = self._page("Wysłane wyniki")
+        row = {"etap": "Brak", "etap_kadry": "Wysłane wyniki"}
+        self.assertFalse(cls._stage_matches(stub, row, "etap"))
+        self.assertTrue(cls._stage_matches(stub, row, "etap_kadry"))
+
+    def test_row_in_tab_prefers_substitute_over_owner(self):
+        row = {"ksiegowa_id": 1, "zast_ks_id": 2}
+        owner, cls = self._page("Wszystkie", 1)
+        substitute, _ = self._page("Wszystkie", 2)
+        everyone, _ = self._page("Wszystkie", None)
+        self.assertFalse(cls._row_in_tab(owner, row, "ksiegowa_id"))
+        self.assertTrue(cls._row_in_tab(substitute, row, "ksiegowa_id"))
+        self.assertTrue(cls._row_in_tab(everyone, row, "ksiegowa_id"))
+        self.assertTrue(cls._row_in_tab(owner, {"ksiegowa_id": 1}, "ksiegowa_id"))
+
+    def test_mark_substitution_is_per_role(self):
+        _stub, cls = self._page("Wszystkie")
+        row = {"id": 1, "zast_ks_id": 2, "zast_ks_za": "Kasia Nowak"}
+        marked = cls._mark_substitution(None, row, "ksiegowosc")
+        self.assertTrue(marked["zastepstwo"])
+        self.assertEqual(marked["zastepstwo_za"], "Kasia Nowak")
+        self.assertNotIn("zastepstwo", row)
+        self.assertIs(cls._mark_substitution(None, row, "kadry"), row)
+
+    def test_model_marks_substituted_company_name(self):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QColor, QFont
+        from app.monthly_view.monthly_view_model import MonthlyViewModel
+        model = MonthlyViewModel([
+            {"id": 1, "nazwa": "Firma A", "zastepstwo": True, "zastepstwo_za": "Kasia Nowak"},
+            {"id": 2, "nazwa": "Firma B"},
+        ], "ksiegowosc")
+        first, second = model.index(0, 0), model.index(1, 0)
+        self.assertEqual(model.data(first), "↪ Firma A")
+        self.assertEqual(model.data(first, Qt.ItemDataRole.ToolTipRole), "Zastępstwo za: Kasia Nowak")
+        self.assertTrue(model.data(first, Qt.ItemDataRole.FontRole).italic())
+        self.assertIsInstance(model.data(first, Qt.ItemDataRole.ForegroundRole), QColor)
+        self.assertEqual(model.data(second), "Firma B")
+        self.assertNotIsInstance(model.data(second, Qt.ItemDataRole.FontRole), QFont)
+
+
 class MonthlyStatusTests(DbTestCase):
     def test_status_and_delivered_flag_roundtrip(self):
         firma = self.make_company()

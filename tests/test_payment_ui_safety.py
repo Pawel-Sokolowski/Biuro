@@ -98,6 +98,21 @@ class BankReviewSafetyTests(unittest.TestCase):
         success.assert_not_called()
         refresh.assert_not_called()
 
+    def test_choices_survive_refresh_after_another_transfer_is_settled(self):
+        self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)
+        self.dialog.table.cellWidget(1, 6).setText("15.00")
+        self.dialog.refresh()
+        self.assertEqual(self.dialog.table.cellWidget(1, 5).currentData(), 11)
+        self.assertEqual(self.dialog.table.cellWidget(1, 6).text(), "15.00")
+        self.assertIsNone(self.dialog.table.cellWidget(0, 5).currentData())
+
+    def test_remembered_amount_is_capped_to_invoice_balance_after_refresh(self):
+        self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)
+        self.dialog.table.cellWidget(1, 6).setText("30.00")
+        self.invoices[0]["balance"] = Decimal("10.00")
+        self.dialog.refresh()
+        self.assertEqual(self.dialog.table.cellWidget(1, 6).text(), "10.00")
+
     def test_unselected_invoice_and_declined_confirmation_never_write(self):
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, \
              patch.object(QMessageBox, "warning"):
@@ -241,10 +256,12 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.addCleanup(dialog.close)
         company = dialog.table.cellWidget(0, 4)
         self.assertTrue(company.isEditable())
-        company.setCurrentIndex(company.findData(self.company_id))
+        index = next(i for i in range(company.count()) if company.itemData(i) == ("firma", self.company_id))
+        company.setCurrentIndex(index)
         with patch("app.invoices.faktury_ui.assign_downloaded_invoice", return_value=("utworzone", 99)) as assign:
             dialog._assign(0)
-        assign.assert_called_once_with(item["data"], "KSEF-1", self.company_id)
+        assign.assert_called_once_with(
+            item["data"], "KSEF-1", company_id=self.company_id, contractor_id=None)
         self.assertFalse(company.isEnabled())
 
     def page(self):
@@ -359,6 +376,28 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
             page._send_selected_to_ksef()
         start.assert_called_once_with([self.invoice_id], send=True)
         picker.assert_not_called()
+
+
+class KsefSyncStateTests(unittest.TestCase):
+    def _page(self, thread):
+        from types import SimpleNamespace
+        return SimpleNamespace(_ksef_thread=thread, _cleanup_ksef_sync=Mock())
+
+    def test_sync_running_reflects_thread_state_and_cleans_finished_one(self):
+        from app.invoices.faktury_ui import FakturyPage
+        self.assertFalse(FakturyPage._sync_running(self._page(None)))
+        running = self._page(Mock(isRunning=Mock(return_value=True)))
+        self.assertTrue(FakturyPage._sync_running(running))
+        running._cleanup_ksef_sync.assert_not_called()
+        finished = self._page(Mock(isRunning=Mock(return_value=False)))
+        self.assertFalse(FakturyPage._sync_running(finished))
+        finished._cleanup_ksef_sync.assert_called_once()
+
+    def test_deleted_qt_thread_is_treated_as_finished(self):
+        from app.invoices.faktury_ui import FakturyPage
+        page = self._page(Mock(isRunning=Mock(side_effect=RuntimeError("deleted"))))
+        self.assertFalse(FakturyPage._sync_running(page))
+        page._cleanup_ksef_sync.assert_called_once()
 
 
 if __name__ == "__main__":

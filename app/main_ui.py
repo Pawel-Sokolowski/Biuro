@@ -821,7 +821,7 @@ class OfficeManagerApp(QMainWindow):
         try:
             logic = getattr(self.page_monthly, "logic", None)
             if logic is not None:
-                logic.stop_general_timer()
+                logic.stop_all_timers()
         except Exception:
-            logger.warning("Nie zapisano stopera ogólnego", exc_info=True)
+            logger.warning("Nie zapisano stoperów", exc_info=True)
         super().closeEvent(event)

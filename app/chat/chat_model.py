@@ -75,6 +75,72 @@ def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
     return last_id
 
 
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
+def add_message_with_attachments(konwersacja_id: int, pracownik_id: int, tresc: str,
+                                 files: List[Dict[str, Any]]) -> int:
+    """Dodaje wiadomość razem z załącznikami ({'nazwa': str, 'dane': bytes})."""
+    for f in files:
+        if len(f["dane"]) > MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"Plik „{f['nazwa']}” jest większy niż {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB.")
+    if not is_participant(konwersacja_id, pracownik_id):
+        raise PermissionError("Nie masz dostępu do tego kanału.")
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO wiadomosci_chat (konwersacja_id, pracownik_id, tresc, data_wysylki)
+        VALUES (%s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
+    """, (konwersacja_id, pracownik_id, tresc))
+    message_id = cur.fetchone()[0]
+    for f in files:
+        cur.execute(
+            "INSERT INTO zalaczniki_chat (wiadomosc_id, nazwa, rozmiar, dane) VALUES (%s, %s, %s, %s)",
+            (message_id, f["nazwa"], len(f["dane"]), f["dane"]),
+        )
+    cur.execute(
+        "UPDATE konwersacje SET ostatnia_aktualizacja = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
+        (konwersacja_id,),
+    )
+    conn.commit()
+    conn.close()
+    return message_id
+
+
+def get_attachments(message_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    """Metadane załączników (bez zawartości) pogrupowane po id wiadomości."""
+    if not message_ids:
+        return {}
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, wiadomosc_id, nazwa, rozmiar FROM zalaczniki_chat "
+        "WHERE wiadomosc_id = ANY(%s) ORDER BY id", (list(message_ids),))
+    rows = cur.fetchall()
+    conn.close()
+    result: Dict[int, List[Dict[str, Any]]] = {}
+    for r in rows:
+        result.setdefault(r["wiadomosc_id"], []).append({k: r[k] for k in r.keys()})
+    return result
+
+
+def get_attachment_data(attachment_id: int, pracownik_id: int) -> Optional[Dict[str, Any]]:
+    """Zwraca załącznik tylko uczestnikowi konwersacji."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT z.nazwa, z.dane, w.konwersacja_id FROM zalaczniki_chat z "
+        "JOIN wiadomosci_chat w ON w.id = z.wiadomosc_id WHERE z.id = %s", (attachment_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    if not is_participant(row["konwersacja_id"], pracownik_id):
+        raise PermissionError("Nie masz dostępu do tego kanału.")
+    return {"nazwa": row["nazwa"], "dane": bytes(row["dane"])}
+
+
 def edit_message(message_id: int, new_text: str) -> None:
     conn = _get_conn()
     cur = conn.cursor()

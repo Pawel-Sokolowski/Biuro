@@ -154,14 +154,10 @@ class ReportsPage(QWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.import_label = QLabel("<b>Księgowość</b>")
-        layout.addWidget(self.import_label)
-        self.import_table = self._make_profit_table("ksiegowosc")
-        layout.addWidget(self.import_table)
-        self.import_label_kadry = QLabel("<b>Kadry</b>")
-        layout.addWidget(self.import_label_kadry)
-        self.import_table_kadry = self._make_profit_table("kadry")
-        layout.addWidget(self.import_table_kadry)
+        self.common_label = QLabel("<b>Wspólny</b>")
+        layout.addWidget(self.common_label)
+        self.common_table = self._make_table(["Dział", "Fv suma", "Koszty suma", "Zysk suma"])
+        layout.addWidget(self.common_table)
         self.chart_top = QChartView()
         self.chart_top.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -174,6 +170,20 @@ class ReportsPage(QWidget):
             chart_view.setMinimumHeight(320)
         self.firm_list.setMinimumHeight(110)
         self.firm_list.setMaximumHeight(160)
+
+        self.company_label = QLabel("<b>Każda firma osobno</b>")
+        layout.addWidget(self.company_label)
+        self.company_table = self._make_table(["Firma", "Dział", "Fv suma", "Koszty suma", "Zysk suma"])
+        layout.addWidget(self.company_table)
+
+        self.import_label = QLabel("<b>Księgowość — szczegóły</b>")
+        layout.addWidget(self.import_label)
+        self.import_table = self._make_profit_table("ksiegowosc")
+        layout.addWidget(self.import_table)
+        self.import_label_kadry = QLabel("<b>Kadry — szczegóły</b>")
+        layout.addWidget(self.import_label_kadry)
+        self.import_table_kadry = self._make_profit_table("kadry")
+        layout.addWidget(self.import_table_kadry)
 
         self.summary_table = QTableWidget(0, 6)
         self.summary_table.setHorizontalHeaderLabels(
@@ -200,8 +210,31 @@ class ReportsPage(QWidget):
         layout.addWidget(self.report_table)
 
         self._update_mode_ui(self.mode_combo.currentText())
-        for table in (self.summary_table, self.report_table, self.import_table, self.import_table_kadry):
+        for table in (self.summary_table, self.report_table, self.import_table, self.import_table_kadry,
+                      self.common_table, self.company_table):
             table.setMinimumHeight(80)
+
+    @staticmethod
+    def _make_table(headers):
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        return table
+
+    @staticmethod
+    def _aggregate_profit(rows):
+        """Sumy sprzedaży i kosztów: {(firma, miesiąc, sekcja): [sprzedaż, koszt]}."""
+        agg = {}
+        for item in rows:
+            key = (item["klient"], item["miesiac"], item["sekcja"])
+            cur = agg.setdefault(key, [0.0, 0.0])
+            cur[0] += float(item["cena"] or 0)
+            cur[1] += float(item["koszt"] or 0)
+        return agg
 
     @staticmethod
     def _make_profit_table(sekcja):
@@ -225,9 +258,13 @@ class ReportsPage(QWidget):
         self.import_label.setVisible(profit)
         self.import_table_kadry.setVisible(profit)
         self.import_label_kadry.setVisible(profit)
+        self.common_label.setVisible(profit)
+        self.common_table.setVisible(profit)
+        self.company_label.setVisible(profit)
+        self.company_table.setVisible(profit)
         self.report_table.setVisible(not summary and not profit)
-        self.chart_top.setVisible(not summary and not profit)
-        self.chart_bottom.setVisible(not summary and not profit)
+        self.chart_top.setVisible(not summary)
+        self.chart_bottom.setVisible(not summary)
 
     def _generate_report(self):
         selected = [
@@ -300,13 +337,170 @@ class ReportsPage(QWidget):
             table.resizeColumnsToContents()
             fit_table_height(table)
         if not rows:
+            self.common_table.setRowCount(0)
+            self.company_table.setRowCount(0)
+            self.chart_top.setChart(QChart())
+            self.chart_bottom.setChart(QChart())
             self.report_status.setText("Brak zaimportowanych danych dla wybranych firm i zakresu.")
             return
+        self._fill_money_table(self.common_table, [
+            [SEKCJA_LABELS[s], totals[s][1], totals[s][2]] for s in ("ksiegowosc", "kadry")
+        ])
+        per_company = {}
+        for (klient, _m, sekcja), (cena, koszt) in self._aggregate_profit(rows).items():
+            cur = per_company.setdefault((klient, sekcja), [0.0, 0.0])
+            cur[0] += cena
+            cur[1] += koszt
+        self._fill_money_table(self.company_table, [
+            [klient, SEKCJA_LABELS[sekcja], v[0], v[1]]
+            for (klient, sekcja), v in sorted(per_company.items(), key=lambda kv: (kv[0][0], kv[0][1]))
+        ])
+        months = sorted({item["miesiac"] for item in rows})
+        self.chart_top.setChart(self._profit_chart("Kadry — zarobek vs koszt i czas", rows, "kadry", months))
+        self.chart_bottom.setChart(
+            self._profit_chart("Księgowość — zarobek vs koszt i czas", rows, "ksiegowosc", months))
         self.report_status.setText(" | ".join(
             f"{SEKCJA_LABELS[s]}: czas {format_hours(t[0])}, cena {t[1]:.2f} zł, "
             f"koszt {t[2]:.2f} zł, zysk {t[1] - t[2]:.2f} zł"
             for s, t in totals.items()
         ))
+
+    @staticmethod
+    def _fill_money_table(table, rows):
+        """Wiersze: [etykiety..., Fv, koszt]; kolumna zysku jest liczona."""
+        table.setRowCount(0)
+        for values in rows:
+            *labels, cena, koszt = values
+            zysk = cena - koszt
+            row = table.rowCount()
+            table.insertRow(row)
+            for col, text in enumerate([*labels, f"{cena:.2f} zł", f"{koszt:.2f} zł", f"{zysk:.2f} zł"]):
+                cell = QTableWidgetItem(str(text))
+                if col >= len(labels):
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if col == len(labels) + 2 and zysk < 0:
+                    cell.setForeground(QColor("#c62828"))
+                table.setItem(row, col, cell)
+        table.resizeColumnsToContents()
+        fit_table_height(table)
+
+    def _profit_chart(self, title, rows, sekcja, months):
+        """Słupki obok siebie: zarobek (zielony) i koszt (czerwony); linia: czas pracy w godzinach."""
+        from PyQt6.QtCharts import QScatterSeries
+        import math
+
+        income = {m: 0.0 for m in months}
+        cost = {m: 0.0 for m in months}
+        seconds = {m: 0.0 for m in months}
+        for item in rows:
+            if item["sekcja"] != sekcja:
+                continue
+            income[item["miesiac"]] += float(item["cena"] or 0)
+            cost[item["miesiac"]] += float(item["koszt"] or 0)
+            seconds[item["miesiac"]] += float(item["sekundy"] or 0)
+
+        chart = QChart()
+        chart.setTitle(title)
+        earned = QBarSet("Faktura")
+        earned.setColor(QColor("#2e9b4f"))
+        spent = QBarSet("Koszt")
+        spent.setColor(QColor("#d93025"))
+        profit_set = QBarSet("Zysk")
+        profit_set.setColor(QColor("#1a73e8"))
+        for m in months:
+            earned.append(income[m])
+            spent.append(cost[m])
+            profit_set.append(income[m] - cost[m])
+        bars = QBarSeries()
+        bars.append(earned)
+        bars.append(spent)
+        bars.append(profit_set)
+        bars.setBarWidth(0.9)
+        chart.addSeries(bars)
+
+        axis_x = QBarCategoryAxis()
+        axis_x.append(months)
+        chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+        bars.attachAxis(axis_x)
+
+        profits = [income[m] - cost[m] for m in months]
+        axis_y = QValueAxis()
+        axis_y.setTitleText("Zł")
+        axis_y.setLabelFormat("%.0f")
+        axis_y.setMin(min(0.0, math.floor(min(profits, default=0.0) * 1.15)))
+        axis_y.setMax(max(1.0, math.ceil(max([*income.values(), *cost.values()], default=0.0) * 1.3)))
+        chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+        bars.attachAxis(axis_y)
+
+        # linia zera, żeby wartości ujemne wyraźnie wychodziły poniżej niej
+        zero = QLineSeries()
+        zero.setColor(QColor("#444444"))
+        zero.append(-0.5, 0)
+        zero.append(len(months) - 0.5, 0)
+        chart.addSeries(zero)
+        zero.attachAxis(axis_x)
+        zero.attachAxis(axis_y)
+        for marker in chart.legend().markers(zero):
+            marker.setVisible(False)
+
+        line = QLineSeries()
+        line.setName("Czas (godziny)")
+        pen = line.pen()
+        pen.setWidth(2)
+        pen.setColor(QColor("#f5a623"))
+        line.setPen(pen)
+        for idx, m in enumerate(months):
+            line.append(idx, seconds[m] / 3600)
+        chart.addSeries(line)
+        axis_h = QValueAxis()
+        axis_h.setTitleText("Czas (godziny)")
+        axis_h.setMin(0)
+        axis_h.setMax(max(1.0, max(seconds.values(), default=0.0) / 3600 * 1.15))
+        chart.addAxis(axis_h, Qt.AlignmentFlag.AlignRight)
+        line.attachAxis(axis_x)
+        line.attachAxis(axis_h)
+
+        # dodane po linii, więc etykiety kwot są nad nią; pozycje słupków: -0.3, 0, +0.3
+        span = axis_y.max() - axis_y.min()
+        for idx, m in enumerate(months):
+            for offset, value in zip((-0.3, 0.0, 0.3), (income[m], cost[m], income[m] - cost[m])):
+                amount = QScatterSeries()
+                amount.setMarkerSize(1)
+                amount.setColor(QColor(0, 0, 0, 0))
+                amount.setBorderColor(QColor(0, 0, 0, 0))
+                amount.append(idx + offset, value if value >= 0 else value - span * 0.07)
+                amount.setPointLabelsVisible(True)
+                amount.setPointLabelsFormat(f"{value:g}")
+                amount.setPointLabelsColor(QColor("#000000"))
+                amount.setPointLabelsClipping(False)
+                f = amount.pointLabelsFont()
+                f.setPointSize(10)
+                f.setBold(True)
+                amount.setPointLabelsFont(f)
+                chart.addSeries(amount)
+                amount.attachAxis(axis_x)
+                amount.attachAxis(axis_y)
+                for marker in chart.legend().markers(amount):
+                    marker.setVisible(False)
+
+        # etykiety czasu w osobnym rzędzie u góry
+        top_y = axis_y.max() * 0.97
+        for idx, m in enumerate(months):
+            label = QScatterSeries()
+            label.setMarkerSize(1)
+            label.setColor(QColor(0, 0, 0, 0))
+            label.setBorderColor(QColor(0, 0, 0, 0))
+            label.append(idx, top_y)
+            label.setPointLabelsVisible(True)
+            label.setPointLabelsFormat("Czas " + format_hours(seconds[m]))
+            label.setPointLabelsColor(QColor("#b36b00"))
+            label.setPointLabelsClipping(False)
+            chart.addSeries(label)
+            label.attachAxis(axis_x)
+            label.attachAxis(axis_y)
+            for marker in chart.legend().markers(label):
+                marker.setVisible(False)
+        return chart
 
     def _import_work(self):
         self._run_import("czas pracy")
@@ -690,14 +884,16 @@ class ReportsPage(QWidget):
                 if not filepath:
                     return
                 wb = openpyxl.Workbook()
-                wb.remove(wb.active)
-                for sekcja in SEKCJE:
-                    ws = wb.create_sheet(SEKCJA_LABELS[sekcja])
-                    ws.append(PROFIT_HEADERS[sekcja])
-                    for item in rows:
-                        if item["sekcja"] != sekcja:
-                            continue
-                        ws.append(safe_row(self._profit_values(item, raw=True)))
+                ws = wb.active
+                ws.title = "Rentowność"
+                ws.append(["Firma", "Miesiąc", "Dział", "Sprzedaż", "Koszt", "Zysk"])
+                for col in range(1, 7):
+                    ws.cell(row=1, column=col).font = Font(bold=True)
+                agg = self._aggregate_profit(rows)
+                for (klient, miesiac, sekcja), (cena, koszt) in sorted(
+                        agg.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
+                    ws.append(safe_row([klient, miesiac, SEKCJA_LABELS[sekcja],
+                                        round(cena, 2), round(koszt, 2), round(cena - koszt, 2)]))
                 wb.save(filepath)
                 QMessageBox.information(self, "Sukces", f"Raport zapisany:\n{filepath}")
                 return

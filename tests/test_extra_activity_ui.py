@@ -62,12 +62,12 @@ class ExtraActivityUiTests(DbTestCase):
         self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
         page = self.page()
         self.assertEqual(page.table.rowCount(), 1)
-        self.assertEqual(page.table.item(0, 4).text(), "Do wykonania")
-        self.assertEqual(page.table.item(0, 5).text(), "Wniosek do urzędu")
+        self.assertEqual(page.table.item(0, 5).text(), "Do wykonania")
+        self.assertEqual(page.table.item(0, 6).text(), "Wniosek do urzędu")
         page.table.selectRow(0)
         task_id = page.rows[0]["zadanie_id"]
         page._complete()
-        self.assertEqual(page.table.item(0, 4).text(), "Wykonane")
+        self.assertEqual(page.table.item(0, 5).text(), "Wykonane")
         self.assertEqual(next(task for task in list_tasks(viewer_id=1) if task["id"] == task_id)["status"], "Zakończone")
 
     def test_cancel_does_not_create_activity_or_task(self):
@@ -82,7 +82,7 @@ class ExtraActivityUiTests(DbTestCase):
         page = self.page()
         page.state_filter.setCurrentIndex(page.state_filter.findData("done"))
         self.assertEqual(page.table.rowCount(), 1)
-        self.assertEqual(page.table.item(0, 4).text(), "Wykonane")
+        self.assertEqual(page.table.item(0, 5).text(), "Wykonane")
         page.month.setCurrentText("2026-10")
         page.refresh()
         self.assertEqual(page.table.rowCount(), 0)
@@ -93,7 +93,7 @@ class ExtraActivityUiTests(DbTestCase):
         other_task = save_task("Inny klient", firma_id=self.other_company_id, created_by=1, actor_id=1)
         page = self.page()
         page.table.selectRow(0)
-        self.assertEqual(page.table.item(0, 4).text(), "Bez zadania")
+        self.assertEqual(page.table.item(0, 5).text(), "Bez zadania")
 
         def choose(_parent, _title, _label, choices, *_args):
             self.assertTrue(any(f"#{right_task} —" in choice for choice in choices))

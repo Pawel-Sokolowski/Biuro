@@ -138,6 +138,25 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     ))
 
 
+def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
+    """Contact addresses and classification for companies visible to the employee."""
+    if not actor_id:
+        return []
+    ids = sorted(assigned_company_ids(actor_id))
+    if not ids:
+        return []
+    conn = get_conn()
+    try:
+        return [dict(row) for row in conn.execute(
+            "SELECT id, nazwa, nazwa_skrocona, nip, adres_email, forma_dzialalnosci, "
+            "typ_rozliczenia, forma_opodatkowania, status FROM firmy "
+            "WHERE id = ANY(%s) ORDER BY LOWER(COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)), id",
+            (ids,),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+
 def get_companies_filtered(
     search: str,
     status: str,

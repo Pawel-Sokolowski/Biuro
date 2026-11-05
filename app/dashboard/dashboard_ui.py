@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
+    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QPushButton,
     QVBoxLayout, QWidget,
 )
 
@@ -12,6 +12,7 @@ from app.utils.backup_mail import refresh_backup_log_from_mail
 from app.utils.backup_status import get_backup_status
 from app.db.dao_dashboard import format_duration, format_event_time, get_dashboard_data
 from app.utils.background import TaskRunner
+from app.utils.view_state import reconcile_list
 import logging
 
 logger = logging.getLogger(__name__)
@@ -149,17 +150,18 @@ class DashboardPage(QWidget):
         colors = {"ok": "#1e8449", "nieaktualna": "#c0392b", "blad": "#c0392b"}
         self.backup_label.setText(status["komunikat"])
         self.backup_label.setStyleSheet(f"font-weight: bold; color: {colors.get(status['stan'], '#7f8c8d')};")
-        self.backup_list.clear()
+        entries = []
         for db in status["bazy"]:
             when = db["ostatnia_kopia"]
             stamp = when.strftime("%Y-%m-%d %H:%M") if when else "brak udanej kopii"
             if when and db.get("data_bazy"):
                 stamp = f"baza z {db['data_bazy'].strftime('%Y-%m-%d')} (zapisano {stamp})"
             label = db["nazwa"] + (f" ({db['firma']})" if db["firma"] and db["firma"] != db["nazwa"] else "")
-            item = QListWidgetItem(f"{label} — {stamp}")
-            if db["stan"] != "ok":
-                item.setForeground(QColor("#c0392b"))
-            self.backup_list.addItem(item)
+            entries.append((db["nazwa"], f"{label} — {stamp}", db["stan"]))
+        def render_backup(item, entry):
+            item.setText(entry[1])
+            item.setForeground(QColor("#c0392b") if entry[2] != "ok" else self.backup_list.palette().text())
+        reconcile_list(self.backup_list, entries, lambda entry: entry[0], render_backup)
 
     def refresh(self):
         data = get_dashboard_data(self.pracownik_id)
@@ -185,25 +187,22 @@ class DashboardPage(QWidget):
 
         self._refresh_backup()
 
-        self.tasks.clear()
+        entries = []
         for task in data["zadania"]:
             text = f"{task['tytul']}"
             if task.get("firma"):
                 text += f" [{task['firma']}]"
             if task.get("termin"):
                 text += f" — termin {task['termin'][:10]}"
-            self.tasks.addItem(text)
+            entries.append((task["id"], text))
         if not data["zadania"]:
-            self.tasks.addItem("Brak otwartych zadań")
+            entries.append(("empty", "Brak otwartych zadań"))
+        reconcile_list(self.tasks, entries, lambda entry: entry[0], lambda item, entry: item.setText(entry[1]))
 
-        self.events.clear()
-        for ev in data["wydarzenia"]:
-            self.events.addItem(f"{format_event_time(ev)}  {ev['tytul']}")
-        if not data["wydarzenia"]:
-            self.events.addItem("Brak wydarzeń w najbliższych 7 dniach")
+        entries = [(ev["id"], f"{format_event_time(ev)}  {ev['tytul']}") for ev in data["wydarzenia"]]
+        reconcile_list(self.events, entries or [("empty", "Brak wydarzeń w najbliższych 7 dniach")],
+                       lambda entry: entry[0], lambda item, entry: item.setText(entry[1]))
 
-        self.missing.clear()
-        for company in data["brak_dokumentow"]:
-            self.missing.addItem(company["nazwa"] or "")
-        if not data["brak_dokumentow"]:
-            self.missing.addItem("Wszystkie dokumenty dostarczone")
+        entries = [(company["id"], company["nazwa"] or "") for company in data["brak_dokumentow"]]
+        reconcile_list(self.missing, entries or [("empty", "Wszystkie dokumenty dostarczone")],
+                       lambda entry: entry[0], lambda item, entry: item.setText(entry[1]))

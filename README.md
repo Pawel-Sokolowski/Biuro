@@ -485,3 +485,64 @@ Kolumna nabywcy pokazuje nazwę skróconą (pełną, jeżeli brak skrótu) i ma 
 zajmują mniej miejsca, a szerokość numeru KSeF wynika z metryki jego czcionki.
 Log `Invoice refresh` podaje czas odczytu faktur oraz obsługi tabel i płatności,
 co pozwala rozróżnić opóźnienia bazy od budowania widoku na danym stanowisku.
+
+### Aktualizacje w tle i powiadomienia poczty
+
+Synchronizacja poczty aktualizuje liczniki folderów oraz etykiety pracowników bez
+odtwarzania całego drzewa i przycisków. Zachowuje otwartą wiadomość, zaznaczenie,
+zwinięte wątki, filtry oraz pozycję czytania według ID wiadomości, również gdy
+nowe maile pojawią się na początku listy. **Odśwież widok** również zachowuje
+kontekst i nie uruchamia synchronizacji sieciowej.
+
+Podobne zasady dotyczą pulpitu, kalendarza i widoku miesięcznego. Kalendarz nie
+włącza ponownie odznaczonych źródeł po synchronizacji, a niezmieniona siatka nie
+jest budowana ponownie. Czat dopisuje nowe wiadomości bez wymiany wcześniejszych
+dymków; czytanie historii i tekst wpisywany w edytorze pozostają na miejscu.
+
+W Windows każde powiadomienie o pojedynczym nowym mailu ma własny cel, więc
+kliknięcie starszego powiadomienia w trakcie działania aplikacji otwiera właściwą
+wiadomość. Dostęp do konta i tożsamość wiadomości są ponownie sprawdzane;
+sam UID nie służy do wyszukania celu. Powiadomienie zbiorcze otwiera zakładkę
+E-mail. Instalator oznacza skrót identyfikatorem `Biuro.OfficeManager`; po
+aktualizacji zależności przebuduj EXE i instalator, aby dołączyć projekcje WinRT XML.
+
+### Mail masowy do klientów
+
+W zakładce **E-mail** przyciski **Synchronizacja wiadomości**, **Odśwież widok**
+i **Mail masowy** są obok siebie. Mail masowy pozwala wybrać konto nadawcze,
+wpisać temat i treść oraz zaznaczyć firmy. Można filtrować po formie działalności,
+typie rozliczania, formie opodatkowania, nazwie, NIP-ie i adresie e-mail.
+Domyślnie widoczne są aktywne firmy; opcję tę można wyłączyć.
+
+Odbiorcy pochodzą z kontaktowego adresu firmy (`adres_email`). Kolumna
+**Adres email** w głównym Excelu jest automatycznie importowana właśnie do tego
+pola oraz kontaktów firmy. Adresy do faktur są odrębnym ustawieniem.
+Firmy bez poprawnego kontaktowego adresu są widoczne, ale nie można ich zaznaczyć.
+Zmiana filtrów odznacza firmy poza wynikiem, a powtarzające się adresy są łączone.
+
+Przed wysłaniem wyświetlane jest potwierdzenie z pełną listą firm i adresów oraz
+treścią wiadomości. Domyślnie partia obejmuje **25 adresów**, a przerwa po jej
+zakończeniu trwa **60 sekund**; oba ustawienia można zmienić. Klienci trafiają
+do UDW/BCC, a pole Do zawiera tylko konto nadawcze. Kopie są zapisywane w wysłanych.
+
+Wysyłka działa poza wątkiem interfejsu. **Zatrzymaj wysyłkę** i zamykanie okna
+wstrzymują dalsze partie; rozpoczęta partia zostaje dokończona. Konto i zatwierdzone
+adresy są ponownie sprawdzane przed każdą partią. Po błędzie SMTP nie ma
+automatycznych ponowień — wynik mógł nie dotrzeć mimo przyjęcia wiadomości.
+Raport rozróżnia wysłane, niepotwierdzone i niewysłane adresy i można zapisać go do CSV.
+Po zakończeniu nową kampanię rozpoczyna się przez ponowne otwarcie okna.
+
+### Ilości w raporcie dziennym
+
+Raport dzienny oraz jego eksport Excel zawierają **Miesiąc rozliczeniowy**,
+**Śr. dokumentów / mies.** i **Umowy (miesiąc)**. Średnia dokumentów obejmuje
+zapisane dla firmy miesiące z liczbą większą od zera, do miesiąca rozliczeniowego
+danego wpisu czasu włącznie. Rzeczywiste dokumenty mają pierwszeństwo przed
+ręczną/importowaną liczbą dla tego samego miesiąca. Miesiące zerowe i przyszłe
+nie wchodzą do średniej; brak obserwacji jest oznaczany kreską.
+
+Umowy to suma UoP, UZ i UoD za miesiąc rozliczeniowy, z dotychczasowym przenoszeniem
+ostatniej znanej wartości. Te ilości są kontekstem firmy, a nie dzienną produkcją
+pracownika; nie należy sumować ich między wierszami czynności. Wpisy ogólne bez
+firmy mają puste pola. Praca nad różnymi okresami tej samej firmy pozostaje
+rozdzielona, nawet jeśli wykonano ją jednego dnia.

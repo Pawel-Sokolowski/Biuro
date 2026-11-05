@@ -19,18 +19,20 @@ class MonthlyViewModel(QAbstractTableModel):
         self.COL_ETAP = 4 if mode == "ksiegowosc" else 2
 
     def set_rows(self, rows: List[Dict[str, Any]]):
+        if rows == self._rows:
+            return
         # szybkie porównanie po id
         old_ids = [r.get("id") for r in self._rows]
         new_ids = [r.get("id") for r in rows]
 
         if old_ids == new_ids:
             # ta sama struktura — porównaj zawartość i emituj dataChanged dla zmienionych komórek
+            changed = [i for i, (old, new) in enumerate(zip(self._rows, rows)) if old != new]
             self._rows = rows
             if len(rows) == 0:
                 return
-            top_left = self.index(0, 0)
-            bottom_right = self.index(len(rows) - 1, self.columnCount() - 1)
-            self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole])
+            for row in changed:
+                self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1), [])
             return
 
         # struktura zmieniona — reset modelu

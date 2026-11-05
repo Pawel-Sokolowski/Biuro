@@ -80,6 +80,8 @@ a = Analysis(
         "PyQt6.QtWebEngineWidgets",
         "openpyxl",
         "winrt.windows.ui.notifications",
+        "winrt.windows.data.xml.dom",
+        "winrt.windows.storage.streams",
         "winrt.windows.ui.notifications.management",
         "winrt.windows.foundation",
         "winrt.windows.foundation.collections",

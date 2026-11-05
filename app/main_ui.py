@@ -649,12 +649,11 @@ class OfficeManagerApp(QMainWindow):
         for name, month in done:
             tray = getattr(self._mail_toaster, "_tray", None)
             if tray is not None:
-                tray.showMessage("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}",
-                                 QSystemTrayIcon.MessageIcon.Information, 6000)
+                self._mail_toaster.show_notice("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}")
         if done and self.pages.currentWidget() is self.page_monthly:
-            self._refresh_current_page(self.pages.currentIndex())
+            self.page_monthly.refresh_background()
 
-    def _show_email_tab(self):
+    def _show_email_tab(self, target=None):
         self.showNormal() if self.isMinimized() else self.show()
         self.raise_()
         self.activateWindow()
@@ -662,6 +661,8 @@ class OfficeManagerApp(QMainWindow):
             if self.sidebar.item(row).data(Qt.ItemDataRole.UserRole) == "E-mail" and not self.sidebar.item(row).isHidden():
                 self.sidebar.setCurrentRow(row)
                 self.pages.setCurrentIndex(row)
+                if target is not None:
+                    self.page_email.open_message_notification(target)
                 break
 
     def _apply_tab_permissions(self):

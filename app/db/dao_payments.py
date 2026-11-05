@@ -234,9 +234,21 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
     return {"all": records_all, "new": inserted, "duplicates": len(records) - inserted, "own": len(own)}
 
 
-def list_unsettled_transfers(actor_id: int) -> list[dict[str, Any]]:
+def bank_import_summary(actor_id: int) -> dict:
+    """Shared import inventory, independent of the importing employee."""
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do przeglądania wyciągów.")
+    with get_conn() as conn:
+        row = conn.execute("SELECT count(*) AS total FROM bank_transakcje").fetchone()
+        scope = conn.execute("SELECT current_database() AS database, current_schema() AS schema").fetchone()
+        return {"total": row["total"], "database": scope["database"], "schema": scope["schema"]}
+
+
+def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit: int = 1000) -> list[dict[str, Any]]:
+    if not _allowed(actor_id):
+        raise PermissionError("Brak uprawnień do przeglądania wyciągów.")
+    if not isinstance(limit, int) or not 1 <= limit <= 1000000:
+        raise PaymentError("Nieprawidłowy limit operacji.")
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -247,11 +259,11 @@ def list_unsettled_transfers(actor_id: int) -> list[dict[str, Any]]:
                 SELECT transakcja_id, SUM(kwota) AS used FROM faktury_platnosci
                 WHERE transakcja_id IS NOT NULL GROUP BY transakcja_id
             ) p ON p.transakcja_id = b.id
-            WHERE b.kwota > 0 AND b.waluta = 'PLN' AND b.kierunek = 'C'
-              AND b.kwota - COALESCE(p.used, 0) > 0.009
+            WHERE %s OR (b.kwota > 0 AND b.waluta = 'PLN' AND b.kierunek = 'C'
+              AND b.kwota - COALESCE(p.used, 0) > 0.009)
             ORDER BY b.data_operacji DESC, b.id DESC
-            LIMIT 1000
-            """
+            LIMIT %s
+            """, (include_all, limit),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

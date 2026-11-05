@@ -393,3 +393,20 @@ Po instalacji tej wersji uruchom **Biuro – aktualizacja bazy** (`python migrat
 Katalog **Rocznego rozliczenia** zawiera także obowiązki ZUS (DRA/RCA — roczne zdrowotne,
 IWA, ZSWA, informacja roczna dla ubezpieczonego) oraz PFRON (DEK-R, INF-2).
 Pełna lista i sprawdzone źródła urzędowe: [docs/annual-declarations.md](docs/annual-declarations.md).
+
+
+### Wzór numeracji faktur i wspólne importy bankowe
+
+W **Ustawienia → Faktury** ustaw wzór numeracji, np.
+`{prefix}/{number:04d}/{month:02d}/{year}` → `FV/0001/11/2026`.
+`prefix` wynosi FV, KFV, FZ albo PRO zależnie od rodzaju dokumentu.
+Bez pola `month` numeracja jest roczna. Numer nadawany jest przy wystawianiu;
+zmiana wzoru nie zmienia numerów już nadanych i nie zwalnia numerów historycznych.
+W podglądzie wysyłki roboczy dokument nie jest oznaczany numerem technicznym `#ID`.
+
+**Faktury → Rozlicz MT940** pokazuje wspólne importy wszystkim pracownikom
+z uprawnieniami do finansów. Pole „Pokaż wszystkie zaimportowane operacje” obejmuje
+również rozliczone operacje, wypływy i inne waluty. Ich przypisywanie jako wpłat PLN
+jest zablokowane. Przycisk „Wczytaj kolejne 1000 operacji” udostępnia starsze wpisy.
+Pod listą widnieje źródło danych i liczba zapisanych operacji, przydatne przy
+porównywaniu widoczności na dwóch stanowiskach.

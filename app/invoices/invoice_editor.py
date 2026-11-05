@@ -38,14 +38,15 @@ class InvoiceEditorDialog(QDialog):
         self.read_only = bool(invoice.get("eksportowana"))
         self.is_correction = invoice.get("rodzaj") == "korekta"
         kind = "Korekta" if self.is_correction else "Faktura"
-        self.setWindowTitle(f"{kind} #{invoice['id']} - {invoice.get('miesiac', '')}")
+        label = invoice.get("numer") or f"robocza (ID: {invoice['id']}; numer przy wystawieniu)"
+        self.setWindowTitle(f"{kind} {label} - {invoice.get('miesiac', '')}")
         self.resize(900, 560)
 
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
         self.numer = QLineEdit(invoice.get("numer") or "")
-        self.numer.setPlaceholderText("puste = numer nadany automatycznie (FV/0001/MM/RRRR)")
+        self.numer.setPlaceholderText("puste = numer przy wystawieniu według wzoru z Ustawienia → Faktury")
         self.data_wyst = _date_edit(invoice.get("data_wystawienia") or "")
         self.data_sprz = _date_edit(invoice.get("data_sprzedazy") or "")
         self.termin = _date_edit(invoice.get("termin_platnosci") or "")

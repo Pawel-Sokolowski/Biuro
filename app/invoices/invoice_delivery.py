@@ -31,7 +31,7 @@ def delivery_plan(invoice_ids, actor_id):
             recipients = parse_recipients(address)
         except ValueError as exc:
             raise ValueError(f"Faktura {invoice.get('numer') or invoice_id}: {exc}") from exc
-        result.append({'id':invoice_id, 'number':invoice.get('numer') or f'#{invoice_id}', 'recipients':recipients})
+        result.append({'id':invoice_id, 'number':invoice.get('numer') or 'Robocza — numer zostanie nadany przy wystawieniu', 'recipients':recipients})
     return result
 
 

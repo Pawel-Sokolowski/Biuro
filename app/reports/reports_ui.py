@@ -23,7 +23,8 @@ from app.reports.import_parse import SEKCJE, SEKCJA_LABELS
 
 PROFIT_MODE = "Rentowność"
 DAILY_MODE = "Raport dzienny"
-DAILY_HEADERS = ["Data", "Pracownik", "Firma", "Zadanie / czynność", "Czas"]
+DAILY_HEADERS = ["Data", "Pracownik", "Firma", "Miesiąc rozliczeniowy", "Zadanie / czynność",
+                 "Śr. dokumentów / mies.", "Umowy (miesiąc)", "Czas"]
 
 
 def iter_daily_display_rows(rows):
@@ -37,7 +38,10 @@ def iter_daily_display_rows(rows):
         yield [
             datetime.date.fromisoformat(item["data"]).strftime("%d/%m/%Y") if new_day else "",
             item["pracownik"] if new_day or item["pracownik"] != last_emp else "",
-            item.get("firma") or "", item["czynnosc"], format_hours(item["sekundy"]),
+            item.get("firma") or "", item.get('miesiac') or '', item["czynnosc"],
+            (f"{item['dokumenty_srednia']:.2f}" if item.get('dokumenty_srednia') is not None
+             else '—' if item.get('firma') else ''),
+            str(item['umowy']) if item.get('umowy') is not None else '', format_hours(item["sekundy"]),
         ]
         last_day, last_emp = item["data"], item["pracownik"]
 
@@ -277,6 +281,10 @@ class ReportsPage(QWidget):
         layout.addWidget(self.report_table)
 
         self.daily_table = self._make_table(DAILY_HEADERS)
+        self.daily_table.horizontalHeaderItem(5).setToolTip(
+            'Średnia z zapisanych niezerowych miesięcy firmy, do miesiąca rozliczeniowego wpisu włącznie. '
+            'Brak niezerowych miesięcy oznaczono kreską. Nie jest to dzienna liczba obsłużonych dokumentów.')
+        self.daily_table.horizontalHeaderItem(6).setToolTip('Suma UoP, UZ i UoD w miesiącu rozliczeniowym wpisu.')
         layout.addWidget(self.daily_table)
         self._update_mode_ui(self.mode_combo.currentText())
         for table in (self.summary_table, self.report_table, self.import_table, self.import_table_kadry,

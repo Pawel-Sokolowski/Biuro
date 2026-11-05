@@ -21,6 +21,7 @@ qrcode[pil]==8.2
 lxml
 winrt-runtime; sys_platform == "win32"
 winrt-Windows.UI.Notifications; sys_platform == "win32"
+winrt-Windows.Data.Xml.Dom; sys_platform == "win32"
 winrt-Windows.UI.Notifications.Management; sys_platform == "win32"
 winrt-Windows.Foundation; sys_platform == "win32"
 winrt-Windows.Foundation.Collections; sys_platform == "win32"

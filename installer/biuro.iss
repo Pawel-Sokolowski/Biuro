@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Biuro"
-#define MyAppVersion "1.3.9"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
 #define MyBuildDir SourcePath + "..\dist\Biuro"

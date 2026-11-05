@@ -10,6 +10,7 @@ import email
 import tempfile
 import threading
 import unicodedata
+from uuid import uuid4
 from urllib.parse import quote, unquote
 from datetime import datetime
 import time
@@ -55,6 +56,7 @@ from app.email.email_storage import (
     list_assigned_rows,
     count_unread_assigned_by_employee,
     resolve_assigned_message,
+    resolve_notification_message,
     list_completed_rows,
     set_messages_completed,
     set_employee_assignment,
@@ -98,9 +100,11 @@ from app.email.email_helpers import (
     is_risky_attachment,
     iter_message_attachments,
     safe_attachment_name,
+    safe_header,
 )
 import logging
 from app.utils.background import TaskRunner, CommandRunner, LatestRead
+from app.utils.view_state import ItemViewState
 from app.email.mail_model import MailItem, MailTreeView
 from app.email.email_storage import get_mail_page
 
@@ -114,6 +118,8 @@ ROLE_FOLDER = Qt.ItemDataRole.UserRole + 4
 MAX_NUMBER_KEYS = 7
 ROLE_MSGID = Qt.ItemDataRole.UserRole + 20
 ROLE_REFS = Qt.ItemDataRole.UserRole + 21
+ROLE_FOLDER_LABEL = Qt.ItemDataRole.UserRole + 30
+ROLE_FOLDER_IDS = Qt.ItemDataRole.UserRole + 31
 DEFAULT_COLUMN_WIDTHS = [430, 220, 180]
 _SUBJECT_PREFIX = re.compile(r"^\s*(re|odp|fw|fwd|pd|wg|aw|przekaż)\s*:\s*", re.IGNORECASE)
 
@@ -282,6 +288,11 @@ class _MailWebPage(QWebEnginePage):
                 view = self.parent()
                 if hasattr(view, "load_remote_images"):
                     view.load_remote_images()
+            elif scheme == 'biuro-contact':
+                view = self.parent()
+                target = getattr(view, 'contact_links', {}).get(url.path())
+                if target is not None:
+                    view.address_clicked.emit(*target)
             elif scheme in ("http", "https", "mailto"):
                 QDesktopServices.openUrl(url)
             return False
@@ -290,10 +301,12 @@ class _MailWebPage(QWebEnginePage):
 
 class MailBrowser(QWebEngineView):
     """Podgląd HTML wiadomości w Chromium; JavaScript, pliki i zdalne zasoby są domyślnie blokowane."""
+    address_clicked = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.resources: Dict[str, Any] = {}
+        self.contact_links = {}
         self._last_html = ""
         self._last_header = ""
         # Osobny profil bez zapisu na dysku, żeby blokada nie dotyczyła innych widoków aplikacji.
@@ -335,7 +348,18 @@ class MailBrowser(QWebEngineView):
         )
 
     def clear(self) -> None:
+        self.contact_links = {}
         self.setHtml("")
+
+    def contextMenuEvent(self, event):
+        request = self.lastContextMenuRequest()
+        url = request.linkUrl() if request is not None else QUrl()
+        target = self.contact_links.get(url.path()) if url.scheme() == 'biuro-contact' else None
+        if target is not None:
+            self.address_clicked.emit(*target)
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     @staticmethod
     def prepare_html(html: str, resources: Dict[str, Any], header: str = "") -> str:
@@ -448,6 +472,8 @@ class EmailPage(QWidget):
         self._list_jobs = TaskRunner(self)
         self._message_jobs = TaskRunner(self)
         self._command_jobs = CommandRunner(self)
+        self._contact_jobs = TaskRunner(self)
+        self._contact_editor_pending = False
         self._sync_jobs = CommandRunner(self)
         self._mail_rows = []
         self._mail_cursor = None
@@ -529,7 +555,6 @@ class EmailPage(QWidget):
         self.label_numbers = resolve_label_numbers(employees)
         employees.sort(key=lambda e: (self.label_numbers.get(e["id"], 99), e["id"]))
         self.employees = employees
-        self._chips_signature = None
 
     def _columns_key(self) -> str:
         return f"email_kolumny_{self.pracownik_id}"
@@ -619,6 +644,8 @@ class EmailPage(QWidget):
         self._search_timer.stop()
         self._cancel_mail_load()
         self._message_jobs.invalidate()
+        self._contact_jobs.invalidate()
+        self._contact_editor_pending = False
 
     def _on_sync_failed(self, message):
         self._last_sync_error = message
@@ -665,11 +692,17 @@ class EmailPage(QWidget):
         btn_sync.clicked.connect(self.on_manual_sync)
         toolbar.addWidget(btn_sync)
         self.sync_status = QLabel("Automatyczna synchronizacja co 2 min")
-        toolbar.addWidget(self.sync_status)
 
         btn_refresh = QPushButton("Odśwież widok")
         btn_refresh.clicked.connect(self.refresh_all)
         toolbar.addWidget(btn_refresh)
+        self.btn_bulk_mail = QPushButton('Mail masowy')
+        self.btn_bulk_mail.clicked.connect(self._open_bulk_mail)
+        toolbar.addWidget(self.btn_bulk_mail)
+        self.btn_contacts = QPushButton('Kontakty')
+        self.btn_contacts.clicked.connect(self._open_address_book)
+        toolbar.addWidget(self.btn_contacts)
+        toolbar.addWidget(self.sync_status)
 
         btn_filters = QToolButton()
         btn_filters.setText("Filtry")
@@ -848,6 +881,8 @@ class EmailPage(QWidget):
         message_layout.addLayout(mail_toolbar)
 
         self.mail_view = MailBrowser()
+        if hasattr(self.mail_view, 'address_clicked'):
+            self.mail_view.address_clicked.connect(self._on_address_clicked)
         self.mail_view.setPlainText("Wybierz wiadomość z listy.")
         message_layout.addWidget(self.mail_view, 1)
 
@@ -913,7 +948,8 @@ class EmailPage(QWidget):
                     self.hidden_folders.get(str(konto_id), set()),
                 )
             except Exception:
-                folders, unread = [], {}
+                logger.exception("Nie można odświeżyć folderów; zachowano bieżący widok")
+                return
 
             if not any(f["server_name"].upper() == "INBOX" for f in folders):
                 folders = folders + [{
@@ -929,9 +965,8 @@ class EmailPage(QWidget):
         current_id = self.current_account["id"] if self.current_account else None
 
         signature = (
-            current_id,
-            self.current_folder_local,
             self.show_hidden_folders,
+            tuple((e["id"], e.get("imie"), e.get("nazwisko")) for e in self.employees),
             tuple(
                 (
                     account["id"],
@@ -942,28 +977,28 @@ class EmailPage(QWidget):
             tuple(
                 (
                     acc["id"],
+                    acc.get("email"),
                     tuple(
-                        (f.get("id"), f["server_name"], f.get("attributes"))
+                        (f.get("id"), f["server_name"], f.get("attributes"), f.get("delimiter"), f.get("display_name"))
                         for f in folders
                     ),
-                    tuple(sorted(unread.items())),
                 )
                 for acc, folders, unread in data
             ),
         )
 
         if signature == self._tree_signature:
+            self._update_folder_unread(data)
             return
 
         self._tree_signature = signature
 
-        try:
-            employees = list_employees()
-        except Exception:
-            employees = []
+        employees = self.employees
 
         previously_expanded = self._expanded_folder_keys()
         had_tree = self.folder_tree.topLevelItemCount() > 0
+        tree_state = ItemViewState(self.folder_tree, lambda index: self._folder_key(
+            self.folder_tree.itemFromIndex(index)))
 
         self.folder_tree.blockSignals(True)
         self.folder_tree.clear()
@@ -985,6 +1020,13 @@ class EmailPage(QWidget):
                 total += subtree_unread(unread, child)
 
             return total
+
+        def subtree_folder_ids(node):
+            folder = node.get("folder")
+            ids = [folder["id"]] if folder and folder.get("id") is not None else []
+            for child in node["children"]:
+                ids.extend(subtree_folder_ids(child))
+            return ids
 
         def add(
                 account_id: int,
@@ -1082,6 +1124,8 @@ class EmailPage(QWidget):
 
             item.setData(0, ROLE_FOLDER, node["path"])
             item.setData(0, ROLE_ACCOUNT, account_id)
+            item.setData(0, ROLE_FOLDER_LABEL, label + (" (ukryty)" if hidden else ""))
+            item.setData(0, ROLE_FOLDER_IDS, subtree_folder_ids(node))
 
             parent.addChild(item)
 
@@ -1186,7 +1230,28 @@ class EmailPage(QWidget):
                 parent.setExpanded(True)
                 parent = parent.parent()
 
+        if had_tree:
+            tree_state.restore()
         self.folder_tree.blockSignals(False)
+
+    def _update_folder_unread(self, data):
+        unread = {account["id"]: counts for account, _folders, counts in data}
+        def walk(item):
+            label = item.data(0, ROLE_FOLDER_LABEL)
+            if label is not None:
+                counts = unread.get(item.data(0, ROLE_ACCOUNT), {})
+                count = sum(counts.get(folder_id, 0) for folder_id in item.data(0, ROLE_FOLDER_IDS) or [])
+                text = f"{label} ({count})" if count else label
+                if item.text(0) != text:
+                    item.setText(0, text)
+                font = item.font(0)
+                if font.bold() != bool(count):
+                    font.setBold(bool(count))
+                    item.setFont(0, font)
+            for row in range(item.childCount()):
+                walk(item.child(row))
+        for row in range(self.folder_tree.topLevelItemCount()):
+            walk(self.folder_tree.topLevelItem(row))
 
     @staticmethod
     def _folder_key(item: QTreeWidgetItem):
@@ -1367,20 +1432,17 @@ class EmailPage(QWidget):
             ensure_row: Optional[Dict[str, Any]] = None,
             _payload=None,
     ) -> None:
-
+        view_state = ItemViewState(self.mail_list, lambda index: index.data(ROLE_ROW_ID)) if keep_view else None
         selected_ids = {
             it.data(0, ROLE_ROW_ID)
             for it in self.mail_list.selectedItems()
         } if keep_view else set()
 
-        scroll = (
-            self.mail_list.verticalScrollBar().value()
-            if keep_view else 0
-        )
-
         current_item = self.mail_list.currentItem() if keep_view else None
         restore_id = (current_item.data(0, ROLE_ROW_ID) if current_item is not None
                       else getattr(self, "_current_message_row_id", None)) if keep_view else None
+        if view_state is not None and view_state.current is None:
+            view_state.current = restore_id
 
         self.mail_list.blockSignals(True)
         if not keep_view:
@@ -1421,14 +1483,8 @@ class EmailPage(QWidget):
         self.older_messages.setEnabled(True)
         self.older_messages.setVisible(more)
         if unchanged:
-            restore = self.mail_list.model().items.get(restore_id)
-            if restore is not None:
-                parent = restore.parent()
-                while parent is not None:
-                    parent.setExpanded(True)
-                    parent = parent.parent()
-                self.mail_list.setCurrentItem(restore, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
-                self.mail_list.verticalScrollBar().setValue(scroll)
+            if current_item is None and restore_id is not None:
+                view_state.restore()
             self._mail_rows = list(rows)
             self.mail_list.blockSignals(False)
             self._refresh_chips()
@@ -1726,9 +1782,7 @@ class EmailPage(QWidget):
             it.setSelected(True)
 
         if keep_view:
-            self.mail_list.verticalScrollBar().setValue(
-                scroll
-            )
+            view_state.restore()
 
         self.mail_list.blockSignals(False)
 
@@ -1744,13 +1798,13 @@ class EmailPage(QWidget):
             logger.exception("Nie można pobrać liczników przypisanej poczty")
             unread_counts = {}
         signature = (
-            tuple(sorted(unread_counts.items())),
-            self.employee_filter, self.completed_filter,
-            tuple((e["id"], self.label_numbers.get(e["id"])) for e in self.employees),
+            tuple((e["id"], employee_name(e), self.label_numbers.get(e["id"])) for e in self.employees),
         )
         if signature == self._chips_signature:
+            self._update_chips(unread_counts)
             return
         self._chips_signature = signature
+        self._chips_buttons = {}
         while self.chips_layout.count():
             w = self.chips_layout.takeAt(0).widget()
             if w is not None:
@@ -1778,12 +1832,12 @@ class EmailPage(QWidget):
             self.chips_layout.addWidget(btn)
             return btn
 
-        chip(
+        self._chips_buttons["all"] = chip(
             "Wszystkie", "#555555",
             self.employee_filter is None and not self.completed_filter,
             lambda _=False: self._on_chip_clicked(None),
         )
-        chip(
+        self._chips_buttons["completed"] = chip(
             f"{COMPLETED_LABEL_NUMBER} Zrobione", label_color(COMPLETED_LABEL_NUMBER),
             self.completed_filter,
             lambda _=False: self._on_completed_chip_clicked(),
@@ -1792,7 +1846,7 @@ class EmailPage(QWidget):
         )
         for emp in self.employees:
             number = self.label_numbers.get(emp["id"])
-            chip(
+            self._chips_buttons[emp["id"]] = chip(
                 f"{employee_name(emp)} ({unread_counts.get(emp['id'], 0)})",
                 self._employee_color(emp["id"]),
                 not self.completed_filter and self.employee_filter == emp["id"],
@@ -1800,6 +1854,19 @@ class EmailPage(QWidget):
                 f"Nieprzeczytane przypisane wiadomości na tym koncie: {unread_counts.get(emp['id'], 0)}. "
                 + (f"Klawisz {number} przypisuje zaznaczone wiadomości" if number else ""),
             )
+
+    def _update_chips(self, unread_counts):
+        buttons = self._chips_buttons
+        buttons["all"].setChecked(self.employee_filter is None and not self.completed_filter)
+        buttons["completed"].setChecked(self.completed_filter)
+        for emp in self.employees:
+            number = self.label_numbers.get(emp["id"])
+            count = unread_counts.get(emp["id"], 0)
+            button = buttons[emp["id"]]
+            button.setText(f"{employee_name(emp)} ({count})")
+            button.setChecked(not self.completed_filter and self.employee_filter == emp["id"])
+            button.setToolTip(f"Nieprzeczytane przypisane wiadomości na tym koncie: {count}. "
+                              + (f"Klawisz {number} przypisuje zaznaczone wiadomości" if number else ""))
 
     def _on_chip_clicked(self, employee_id: Optional[int]) -> None:
         self.employee_filter = employee_id
@@ -1809,10 +1876,16 @@ class EmailPage(QWidget):
             self.load_mail_list_from_db(self.current_folder_local)
 
     def open_assignment_notification(self, target):
+        return self._open_notification(target, resolve_assigned_message)
+
+    def open_message_notification(self, target):
+        return self._open_notification(target, resolve_notification_message)
+
+    def _open_notification(self, target, resolver):
         try:
             accounts = get_email_accounts_for_employee(self.pracownik_id)
             account = next((account for account in accounts if account["id"] == target.get("account_id")), None)
-            message = resolve_assigned_message(self.pracownik_id, target) if account else None
+            message = resolver(self.pracownik_id, target) if account else None
         except Exception:
             logger.exception("Nie można odnaleźć przypisanej wiadomości")
             message = None
@@ -1820,6 +1893,7 @@ class EmailPage(QWidget):
             QMessageBox.information(self, "Powiadomienie", "Wiadomość została usunięta, przeniesiona bez identyfikatora lub nie jest już Tobie dostępna.")
             return False
         self._select_timer.stop()
+        self._search_timer.stop()
         self.accounts = accounts
         self.current_account = account
         self.current_folder_local = message["server_name"]
@@ -1830,6 +1904,20 @@ class EmailPage(QWidget):
         self.search_input.clear()
         self.search_input.blockSignals(False)
         self.load_folders_from_db()
+        def select_folder(parent):
+            for index in range(parent.childCount()):
+                item = parent.child(index)
+                if (item.data(0, ROLE_ACCOUNT) == account['id']
+                        and item.data(0, ROLE_DATA) == self.current_folder_local):
+                    blocked = self.folder_tree.blockSignals(True)
+                    self.folder_tree.setCurrentItem(item)
+                    self.folder_tree.scrollToItem(item)
+                    self.folder_tree.blockSignals(blocked)
+                    return True
+                if select_folder(item):
+                    return True
+            return False
+        select_folder(self.folder_tree.invisibleRootItem())
         self.load_mail_list_from_db(self.current_folder_local, ensure_row=message)
         found = None
         for item in self.mail_list.all_items():
@@ -2243,6 +2331,21 @@ class EmailPage(QWidget):
 
     def _render_message(self, msg: email.message.Message) -> None:
         self.cached_message = msg
+        self.mail_view.contact_links = {}
+        from app.email.address_book import normalize_email
+        def addresses(raw):
+            links = []
+            for name, address in getaddresses([str(raw or '')]):
+                try:
+                    address = normalize_email(address)
+                except ValueError:
+                    continue
+                name = safe_header(name)
+                token = uuid4().hex
+                self.mail_view.contact_links[token] = (name, address)
+                label = f'{name} <{address}>' if name else address
+                links.append(f'<a href="biuro-contact:{token}" title="Opcje adresu i dodawanie kontaktu">{html_escape(label)}</a>')
+            return ', '.join(links) or html_escape(str(raw or ''))
         labels_html = ""
         if self.current_message_labels:
             badges = "".join(
@@ -2254,9 +2357,11 @@ class EmailPage(QWidget):
             labels_html = f"Etykiety: {badges}<br>"
         header = (
             f"<b>{html_escape(str(msg.get('Subject') or '(brak tematu)'))}</b><br>"
-            f"Od: {html_escape(str(msg.get('From') or ''))}<br>"
-            f"Do: {html_escape(str(msg.get('To') or ''))}<br>"
-            f"Data: {html_escape(str(msg.get('Date') or ''))}<br>"
+            f"Od: {addresses(msg.get('From'))}<br>"
+            f"Do: {addresses(msg.get('To'))}<br>"
+            + (f"Kopia: {addresses(msg.get('Cc'))}<br>" if msg.get('Cc') else '')
+            + (f"Odpowiedź do: {addresses(msg.get('Reply-To'))}<br>" if msg.get('Reply-To') else '')
+            + f"Data: {html_escape(str(msg.get('Date') or ''))}<br>"
             f"{labels_html}<hr>"
         )
         html = extract_html(msg)
@@ -2279,6 +2384,7 @@ class EmailPage(QWidget):
         self.show_attachments(shown)
 
     def _clear_view(self) -> None:
+        self.mail_view.contact_links = {}
         self.mail_view.clear()
         self.mail_view.resources = {}
         self.att_bar.hide()
@@ -2479,11 +2585,58 @@ class EmailPage(QWidget):
         self._last_account_check = 0.0
         self.start_background_sync()
 
+    def _open_bulk_mail(self):
+        from app.email.bulk_mail_dialog import BulkMailDialog
+        try:
+            accounts = get_email_accounts_for_employee(self.pracownik_id)
+            if not accounts:
+                QMessageBox.information(self, 'Mail masowy', 'Brak dostępnego konta nadawczego.')
+                return
+            BulkMailDialog(self.pracownik_id, accounts,
+                           (self.current_account or {}).get('id'), self).exec()
+        except Exception:
+            logger.exception('Nie można otworzyć maila masowego')
+            QMessageBox.warning(self, 'Mail masowy', 'Nie udało się wczytać kont lub firm. Sprawdź połączenie z bazą i spróbuj ponownie.')
+
+    def _open_address_book(self):
+        from app.email.address_book_ui import AddressBookDialog
+        AddressBookDialog(self.pracownik_id, self).exec()
+
+    def _on_address_clicked(self, name, address):
+        from PyQt6.QtGui import QCursor
+        from app.email.address_book import contact_mailbox
+        menu = QMenu(self)
+        menu.addAction(address).setEnabled(False)
+        menu.addSeparator()
+        menu.addAction('Dodaj do książki adresowej…').triggered.connect(lambda: self._add_global_contact(name, address))
+        mailbox = contact_mailbox({'display_name': name, 'email': address})
+        menu.addAction('Wyślij wiadomość do…').triggered.connect(lambda: self._open_compose('Nowa wiadomość', to=mailbox))
+        menu.addAction('Kopiuj adres e-mail').triggered.connect(lambda: QApplication.clipboard().setText(address))
+        menu.addAction('Kopiuj nazwę i adres e-mail').triggered.connect(lambda: QApplication.clipboard().setText(mailbox))
+        menu.aboutToHide.connect(menu.deleteLater)
+        self._address_menu = menu
+        menu.popup(QCursor.pos())
+
+    def _add_global_contact(self, name, address):
+        if self._contact_editor_pending:
+            return
+        from app.db.dao_address_book import find_contact
+        from app.email.address_book_ui import ContactDialog
+        self._contact_editor_pending = True
+        def loaded(contact):
+            self._contact_editor_pending = False
+            ContactDialog(self.pracownik_id, contact=contact,
+                          initial={'email': address, 'display_name': name}, parent=self).exec()
+        def failed(exc):
+            self._contact_editor_pending = False
+            QMessageBox.warning(self, 'Kontakt', f'Nie udało się wczytać książki adresowej: {exc}')
+        self._contact_jobs.submit(lambda: find_contact(self.pracownik_id, address), loaded, failed)
+
     def refresh_all(self) -> None:
         self._reload_employees()
         self.load_folders_from_db()
         if self.current_folder_local:
-            self.load_mail_list_from_db(self.current_folder_local)
+            self._load_mail_async(keep_view=True)
 
     # ------------------------------------------------------------------
     # Pisanie wiadomości

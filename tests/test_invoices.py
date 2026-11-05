@@ -178,6 +178,16 @@ class InvoiceLifecycleTests(DbTestCase):
         self.assertEqual([i["id"] for i in list_invoices(other, False, "2026-10")], [self.invoice_id])
         self.assertEqual(list_invoices(None, False, "2026-10"), [])
 
+    def test_combined_list_keeps_both_groups_and_access_checks(self):
+        company = self.make_company('Second customer')
+        issued = create_or_update_invoice(company, '2026-10', POSITIONS, 520, 639.6)
+        mark_exported([issued], 1)
+        rows = list_invoices(1, None, '2026-10')
+        self.assertEqual({row['id'] for row in rows}, {self.invoice_id, issued})
+        self.assertEqual({bool(row['eksportowana']) for row in rows}, {False, True})
+        self.assertEqual(list_invoices(None, None, '2026-10'), [])
+        self.assertEqual([row['id'] for row in list_invoices(1, None, '2026-10', company)], [issued])
+
 
 class InvoiceUiTests(DbTestCase):
     @classmethod

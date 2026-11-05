@@ -17,6 +17,8 @@ def preserve_table_view(table):
     anchor = key(top)
     offset = table.rowViewportPosition(top) if top >= 0 else 0
     blocked = table.blockSignals(True)
+    updating = table.updatesEnabled()
+    table.setUpdatesEnabled(False)
     try:
         yield
     finally:
@@ -40,3 +42,4 @@ def preserve_table_view(table):
             table.horizontalScrollBar().setValue(horizontal)
         finally:
             table.blockSignals(blocked)
+            table.setUpdatesEnabled(updating)

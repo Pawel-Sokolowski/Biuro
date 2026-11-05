@@ -3,9 +3,10 @@ import math
 from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
+from time import perf_counter
 
 from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QSettings, QRunnable, QThreadPool
-from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
+from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QFontMetrics, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
     QDateEdit, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton,
@@ -244,7 +245,7 @@ class KsefUnmatchedDialog(QDialog):
 class FakturyPage(QWidget):
     DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
-    ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Podgląd", "Kwota netto", "Kwota brutto",
+    ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Podgląd", "Netto", "Brutto",
                       "Zapłacono", "Pozostało", "Data zapłaty", "Data eksportu", "Numer KSeF", "Status KSeF",
                       "E-mail faktury"]
     ISSUED_NUMBER_COLUMN = 4
@@ -267,6 +268,7 @@ class FakturyPage(QWidget):
         self._issued_payments = None
         self._issued_payment_filter = None
         self._issued_number_filter = None
+        self._issued_kind_filter = None
         self._refresh_later = QTimer(self)
         self._refresh_later.setSingleShot(True)
         self._refresh_later.setInterval(250)
@@ -309,6 +311,17 @@ class FakturyPage(QWidget):
         if timer is not None:
             timer.stop()
         super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "issued_table"):
+            self._size_buyer_column()
+
+    def _size_buyer_column(self):
+        table = self.issued_table
+        other_width = sum(table.columnWidth(c) for c in range(table.columnCount())
+                          if c != 2 and not table.isColumnHidden(c))
+        table.setColumnWidth(2, max(240, table.viewport().width() - other_width))
 
     # ---------------- budowa ekranu ----------------
     def _build_filters(self):
@@ -500,6 +513,14 @@ class FakturyPage(QWidget):
         self.payment_filter.currentIndexChanged.connect(self._payment_filter_changed)
         payment_column.addWidget(self.payment_filter)
         payment_filters.addLayout(payment_column)
+        kind_column = QVBoxLayout()
+        kind_column.addWidget(QLabel("Rodzaj"))
+        self.invoice_kind_filter = QComboBox()
+        for label, value in (("Wszystkie", "all"), ("Sprzedażowa", "sale"), ("Korekta", "korekta")):
+            self.invoice_kind_filter.addItem(label, value)
+        self.invoice_kind_filter.currentIndexChanged.connect(self._invoice_number_filter_changed)
+        kind_column.addWidget(self.invoice_kind_filter)
+        payment_filters.addLayout(kind_column)
         number_column = QVBoxLayout()
         number_column.addWidget(QLabel("Nr faktury"))
         self.invoice_number_filter = QLineEdit()
@@ -530,14 +551,17 @@ class FakturyPage(QWidget):
         header.setStretchLastSection(False)
         for column in range(len(self.ISSUED_HEADERS)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # nabywca wypełnia wolne miejsce
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        ksef_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        ksef_width = QFontMetrics(ksef_font).horizontalAdvance("9240000010-20261028-9B6112C00016-4F") + 18
         widths = {
-            0: 52, 1: 72, 3: 72, 4: 155, self.ISSUED_PREVIEW_COLUMN: 82,
-            6: 88, 7: 88, 8: 88, 9: 88, self.ISSUED_PAID_COLUMN: 100, 11: 142,
-            self.ISSUED_KSEF_COLUMN: 360, 13: 150, 14: 150,
+            0: 52, 1: 76, 3: 72, 4: 132, self.ISSUED_PREVIEW_COLUMN: 82,
+            6: 78, 7: 78, 8: 88, 9: 88, self.ISSUED_PAID_COLUMN: 100, 11: 142,
+            self.ISSUED_KSEF_COLUMN: ksef_width, 13: 100, 14: 100,
         }
         for column, width in widths.items():
             self.issued_table.setColumnWidth(column, width)
+        self._size_buyer_column()
 
     def _build_tab_rozliczenia(self):
         layout = QVBoxLayout(self.tab_rozliczenia)
@@ -622,16 +646,27 @@ class FakturyPage(QWidget):
         self.refresh()
 
     def _build_tab_dodatkowe(self):
+        self.extra_activities = None
+        QVBoxLayout(self.tab_dodatkowe)
+        self.tabs.currentChanged.connect(self._load_extra_activities)
+
+    def _load_extra_activities(self, *_):
+        if self.tabs.currentWidget() is not self.tab_dodatkowe:
+            return
+        if self.extra_activities is not None:
+            month = self._current_month()
+            if self.extra_activities.month.currentText() != month:
+                self.extra_activities.month.setCurrentText(month)
+            return
         from app.db.dao_companies import list_companies
         from app.db.dao_employees import list_employees
         from app.tasks.extra_activities_ui import ExtraActivitiesPage
 
-        layout = QVBoxLayout(self.tab_dodatkowe)
+        layout = self.tab_dodatkowe.layout()
         self.extra_activities = ExtraActivitiesPage(
             self.pracownik_id, list_companies(self.pracownik_id), list_employees(), self.tab_dodatkowe,
+            month=self._current_month(),
         )
-        self.extra_activities.month.setCurrentText(self._current_month())
-        self.extra_activities.refresh()
         self.extra_activities.activities_changed.connect(self.refresh)
         self.extra_activities.open_task.connect(self._open_extra_task)
         layout.addWidget(self.extra_activities)
@@ -995,12 +1030,12 @@ class FakturyPage(QWidget):
     # ---------------- filtry ----------------
     def _invoice_number_filter_changed(self):
         if self._issued_rows is not None:
-            self._fill_issued(self._issued_rows)
+            self._fill_issued(self._issued_rows, payments=self._issued_payments)
 
     def _payment_filter_changed(self):
         self._view_settings.setValue(self._payment_filter_key, self.payment_filter.currentData())
         self._view_settings.sync()
-        self.refresh()
+        self._invoice_number_filter_changed()
 
     def _current_month(self):
         return self.month_button.monthText()
@@ -1009,9 +1044,7 @@ class FakturyPage(QWidget):
         return self.month_button.currentText()
 
     def _invoice_month_changed(self, month):
-        if hasattr(self, "extra_activities"):
-            self.extra_activities.month.setCurrentText(self._current_month())
-            self.extra_activities.refresh()
+        self._load_extra_activities()
         self.refresh()
 
     # ---------------- generowanie ----------------
@@ -1073,27 +1106,15 @@ class FakturyPage(QWidget):
 
         miesiac = self._current_period()
 
-        self._fill_drafts(
-            list_invoices(
-                self.pracownik_id,
-                False,
-                miesiac,
-                firma_id,
-                kontrahent_id,
-            )
-        )
-
-        self._fill_issued(
-            list_invoices(
-                self.pracownik_id,
-                True,
-                miesiac,
-                firma_id,
-                kontrahent_id,
-            )
-        )
+        started = perf_counter()
+        invoices = list_invoices(self.pracownik_id, None, miesiac, firma_id, kontrahent_id)
+        fetched = perf_counter()
+        self._fill_drafts([inv for inv in invoices if not inv.get("eksportowana")])
+        self._fill_issued([inv for inv in invoices if inv.get("eksportowana")])
         if self.tabs.currentWidget() is self.tab_rozliczenia:
             self._fill_settlements()
+        logger.info("Invoice refresh: rows=%d query=%.3fs tables_and_payments=%.3fs",
+                    len(invoices), fetched - started, perf_counter() - fetched)
 
     def _fill_drafts(self, invoices):
         if self._draft_rows == invoices:
@@ -1103,9 +1124,8 @@ class FakturyPage(QWidget):
         after = next((row for row in invoices if row["id"] == shown), None)
         with preserve_table_view(self.draft_table):
             self.draft_table.setRowCount(0)
-            for inv in invoices:
-                row = self.draft_table.rowCount()
-                self.draft_table.insertRow(row)
+            self.draft_table.setRowCount(len(invoices))
+            for row, inv in enumerate(invoices):
                 values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
                           f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                           _fmt_date(inv["data_wystawienia"]), _fmt_date(inv["termin_platnosci"])]
@@ -1115,9 +1135,10 @@ class FakturyPage(QWidget):
         if before != after or (shown is not None and self._selected_ids(self.draft_table) != [shown]):
             self._show_draft_positions()
 
-    def _fill_issued(self, invoices):
+    def _fill_issued(self, invoices, *, payments=None):
         try:
-            payments = payments_for_invoices([inv["id"] for inv in invoices])
+            if payments is None:
+                payments = payments_for_invoices([inv["id"] for inv in invoices])
         except Exception:
             logger.exception("Nie udało się wczytać dat zapłaty")
             self.payment_filter_status.setText("Nie udało się odczytać płatności. Odśwież listę.")
@@ -1128,14 +1149,21 @@ class FakturyPage(QWidget):
         self.payment_filter_status.clear()
         payment_filter = self.payment_filter.currentData()
         number_filter = self.invoice_number_filter.text().strip().casefold()
+        kind_filter = self.invoice_kind_filter.currentData()
         changed = (self._issued_rows != invoices or self._issued_payments != payments
                    or self._issued_payment_filter != payment_filter
-                   or self._issued_number_filter != number_filter)
+                   or self._issued_number_filter != number_filter
+                   or self._issued_kind_filter != kind_filter)
         if changed:
             with preserve_table_view(self.issued_table):
                 self.issued_table.setRowCount(0)
+                self.issued_table.setRowCount(len(invoices))
+                row = 0
                 for inv in invoices:
                     if number_filter not in str(inv.get("numer") or "").casefold():
+                        continue
+                    correction = inv.get("rodzaj") == "korekta"
+                    if (kind_filter == "korekta" and not correction) or (kind_filter == "sale" and correction):
                         continue
                     paid = payments.get(inv["id"], [])
                     paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
@@ -1148,8 +1176,6 @@ class FakturyPage(QWidget):
                         matching_states.add("unpaid")
                     if selected_state not in matching_states:
                         continue
-                    row = self.issued_table.rowCount()
-                    self.issued_table.insertRow(row)
                     values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{remaining:.2f}", paid_text,
@@ -1178,11 +1204,14 @@ class FakturyPage(QWidget):
                             "Kliknij, aby otworzyć urzędową weryfikację KSeF "
                             "(numer zostanie też skopiowany do schowka)"
                         )
+                    row += 1
+                self.issued_table.setRowCount(row)
 
             self._issued_rows = deepcopy(invoices)
             self._issued_payments = deepcopy(payments)
             self._issued_payment_filter = payment_filter
             self._issued_number_filter = number_filter
+            self._issued_kind_filter = kind_filter
 
         # Rendering a list never schedules KSeF traffic. Only an explicit send
         # or status request can start the workflow and its one-minute retries.

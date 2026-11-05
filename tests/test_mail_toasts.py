@@ -38,8 +38,17 @@ class MailToastTests(DbTestCase):
         self.assertEqual(get_new_unread_messages(1, max_id)[1], [])
 
     def test_sender_name(self):
-        self.assertEqual(_sender_name('"Jan Kowalski" <j@x.pl>'), "Jan Kowalski")
-        self.assertEqual(_sender_name("j@x.pl"), "j@x.pl")
+        for raw, expected in (
+            ('"Jan Kowalski" <j@x.pl>', "Jan Kowalski"),
+            ('Jan Kowalski <j@x.pl>', "Jan Kowalski"),
+            ('"Łukasz Żółć" <j@x.pl>', "Łukasz Żółć"),
+            ("j@x.pl", "j@x.pl"),
+            ("<j@x.pl>", "j@x.pl"),
+            (None, "(nieznany nadawca)"),
+            ("", "(nieznany nadawca)"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(_sender_name(raw), expected)
 
 
 if __name__ == "__main__":

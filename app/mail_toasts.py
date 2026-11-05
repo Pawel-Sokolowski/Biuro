@@ -16,9 +16,11 @@ def _compact(value, limit=100):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-def _sender_name(raw) -> str:
+def _sender_name(raw, *, include_address=False) -> str:
     name, address = parseaddr(str(raw or ""))
-    return _compact(f"{name} <{address}>" if name and address else name or address or raw or "(nieznany nadawca)")
+    if include_address and name and address:
+        return _compact(f"{name} <{address}>")
+    return _compact(name or address or raw or "(nieznany nadawca)")
 
 
 def _account_label(account):
@@ -33,7 +35,7 @@ def _notification_text(messages):
         message = messages[0]
         account = message["_account"]
         title = _compact("Nowy e-mail — " + str(account.get("email") or _account_label(account)), 63)
-        body = f"Od: {_compact(_sender_name(message.get('nadawca')), 80)}\nTemat: {_compact(message.get('temat') or '(bez tematu)', 145)}"
+        body = f"Od: {_compact(_sender_name(message.get('nadawca'), include_address=True), 80)}\nTemat: {_compact(message.get('temat') or '(bez tematu)', 145)}"
         return title, body
     shown = messages[:3]
     lines = []

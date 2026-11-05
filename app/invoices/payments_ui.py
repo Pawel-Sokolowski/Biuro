@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.db.dao_payments import (
-    PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
+    bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
     list_unsettled_transfers, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
     invoice_choices_for_transaction, match_invoice_contractor,
     invoice_contractor_key,
@@ -60,6 +60,7 @@ class BankPaymentReview(QDialog):
         self.invoices = []
         self.companies = []
         self.transactions = []
+        self._bank_limit = 1000
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
         self.resize(1600, 1000)
         layout = QVBoxLayout(self)
@@ -109,6 +110,20 @@ class BankPaymentReview(QDialog):
         refresh.clicked.connect(self.refresh)
         buttons.addWidget(refresh)
         layout.addLayout(buttons)
+        self.all_imports = QCheckBox("Pokaż wszystkie zaimportowane operacje, także rozliczone i wypływy")
+        self.all_imports.setChecked(True)
+        self.all_imports.toggled.connect(self.refresh)
+        layout.addWidget(self.all_imports)
+        self.more_imports = QPushButton("Wczytaj kolejne 1000 operacji")
+        self.more_imports.clicked.connect(self._load_more_imports)
+        layout.addWidget(self.more_imports)
+        self.data_status = QLabel()
+        self.data_status.setWordWrap(True)
+        layout.addWidget(self.data_status)
+        self.refresh()
+
+    def _load_more_imports(self):
+        self._bank_limit += 1000
         self.refresh()
 
     def _remember_encoding(self):
@@ -150,7 +165,8 @@ class BankPaymentReview(QDialog):
     def refresh(self):
         try:
             invoices = list_invoice_choices(self.actor_id)
-            transactions = list_unsettled_transfers(self.actor_id)
+            transactions = list_unsettled_transfers(self.actor_id, include_all=self.all_imports.isChecked(), limit=self._bank_limit)
+            summary = bank_import_summary(self.actor_id)
             try:
                 self.companies = list_company_choices(self.actor_id)
             except Exception:
@@ -163,6 +179,12 @@ class BankPaymentReview(QDialog):
             logger.exception("Błąd odświeżania rozliczeń bankowych")
             QMessageBox.warning(self, "Rozliczenie", "Nie udało się odczytać rozliczeń. Szczegóły w logach.")
             return
+        from app.config import get_database
+        self.data_status.setText(
+            f"Wspólna baza: {get_database()} · schemat: {summary['schema']}. "
+            f"Zaimportowane operacje: {summary['total']}; na liście: {len(transactions)}. "
+            "Rozliczać można tylko nierozliczone wpływy PLN; importy są wspólne dla uprawnionych pracowników.")
+        self.more_imports.setVisible(len(transactions) >= self._bank_limit)
         saved_choices = self._snapshot_choices()
         self.invoices, self.transactions = invoices, transactions
         self.table.setRowCount(0)
@@ -226,6 +248,17 @@ class BankPaymentReview(QDialog):
             contractor.lineEdit().editingFinished.connect(lambda row=idx: self._contractor_text_entered(row))
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, self.COL_SETTLEMENT))
+            eligible = (entry.get("waluta", "PLN") == "PLN" and entry.get("kierunek", "C") == "C"
+                        and Decimal(str(entry["kwota"])) > 0 and Decimal(str(entry["remaining"])) > Decimal("0.009"))
+            if not eligible:
+                choices.blockSignals(True)
+                choices.clear()
+                choices.addItem("Operacja nie podlega rozliczeniu", None)
+                choices.blockSignals(False)
+                for widget in (choices, amount, contractor, override):
+                    widget.setEnabled(False)
+                self.table.item(idx, self.COL_AMOUNT).setText(
+                    f"{money_text(entry['kwota'])} {entry.get('waluta', 'PLN')} / pozostało {money_text(entry['remaining'])}")
         if self.transactions:
             self.table.selectRow(0)
 

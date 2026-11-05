@@ -15,6 +15,8 @@ from app.utils.payment_terms import (
     DAY_OF_MONTH_KEY, DAYS_KEY, MODE_DAY_OF_MONTH, MODE_DAYS, MODE_KEY,
 )
 from app.invoices.ksef import DEFAULT_URL_TEMPLATE, URL_TEMPLATE_KEY
+from app.invoices.numbering import KEY as NUMBER_KEY, DEFAULT as NUMBER_DEFAULT, render as render_number
+from datetime import date
 
 
 class InvoiceSettings(QWidget):
@@ -39,6 +41,15 @@ class InvoiceSettings(QWidget):
         title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(title)
 
+        layout.addWidget(QLabel("Wzór numeracji nowych faktur:"))
+        self.number_pattern = QLineEdit(self.logic.get_setting(NUMBER_KEY) or NUMBER_DEFAULT)
+        layout.addWidget(self.number_pattern)
+        layout.addWidget(QLabel("Pola: {prefix}, {number:04d}, {month:02d}, {year}. "
+                               "Bez pola month numeracja jest roczna. Dotychczasowe numery pozostają bez zmian."))
+        self.number_preview = QLabel()
+        layout.addWidget(self.number_preview)
+        self.number_pattern.textChanged.connect(self._preview_number)
+        self._preview_number()
         # -------------------------
         # Metoda kasowa
         # -------------------------
@@ -236,7 +247,20 @@ class InvoiceSettings(QWidget):
     # ----------------------------------------------------
     # ZAPIS USTAWIEŃ
     # ----------------------------------------------------
+    def _preview_number(self):
+        try:
+            value = render_number(self.number_pattern.text().strip(), "FV", date.today())
+            self.number_preview.setText("Przykład: " + value)
+        except ValueError as exc:
+            self.number_preview.setText(str(exc))
+
     def _save(self):
+        template = self.number_pattern.text().strip()
+        try:
+            render_number(template, "FV", date.today())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Numeracja faktur", str(exc))
+            return
         if self.bank_account is not None and is_administrator(self.pracownik_id):
             import re
             account = re.sub(r"\s+", "", self.bank_account.text().strip()).upper()
@@ -246,6 +270,8 @@ class InvoiceSettings(QWidget):
                 return
             self.logic.set_setting("konto_bankowe_biura", account)
             self.logic.set_setting("faktury_konto_bankowe", account)
+
+        self.logic.set_setting(NUMBER_KEY, template)
 
         # metoda kasowa
         self._set_flag_value(

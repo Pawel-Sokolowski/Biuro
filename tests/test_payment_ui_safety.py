@@ -32,12 +32,27 @@ class BankReviewSafetyTests(unittest.TestCase):
         ]
         self.choices_patch = patch("app.invoices.payments_ui.list_invoice_choices", return_value=self.invoices)
         self.transfers_patch = patch("app.invoices.payments_ui.list_unsettled_transfers", return_value=self.transfers)
+        summary_patch = patch("app.invoices.payments_ui.bank_import_summary", return_value={"total": 2, "database": "test", "schema": "public"})
+        summary_patch.start()
+        self.addCleanup(summary_patch.stop)
         self.choices_patch.start()
         self.transfers_patch.start()
         self.addCleanup(self.choices_patch.stop)
         self.addCleanup(self.transfers_patch.stop)
         self.dialog = BankPaymentReview(1)
         self.addCleanup(self.dialog.close)
+
+    def test_non_pln_import_is_visible_without_offering_settlement(self):
+        self.transfers[0]["waluta"] = "EUR"
+        self.dialog.refresh()
+        self.assertTrue(self.dialog.all_imports.isChecked())
+        self.assertEqual(self.dialog.table.rowCount(), 2)
+        self.assertFalse(self.dialog.table.cellWidget(0, self.dialog.COL_INVOICE).isEnabled())
+        self.assertIsNone(self.dialog.table.cellWidget(0, self.dialog.COL_INVOICE).currentData())
+        self.dialog.table.selectRow(0)
+        with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, patch.object(QMessageBox, "warning"):
+            self.dialog._confirm()
+        confirm.assert_not_called()
 
     def test_editing_invoice_selects_its_transfer_and_caps_split_amount(self):
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(0)

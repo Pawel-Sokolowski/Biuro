@@ -266,6 +266,7 @@ class FakturyPage(QWidget):
         self._issued_rows = None
         self._issued_payments = None
         self._issued_payment_filter = None
+        self._issued_number_filter = None
         self._refresh_later = QTimer(self)
         self._refresh_later.setSingleShot(True)
         self._refresh_later.setInterval(250)
@@ -487,7 +488,8 @@ class FakturyPage(QWidget):
         self.send_pdf_after_ksef = QCheckBox("Po przyjęciu w KSeF wyślij PDF do klienta")
         layout.addWidget(self.send_pdf_after_ksef)
         payment_filters = QHBoxLayout()
-        payment_filters.addWidget(QLabel("Płatność:"))
+        payment_column = QVBoxLayout()
+        payment_column.addWidget(QLabel("Filtr płatności"))
         self.payment_filter = QComboBox()
         for label, value in (("Wszystkie", "all"), ("Zapłacone", "paid"),
                              ("Częściowo zapłacone", "partial"), ("Niezapłacone", "unpaid")):
@@ -496,7 +498,17 @@ class FakturyPage(QWidget):
         saved_filter = self._view_settings.value(self._payment_filter_key, "all")
         self.payment_filter.setCurrentIndex(max(0, self.payment_filter.findData(saved_filter)))
         self.payment_filter.currentIndexChanged.connect(self._payment_filter_changed)
-        payment_filters.addWidget(self.payment_filter)
+        payment_column.addWidget(self.payment_filter)
+        payment_filters.addLayout(payment_column)
+        number_column = QVBoxLayout()
+        number_column.addWidget(QLabel("Nr faktury"))
+        self.invoice_number_filter = QLineEdit()
+        self.invoice_number_filter.setPlaceholderText("Wpisz numer lub fragment numeru…")
+        self.invoice_number_filter.setClearButtonEnabled(True)
+        self.invoice_number_filter.setMinimumWidth(260)
+        self.invoice_number_filter.textChanged.connect(self._invoice_number_filter_changed)
+        number_column.addWidget(self.invoice_number_filter)
+        payment_filters.addLayout(number_column)
         self.payment_filter_status = QLabel()
         payment_filters.addWidget(self.payment_filter_status)
         payment_filters.addStretch()
@@ -981,6 +993,10 @@ class FakturyPage(QWidget):
         self._start_ksef_batch(ids, send=False)
 
     # ---------------- filtry ----------------
+    def _invoice_number_filter_changed(self):
+        if self._issued_rows is not None:
+            self._fill_issued(self._issued_rows)
+
     def _payment_filter_changed(self):
         self._view_settings.setValue(self._payment_filter_key, self.payment_filter.currentData())
         self._view_settings.sync()
@@ -1111,12 +1127,16 @@ class FakturyPage(QWidget):
             return
         self.payment_filter_status.clear()
         payment_filter = self.payment_filter.currentData()
+        number_filter = self.invoice_number_filter.text().strip().casefold()
         changed = (self._issued_rows != invoices or self._issued_payments != payments
-                   or self._issued_payment_filter != payment_filter)
+                   or self._issued_payment_filter != payment_filter
+                   or self._issued_number_filter != number_filter)
         if changed:
             with preserve_table_view(self.issued_table):
                 self.issued_table.setRowCount(0)
                 for inv in invoices:
+                    if number_filter not in str(inv.get("numer") or "").casefold():
+                        continue
                     paid = payments.get(inv["id"], [])
                     paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
                     paid_sum = sum((Decimal(str(p["kwota"] or 0)) for p in paid), Decimal("0"))
@@ -1162,6 +1182,7 @@ class FakturyPage(QWidget):
             self._issued_rows = deepcopy(invoices)
             self._issued_payments = deepcopy(payments)
             self._issued_payment_filter = payment_filter
+            self._issued_number_filter = number_filter
 
         # Rendering a list never schedules KSeF traffic. Only an explicit send
         # or status request can start the workflow and its one-minute retries.

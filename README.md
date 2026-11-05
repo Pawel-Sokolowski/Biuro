@@ -470,3 +470,6 @@ Aktualizacja danych zachowuje zaznaczenie i pozycję przewijania według ID fakt
 Niezmienione tabele nie są budowane ponownie, a otwarty edytor pozycji nie jest
 przerywany przez odświeżenie. Filtr płatności jest zapamiętywany osobno dla każdego
 pracownika i przywracany po ponownym otwarciu widoku.
+Obok filtra płatności znajduje się pole **Nr faktury**. Wpisanie fragmentu numeru
+od razu zawęża listę w ramach wybranego statusu płatności, bez rozróżniania wielkości
+liter. Przycisk czyszczenia pola usuwa wyszukiwanie; odświeżenie zachowuje wpisany tekst.

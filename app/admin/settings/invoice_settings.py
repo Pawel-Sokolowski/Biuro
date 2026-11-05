@@ -41,6 +41,27 @@ class InvoiceSettings(QWidget):
         title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(title)
 
+        # -------------------------
+        # Dane sprzedawcy i logo na podglądzie/PDF
+        # -------------------------
+        seller_form = QFormLayout()
+        self.seller_fields = {}
+        for label, key in (
+            ("Nazwa sprzedawcy:", "faktury_sprzedawca_nazwa"),
+            ("NIP sprzedawcy:", "faktury_sprzedawca_nip"),
+            ("REGON sprzedawcy:", "faktury_sprzedawca_regon"),
+            ("E-mail sprzedawcy:", "faktury_sprzedawca_email"),
+            ("Adres sprzedawcy:", "faktury_sprzedawca_adres"),
+            ("Kod pocztowy:", "faktury_sprzedawca_kod"),
+            ("Miejscowość:", "faktury_sprzedawca_miasto"),
+            ("Kraj:", "faktury_sprzedawca_kraj"),
+        ):
+            field = QLineEdit(self.logic.get_setting(key) or "")
+            self.seller_fields[key] = field
+            seller_form.addRow(label, field)
+        layout.addWidget(QLabel("Dane sprzedawcy na fakturze i PDF:"))
+        layout.addLayout(seller_form)
+
         layout.addWidget(QLabel("Wzór numeracji nowych faktur:"))
         self.number_pattern = QLineEdit(self.logic.get_setting(NUMBER_KEY) or NUMBER_DEFAULT)
         layout.addWidget(self.number_pattern)
@@ -146,26 +167,6 @@ class InvoiceSettings(QWidget):
         row.addStretch()
         layout.addLayout(row)
         self._sync_term_widgets()
-        # -------------------------
-        # Dane sprzedawcy i logo na podglądzie/PDF
-        # -------------------------
-        seller_form = QFormLayout()
-        self.seller_fields = {}
-        for label, key in (
-            ("Nazwa sprzedawcy:", "faktury_sprzedawca_nazwa"),
-            ("NIP sprzedawcy:", "faktury_sprzedawca_nip"),
-            ("REGON sprzedawcy:", "faktury_sprzedawca_regon"),
-            ("E-mail sprzedawcy:", "faktury_sprzedawca_email"),
-            ("Adres sprzedawcy:", "faktury_sprzedawca_adres"),
-            ("Kod pocztowy:", "faktury_sprzedawca_kod"),
-            ("Miejscowość:", "faktury_sprzedawca_miasto"),
-            ("Kraj:", "faktury_sprzedawca_kraj"),
-        ):
-            field = QLineEdit(self.logic.get_setting(key) or "")
-            self.seller_fields[key] = field
-            seller_form.addRow(label, field)
-        layout.addWidget(QLabel("Dane sprzedawcy na fakturze i PDF:"))
-        layout.addLayout(seller_form)
         self.logo_data = self.logic.get_setting("faktury_logo_data") or ""
         logo_row = QHBoxLayout()
         self.logo_status = QLabel("Logo zapisane" if self.logo_data else "Brak logo")

@@ -141,7 +141,7 @@ class ExtraActivitiesPage(QWidget):
     open_task = pyqtSignal(int)
     activities_changed = pyqtSignal()
 
-    def __init__(self, actor_id, companies, employees, parent=None):
+    def __init__(self, actor_id, companies, employees, parent=None, *, month=None):
         super().__init__(parent)
         self.actor_id, self.companies, self.employees = actor_id, companies, employees
         self.rows = []
@@ -151,7 +151,7 @@ class ExtraActivitiesPage(QWidget):
         self.company_filter.addItem("Wszyscy klienci", None)
         for company in companies:
             self.company_filter.addItem(company.get("nazwa_skrocona") or company["nazwa"], company["id"])
-        self.month = MonthPicker(date.today().strftime("%Y-%m"))
+        self.month = MonthPicker(month or date.today().strftime("%Y-%m"))
         self.state_filter = QComboBox()
         self.state_filter.addItem("Wszystkie", None)
         for state, label in STATES.items():

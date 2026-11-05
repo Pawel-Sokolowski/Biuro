@@ -1050,14 +1050,17 @@ def can_access_invoice(pracownik_id: Optional[int], firma_id: Optional[int]) -> 
 
 def list_invoices(
     pracownik_id: Optional[int],
-    wystawione: bool,
+    wystawione: Optional[bool],
     miesiac: Optional[str] = None,
     firma_id: Optional[int] = None,
     kontrahent_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Faktury robocze (wystawione=False) albo wystawione (wystawione=True) widoczne dla pracownika."""
-    where = ["COALESCE(f.eksportowana, 0) = %s"]
-    params: List[Any] = [1 if wystawione else 0]
+    """Widoczne faktury: robocze (False), wystawione (True) lub obie grupy (None)."""
+    where = ["TRUE"]
+    params: List[Any] = []
+    if wystawione is not None:
+        where.append("COALESCE(f.eksportowana, 0) = %s")
+        params.append(1 if wystawione else 0)
     if miesiac:
         where.append("f.miesiac LIKE %s" if len(miesiac) == 4 else "f.miesiac = %s")
         params.append(miesiac + "-%" if len(miesiac) == 4 else miesiac)

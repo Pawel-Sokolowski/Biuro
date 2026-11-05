@@ -473,3 +473,15 @@ pracownika i przywracany po ponownym otwarciu widoku.
 Obok filtra płatności znajduje się pole **Nr faktury**. Wpisanie fragmentu numeru
 od razu zawęża listę w ramach wybranego statusu płatności, bez rozróżniania wielkości
 liter. Przycisk czyszczenia pola usuwa wyszukiwanie; odświeżenie zachowuje wpisany tekst.
+
+Filtr **Rodzaj** zawęża listę do faktur sprzedażowych albo korekt i działa razem
+z numerem oraz statusem płatności. Te trzy filtry korzystają z wczytanych danych;
+przycisk **Odśwież** pobiera aktualne faktury i płatności z bazy. Faktury robocze
+i wystawione są pobierane jednym zapytaniem z dotychczasową kontrolą dostępu.
+Zakładka **Czynności dodatkowe** wczytuje dane dopiero po jej otwarciu.
+
+Kolumna nabywcy pokazuje nazwę skróconą (pełną, jeżeli brak skrótu) i ma co najmniej
+240 px szerokości. Nagłówki kwot to **Netto** i **Brutto**. Numer faktury oraz statusy
+zajmują mniej miejsca, a szerokość numeru KSeF wynika z metryki jego czcionki.
+Log `Invoice refresh` podaje czas odczytu faktur oraz obsługi tabel i płatności,
+co pozwala rozróżnić opóźnienia bazy od budowania widoku na danym stanowisku.

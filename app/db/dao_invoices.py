@@ -1167,7 +1167,7 @@ def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) ->
         invoice = dict(row)
         if draft_only and invoice.get("eksportowana"):
             raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Utwórz korektę.")
-        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s LIMIT 1", (invoice_id,)).fetchone():
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s OR source_correction_id = %s LIMIT 1", (invoice_id, invoice_id)).fetchone():
             raise InvoiceLockedError("Faktura ma zapisane płatności. Nie można usunąć historii jej rozliczeń.")
         if invoice.get("ksef_numer") or invoice.get("ksef_status") in (
             "wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta"
@@ -1195,7 +1195,7 @@ def delete_issued_invoice(invoice_id: int) -> None:
     if invoice and (invoice.get("ksef_numer") or invoice.get("ksef_status") in ("wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta")):
         raise InvoiceLockedError("Faktura KSeF wymaga korekty.")
     with get_conn() as conn:
-        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s", (invoice_id,)).fetchone():
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s OR source_correction_id = %s", (invoice_id, invoice_id)).fetchone():
             raise InvoiceLockedError("Faktura ma historię płatności; nie można jej usunąć.")
     raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Użyj anulowania lub korekty.")
 
@@ -1342,7 +1342,7 @@ def trash_invoice(invoice_id: int, actor_id: int) -> None:
         row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not row:
             raise ValueError("Nie znaleziono faktury.")
-        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s LIMIT 1", (invoice_id,)).fetchone():
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s OR source_correction_id = %s LIMIT 1", (invoice_id, invoice_id)).fetchone():
             raise InvoiceLockedError("Faktura ma zapisane płatności. Najpierw cofnij rozliczenia.")
         conn.execute(
             "INSERT INTO faktury_kosz (faktura_id, firma_id, miesiac, numer, ksef_numer, faktura_json, pozycje_json, deleted_by) "
@@ -1414,7 +1414,7 @@ def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
             raise InvoiceLockedError("Faktura jest już anulowana.")
         if row["ksef_numer"] or row["ksef_status"] in ("wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta"):
             raise InvoiceLockedError("Dokument KSeF wymaga korekty.")
-        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s", (invoice_id,)).fetchone():
+        if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s OR source_correction_id = %s", (invoice_id, invoice_id)).fetchone():
             raise InvoiceLockedError("Faktura ma historię płatności. Użyj korekty.")
         archive_invoice_positions(conn, dict(row))
         # Snapshot z numerem zostaje w archiwum i audycie; sama faktura wraca do roboczych bez numeru.

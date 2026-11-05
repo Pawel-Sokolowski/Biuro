@@ -1,9 +1,10 @@
 import logging
 import math
+from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 
-from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QRunnable, QThreadPool
+from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QSettings, QRunnable, QThreadPool
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
@@ -20,6 +21,7 @@ from app.db.dao_invoices import (
 )
 from app.invoices.positions import normalize_position, totals
 from app.invoices.vat_summary import VatSummary
+from app.invoices.table_state import preserve_table_view
 from app.invoices.invoice_delivery import review_delivery, queue_deliveries
 from app.db.dao_global_settings import get_extra_services
 from app.invoices.faktury_logic import FakturyLogic
@@ -258,6 +260,16 @@ class FakturyPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.logic = FakturyLogic()
+        self._view_settings = QSettings("Biuro", "OfficeManager")
+        self._payment_filter_key = f"users/{pracownik_id}/invoices/payment_filter"
+        self._draft_rows = None
+        self._issued_rows = None
+        self._issued_payments = None
+        self._issued_payment_filter = None
+        self._refresh_later = QTimer(self)
+        self._refresh_later.setSingleShot(True)
+        self._refresh_later.setInterval(250)
+        self._refresh_later.timeout.connect(self.refresh)
         self._ksef_thread = None
         self._ksef_worker = None
         self._ksef_progress = None
@@ -266,7 +278,8 @@ class FakturyPage(QWidget):
         self._ksef_poll_counts = {}
         self._ksef_poll_timer = QTimer(self)
         self._ksef_poll_timer.setSingleShot(True)
-        self._ksef_poll_timer.setInterval(5000)
+        self._ksef_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._ksef_poll_timer.setInterval(60000)
         self._ksef_poll_timer.timeout.connect(self._poll_pending_ksef)
 
         layout = QVBoxLayout(self)
@@ -289,6 +302,12 @@ class FakturyPage(QWidget):
         self._build_tab_rozliczenia()
         self.tabs.setCurrentWidget(self.tab_wystawione)
         self.refresh()
+
+    def closeEvent(self, event):
+        timer = getattr(self, "_refresh_later", None)
+        if timer is not None:
+            timer.stop()
+        super().closeEvent(event)
 
     # ---------------- budowa ekranu ----------------
     def _build_filters(self):
@@ -457,10 +476,10 @@ class FakturyPage(QWidget):
         for button in (self.btn_trash, self.btn_trash_bin):
             button.setVisible(is_administrator(self.pracownik_id))
         for button in (self.btn_view, self.btn_jpk, self.btn_correction, self.btn_delete_issued,
-                       self.btn_ksef_download, self.btn_ksef_download_one, self.btn_send_ksef,
+                       self.btn_ksef_download, self.btn_ksef_download_one, self.btn_send_ksef, self.btn_status_ksef,
                        self.btn_bank, self.btn_cash, self.btn_email_pdf, self.btn_trash, self.btn_trash_bin):
             buttons.addWidget(button)
-        for button in (self.btn_reexport, self.btn_ksef, self.btn_status_ksef):
+        for button in (self.btn_reexport, self.btn_ksef):
             button.setVisible(False)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -474,7 +493,9 @@ class FakturyPage(QWidget):
                              ("Częściowo zapłacone", "partial"), ("Niezapłacone", "unpaid")):
             self.payment_filter.addItem(label, value)
         self.payment_filter.setToolTip("Niezapłacone: wszystkie faktury z pozostałym saldem, także częściowo zapłacone.")
-        self.payment_filter.currentIndexChanged.connect(self.refresh)
+        saved_filter = self._view_settings.value(self._payment_filter_key, "all")
+        self.payment_filter.setCurrentIndex(max(0, self.payment_filter.findData(saved_filter)))
+        self.payment_filter.currentIndexChanged.connect(self._payment_filter_changed)
         payment_filters.addWidget(self.payment_filter)
         self.payment_filter_status = QLabel()
         payment_filters.addWidget(self.payment_filter_status)
@@ -541,25 +562,28 @@ class FakturyPage(QWidget):
         return -value if isinstance(value, int) and value < 0 else None
 
     def _fill_settlements(self):
-        self.settlement_table.setRowCount(0)
         try:
             rows = list_settlements(self.pracownik_id, None, self.settlement_search.text())
         except PermissionError:
+            self.settlement_table.setRowCount(0)
             return
         except Exception:
+            self.settlement_table.setRowCount(0)
             logger.exception("Nie udało się wczytać rozliczeń")
             QMessageBox.warning(self, "Rozliczenia", "Nie udało się wczytać rozliczeń. Szczegóły w logach.")
             return
-        for item in rows:
-            row = self.settlement_table.rowCount()
-            self.settlement_table.insertRow(row)
-            source = ("Gotówka" if item["sposob"] == "gotowka" else "Przelew")
-            bank = " — ".join(filter(None, [item.get("bank_sender"), item.get("bank_title")]))
-            values = [item["id"], _fmt_date(item["data_zaplaty"]), item["numer"],
-                      _fmt_date(item["data_wystawienia"]), item["buyer"], f"{item['kwota']:.2f}",
-                      source, bank, item.get("actor_name") or ""]
-            for column, value in enumerate(values):
-                self.settlement_table.setItem(row, column, _cell(value, column == 5))
+        with preserve_table_view(self.settlement_table):
+            self.settlement_table.setRowCount(0)
+            for item in rows:
+                row = self.settlement_table.rowCount()
+                self.settlement_table.insertRow(row)
+                source = ("Gotówka" if item["sposob"] == "gotowka" else "Przelew")
+                bank = " — ".join(filter(None, [item.get("bank_sender"), item.get("bank_title")]))
+                values = [item["id"], _fmt_date(item["data_zaplaty"]), item["numer"],
+                          _fmt_date(item["data_wystawienia"]), item["buyer"], f"{item['kwota']:.2f}",
+                          source, bank, item.get("actor_name") or ""]
+                for column, value in enumerate(values):
+                    self.settlement_table.setItem(row, column, _cell(value, column == 5))
 
     def _revert_selected_settlements(self):
         if not self._can_manage_payments():
@@ -908,6 +932,7 @@ class FakturyPage(QWidget):
         self.ksef_send_status.setText(f"KSeF: {done}/{total} · {text}")
 
     def _ksef_batch_finished(self, result):
+        self._ksef_poll_timer.stop()
         self._ksef_send_worker = None
         self.btn_email_pdf.setEnabled(True)
         self.btn_ksef_download.setEnabled(True)
@@ -935,6 +960,7 @@ class FakturyPage(QWidget):
         self.refresh()
         if any(self._ksef_poll_counts.get(invoice_id, 0) < 60 for invoice_id in self._ksef_pending):
             self._ksef_poll_timer.start()
+            self.ksef_send_status.setText(message + "\nPonowienie oczekujących operacji za minutę.")
         elif self._ksef_pending:
             self.ksef_send_status.setText(message + "\nAutomatyczne sprawdzanie zakończone. Zaznacz dokumenty i użyj Status wysyłki KSeF, aby wznowić.")
 
@@ -955,6 +981,11 @@ class FakturyPage(QWidget):
         self._start_ksef_batch(ids, send=False)
 
     # ---------------- filtry ----------------
+    def _payment_filter_changed(self):
+        self._view_settings.setValue(self._payment_filter_key, self.payment_filter.currentData())
+        self._view_settings.sync()
+        self.refresh()
+
     def _current_month(self):
         return self.month_button.monthText()
 
@@ -1015,7 +1046,12 @@ class FakturyPage(QWidget):
         KontrahenciDialog(self).exec()
 
     def refresh(self):
-
+        # Never destroy a live inline editor while a background result arrives.
+        if self.positions_table.state() == QAbstractItemView.State.EditingState:
+            if not self._refresh_later.isActive():
+                self._refresh_later.start()
+            return
+        self._refresh_later.stop()
         firma_id = self._selected_company_id()
         kontrahent_id = self._selected_contractor_id()
 
@@ -1044,82 +1080,91 @@ class FakturyPage(QWidget):
             self._fill_settlements()
 
     def _fill_drafts(self, invoices):
-        self.draft_table.setRowCount(0)
-        self.positions_table.setRowCount(0)
-        for inv in invoices:
-            row = self.draft_table.rowCount()
-            self.draft_table.insertRow(row)
-            values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
-                      f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
-                      _fmt_date(inv["data_wystawienia"]), _fmt_date(inv["termin_platnosci"])]
-            for column, value in enumerate(values):
-                self.draft_table.setItem(row, column, _cell(value, column in (5, 6)))
+        if self._draft_rows == invoices:
+            return
+        shown = getattr(self, "_shown_draft_id", None)
+        before = next((row for row in self._draft_rows or [] if row["id"] == shown), None)
+        after = next((row for row in invoices if row["id"] == shown), None)
+        with preserve_table_view(self.draft_table):
+            self.draft_table.setRowCount(0)
+            for inv in invoices:
+                row = self.draft_table.rowCount()
+                self.draft_table.insertRow(row)
+                values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+                          f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
+                          _fmt_date(inv["data_wystawienia"]), _fmt_date(inv["termin_platnosci"])]
+                for column, value in enumerate(values):
+                    self.draft_table.setItem(row, column, _cell(value, column in (5, 6)))
+        self._draft_rows = deepcopy(invoices)
+        if before != after or (shown is not None and self._selected_ids(self.draft_table) != [shown]):
+            self._show_draft_positions()
 
     def _fill_issued(self, invoices):
-        self.issued_table.setRowCount(0)
         try:
             payments = payments_for_invoices([inv["id"] for inv in invoices])
         except Exception:
             logger.exception("Nie udało się wczytać dat zapłaty")
             self.payment_filter_status.setText("Nie udało się odczytać płatności. Odśwież listę.")
+            with preserve_table_view(self.issued_table):
+                self.issued_table.setRowCount(0)
+            self._issued_rows = None
             return
         self.payment_filter_status.clear()
-        for inv in invoices:
-            paid = payments.get(inv["id"], [])
-            paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
-            paid_sum = sum((Decimal(str(p["kwota"] or 0)) for p in paid), Decimal("0"))
-            remaining = max(Decimal(str(inv["kwota_brutto"] or 0)) - paid_sum, Decimal("0"))
-            state = "paid" if remaining == 0 else "partial" if paid_sum > 0 else "unpaid"
-            selected_state = self.payment_filter.currentData()
-            matching_states = {"all", state}
-            if remaining > 0:
-                matching_states.add("unpaid")
-            if selected_state not in matching_states:
-                continue
-            row = self.issued_table.rowCount()
-            self.issued_table.insertRow(row)
-            values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
-                      f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
-                      f"{paid_sum:.2f}", f"{remaining:.2f}", paid_text,
-                      inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
-            for column, value in enumerate(values):
-                self.issued_table.setItem(row, column, _cell(value, column in (6, 7, 8, 9)))
-            if paid:
-                lines = "\n".join(f"{_fmt_date(p['data_zaplaty'])} — {p['kwota']:.2f} zł" for p in paid)
-                self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Zapłacono:\n" + lines)
-                self.issued_table.item(row, self.ISSUED_PAID_COLUMN).setToolTip(
-                    f"FV {inv['numer']}\nwyst. {_fmt_date(inv.get('data_wystawienia'))}"
-                )
-            else:
-                self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Brak zapłaty")
-            preview = QPushButton("Podgląd", self.issued_table)
-            preview.setToolTip("Wyświetl fakturę i umożliw zapis do PDF")
-            preview.clicked.connect(lambda _checked=False, invoice_id=inv["id"]: self._open_invoice_preview(invoice_id))
-            self.issued_table.setCellWidget(row, self.ISSUED_PREVIEW_COLUMN, preview)
-            ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
-            if inv["ksef_numer"]:
-                font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-                font.setUnderline(True)
-                ksef_item.setFont(font)
-                ksef_item.setForeground(KSEF_LINK_COLOR)
-                ksef_item.setToolTip(
-                    "Kliknij, aby otworzyć urzędową weryfikację KSeF "
-                    "(numer zostanie też skopiowany do schowka)"
-                )
+        payment_filter = self.payment_filter.currentData()
+        changed = (self._issued_rows != invoices or self._issued_payments != payments
+                   or self._issued_payment_filter != payment_filter)
+        if changed:
+            with preserve_table_view(self.issued_table):
+                self.issued_table.setRowCount(0)
+                for inv in invoices:
+                    paid = payments.get(inv["id"], [])
+                    paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
+                    paid_sum = sum((Decimal(str(p["kwota"] or 0)) for p in paid), Decimal("0"))
+                    remaining = max(Decimal(str(inv["kwota_brutto"] or 0)) - paid_sum, Decimal("0"))
+                    state = "paid" if remaining == 0 else "partial" if paid_sum > 0 else "unpaid"
+                    selected_state = self.payment_filter.currentData()
+                    matching_states = {"all", state}
+                    if remaining > 0:
+                        matching_states.add("unpaid")
+                    if selected_state not in matching_states:
+                        continue
+                    row = self.issued_table.rowCount()
+                    self.issued_table.insertRow(row)
+                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
+                              f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
+                              f"{paid_sum:.2f}", f"{remaining:.2f}", paid_text,
+                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
+                    for column, value in enumerate(values):
+                        self.issued_table.setItem(row, column, _cell(value, column in (6, 7, 8, 9)))
+                    if paid:
+                        lines = "\n".join(f"{_fmt_date(p['data_zaplaty'])} — {p['kwota']:.2f} zł" for p in paid)
+                        self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Zapłacono:\n" + lines)
+                        self.issued_table.item(row, self.ISSUED_PAID_COLUMN).setToolTip(
+                            f"FV {inv['numer']}\nwyst. {_fmt_date(inv.get('data_wystawienia'))}"
+                        )
+                    else:
+                        self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Brak zapłaty")
+                    preview = QPushButton("Podgląd", self.issued_table)
+                    preview.setToolTip("Wyświetl fakturę i umożliw zapis do PDF")
+                    preview.clicked.connect(lambda _checked=False, invoice_id=inv["id"]: self._open_invoice_preview(invoice_id))
+                    self.issued_table.setCellWidget(row, self.ISSUED_PREVIEW_COLUMN, preview)
+                    ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
+                    if inv["ksef_numer"]:
+                        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+                        font.setUnderline(True)
+                        ksef_item.setFont(font)
+                        ksef_item.setForeground(KSEF_LINK_COLOR)
+                        ksef_item.setToolTip(
+                            "Kliknij, aby otworzyć urzędową weryfikację KSeF "
+                            "(numer zostanie też skopiowany do schowka)"
+                        )
 
-        # Resume status/download work after reopening the application. Never
-        # automatically resend an invoice whose transport result is uncertain.
-        resumable = [invoice for invoice in invoices if invoice.get("ksef_status") in ("wysylanie", "oczekuje", "do_sprawdzenia") or (invoice.get("ksef_numer") and invoice.get("invoice_email_status") in ("queued", "preparing", "failed_before_send"))]
-        from app.config import get_data_dir
-        for invoice in invoices:
-            if invoice.get("ksef_status") == "przyjeta" and invoice.get("ksef_numer"):
-                archive = get_data_dir() / "ksef" / str(invoice.get("ksef_srodowisko_wysylki") or "") / str(invoice.get("ksef_nip_wysylki") or "") / (str(invoice["ksef_numer"]) + ".xml")
-                if not archive.is_file() or invoice.get("invoice_email_status") in ("queued", "preparing", "failed_before_send"):
-                    resumable.append(invoice)
-        if resumable and (is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data")):
-            self._ksef_pending.update(invoice["id"] for invoice in resumable)
-            if self._ksef_send_worker is None and not self._ksef_poll_timer.isActive() and any(self._ksef_poll_counts.get(i, 0) < 60 for i in self._ksef_pending):
-                self._ksef_poll_timer.start()
+            self._issued_rows = deepcopy(invoices)
+            self._issued_payments = deepcopy(payments)
+            self._issued_payment_filter = payment_filter
+
+        # Rendering a list never schedules KSeF traffic. Only an explicit send
+        # or status request can start the workflow and its one-minute retries.
 
     @staticmethod
     def _selected_ids(table):
@@ -1133,14 +1178,26 @@ class FakturyPage(QWidget):
             widget.setEnabled(enabled)
 
     def _reload_catalogue(self):
-        self.service_choice.clear()
-        self.service_choice.addItem("Wybierz usługę z katalogu…", None)
+        text = self.service_choice.currentText()
+        service = self.service_choice.currentData()
+        selected_id = service.get("id") if isinstance(service, dict) else None
+        typed = text != self.service_choice.itemText(self.service_choice.currentIndex())
+        blocked = self.service_choice.blockSignals(True)
         try:
-            for service in get_extra_services():
-                service = dict(service)
-                self.service_choice.addItem(f'{service["nazwa"]} · {service["cena_netto"]:.2f} zł netto', service)
-        except Exception:
-            logger.exception("Nie udało się pobrać katalogu usług")
+            self.service_choice.clear()
+            self.service_choice.addItem("Wybierz usługę z katalogu…", None)
+            try:
+                for item in get_extra_services():
+                    item = dict(item)
+                    self.service_choice.addItem(f'{item["nazwa"]} · {item["cena_netto"]:.2f} zł netto', item)
+                    if item.get("id") == selected_id:
+                        self.service_choice.setCurrentIndex(self.service_choice.count() - 1)
+            except Exception:
+                logger.exception("Nie udało się pobrać katalogu usług")
+            if typed:
+                self.service_choice.setEditText(text)
+        finally:
+            self.service_choice.blockSignals(blocked)
 
     def _edit_draft_header(self):
         ids = self._selected_ids(self.draft_table)

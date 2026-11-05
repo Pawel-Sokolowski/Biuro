@@ -90,7 +90,7 @@ def list_tasks_for_timer(
 def list_tasks(
     pracownik_id: Optional[int] = None,
     firma_id: Optional[int] = None,
-    status: Optional[str] = None,
+    status: Optional[str | list[str] | tuple[str, ...]] = None,
     viewer_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     conn = get_conn()
@@ -103,7 +103,10 @@ def list_tasks(
         if firma_id:
             filters.append("z.firma_id = %s")
             params.append(firma_id)
-        if status:
+        if isinstance(status, (list, tuple)):
+            filters.append("z.status = ANY(%s)")
+            params.append(list(status))
+        elif status:
             filters.append("z.status = %s")
             params.append(status)
         if viewer_id and not is_administrator(viewer_id):

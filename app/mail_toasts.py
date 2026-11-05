@@ -1,6 +1,6 @@
 """Systemowe powiadomienia (toast Windows) o nowych e-mailach, jak w Thunderbirdzie."""
 import logging
-import re
+from email.utils import parseaddr
 
 from PyQt6.QtWidgets import QApplication, QStyle, QSystemTrayIcon
 
@@ -11,10 +11,40 @@ SHOW_MS = 6000
 MAX_SEPARATE = 3
 
 
+def _compact(value, limit=100):
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def _sender_name(raw) -> str:
-    text = str(raw or "").strip()
-    match = re.match(r'\s*"?([^"<]+?)"?\s*<', text)
-    return (match.group(1) if match else text) or "(nieznany nadawca)"
+    name, address = parseaddr(str(raw or ""))
+    return _compact(f"{name} <{address}>" if name and address else name or address or raw or "(nieznany nadawca)")
+
+
+def _account_label(account):
+    address = account.get("email") or "(nieznane konto)"
+    name = account.get("display_name")
+    return f"{name} <{address}>" if name else address
+
+
+def _notification_text(messages):
+    """Keep native tray notifications within the Windows balloon text budget."""
+    if len(messages) == 1:
+        message = messages[0]
+        account = message["_account"]
+        title = _compact("Nowy e-mail — " + str(account.get("email") or _account_label(account)), 63)
+        body = f"Od: {_compact(_sender_name(message.get('nadawca')), 80)}\nTemat: {_compact(message.get('temat') or '(bez tematu)', 145)}"
+        return title, body
+    shown = messages[:3]
+    lines = []
+    for message in shown:
+        account = message["_account"]
+        lines.append(f"{_compact(account.get('email') or _account_label(account), 22)} · "
+                     f"{_compact(_sender_name(message.get('nadawca')), 20)} — "
+                     f"{_compact(message.get('temat') or '(bez tematu)', 26)}")
+    if len(messages) > len(shown):
+        lines.append(f"Pozostałe: {len(messages) - len(shown)}")
+    return f"Nowe wiadomości e-mail: {len(messages)}", "\n".join(lines)
 
 
 class MailToaster:
@@ -47,16 +77,16 @@ class MailToaster:
                 logger.debug("Powiadomienia o mailach: błąd odczytu", exc_info=True)
                 continue
             self._last_ids[konto_id] = max_id
-            new.extend(found)
+            new.extend({**message, "_account": dict(account)} for message in found)
         if not new:
             return
         if len(new) > MAX_SEPARATE:
-            self._tray.showMessage("Nowe wiadomości e-mail", f"Liczba nowych wiadomości: {len(new)}",
-                                   QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
+            title, body = _notification_text(new)
+            self._tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
             return
         for message in new:
-            self._tray.showMessage(_sender_name(message["nadawca"]), str(message["temat"] or "(bez tematu)"),
-                                   QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
+            title, body = _notification_text([message])
+            self._tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
 
     def hide(self):
         if self._tray is not None:

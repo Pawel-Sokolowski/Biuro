@@ -89,7 +89,7 @@ class GlobalSettingsPage(QWidget):
             ]),
             ("Firmy i faktury", [
                 ("Firmy", lambda: CompaniesSettings(pracownik_id=self.pracownik_id), True),
-                ("Faktury i KSeF", lambda: InvoiceSettings(pracownik_id=self.pracownik_id), bool(perms.get("can_view_invoices"))),
+                ("Faktury i KSeF", _scrollable(lambda: InvoiceSettings(pracownik_id=self.pracownik_id)), bool(perms.get("can_view_invoices"))),
                 ("KSeF – dostęp i certyfikat", KsefSettings, bool(perms.get("can_view_invoices"))),
             ]),
             ("System", [

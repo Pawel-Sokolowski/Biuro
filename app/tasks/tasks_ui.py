@@ -52,6 +52,7 @@ class TasksPage(QWidget):
 
         filters = QHBoxLayout()
         self.status_filter = QComboBox()
+        self.status_filter.addItem("Nowe i w toku", ("Nowe", "W toku"))
         self.status_filter.addItem("Wszystkie", None)
         for status in TASK_STATUSES:
             self.status_filter.addItem(status, status)
@@ -105,9 +106,18 @@ class TasksPage(QWidget):
     def _load_reference_data(self):
         self.companies = list_companies(self.pracownik_id)
         self.employees = list_employees()
-        for employee in self.employees:
-            label = f"{employee.get('imie', '')} {employee.get('nazwisko', '')}".strip()
-            self.assignee_filter.addItem(label, employee["id"])
+        self.assignee_filter.blockSignals(True)
+        try:
+            for employee in self.employees:
+                label = f"{employee.get('imie', '')} {employee.get('nazwisko', '')}".strip()
+                self.assignee_filter.addItem(label, employee["id"])
+            index = self.assignee_filter.findData(self.pracownik_id)
+            if index < 0:
+                self.assignee_filter.addItem("Moje zadania", self.pracownik_id)
+                index = self.assignee_filter.count() - 1
+            self.assignee_filter.setCurrentIndex(index)
+        finally:
+            self.assignee_filter.blockSignals(False)
 
     def _refresh(self):
         status = self.status_filter.currentData()
@@ -135,7 +145,7 @@ class TasksPage(QWidget):
         self.tabs.setCurrentIndex(0)
         self.status_filter.blockSignals(True)
         self.assignee_filter.blockSignals(True)
-        self.status_filter.setCurrentIndex(0)
+        self.status_filter.setCurrentIndex(self.status_filter.findData(None))
         self.assignee_filter.setCurrentIndex(max(0, self.assignee_filter.findData(self.pracownik_id)))
         self.status_filter.blockSignals(False)
         self.assignee_filter.blockSignals(False)

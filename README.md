@@ -455,3 +455,21 @@ aplikację ponownie — Sync Project nie przeładowuje już otwartych okien.
 Powiadomienia systemowe o nowych e-mailach pokazują konto, nadawcę i temat.
 Przy większej liczbie wiadomości zawierają krótką listę i liczbę pozostałych,
 bez dodatkowego pobierania treści wiadomości.
+
+
+### Odświeżanie faktur i sprawdzanie KSeF
+
+Otwarcie lub odświeżenie listy faktur nie uruchamia zapytań do KSeF, również na
+stanowisku bez lokalnych kopii XML. Po wysłaniu dokumentu program sprawdza status
+jeden raz. Jeżeli numer nie jest jeszcze nadany, kolejne sprawdzenie następuje po
+minucie. Przyjęte faktury nie są ponownie wysyłane; ponowienie po błędzie pobrania
+XML dotyczy samego pobrania. Przycisk **Status wysyłki KSeF** pozwala ręcznie
+wznowić sprawdzanie, np. po ponownym uruchomieniu aplikacji.
+
+Aktualizacja danych zachowuje zaznaczenie i pozycję przewijania według ID faktury.
+Niezmienione tabele nie są budowane ponownie, a otwarty edytor pozycji nie jest
+przerywany przez odświeżenie. Filtr płatności jest zapamiętywany osobno dla każdego
+pracownika i przywracany po ponownym otwarciu widoku.
+Obok filtra płatności znajduje się pole **Nr faktury**. Wpisanie fragmentu numeru
+od razu zawęża listę w ramach wybranego statusu płatności, bez rozróżniania wielkości
+liter. Przycisk czyszczenia pola usuwa wyszukiwanie; odświeżenie zachowuje wpisany tekst.

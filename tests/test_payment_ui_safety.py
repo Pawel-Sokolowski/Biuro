@@ -380,7 +380,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
 
         self.assertEqual(texts(page.tab_wystawione), [
             "Podgląd faktury", "JPK_V7M", "Wystaw korektę", "Anuluj fakturę", "Pobierz z KSeF",
-            "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Rozlicz MT940", "Zapłacono",
+            "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Status wysyłki KSeF", "Rozlicz MT940", "Zapłacono",
             "Wyślij pdf e-mailem", "Przenieś do kosza", "Kosz…"])
         drafts = texts(page.tab_robocze)
         self.assertEqual(drafts[:2], ["Generuj faktury", "Wystaw faktury"])

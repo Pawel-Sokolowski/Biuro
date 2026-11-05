@@ -18,6 +18,7 @@ class _Signals(QObject):
 class _Job(QRunnable):
     def __init__(self, generation, work, schema):
         super().__init__()
+        self.setAutoDelete(False)
         self.generation, self.work, self.schema = generation, work, schema
         self.signals = _Signals()
         self.context = copy_context()
@@ -52,8 +53,10 @@ class TaskRunner(QObject):
         self._jobs = {}
 
     def submit(self, work, done, error=None):
-        for job in self._jobs.values():
+        for generation, job in list(self._jobs.items()):
             job.cancelled.set()
+            if _pool.tryTake(job):
+                self._jobs.pop(generation, None)
         self._generation += 1
         generation = self._generation
         self._callbacks.clear()
@@ -61,11 +64,18 @@ class TaskRunner(QObject):
         job = _Job(generation, work, get_schema())
         self._jobs[generation] = job
         job.signals.finished.connect(self._completed)
-        _pool.start(job)
+        try:
+            _pool.start(job)
+        except Exception:
+            self._jobs.pop(generation, None)
+            self._callbacks.pop(generation, None)
+            raise
 
     def invalidate(self):
-        for job in self._jobs.values():
+        for generation, job in list(self._jobs.items()):
             job.cancelled.set()
+            if _pool.tryTake(job):
+                self._jobs.pop(generation, None)
         self._generation += 1
         self._callbacks.clear()
 
@@ -76,6 +86,79 @@ class TaskRunner(QObject):
         if callbacks is None or generation != self._generation:
             return
         done, error = callbacks
+        if exc is None:
+            done(result)
+        elif error is not None:
+            error(exc)
+
+
+class LatestRead:
+    """Mark a replaceable read when a caller shares a command submission API."""
+    def __init__(self, work):
+        self.work = work
+
+    def __call__(self):
+        return self.work()
+
+
+_write_pool = QThreadPool()
+_write_pool.setMaxThreadCount(4)
+_live_commands = set()
+
+
+class CommandRunner(QObject):
+    """FIFO commands: bounded concurrency, no cancellation or lost completions.
+
+    The runner outlives its page until queued writes finish. Destruction of the
+    page suppresses UI callbacks, without silently discarding accepted work.
+    """
+    def __init__(self, owner=None, capacity=64):
+        super().__init__()
+        from collections import deque
+        self._queue = deque()
+        self._jobs = {}
+        self._generation = 0
+        self._owner_alive = True
+        self._capacity = capacity
+        if owner is not None:
+            owner.destroyed.connect(self._owner_destroyed)
+
+    def _owner_destroyed(self):
+        self._owner_alive = False
+
+    def submit(self, work, done=lambda _: None, error=None):
+        if len(self._queue) + len(self._jobs) >= self._capacity:
+            raise RuntimeError("Kolejka operacji jest pełna. Poczekaj na zakończenie poprzednich operacji.")
+        self._generation += 1
+        job = _Job(self._generation, work, get_schema())
+        job.setAutoDelete(False)
+        self._queue.append((job, done, error))
+        _live_commands.add(self)
+        self._start_next()
+
+    def _start_next(self):
+        if self._jobs or not self._queue:
+            return
+        job, done, error = self._queue.popleft()
+        self._jobs[job.generation] = (job, done, error)
+        job.signals.finished.connect(self._completed)
+        try:
+            _write_pool.start(job)
+        except Exception:
+            self._jobs.pop(job.generation, None)
+            self._start_next()
+            if not self._jobs:
+                _live_commands.discard(self)
+            raise
+
+    def _completed(self, payload):
+        generation, result, exc = payload
+        _, done, error = self._jobs.pop(generation)
+        self._start_next()
+        if not self._jobs and not self._queue:
+            _live_commands.discard(self)
+        if not self._owner_alive:
+            return
         if exc is None:
             done(result)
         elif error is not None:

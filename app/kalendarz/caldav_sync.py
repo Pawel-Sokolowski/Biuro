@@ -1,13 +1,13 @@
 """Synchronizacja kalendarza przez CalDAV (biblioteka `caldav`) – Google Calendar lub dowolny serwer CalDAV."""
 from __future__ import annotations
 
-import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from icalendar import Calendar, Event
+from caldav.lib.error import NotFoundError
 
-from app.db import dao_calendar
+from app.db import dao_calendar, dao_calendar_sync as outbox
 from app.db.dao_app_settings import get_setting, set_setting
 from app.utils.crypto import decrypt_password, encrypt_password
 
@@ -128,6 +128,9 @@ def _selected_calendar(client, cfg):
         for c in cals:
             if _cal_url(c) == cfg["kalendarz"]:
                 return c
+        raise CaldavError("Wybrany kalendarz nie jest dostępny. Sprawdź ustawienia kalendarza.")
+    if not cals:
+        raise CaldavError("Brak dostępnych kalendarzy.")
     return cals[0]
 
 
@@ -194,66 +197,92 @@ def build_ical(event: Dict[str, Any], uid: str) -> str:
 def _find_remote(calendar, uid: str):
     try:
         return calendar.event_by_uid(uid)
-    except Exception:
+    except NotFoundError:
         return None
 
 
 # ---------- operacje ----------
-def push_event(pracownik_id: int, event: Dict[str, Any], calendar=None) -> None:
-    """Tworzy lub aktualizuje wydarzenie na serwerze i zapisuje jego UID."""
-    try:
-        if calendar is None:
-            cfg = get_config()
-            calendar = _selected_calendar(_connect(cfg), cfg)
-        uid = event.get("caldav_uid") or f"{uuid.uuid4()}@biuro"
-        ical = build_ical(event, uid)
-        remote = _find_remote(calendar, uid) if event.get("caldav_uid") else None
+def _send_operation(op, calendar):
+    uid = op["remote_id"]
+    remote = _find_remote(calendar, uid)
+    if op["action"] == "delete":
+        if remote is not None:
+            remote.delete()
+    else:
+        ical = build_ical(op["payload"], uid)
         if remote is not None:
             remote.data = ical
             remote.save()
         else:
             calendar.save_event(ical)
-        if not event.get("caldav_uid"):
-            dao_calendar.set_caldav_uid(event["id"], uid)
-    except CaldavError:
-        raise
-    except Exception as exc:
-        raise CaldavError(friendly_error(exc)) from exc
+        dao_calendar.set_caldav_uid(op["event_id"], uid, calendar_id=op["calendar_id"])
+    outbox.acknowledge(op)
 
 
-def delete_remote(pracownik_id: int, uid: str, calendar=None) -> None:
+def push_event(pracownik_id: int, event: Dict[str, Any], calendar=None) -> None:
     try:
-        if calendar is None:
-            cfg = get_config()
-            calendar = _selected_calendar(_connect(cfg), cfg)
-        remote = _find_remote(calendar, uid)
-        if remote is not None:
-            remote.delete()
+        cfg = get_config()
+        scope = outbox.caldav_scope_values(cfg["url"], cfg["login"], cfg["kalendarz"])
+        if not scope:
+            raise CaldavError("Połączenie CalDAV nie jest skonfigurowane.")
+        with outbox.calendar_lock(pracownik_id, "caldav", scope):
+            if calendar is None:
+                calendar = _selected_calendar(_connect(cfg), cfg)
+            op = outbox.stage(pracownik_id, "caldav", scope, event["id"])
+            if op:
+                _send_operation(op, calendar)
     except CaldavError:
         raise
     except Exception as exc:
         raise CaldavError(friendly_error(exc)) from exc
 
 
-def pull_events(pracownik_id: int, calendar, days_back: int = 30, days_ahead: int = 365) -> Dict[str, int]:
+def delete_remote(pracownik_id: int, uid: str, calendar=None, *, calendar_id=None) -> None:
+    try:
+        cfg = get_config()
+        scope = outbox.caldav_scope_values(cfg["url"], cfg["login"], cfg["kalendarz"])
+        if calendar_id is not None and calendar_id != scope:
+            raise CaldavError("Zdarzenie należy do innego kalendarza. Usunięcie pozostaje w kolejce.")
+        with outbox.calendar_lock(pracownik_id, "caldav", scope):
+            if calendar is None:
+                calendar = _selected_calendar(_connect(cfg), cfg)
+            op = next((o for o in outbox.operations(pracownik_id, "caldav", scope)
+                       if o["remote_id"] == uid and o["action"] == "delete"), None)
+            if op:
+                _send_operation(op, calendar)
+            else:
+                remote = _find_remote(calendar, uid)
+                if remote is not None:
+                    remote.delete()
+    except CaldavError:
+        raise
+    except Exception as exc:
+        raise CaldavError(friendly_error(exc)) from exc
+
+
+def pull_events(pracownik_id: int, calendar, days_back: int = 30, days_ahead: int = 365, *, scope=None) -> Dict[str, int]:
     now = datetime.now()
     start, end = now - timedelta(days=days_back), now + timedelta(days=days_ahead)
     stats = {"pobrane": 0, "usuniete": 0}
     seen = set()
+    scope = scope or outbox.caldav_scope()
     for remote in calendar.date_search(start, end):
         for values in parse_ical(remote.data):
             seen.add(values["caldav_uid"])
-            existing = dao_calendar.get_event_by_caldav_uid(pracownik_id, values["caldav_uid"])
+            if outbox.remote_pending(pracownik_id, "caldav", scope, values["caldav_uid"]):
+                continue
+            values["caldav_calendar_id"] = scope
+            existing = dao_calendar.get_event_by_caldav_uid(pracownik_id, values["caldav_uid"], scope)
             if existing:
                 values["id"] = existing["id"]
                 values["firma_id"] = existing.get("firma_id")
                 values["google_event_id"] = existing.get("google_event_id")
-            dao_calendar.save_event(pracownik_id, values)
+            dao_calendar.save_event(pracownik_id, values, from_remote=True)
             stats["pobrane"] += 1
     s_iso, e_iso = start.isoformat(timespec="minutes"), end.isoformat(timespec="minutes")
-    for local in dao_calendar.list_caldav_events(pracownik_id):
+    for local in dao_calendar.list_caldav_events(pracownik_id, scope):
         if local["caldav_uid"] not in seen and s_iso <= local["start"] <= e_iso:
-            dao_calendar.delete_event(local["id"], pracownik_id)
+            dao_calendar.delete_event(local["id"], pracownik_id, from_remote=True)
             stats["usuniete"] += 1
     return stats
 
@@ -262,13 +291,17 @@ def sync(pracownik_id: int, days_back: int = 30, days_ahead: int = 365) -> Dict[
     try:
         cfg = get_config()
         calendar = _selected_calendar(_connect(cfg), cfg)
-        sent = 0
-        for event in dao_calendar.list_events_without_caldav(pracownik_id):
-            push_event(pracownik_id, event, calendar)
-            sent += 1
-        stats = pull_events(pracownik_id, calendar, days_back, days_ahead)
-        stats["wyslane"] = sent
-        return stats
+        scope = outbox.caldav_scope_values(cfg["url"], cfg["login"], cfg["kalendarz"])
+        with outbox.calendar_lock(pracownik_id, "caldav", scope):
+            for event in dao_calendar.list_events_without_caldav(pracownik_id):
+                outbox.stage(pracownik_id, "caldav", scope, event["id"])
+            sent = 0
+            for op in outbox.operations(pracownik_id, "caldav", scope):
+                _send_operation(op, calendar)
+                sent += 1
+            stats = pull_events(pracownik_id, calendar, days_back, days_ahead, scope=scope)
+            stats["wyslane"] = sent
+            return stats
     except CaldavError:
         raise
     except Exception as exc:

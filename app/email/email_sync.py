@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from datetime import datetime, timedelta
 
-from app.config import EMAIL_HISTORY_DAYS
+from app.config import EMAIL_HISTORY_DAYS, get_dsn, get_schema
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting, set_setting
 from app.email import email_cache
@@ -31,6 +31,7 @@ from app.email.email_helpers import (
 )
 from app.email.email_storage import (
     account_has_headers,
+    lock_account_revision,
     apply_server_state,
     get_account_info as _get_account_info,
     get_folder_id,
@@ -73,7 +74,7 @@ AUTH_RETRY_SECONDS = 900
 
 def _account_sync_lock(konto_id: int) -> threading.Lock:
     with _ACCOUNT_SYNC_LOCKS_MUTEX:
-        return _ACCOUNT_SYNC_LOCKS.setdefault(konto_id, threading.RLock())
+        return _ACCOUNT_SYNC_LOCKS.setdefault((get_dsn(), get_schema(), konto_id), threading.RLock())
 
 _IMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -88,7 +89,7 @@ def _connect_imap(
     if not host or not login:
         return None
 
-    key = (host, login, account.get("haslo_enc"))
+    key = (get_dsn(), get_schema(), host, account.get("port_imap"), account.get("ssl_imap"), login, account.get("haslo_enc"))
     failed_at = _AUTH_FAILURES.get(key)
     if failed_at is not None and time.monotonic() - failed_at < AUTH_RETRY_SECONDS:
         return None
@@ -141,8 +142,10 @@ def _supports_move(imap_conn: imaplib.IMAP4) -> bool:
 class _Session:
     """Współdzielone połączenie IMAP konta (unika logowania przy każdej akcji)."""
 
-    def __init__(self, conn: imaplib.IMAP4, konto_id: Optional[int] = None) -> None:
+    def __init__(self, conn: imaplib.IMAP4, konto_id: Optional[int] = None, account=None) -> None:
         self.conn = conn
+        self.fingerprint = _account_fingerprint(account or {})
+        self.account_revision = (account or {}).get("connection_revision")
         self.konto_id = konto_id
         self.selected: Optional[Tuple[str, bool]] = None
         self.selected_generation: Optional[str] = None
@@ -153,10 +156,13 @@ class _Session:
         observed = get_mailbox_generation(self.konto_id, folder) if self.konto_id is not None else None
         if _select_folder(self.conn, folder, readonly=readonly):
             generation = _uidvalidity(self.conn)
+            if self.konto_id is not None and self.account_revision is not None:
+                with get_conn() as db:
+                    lock_account_revision(db, self.konto_id, self.account_revision)
             # IMAP4.response() consumes the response. Preserve the generation
             # from this SELECT for callers that later validate a body write.
             if self.konto_id is not None and generation:
-                retired = record_mailbox_generation(self.konto_id, folder, generation, expected_generation=observed)
+                retired = record_mailbox_generation(self.konto_id, folder, generation, expected_generation=observed, **_revision_args(self.account_revision))
                 if retired:
                     self.selected = None
                     self.selected_generation = None
@@ -181,32 +187,43 @@ _session_locks: Dict[int, threading.Lock] = {}
 _session_guard = threading.Lock()
 
 
+def _account_fingerprint(account):
+    return tuple(account.get(k) for k in ("serwer_imap", "port_imap", "ssl_imap", "email", "haslo_enc", "connection_revision"))
+
+
+def _revision_args(revision):
+    return {"expected_account_revision": revision} if revision is not None else {}
+
+
 @contextmanager
 def _shared_session(konto_id: int, timeout: int = 30):
-    """Daje sesję IMAP konta (albo None gdy brak połączenia); jednocześnie używa jej jeden wątek."""
+    """Reuse only within the same database, schema and connection configuration."""
+    key = (get_dsn(), get_schema(), konto_id)
     with _session_guard:
-        lock = _session_locks.setdefault(konto_id, threading.Lock())
+        lock = _session_locks.setdefault(key, threading.Lock())
     with lock:
-        session = _sessions.get(konto_id)
+        account = _get_account_info(konto_id)
+        session = _sessions.get(key)
         if session is not None:
             try:
+                if not account or session.fingerprint != _account_fingerprint(account):
+                    raise ConnectionError("Zmieniono konfigurację konta IMAP.")
                 session.conn.noop()
             except Exception:
                 session.close()
                 session = None
-                _sessions.pop(konto_id, None)
+                _sessions.pop(key, None)
         if session is None:
-            account = _get_account_info(konto_id)
             conn = _connect_imap(account, timeout) if account else None
             if conn is not None:
-                session = _Session(conn, konto_id)
-                _sessions[konto_id] = session
+                session = _Session(conn, konto_id, account)
+                _sessions[key] = session
         try:
             yield session
         except Exception:
             if session is not None:
                 session.close()
-                _sessions.pop(konto_id, None)
+                _sessions.pop(key, None)
             raise
 
 
@@ -381,6 +398,7 @@ def fetch_message_from_imap(
             # Bind the downloaded bytes to the mapping and generation selected
             # here; never look up a replacement row after FETCH has finished.
             generation = session.selected_generation
+            account_revision = getattr(session, "account_revision", None)
             row_id = get_message_row_id(konto_id, folder_id, str(uid)) if folder_id else None
             if expected_row_id is not None and row_id != expected_row_id:
                 return None
@@ -407,7 +425,7 @@ def fetch_message_from_imap(
         )
         return None
 
-    if row_id and not save_current_raw_message(konto_id, folder_id, str(uid), row_id, generation, raw_bytes):
+    if row_id and not save_current_raw_message(konto_id, folder_id, str(uid), row_id, generation, raw_bytes, **_revision_args(account_revision)):
         return None
 
     return parse_message(
@@ -473,6 +491,7 @@ def prefetch_messages(
                 return 0
 
             generation = session.selected_generation
+            account_revision = getattr(session, "account_revision", None)
             # SELECT can adopt a generation already recorded by another sync,
             # in which case its success says nothing about the captured IDs.
             cache_states = get_message_cache_states(konto_id, folder_id, unique_uids)
@@ -508,7 +527,7 @@ def prefetch_messages(
                                 uid, folder,
                             )
                         else:
-                            if save_current_raw_message(konto_id, folder_id, uid, row_id, generation, raw):
+                            if save_current_raw_message(konto_id, folder_id, uid, row_id, generation, raw, **_revision_args(account_revision)):
                                 fetched += 1
                             else:
                                 failed += 1
@@ -690,9 +709,11 @@ def fetch_headers(
 
         generation = _uidvalidity(imap_conn)
         if generation:
-            record_mailbox_generation(konto_id, folder, generation, expected_generation=observed)
+            record_mailbox_generation(konto_id, folder, generation, expected_generation=observed, **_revision_args(account.get("connection_revision")))
         if flags_out is not None:
             flags_out["generation"] = generation
+            if account.get("connection_revision") is not None:
+                flags_out["account_revision"] = account["connection_revision"]
         if known_uids is not None:
             # Another selector may already have adopted this generation. Its
             # retirement boolean cannot validate the caller's earlier UID set.
@@ -908,6 +929,7 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
         if session is None or not session.select(folder, True):
             return 0
         generation = session.selected_generation
+        account_revision = getattr(session, "account_revision", None)
         uids = get_uids_missing_refs(konto_id, folder_id, limit)
         for start in range(0, len(uids), HEADER_BATCH):
             chunk = uids[start:start + HEADER_BATCH]
@@ -925,7 +947,7 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
                         seen.add(uid)
                         updates.append((uid, thread_refs(parser.parsebytes(part[1]))))
             updates += [(u, "") for u in chunk if u not in seen]
-    save_refs(konto_id, folder_id, updates, expected_generation=generation)
+    save_refs(konto_id, folder_id, updates, expected_generation=generation, **_revision_args(account_revision))
     return len(updates)
 
 def sync_folder_and_prefetch_all(
@@ -1189,6 +1211,7 @@ def _sync_folder_once(konto_id: int, folder: str, full_sync: bool, entire_mailbo
         folder_id,
         headers,
         expected_generation=flags.get("generation"),
+        **_revision_args(flags.get("account_revision")),
     )
 
     try:
@@ -1219,6 +1242,7 @@ def _sync_folder_once(konto_id: int, folder: str, full_sync: bool, entire_mailbo
             flags.get("unseen"),
             cutoff,
             expected_generation=flags.get("generation"),
+            **_revision_args(flags.get("account_revision")),
         )
 
     if known and headers and folder.upper() == "INBOX":
@@ -1711,6 +1735,7 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
     (i pierwszy po starcie) sprawdza wszystkie foldery, by wychwycić zmiany flag.
     """
     from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
     ordered = sorted(accounts, key=lambda account: account["id"] != current_account_id)
     if not ordered:
         return []
@@ -1761,7 +1786,8 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
             lock.release()
 
     with ThreadPoolExecutor(max_workers=min(4, len(ordered))) as pool:
-        jobs = list(pool.map(headers, ordered))
+        futures = [pool.submit(copy_context().run, headers, account) for account in ordered]
+        jobs = [future.result() for future in futures]
     errors = [error for _, _, error in jobs if error]
     # Body prefetch cannot postpone other accounts' header/unread updates.
     for konto_id, folders, error in jobs:

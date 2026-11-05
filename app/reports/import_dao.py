@@ -12,8 +12,8 @@ from app.reports.import_parse import (
     digits,
     fold,
     kadry_contract_type,
-    parse_invoice_rows,
-    parse_work_rows,
+    iter_invoice_rows,
+    iter_work_rows,
 )
 from app.reports.reports_logic import _authorized_company_ids
 
@@ -74,9 +74,10 @@ class _BatchWriter:
 
 
 def import_work_file(path: str) -> Dict[str, int]:
-    rows = parse_work_rows(read_sheet_rows(path))
+    source = read_sheet_rows(path)
+    rows = iter_work_rows(source)
     conn = get_conn()
-    inserted = unmatched = 0
+    inserted = unmatched = total = 0
     try:
         index = _company_index(conn)
         employees = {
@@ -93,6 +94,7 @@ def import_work_file(path: str) -> Dict[str, int]:
                     dzial = EXCLUDED.dzial, pracownik_id = EXCLUDED.pracownik_id
                 """)
         for r in rows:
+            total += 1
             firma_id = _match_company(index, r["nip"], r["firma_nazwa"])
             if firma_id is None:
                 unmatched += 1
@@ -106,16 +108,19 @@ def import_work_file(path: str) -> Dict[str, int]:
         inserted = batch.count
         conn.commit()
     finally:
+        rows.close()
+        source.close()
         conn.close()
-    return {"wiersze": len(rows), "dodane": inserted, "pominiete": len(rows) - inserted,
+    return {"wiersze": total, "dodane": inserted, "pominiete": total - inserted,
             "bez_firmy": unmatched}
 
 
 
 def import_invoices_file(path: str, default_month: Optional[str], overwrite: bool = False) -> Dict[str, int]:
-    rows = parse_invoice_rows(read_sheet_rows(path), default_month)
+    source = read_sheet_rows(path)
+    rows = iter_invoice_rows(source, default_month)
     conn = get_conn()
-    inserted = unmatched = 0
+    inserted = unmatched = total = 0
     kadry_totals: Dict[Tuple[int, str, str], float] = {}
     over_limit: Dict[Tuple[int, str], Tuple[float, Optional[int]]] = {}
     seen_firms = set()
@@ -132,6 +137,7 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
                     rodzaj = EXCLUDED.rodzaj
                 """)
         for r in rows:
+            total += 1
             firma_id = _match_company(index, r["nip"], r["kontrahent"])
             if firma_id is None:
                 unmatched += 1
@@ -163,8 +169,10 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
         docs_set = _apply_document_counts(conn, over_limit, backfill, overwrite)
         conn.commit()
     finally:
+        rows.close()
+        source.close()
         conn.close()
-    return {"wiersze": len(rows), "dodane": inserted, "pominiete": len(rows) - inserted,
+    return {"wiersze": total, "dodane": inserted, "pominiete": total - inserted,
             "bez_firmy": unmatched, "ceny_kadry": updated, "ilosc_dok": docs_set}
 
 

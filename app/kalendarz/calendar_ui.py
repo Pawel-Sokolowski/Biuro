@@ -17,23 +17,10 @@ from PyQt6.QtWidgets import (
 from app.db import dao_calendar
 from app.db.dao_companies import get_employees_list, list_companies
 from app.kalendarz import caldav_sync, google_sync, ics_import
+from app.utils.background import CommandRunner
 
 DT_FORMAT = "yyyy-MM-ddTHH:mm"
 
-
-class _Worker(QThread):
-    finished_ok = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, func: Callable[[], Any], parent=None):
-        super().__init__(parent)
-        self._func = func
-
-    def run(self):
-        try:
-            self.finished_ok.emit(self._func())
-        except Exception as exc:
-            self.failed.emit(caldav_sync.friendly_error(exc))
 
 
 class EventDialog(QDialog):
@@ -154,6 +141,7 @@ class EventDialog(QDialog):
             "google_event_id": self.event.get("google_event_id"),
             "google_calendar_id": self.gcal.currentData(),
             "caldav_uid": self.event.get("caldav_uid"),
+            "caldav_calendar_id": self.event.get("caldav_calendar_id"),
             "zrodlo": self.event.get("zrodlo") or "lokalne",
         }
         return data
@@ -272,7 +260,7 @@ class CalendarPage(QWidget):
     def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
-        self._workers: list[_Worker] = []
+        self._commands = CommandRunner(self)
         self.anchor = date.today()
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._auto_sync)
@@ -685,17 +673,6 @@ class CalendarPage(QWidget):
             QMessageBox.critical(self, "Błąd", str(exc))
             return
         self._refresh_all()
-        if data.get("google_event_id") and data.get("google_calendar_id"):
-            try:
-                google_sync.mark_event_pending(
-                    self.pracownik_id, data["google_calendar_id"], data["google_event_id"], "upsert"
-                )
-            except Exception as exc:
-                QMessageBox.warning(
-                    self, "Google Calendar",
-                    f"Wydarzenie zapisano lokalnie, ale nie udało się dodać zmiany do kolejki: {exc}",
-                )
-                return
         if (data.get("google_calendar_id") and google_sync.is_connected(self.pracownik_id)):
             saved = dao_calendar.get_event(data["id"])
             self._run(lambda: google_sync.push_event(self.pracownik_id, saved), refresh=True)
@@ -719,17 +696,6 @@ class CalendarPage(QWidget):
             return
         google_event_id = ev.get("google_event_id")
         google_calendar_id = ev.get("google_calendar_id")
-        if google_event_id and google_calendar_id:
-            try:
-                google_sync.mark_event_pending(
-                    self.pracownik_id, google_calendar_id, google_event_id, "delete"
-                )
-            except Exception as exc:
-                QMessageBox.warning(
-                    self, "Google Calendar",
-                    f"Nie udało się przygotować usunięcia wydarzenia z Google: {exc}",
-                )
-                return
         dao_calendar.delete_event(ev["id"], self.pracownik_id)
         self._refresh_all()
         if (google_event_id and google_calendar_id
@@ -738,7 +704,7 @@ class CalendarPage(QWidget):
             self._run(lambda: google_sync.delete_remote(
                 self.pracownik_id, google_calendar_id, google_event_id))
         elif ev.get("caldav_uid") and caldav_sync.is_configured():
-            self._run(lambda: caldav_sync.delete_remote(self.pracownik_id, ev["caldav_uid"]))
+            self._run(lambda: caldav_sync.delete_remote(self.pracownik_id, ev["caldav_uid"], calendar_id=ev.get("caldav_calendar_id")))
 
     def _refresh_all(self):
         self._fill_calendar_list()
@@ -800,29 +766,27 @@ class CalendarPage(QWidget):
 
     def _run(self, func, refresh: bool = False, on_done=None, on_fail=None, always=None,
              silent: bool = False):
-        worker = _Worker(func, self)
-        self._workers.append(worker)
-
-        def cleanup():
-            if always:
-                always()
-            if worker in self._workers:
-                self._workers.remove(worker)
-
         def ok(result):
-            if on_done:
-                on_done(result)
-            if refresh:
-                self._refresh_all()
-            cleanup()
+            try:
+                if on_done:
+                    on_done(result)
+                if refresh:
+                    self._refresh_all()
+            finally:
+                if always:
+                    always()
 
-        def fail(message):
-            if not silent:
-                QMessageBox.warning(self, "Kalendarz", message)
-            if on_fail:
-                on_fail()
-            cleanup()
+        def fail(exc):
+            try:
+                if not silent:
+                    QMessageBox.warning(self, "Kalendarz", caldav_sync.friendly_error(exc))
+                if on_fail:
+                    on_fail()
+            finally:
+                if always:
+                    always()
 
-        worker.finished_ok.connect(ok)
-        worker.failed.connect(fail)
-        worker.start()
+        try:
+            self._commands.submit(func, ok, fail)
+        except Exception as exc:
+            fail(exc)

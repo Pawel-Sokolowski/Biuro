@@ -10,7 +10,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from PyQt6.QtCore import QMarginsF, QSizeF, QTimer
-from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
+from PyQt6.QtGui import QFont, QImage, QPageLayout, QPageSize, QPdfWriter, QTextDocument
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QMessageBox, QPushButton, QTextBrowser, QVBoxLayout,
 )
@@ -93,11 +93,25 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
     seller_nip = invoice.get("sprzedawca_nip") or get_setting("faktury_sprzedawca_nip") or invoice.get("ksef_nip_wysylki") or ""
     seller_address = invoice.get("sprzedawca_adres") or " ".join(filter(None, (
         get_setting("faktury_sprzedawca_adres"), get_setting("faktury_sprzedawca_kod"),
-        get_setting("faktury_sprzedawca_miasto"), get_setting("faktury_sprzedawca_kraj"),
+        get_setting("faktury_sprzedawca_miasto"),
     )))
+    configured_nip = re.sub(r"\D", "", get_setting("faktury_sprzedawca_nip") or "")
+    matching_seller = bool(configured_nip and configured_nip == re.sub(r"\D", "", seller_nip))
+    def seller_detail(field):
+        value = invoice.get("sprzedawca_" + field)
+        if value is None and (not invoice.get("_official") or matching_seller):
+            value = get_setting("faktury_sprzedawca_" + field)
+        return value or ""
+    seller_regon, seller_country, seller_email = (seller_detail(field) for field in ("regon", "kraj", "email"))
     logo = get_setting("faktury_logo_data") or ""
     logo_html = f'<img src="{_escape(logo)}" width="180"><br>' if logo.startswith("data:image/") else ""
     qr = invoice.get("_qr_data_url") or _qr_data_url(invoice)
+    verification_url = ksef_url(invoice.get("ksef_numer"), invoice=invoice) if invoice.get("ksef_numer") else ""
+    verification_html = ""
+    if verification_url.startswith("https://"):
+        visible_url = "\u200b".join(verification_url[index:index + 20] for index in range(0, len(verification_url), 20))
+        verification_html = (f'<br><a href="{_escape(verification_url)}">Zweryfikuj fakturę w KSeF</a>'
+                             f'<br><span class="label"><a href="{_escape(verification_url)}">{_escape(visible_url)}</a></span>')
     qr_html = (f'<img src="{_escape(qr)}" width="120" height="120"><br>' if qr else
                '<span style="color:#8b98a5">Kod QR niedostępny</span><br>')
     buyer_address = " ".join(filter(None, (
@@ -163,7 +177,8 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
         <tr bgcolor="#eeeeee"><th width="50%" align="left">Sprzedawca</th><th width="50%" align="left">Nabywca</th></tr>
         <tr><td><span class="party-name">{_escape(seller)}</span><br>
         {_escape(seller_address)}<br>NIP: <b>{_escape(seller_nip)}</b><br>
-        </td><td><span class="party-name">{_escape(invoice.get('nabywca_pelna') or invoice.get('firma_nazwa'))}</span><br>
+        REGON: {_escape(seller_regon)}<br>Kraj: {_escape(seller_country)}<br>
+        E-mail: {_escape(seller_email)}</td><td><span class="party-name">{_escape(invoice.get('nabywca_pelna') or invoice.get('firma_nazwa'))}</span><br>
         {_escape(buyer_address)}<br>NIP: <b>{_escape(invoice.get('nabywca_nip'))}</b><br>
         REGON: {_escape(invoice.get('nabywca_regon'))}<br>Kraj: {_escape(invoice.get('nabywca_kraj'))}<br>
         E-mail: {_escape(invoice.get('nabywca_email'))}</td>
@@ -189,7 +204,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
           <tr><td><b>Numer rachunku</b></td><td>{_escape(account)}</td></tr>
           <tr><td><b>Numer KSeF</b></td><td><span class="ksef-number">{_escape(invoice.get('ksef_numer') or '—')}</span></td></tr>
         </table></td>
-        <td width="30%" align="center">{qr_html}<span class="label">Zeskanuj kod, aby zweryfikować fakturę w KSeF</span></td>
+        <td width="30%" align="center">{qr_html}<span class="label">Zeskanuj kod, aby zweryfikować fakturę w KSeF</span>{verification_html}</td>
       </tr></table>
     </body></html>
     """
@@ -198,15 +213,26 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
 def write_invoice_pdf(path, rendered_html, *, title="Faktura"):
     """Qt's reentrant document/PDF classes also support background delivery jobs."""
     writer = QPdfWriter(str(path))
-    writer.setResolution(96)
+    writer.setResolution(600)
     writer.setTitle(title)
     writer.setPageLayout(QPageLayout(QPageSize(QPageSize.PageSizeId.A4), QPageLayout.Orientation.Portrait,
                                     QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter))
     document = QTextDocument()
-    document.documentLayout().setPaintDevice(writer)
+    # Lay out HTML in stable logical units, independently of the screen DPI.
+    # The metric device is never painted: PDF text remains vector text.
+    metrics = QImage(1, 1, QImage.Format.Format_ARGB32)
+    metrics.setDotsPerMeterX(round(96 / 0.0254))
+    metrics.setDotsPerMeterY(round(96 / 0.0254))
+    document.documentLayout().setPaintDevice(metrics)
+    font = QFont("Arial")
+    font.setPointSizeF(9.5)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    document.setDefaultFont(font)
+    document.setUseDesignMetrics(True)
     document.setDocumentMargin(0)
     document.setHtml(rendered_html)
-    document.setPageSize(QSizeF(writer.width(), writer.height()))
+    document.setPageSize(QSizeF(writer.width() * metrics.logicalDpiX() / writer.resolution(),
+                               writer.height() * metrics.logicalDpiY() / writer.resolution()))
     document.print(writer)
     del writer
 
@@ -223,6 +249,7 @@ class InvoicePreviewDialog(QDialog):
         self.resize(1150, 840)
         layout = QVBoxLayout(self)
         self.preview = QTextBrowser(self)
+        self.preview.setOpenExternalLinks(True)
         # Invoice paper stays white independently of the application theme.
         self.preview.setStyleSheet("QTextBrowser { background: white; color: #111; }")
         self.html = invoice_html(self.invoice, get_invoice_positions(int(self.invoice["id"])))

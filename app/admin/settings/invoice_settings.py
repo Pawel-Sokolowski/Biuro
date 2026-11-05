@@ -154,6 +154,8 @@ class InvoiceSettings(QWidget):
         for label, key in (
             ("Nazwa sprzedawcy:", "faktury_sprzedawca_nazwa"),
             ("NIP sprzedawcy:", "faktury_sprzedawca_nip"),
+            ("REGON sprzedawcy:", "faktury_sprzedawca_regon"),
+            ("E-mail sprzedawcy:", "faktury_sprzedawca_email"),
             ("Adres sprzedawcy:", "faktury_sprzedawca_adres"),
             ("Kod pocztowy:", "faktury_sprzedawca_kod"),
             ("Miejscowość:", "faktury_sprzedawca_miasto"),

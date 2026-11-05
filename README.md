@@ -424,3 +424,16 @@ rozliczeń i można ją cofnąć w zakładce Rozliczenia.
 Filtr **Płatność** rozróżnia: wszystkie, zapłacone, częściowo zapłacone i niezapłacone.
 Niezapłacone obejmują wszystkie faktury z dodatnim pozostałym saldem, również częściowe
 wpłaty. Filtr uwzględnia łącznie płatności ręczne, gotówkę i rozliczenia MT940.
+
+
+### Jakość PDF i weryfikacja KSeF
+
+Eksport PDF używa metryk projektowych czcionek i stałego układu niezależnego od
+skalowania ekranu; tekst pozostaje wektorowy, z osadzonymi fontami. Obok kodu QR
+znajduje się klikalne łącze weryfikacyjne tej faktury, także w PDF wysyłanym e-mailem.
+Adres odpowiada adresowi zakodowanemu w QR; środowiska testowe nie prowadzą do produkcji.
+
+W **Ustawienia → Faktury** uzupełnij REGON, kraj i e-mail sprzedawcy. Dane te są
+wyświetlane w podglądzie i PDF. Danych własnego biura nie dopisujemy jako danych
+kontaktowych innego sprzedawcy w dokumentach KSeF. Zapisane wcześniej pliki PDF
+pozostają bez zmian — po aktualizacji wygeneruj PDF ponownie.

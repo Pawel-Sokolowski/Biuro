@@ -1,6 +1,7 @@
 # app/chat/chat_ui.py
 import os
 import re
+from copy import deepcopy
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QTextEdit, QLineEdit, QMessageBox,
@@ -9,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from PyQt6.QtGui import QFont, QColor
-from PyQt6.QtCore import Qt, QDateTime, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QDateTime, QTimer, QSignalBlocker, pyqtSignal
 from typing import Optional
 
 from app.chat.chat_model import (
@@ -22,6 +23,7 @@ from app.chat.chat_model import (
 )
 
 import psycopg
+from app.utils.view_state import ItemViewState
 
 
 def _format_size(n: int) -> str:
@@ -226,12 +228,14 @@ class ChatPage(QWidget):
             item = self.chat_conversations.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == current:
                 self.chat_conversations.blockSignals(True)
-                self.chat_conversations.setCurrentItem(item)
+                if self.chat_conversations.currentItem() is not item:
+                    self.chat_conversations.setCurrentItem(item)
                 self.chat_conversations.blockSignals(False)
-                self.load_messages()
+                self.load_messages(scroll_to_bottom=False)
                 break
 
     def refresh_chat_conversations(self, select_id: Optional[int] = None):
+        state = ItemViewState(self.chat_conversations, lambda index: index.data(Qt.ItemDataRole.UserRole))
         self.chat_conversations.blockSignals(True)
         self.chat_conversations.clear()
         rows = [r for r in get_conversations(self.pracownik_id) if r.get("typ") != "prywatna"]
@@ -262,6 +266,8 @@ class ChatPage(QWidget):
         header("ROZMOWY")
         for r in directs:
             add_item(r, "● ")
+        if select_id is None:
+            state.restore()
         self.chat_conversations.blockSignals(False)
         self._refresh_unread_marks()
         if select_id is not None and self.chat_conversations.currentItem():
@@ -320,6 +326,7 @@ class ChatPage(QWidget):
             self.load_more_history()
 
     def _clear_messages(self):
+        self._rendered_messages = None
         while self.messages_layout.count():
             item = self.messages_layout.takeAt(0)
             w = item.widget()
@@ -331,16 +338,34 @@ class ChatPage(QWidget):
         Render messages grouped by date and sender.
         Consecutive messages from same sender on same date are shown under one header.
         """
-        self._clear_messages()
         try:
             attachments = get_attachments([m["id"] for m in messages if m.get("id")])
         except Exception:
             attachments = {}
 
-        last_date = None
-        group_layout = None
+        previous = getattr(self, "_rendered_messages", None)
+        same_chat = getattr(self, "_rendered_conversation", None) == self.current_konwersacja
+        old_attachments = getattr(self, "_rendered_attachments", {})
+        unchanged_attachments = all(attachments.get(msg.get("id"), []) == old_attachments.get(msg.get("id"), [])
+                                    for msg in previous or [])
+        append = (same_chat and previous is not None and messages[:len(previous)] == previous
+                  and unchanged_attachments)
+        if append and len(messages) == len(previous) and attachments == old_attachments:
+            if scroll_to_bottom:
+                self._scroll_to_bottom()
+            return
+        scroll = self.scroll_area.verticalScrollBar().value()
+        blocker = QSignalBlocker(self.scroll_area.verticalScrollBar())
+        if append:
+            self.messages_layout.takeAt(self.messages_layout.count() - 1)  # trailing stretch
+            last_date, last_sender_id, group_layout = self._message_group_state
+            pending_messages = messages[len(previous):]
+        else:
+            self._clear_messages()
+            last_date, last_sender_id, group_layout = None, None, None
+            pending_messages = messages
 
-        for msg in messages:
+        for msg in pending_messages:
             sender_id = msg.get("pracownik_id")
             sender_name = (msg.get("imie") or "") + ((" " + msg.get("nazwisko")) if msg.get("nazwisko") else "")
             timestamp = msg.get("data_wysylki") or ""
@@ -431,16 +456,24 @@ class ChatPage(QWidget):
 
         # stretch at the end to push content up if few messages
         self.messages_layout.addStretch()
+        self._rendered_conversation = self.current_konwersacja
+        self._rendered_messages = deepcopy(messages)
+        self._rendered_attachments = deepcopy(attachments)
+        self._message_group_state = last_date, last_sender_id, group_layout
+        self.messages_container.adjustSize()
         if scroll_to_bottom:
             self._scroll_to_bottom()
+        else:
+            self.scroll_area.verticalScrollBar().setValue(scroll)
+        blocker.unblock()
 
     def _scroll_to_bottom(self):
         # layout is recalculated lazily, so scroll now and again after it settles
         def go():
             bar = self.scroll_area.verticalScrollBar()
-            bar.blockSignals(True)
+            blocked = bar.blockSignals(True)
             bar.setValue(bar.maximum())
-            bar.blockSignals(False)
+            bar.blockSignals(blocked)
 
         self.messages_container.adjustSize()
         go()

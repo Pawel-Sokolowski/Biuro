@@ -737,7 +737,7 @@ def get_new_unread_messages(
             return max_id, []
         cur.execute(
             """
-            SELECT w.id, w.nadawca, w.temat, f.server_name, f.attributes, f.delimiter
+            SELECT w.id, w.message_id, w.nadawca, w.temat, f.server_name, f.attributes, f.delimiter
             FROM wiadomosci_email w
             JOIN foldery_email f ON f.id = w.folder_id
             WHERE w.konto_id = %s AND w.id > %s
@@ -755,7 +755,7 @@ def get_new_unread_messages(
                 continue
             if folder_role(path, row["attributes"], row["delimiter"]) in _NO_TOAST_ROLES:
                 continue
-            found.append({"id": int(row["id"]), "nadawca": row["nadawca"], "temat": row["temat"]})
+            found.append({"id": int(row["id"]), "message_id": row["message_id"], "nadawca": row["nadawca"], "temat": row["temat"]})
         return max_id, found[-limit:]
     finally:
         conn.close()
@@ -1557,10 +1557,18 @@ def rename_folder_local(konto_id: int, old: str, new: str) -> int:
         conn.close()
 
 
-def resolve_assigned_message(actor_id: int, target: dict):
+def resolve_assigned_message(actor_id: int, target: dict, *, require_assignment=True):
     """Revalidate account access and follow an assignment after an IMAP move."""
     conn = get_conn()
     try:
+        assignment = f"""AND EXISTS (
+                  SELECT 1 FROM wiadomosci_email w2
+                  JOIN email_message_assignments a ON a.message_id = w2.id AND a.employee_id = %s
+                  WHERE w2.konto_id = we.konto_id AND {_SAME_MESSAGE})""" if require_assignment else ""
+        params = [actor_id, target['account_id'], target.get('row_id'), target.get('message_id'), target.get('message_id')]
+        if require_assignment:
+            params.append(actor_id)
+        params.append(target.get('row_id'))
         row = conn.execute(
             f"""
             SELECT we.*, fe.server_name
@@ -1571,15 +1579,16 @@ def resolve_assigned_message(actor_id: int, target: dict):
             WHERE we.konto_id = %s AND COALESCE(we.usunieta, 0) = 0
               AND COALESCE(ke.aktywne, 1) = 1 AND COALESCE(ke.systemowe, 0) = 0
               AND (we.id = %s OR (NULLIF(%s, '') IS NOT NULL AND we.message_id = %s))
-              AND EXISTS (
-                  SELECT 1 FROM wiadomosci_email w2
-                  JOIN email_message_assignments a ON a.message_id = w2.id AND a.employee_id = %s
-                  WHERE w2.konto_id = we.konto_id AND {_SAME_MESSAGE})
+              {assignment}
             ORDER BY (we.id = %s) DESC, we.id DESC LIMIT 1
             """,
-            (actor_id, target['account_id'], target.get('row_id'), target.get('message_id'),
-             target.get('message_id'), actor_id, target.get('row_id')),
+            params,
         ).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def resolve_notification_message(actor_id: int, target: dict):
+    """Resolve a new-mail toast by row/message identity, rechecking account access."""
+    return resolve_assigned_message(actor_id, target, require_assignment=False)

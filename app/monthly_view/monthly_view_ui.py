@@ -42,6 +42,7 @@ from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_services import add_company_extra_service
 from app.db.dao_tasks import list_tasks_for_timer
 from app.utils.timer import TimerUtils
+from app.utils.view_state import preserve_view_state
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.month_picker import MonthPicker
 from app.monthly_view.notes_window import NotesWindow
@@ -816,6 +817,21 @@ class MonthlyViewPage(QWidget):
         self.logic.set_month(month)
         self._reload_rows()
 
+    def refresh_background(self):
+        timer = getattr(self, '_background_refresh_timer', None)
+        if any(table.state() == QAbstractItemView.State.EditingState for table in (self.table_ks, self.table_kadry)):
+            if timer is None:
+                timer = self._background_refresh_timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.setInterval(250)
+                timer.timeout.connect(self.refresh_background)
+            if not timer.isActive():
+                timer.start()
+            return
+        if timer is not None:
+            timer.stop()
+        self._reload_rows()
+
     def _reload_rows(self):
         if self.month_combo.isWholeYear():
             self.year_end_page.refresh()
@@ -847,11 +863,13 @@ class MonthlyViewPage(QWidget):
                    if self._row_in_tab(r, "ksiegowa_id") and self._stage_matches(r, "etap")]
         kadry_rows = [self._mark_substitution(r, "kadry") for r in rows_prepared
                       if self._row_in_tab(r, "kadrowa_id") and self._stage_matches(r, "etap_kadry")]
-        self.model_ks.set_rows(ks_rows)
-        self.model_kadry.set_rows(kadry_rows)
-        for idx, row in enumerate(ks_rows):
-            lines = max(1, len(row.get("invoice_payments", [])))
-            self.table_ks.setRowHeight(idx, max(32, lines * self.table_ks.fontMetrics().lineSpacing() + 8))
+        key = lambda index: (index.data(Qt.ItemDataRole.UserRole) or {}).get("id")
+        with preserve_view_state(self.table_ks, key), preserve_view_state(self.table_kadry, key):
+            self.model_ks.set_rows(ks_rows)
+            self.model_kadry.set_rows(kadry_rows)
+            for idx, row in enumerate(ks_rows):
+                lines = max(1, len(row.get("invoice_payments", [])))
+                self.table_ks.setRowHeight(idx, max(32, lines * self.table_ks.fontMetrics().lineSpacing() + 8))
         total = sum(int(r.get("ilosc_dok") or 0) for r in ks_rows)
         self.activity_label.setText(f"Aktywność pracownika: {total}")
 

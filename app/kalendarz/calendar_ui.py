@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -18,6 +19,7 @@ from app.db import dao_calendar
 from app.db.dao_companies import get_employees_list, list_companies
 from app.kalendarz import caldav_sync, google_sync, ics_import
 from app.utils.background import CommandRunner
+from app.utils.view_state import preserve_view_state, reconcile_list
 
 DT_FORMAT = "yyyy-MM-ddTHH:mm"
 
@@ -396,22 +398,23 @@ class CalendarPage(QWidget):
 
     # ---------- kalendarze ----------
     def _fill_calendar_list(self):
-        self.calendars.blockSignals(True)
-        self.calendars.clear()
+        checks = getattr(self, "_source_checks", {})
+        checks.update({self.calendars.item(i).data(Qt.ItemDataRole.UserRole): self.calendars.item(i).checkState()
+                       for i in range(self.calendars.count())})
+        self._source_checks = checks
         entries = [("Lokalne (import ICS)", "lokalne")]
         if google_sync.is_connected(self.pracownik_id):
             entries.append(("Google Calendar", "google"))
         if caldav_sync.is_configured():
             host = urlparse(caldav_sync.get_config()["url"]).hostname or "CalDAV"
             entries.append((f"CalDAV: {host}", "caldav"))
-        for name, key in entries:
-            item = QListWidgetItem(name)
+        def render_source(item, entry):
+            name, key = entry
+            item.setText(name)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setCheckState(checks.get(key, Qt.CheckState.Checked))
             item.setForeground(QColor(SOURCE_COLORS[key]))
-            self.calendars.addItem(item)
-        self.calendars.blockSignals(False)
+        reconcile_list(self.calendars, entries, lambda entry: entry[1], render_source)
 
     def _enabled_sources(self) -> set:
         return {
@@ -522,8 +525,7 @@ class CalendarPage(QWidget):
         return out
 
     def _fill_tree(self, events: list):
-        keep = getattr(self, "_sel_id", None)
-        self.tree.clear()
+        rendered = []
         for ev in events:
             if ev["caly_dzien"]:
                 s, e = ev["start"][:10], ev["koniec"][:10]
@@ -541,15 +543,27 @@ class CalendarPage(QWidget):
                 title += f"  (udostępnił: {ev['wlasciciel']})"
             elif dao_calendar.get_event_access(ev["id"]):
                 title += "  (udostępnione)"
-            item = QTreeWidgetItem([title, s, e, cat])
-            item.setData(0, Qt.ItemDataRole.UserRole, ev)
-            self.tree.addTopLevelItem(item)
-            if keep is not None and ev["id"] == keep:
-                self.tree.setCurrentItem(item)
-        for c in range(4):
-            self.tree.resizeColumnToContents(c)
+            rendered.append((ev, [title, s, e, cat]))
+        if rendered == getattr(self, "_tree_rows", None):
+            return
+        had_rows = self.tree.topLevelItemCount() > 0
+        with preserve_view_state(self.tree, lambda index: (index.data(Qt.ItemDataRole.UserRole) or {}).get("id")):
+            self.tree.clear()
+            for ev, texts in rendered:
+                item = QTreeWidgetItem(texts)
+                item.setData(0, Qt.ItemDataRole.UserRole, ev)
+                self.tree.addTopLevelItem(item)
+            if not had_rows:
+                for c in range(4):
+                    self.tree.resizeColumnToContents(c)
+        self._tree_rows = deepcopy(rendered)
+        self._tree_current_changed(self.tree.currentItem(), None)
 
     def _fill_grid(self, first: date, weeks: int, events: list):
+        signature = (first, weeks, self.view, self.anchor, date.today(), events)
+        if signature == getattr(self, "_grid_signature", None):
+            return
+        scroll = self.grid_scroll.verticalScrollBar().value()
         while self.grid.count():
             w = self.grid.takeAt(0).widget()
             if w:
@@ -591,6 +605,9 @@ class CalendarPage(QWidget):
         for c in range(1, 8):
             self.grid.setColumnStretch(c, 1)
         self._apply_event_selection()
+        self._grid_signature = deepcopy(signature)
+        self.grid.activate()
+        self.grid_scroll.verticalScrollBar().setValue(scroll)
 
     def _apply_event_selection(self):
         sel = getattr(self, "_sel_id", None)

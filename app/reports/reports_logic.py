@@ -1,5 +1,6 @@
 # app/reports/reports_logic.py
 import psycopg
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Dict, Any
 from app.services.calculator import oblicz_miesieczny_koszt
 from app.db.dao_conn import get_conn
@@ -47,7 +48,9 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
                        pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     """Czas pracy z czasomierzy dla wybranych pracowników w dniach start..end (YYYY-MM-DD, włącznie).
 
-    Pracownik bez uprawnień do finansów widzi wyłącznie własny czas."""
+    Pracownik bez uprawnień do finansów widzi wyłącznie własny czas.
+    Dokumenty są średnią niezerowych miesięcy do okresu rozliczeniowego wpisu;
+    umowy są miesięczną sumą UoP/UZ/UoD. Nie są to dzienne ilości wykonanej pracy."""
     see_all = not pracownik_id or is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
     employee_ids = [int(e) for e in employee_ids if see_all or int(e) == pracownik_id]
     if not employee_ids:
@@ -56,7 +59,9 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
     try:
         rows = conn.execute(
             """
-            SELECT substr(c.rozpoczecie, 1, 10) AS dzien, c.typ, c.opis, c.sekundy,
+            SELECT substr(c.rozpoczecie, 1, 10) AS dzien, c.pracownik_id, c.firma_id,
+                   COALESCE(NULLIF(TRIM(c.miesiac), ''), substr(c.rozpoczecie, 1, 7)) AS miesiac,
+                   c.typ, c.opis, c.sekundy,
                    COALESCE(NULLIF(TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')), ''), '(brak)') AS pracownik,
                    COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, '') AS firma, u.nazwa AS usluga
             FROM czasomierze c
@@ -69,15 +74,48 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
             """,
             (employee_ids, start, end),
         ).fetchall()
+        company_ids = sorted({row['firma_id'] for row in rows if row['firma_id'] is not None})
+        months = sorted({row['miesiac'] for row in rows if row['firma_id'] is not None})
+        documents, monthly_documents, contracts, averages = {}, {}, {}, {}
+        if company_ids and months:
+            range_end = month_bounds(months[-1])[1]
+            documents = {(row['firma_id'], row['miesiac']): int(row['ilosc'] or 0) for row in conn.execute(
+                "SELECT firma_id, substr(data_wyst, 1, 7) AS miesiac, COUNT(*) AS ilosc FROM dokumenty "
+                "WHERE firma_id = ANY(%s) AND data_wyst < %s "
+                "AND data_wyst ~ '^[0-9]{4}-(0[1-9]|1[0-2])-' "
+                "GROUP BY firma_id, substr(data_wyst, 1, 7)", (company_ids, range_end),
+            ).fetchall()}
+            monthly_documents = {(row['firma_id'], row['miesiac']): int(row['ilosc_dok'] or 0) for row in conn.execute(
+                "SELECT firma_id, miesiac, ilosc_dok FROM statusy_miesieczne "
+                "WHERE firma_id = ANY(%s) AND miesiac <= %s", (company_ids, months[-1]),
+            ).fetchall()}
+            contracts = contracts_by_month(conn, company_ids, months)
+            history = {**monthly_documents, **documents}
+            for company_id, month in {(row['firma_id'], row['miesiac']) for row in rows if row['firma_id'] is not None}:
+                positive = [count for (fid, period), count in history.items()
+                            if fid == company_id and period <= month and count > 0]
+                averages[company_id, month] = ((Decimal(sum(positive)) / Decimal(len(positive))).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP) if positive else None, len(positive))
     finally:
         conn.close()
-    totals: Dict[tuple, int] = {}
+    totals: Dict[tuple, Dict[str, Any]] = {}
     for row in rows:
         activity = row["opis"] or row["usluga"] or _TYPE_LABELS.get(row["typ"], row["typ"])
-        key = (row["dzien"], row["pracownik"], row["firma"], activity)
-        totals[key] = totals.get(key, 0) + int(row["sekundy"] or 0)
-    return [{"data": day, "pracownik": emp, "firma": firm, "czynnosc": act, "sekundy": secs}
-            for (day, emp, firm, act), secs in sorted(totals.items())]
+        pair = row['firma_id'], row['miesiac']
+        key = row['dzien'], row['pracownik_id'], *pair, activity
+        firm = row['firma_id'] is not None
+        entry = totals.setdefault(key, {
+            'data': row['dzien'], 'pracownik': row['pracownik'], 'firma': row['firma'],
+            'firma_id': row['firma_id'], 'miesiac': row['miesiac'] if firm else '',
+            'czynnosc': activity, 'sekundy': 0,
+            'dokumenty': documents.get(pair, monthly_documents.get(pair, 0)) if firm else None,
+            'dokumenty_srednia': averages.get(pair, (None, 0))[0],
+            'dokumenty_srednia_miesiace': averages.get(pair, (None, 0))[1],
+            'umowy': contracts.get(pair, 0) if firm else None,
+        })
+        entry['sekundy'] += int(row['sekundy'] or 0)
+    return sorted(totals.values(), key=lambda row: (
+        row['data'], row['pracownik'], row['firma'], row['miesiac'], row['czynnosc']))
 
 
 # ============================================================

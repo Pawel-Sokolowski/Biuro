@@ -485,3 +485,94 @@ Kolumna nabywcy pokazuje nazwę skróconą (pełną, jeżeli brak skrótu) i ma 
 zajmują mniej miejsca, a szerokość numeru KSeF wynika z metryki jego czcionki.
 Log `Invoice refresh` podaje czas odczytu faktur oraz obsługi tabel i płatności,
 co pozwala rozróżnić opóźnienia bazy od budowania widoku na danym stanowisku.
+
+### Aktualizacje w tle i powiadomienia poczty
+
+Synchronizacja poczty aktualizuje liczniki folderów oraz etykiety pracowników bez
+odtwarzania całego drzewa i przycisków. Zachowuje otwartą wiadomość, zaznaczenie,
+zwinięte wątki, filtry oraz pozycję czytania według ID wiadomości, również gdy
+nowe maile pojawią się na początku listy. **Odśwież widok** również zachowuje
+kontekst i nie uruchamia synchronizacji sieciowej.
+
+Podobne zasady dotyczą pulpitu, kalendarza i widoku miesięcznego. Kalendarz nie
+włącza ponownie odznaczonych źródeł po synchronizacji, a niezmieniona siatka nie
+jest budowana ponownie. Czat dopisuje nowe wiadomości bez wymiany wcześniejszych
+dymków; czytanie historii i tekst wpisywany w edytorze pozostają na miejscu.
+
+W Windows każde powiadomienie o pojedynczym nowym mailu ma własny cel, więc
+kliknięcie starszego powiadomienia w trakcie działania aplikacji otwiera właściwą
+wiadomość. Dostęp do konta i tożsamość wiadomości są ponownie sprawdzane;
+sam UID nie służy do wyszukania celu. Powiadomienie zbiorcze otwiera zakładkę
+E-mail. Instalator oznacza skrót identyfikatorem `Biuro.OfficeManager`; po
+aktualizacji zależności przebuduj EXE i instalator, aby dołączyć projekcje WinRT XML.
+
+### Mail masowy do klientów
+
+W zakładce **E-mail** przyciski **Synchronizacja wiadomości**, **Odśwież widok**
+i **Mail masowy** są obok siebie. Mail masowy pozwala wybrać konto nadawcze,
+wpisać temat i treść oraz zaznaczyć firmy. Można filtrować po formie działalności,
+typie rozliczania, formie opodatkowania, nazwie, NIP-ie i adresie e-mail.
+Domyślnie widoczne są aktywne firmy; opcję tę można wyłączyć.
+
+Odbiorcy pochodzą z kontaktowego adresu firmy (`adres_email`). Kolumna
+**Adres email** w głównym Excelu jest automatycznie importowana właśnie do tego
+pola oraz kontaktów firmy. Adresy do faktur są odrębnym ustawieniem.
+Firmy bez poprawnego kontaktowego adresu są widoczne, ale nie można ich zaznaczyć.
+Zmiana filtrów odznacza firmy poza wynikiem, a powtarzające się adresy są łączone.
+
+Przed wysłaniem wyświetlane jest potwierdzenie z pełną listą firm i adresów oraz
+treścią wiadomości. Domyślnie partia obejmuje **25 adresów**, a przerwa po jej
+zakończeniu trwa **60 sekund**; oba ustawienia można zmienić. Klienci trafiają
+do UDW/BCC, a pole Do zawiera tylko konto nadawcze. Kopie są zapisywane w wysłanych.
+
+Wysyłka działa poza wątkiem interfejsu. **Zatrzymaj wysyłkę** i zamykanie okna
+wstrzymują dalsze partie; rozpoczęta partia zostaje dokończona. Konto i zatwierdzone
+adresy są ponownie sprawdzane przed każdą partią. Po błędzie SMTP nie ma
+automatycznych ponowień — wynik mógł nie dotrzeć mimo przyjęcia wiadomości.
+Raport rozróżnia wysłane, niepotwierdzone i niewysłane adresy i można zapisać go do CSV.
+Po zakończeniu nową kampanię rozpoczyna się przez ponowne otwarcie okna.
+
+### Ilości w raporcie dziennym
+
+Raport dzienny oraz jego eksport Excel zawierają **Miesiąc rozliczeniowy**,
+**Śr. dokumentów / mies.** i **Umowy (miesiąc)**. Średnia dokumentów obejmuje
+zapisane dla firmy miesiące z liczbą większą od zera, do miesiąca rozliczeniowego
+danego wpisu czasu włącznie. Rzeczywiste dokumenty mają pierwszeństwo przed
+ręczną/importowaną liczbą dla tego samego miesiąca. Miesiące zerowe i przyszłe
+nie wchodzą do średniej; brak obserwacji jest oznaczany kreską.
+
+Umowy to suma UoP, UZ i UoD za miesiąc rozliczeniowy, z dotychczasowym przenoszeniem
+ostatniej znanej wartości. Te ilości są kontekstem firmy, a nie dzienną produkcją
+pracownika; nie należy sumować ich między wierszami czynności. Wpisy ogólne bez
+firmy mają puste pola. Praca nad różnymi okresami tej samej firmy pozostaje
+rozdzielona, nawet jeśli wykonano ją jednego dnia.
+
+### Globalna książka adresowa
+
+Przycisk **E-mail → Kontakty** otwiera wspólną książkę adresową pracowników
+z dostępem do poczty. Można dodawać, edytować, usuwać i wyszukiwać kontakty
+niezależne od kart firm. Kliknięcie lub prawy przycisk na adresie w nagłówku
+wiadomości otwiera menu **Dodaj do książki adresowej…**, kopiowania adresu
+i pisania wiadomości. Formularz ma uzupełnioną nazwę i e-mail; istniejący kontakt
+otwiera się do edycji.
+
+**Importuj CSV…** obsługuje podane polskie nagłówki eksportu Thunderbirda, także
+ich angielskie odpowiedniki, pliki UTF-8 (z BOM lub bez), UTF-16 i Windows-1250
+oraz separatory przecinek, średnik i tabulator. Wszystkie 37 pól eksportu jest
+zachowywanych, w tym drugi e-mail, telefony, adresy domowe/służbowe, urodziny,
+informacje dodatkowe i notatki. Nieznane kolumny również są przechowywane.
+
+Import pokazuje podgląd i pominięte niepoprawne wiersze przed zatwierdzeniem.
+Duplikaty są dopasowywane po podstawowym e-mailu bez rozróżniania wielkości liter;
+kolejny import uzupełnia puste pola zamiast nadpisywać ręcznie wpisane dane.
+Zapis jest wspólny w bazie, a równoczesna edycja przez drugiego pracownika jest
+wykrywana przed zapisaniem lub usunięciem kontaktu.
+
+W polach **Do**, **Kopia** i **Ukryta kopia** po wpisaniu co najmniej dwóch znaków
+pojawiają się podpowiedzi nazw, pseudonimów, firm i adresów. Wybór kontaktu działa
+również przy wielu odbiorcach oraz nazwach zawierających przecinki. Wyszukiwanie
+i import pracują w tle, a nieaktualna podpowiedź nie zastąpi nowszego wpisu.
+
+Ta funkcja wymaga migracji bazy **20261105_01**. Po aktualizacji kodu lub EXE
+uruchom `python migrate_db.py` (w instalacji: skrót aktualizacji bazy lub
+`Biuro.exe --migrate`) przed uruchomieniem nowej wersji aplikacji.

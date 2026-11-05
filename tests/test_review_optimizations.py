@@ -182,14 +182,18 @@ class DatabaseOptimizationTests(DbTestCase):
         self.assertEqual(connect.call_count, 1)
 
     def test_migration_rerun_does_not_replay_legacy_bootstrap(self):
+        from pathlib import Path
+        from alembic.script import ScriptDirectory
         from app.db import schema_baseline
-        from app.db.schema import upgrade_database
+        from app.db.schema import schema_is_current, upgrade_database
+        expected_head = ScriptDirectory(str(Path(schema_baseline.__file__).parent / 'migrations')).get_current_head()
         with mock.patch.object(schema_baseline, "init_db", wraps=schema_baseline.init_db) as bootstrap:
             upgrade_database()
             upgrade_database()
         self.assertEqual(bootstrap.call_count, 1)
         with get_conn() as conn:
-            self.assertEqual(conn.execute("SELECT version_num FROM alembic_version").fetchone()[0], "20261104_02")
+            self.assertEqual(conn.execute("SELECT version_num FROM alembic_version").fetchone()[0], expected_head)
+        self.assertTrue(schema_is_current())
 
 
 class BackgroundAndStreamTests(unittest.TestCase):

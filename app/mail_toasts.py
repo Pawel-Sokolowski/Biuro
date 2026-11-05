@@ -5,6 +5,7 @@ from email.utils import parseaddr
 from PyQt6.QtWidgets import QApplication, QStyle, QSystemTrayIcon
 
 from app.email.email_storage import get_new_unread_messages
+from app.windows_toasts import native_toasts
 
 logger = logging.getLogger(__name__)
 SHOW_MS = 6000
@@ -55,6 +56,8 @@ class MailToaster:
     def __init__(self, window, on_click):
         self._last_ids = {}
         self._on_click = on_click
+        self._click_target = None
+        self._native = native_toasts(window, on_click)
         self._tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             icon = window.windowIcon()
@@ -62,11 +65,11 @@ class MailToaster:
                 icon = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
             self._tray = QSystemTrayIcon(icon, window)
             self._tray.setToolTip("Biuro")
-            self._tray.messageClicked.connect(self._on_click)
+            self._tray.messageClicked.connect(lambda: self._on_click(self._click_target))
             self._tray.show()
 
     def check(self, accounts, hidden_folders):
-        if self._tray is None:
+        if self._tray is None and getattr(self, '_native', None) is None:
             return
         new = []
         for account in accounts:
@@ -84,12 +87,30 @@ class MailToaster:
             return
         if len(new) > MAX_SEPARATE:
             title, body = _notification_text(new)
-            self._tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
+            self._show(title, body, None)
             return
         for message in new:
             title, body = _notification_text([message])
+            target = {'kind': 'email', 'account_id': message['_account']['id'],
+                      'row_id': message.get('id'), 'message_id': message.get('message_id')}
+            self._show(title, body, target)
+
+    def _show(self, title, body, target):
+        if getattr(self, '_native', None) is not None:
+            try:
+                self._native.show(title, body, target)
+                return
+            except Exception:
+                logger.warning('Nie można wyświetlić powiadomienia Windows', exc_info=True)
+        self._click_target = target
+        if self._tray is not None:
             self._tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
 
+    def show_notice(self, title, body):
+        self._show(title, body, None)
+
     def hide(self):
+        if getattr(self, '_native', None) is not None:
+            self._native.close()
         if self._tray is not None:
             self._tray.hide()

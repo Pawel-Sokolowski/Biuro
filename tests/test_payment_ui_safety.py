@@ -210,7 +210,7 @@ class BankReviewSafetyTests(unittest.TestCase):
              patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
              patch.object(QMessageBox, "information"):
             self.dialog._delete_selected()
-        delete.assert_called_once_with(1, 1)
+        delete.assert_called_once_with(1, 1, preserve_payments=True)
 
     def test_october_transfer_filters_september_invoice_despite_different_payer_name(self):
         self.invoices[0].update(
@@ -424,7 +424,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertEqual(page.issued_table.columnWidth(14), 100)
         headers = [page.issued_table.horizontalHeaderItem(i).text() for i in range(page.issued_table.columnCount())]
         self.assertEqual(headers[6:8], ["Netto", "Brutto"])
-        self.assertEqual(headers[page.ISSUED_PAID_AMOUNT_COLUMN], "Zapłacono")
+        self.assertEqual(headers[page.ISSUED_PAID_AMOUNT_COLUMN], "Rozliczono")
         self.assertEqual(headers[page.ISSUED_REMAINING_COLUMN], "Pozostało")
         brutto = Decimal(page.issued_table.item(0, 7).text())
         paid = Decimal(page.issued_table.item(0, page.ISSUED_PAID_AMOUNT_COLUMN).text())

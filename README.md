@@ -546,3 +546,33 @@ ostatniej znanej wartości. Te ilości są kontekstem firmy, a nie dzienną prod
 pracownika; nie należy sumować ich między wierszami czynności. Wpisy ogólne bez
 firmy mają puste pola. Praca nad różnymi okresami tej samej firmy pozostaje
 rozdzielona, nawet jeśli wykonano ją jednego dnia.
+
+### Globalna książka adresowa
+
+Przycisk **E-mail → Kontakty** otwiera wspólną książkę adresową pracowników
+z dostępem do poczty. Można dodawać, edytować, usuwać i wyszukiwać kontakty
+niezależne od kart firm. Kliknięcie lub prawy przycisk na adresie w nagłówku
+wiadomości otwiera menu **Dodaj do książki adresowej…**, kopiowania adresu
+i pisania wiadomości. Formularz ma uzupełnioną nazwę i e-mail; istniejący kontakt
+otwiera się do edycji.
+
+**Importuj CSV…** obsługuje podane polskie nagłówki eksportu Thunderbirda, także
+ich angielskie odpowiedniki, pliki UTF-8 (z BOM lub bez), UTF-16 i Windows-1250
+oraz separatory przecinek, średnik i tabulator. Wszystkie 37 pól eksportu jest
+zachowywanych, w tym drugi e-mail, telefony, adresy domowe/służbowe, urodziny,
+informacje dodatkowe i notatki. Nieznane kolumny również są przechowywane.
+
+Import pokazuje podgląd i pominięte niepoprawne wiersze przed zatwierdzeniem.
+Duplikaty są dopasowywane po podstawowym e-mailu bez rozróżniania wielkości liter;
+kolejny import uzupełnia puste pola zamiast nadpisywać ręcznie wpisane dane.
+Zapis jest wspólny w bazie, a równoczesna edycja przez drugiego pracownika jest
+wykrywana przed zapisaniem lub usunięciem kontaktu.
+
+W polach **Do**, **Kopia** i **Ukryta kopia** po wpisaniu co najmniej dwóch znaków
+pojawiają się podpowiedzi nazw, pseudonimów, firm i adresów. Wybór kontaktu działa
+również przy wielu odbiorcach oraz nazwach zawierających przecinki. Wyszukiwanie
+i import pracują w tle, a nieaktualna podpowiedź nie zastąpi nowszego wpisu.
+
+Ta funkcja wymaga migracji bazy **20261105_01**. Po aktualizacji kodu lub EXE
+uruchom `python migrate_db.py` (w instalacji: skrót aktualizacji bazy lub
+`Biuro.exe --migrate`) przed uruchomieniem nowej wersji aplikacji.

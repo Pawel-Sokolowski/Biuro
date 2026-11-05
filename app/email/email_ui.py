@@ -10,6 +10,7 @@ import email
 import tempfile
 import threading
 import unicodedata
+from uuid import uuid4
 from urllib.parse import quote, unquote
 from datetime import datetime
 import time
@@ -99,6 +100,7 @@ from app.email.email_helpers import (
     is_risky_attachment,
     iter_message_attachments,
     safe_attachment_name,
+    safe_header,
 )
 import logging
 from app.utils.background import TaskRunner, CommandRunner, LatestRead
@@ -286,6 +288,11 @@ class _MailWebPage(QWebEnginePage):
                 view = self.parent()
                 if hasattr(view, "load_remote_images"):
                     view.load_remote_images()
+            elif scheme == 'biuro-contact':
+                view = self.parent()
+                target = getattr(view, 'contact_links', {}).get(url.path())
+                if target is not None:
+                    view.address_clicked.emit(*target)
             elif scheme in ("http", "https", "mailto"):
                 QDesktopServices.openUrl(url)
             return False
@@ -294,10 +301,12 @@ class _MailWebPage(QWebEnginePage):
 
 class MailBrowser(QWebEngineView):
     """Podgląd HTML wiadomości w Chromium; JavaScript, pliki i zdalne zasoby są domyślnie blokowane."""
+    address_clicked = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.resources: Dict[str, Any] = {}
+        self.contact_links = {}
         self._last_html = ""
         self._last_header = ""
         # Osobny profil bez zapisu na dysku, żeby blokada nie dotyczyła innych widoków aplikacji.
@@ -339,7 +348,18 @@ class MailBrowser(QWebEngineView):
         )
 
     def clear(self) -> None:
+        self.contact_links = {}
         self.setHtml("")
+
+    def contextMenuEvent(self, event):
+        request = self.lastContextMenuRequest()
+        url = request.linkUrl() if request is not None else QUrl()
+        target = self.contact_links.get(url.path()) if url.scheme() == 'biuro-contact' else None
+        if target is not None:
+            self.address_clicked.emit(*target)
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     @staticmethod
     def prepare_html(html: str, resources: Dict[str, Any], header: str = "") -> str:
@@ -452,6 +472,8 @@ class EmailPage(QWidget):
         self._list_jobs = TaskRunner(self)
         self._message_jobs = TaskRunner(self)
         self._command_jobs = CommandRunner(self)
+        self._contact_jobs = TaskRunner(self)
+        self._contact_editor_pending = False
         self._sync_jobs = CommandRunner(self)
         self._mail_rows = []
         self._mail_cursor = None
@@ -622,6 +644,8 @@ class EmailPage(QWidget):
         self._search_timer.stop()
         self._cancel_mail_load()
         self._message_jobs.invalidate()
+        self._contact_jobs.invalidate()
+        self._contact_editor_pending = False
 
     def _on_sync_failed(self, message):
         self._last_sync_error = message
@@ -675,6 +699,9 @@ class EmailPage(QWidget):
         self.btn_bulk_mail = QPushButton('Mail masowy')
         self.btn_bulk_mail.clicked.connect(self._open_bulk_mail)
         toolbar.addWidget(self.btn_bulk_mail)
+        self.btn_contacts = QPushButton('Kontakty')
+        self.btn_contacts.clicked.connect(self._open_address_book)
+        toolbar.addWidget(self.btn_contacts)
         toolbar.addWidget(self.sync_status)
 
         btn_filters = QToolButton()
@@ -854,6 +881,8 @@ class EmailPage(QWidget):
         message_layout.addLayout(mail_toolbar)
 
         self.mail_view = MailBrowser()
+        if hasattr(self.mail_view, 'address_clicked'):
+            self.mail_view.address_clicked.connect(self._on_address_clicked)
         self.mail_view.setPlainText("Wybierz wiadomość z listy.")
         message_layout.addWidget(self.mail_view, 1)
 
@@ -2302,6 +2331,21 @@ class EmailPage(QWidget):
 
     def _render_message(self, msg: email.message.Message) -> None:
         self.cached_message = msg
+        self.mail_view.contact_links = {}
+        from app.email.address_book import normalize_email
+        def addresses(raw):
+            links = []
+            for name, address in getaddresses([str(raw or '')]):
+                try:
+                    address = normalize_email(address)
+                except ValueError:
+                    continue
+                name = safe_header(name)
+                token = uuid4().hex
+                self.mail_view.contact_links[token] = (name, address)
+                label = f'{name} <{address}>' if name else address
+                links.append(f'<a href="biuro-contact:{token}" title="Opcje adresu i dodawanie kontaktu">{html_escape(label)}</a>')
+            return ', '.join(links) or html_escape(str(raw or ''))
         labels_html = ""
         if self.current_message_labels:
             badges = "".join(
@@ -2313,9 +2357,11 @@ class EmailPage(QWidget):
             labels_html = f"Etykiety: {badges}<br>"
         header = (
             f"<b>{html_escape(str(msg.get('Subject') or '(brak tematu)'))}</b><br>"
-            f"Od: {html_escape(str(msg.get('From') or ''))}<br>"
-            f"Do: {html_escape(str(msg.get('To') or ''))}<br>"
-            f"Data: {html_escape(str(msg.get('Date') or ''))}<br>"
+            f"Od: {addresses(msg.get('From'))}<br>"
+            f"Do: {addresses(msg.get('To'))}<br>"
+            + (f"Kopia: {addresses(msg.get('Cc'))}<br>" if msg.get('Cc') else '')
+            + (f"Odpowiedź do: {addresses(msg.get('Reply-To'))}<br>" if msg.get('Reply-To') else '')
+            + f"Data: {html_escape(str(msg.get('Date') or ''))}<br>"
             f"{labels_html}<hr>"
         )
         html = extract_html(msg)
@@ -2338,6 +2384,7 @@ class EmailPage(QWidget):
         self.show_attachments(shown)
 
     def _clear_view(self) -> None:
+        self.mail_view.contact_links = {}
         self.mail_view.clear()
         self.mail_view.resources = {}
         self.att_bar.hide()
@@ -2550,6 +2597,40 @@ class EmailPage(QWidget):
         except Exception:
             logger.exception('Nie można otworzyć maila masowego')
             QMessageBox.warning(self, 'Mail masowy', 'Nie udało się wczytać kont lub firm. Sprawdź połączenie z bazą i spróbuj ponownie.')
+
+    def _open_address_book(self):
+        from app.email.address_book_ui import AddressBookDialog
+        AddressBookDialog(self.pracownik_id, self).exec()
+
+    def _on_address_clicked(self, name, address):
+        from PyQt6.QtGui import QCursor
+        from app.email.address_book import contact_mailbox
+        menu = QMenu(self)
+        menu.addAction(address).setEnabled(False)
+        menu.addSeparator()
+        menu.addAction('Dodaj do książki adresowej…').triggered.connect(lambda: self._add_global_contact(name, address))
+        mailbox = contact_mailbox({'display_name': name, 'email': address})
+        menu.addAction('Wyślij wiadomość do…').triggered.connect(lambda: self._open_compose('Nowa wiadomość', to=mailbox))
+        menu.addAction('Kopiuj adres e-mail').triggered.connect(lambda: QApplication.clipboard().setText(address))
+        menu.addAction('Kopiuj nazwę i adres e-mail').triggered.connect(lambda: QApplication.clipboard().setText(mailbox))
+        menu.aboutToHide.connect(menu.deleteLater)
+        self._address_menu = menu
+        menu.popup(QCursor.pos())
+
+    def _add_global_contact(self, name, address):
+        if self._contact_editor_pending:
+            return
+        from app.db.dao_address_book import find_contact
+        from app.email.address_book_ui import ContactDialog
+        self._contact_editor_pending = True
+        def loaded(contact):
+            self._contact_editor_pending = False
+            ContactDialog(self.pracownik_id, contact=contact,
+                          initial={'email': address, 'display_name': name}, parent=self).exec()
+        def failed(exc):
+            self._contact_editor_pending = False
+            QMessageBox.warning(self, 'Kontakt', f'Nie udało się wczytać książki adresowej: {exc}')
+        self._contact_jobs.submit(lambda: find_contact(self.pracownik_id, address), loaded, failed)
 
     def refresh_all(self) -> None:
         self._reload_employees()

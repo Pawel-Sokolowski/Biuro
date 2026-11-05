@@ -10,10 +10,12 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QTextEdit,
     QToolBar, QVBoxLayout,
 )
+from app.email.address_book import normalize_email, split_recipients
+from app.email.recipient_edit import RecipientEdit
 
 
 def split_addresses(text: str) -> List[str]:
-    return [a.strip() for a in (text or "").replace(";", ",").split(",") if a.strip()]
+    return split_recipients(text or '')
 
 
 class ComposeDialog(QDialog):
@@ -53,10 +55,10 @@ class ComposeDialog(QDialog):
             account_id = accounts[0]["id"]
         self._account_id = account_id
 
-        self.to_edit = QLineEdit(to)
+        self.to_edit = RecipientEdit(pracownik_id, to, self)
         self.to_edit.setPlaceholderText("adres1@domena.pl, adres2@domena.pl")
-        self.cc_edit = QLineEdit(cc)
-        self.bcc_edit = QLineEdit()
+        self.cc_edit = RecipientEdit(pracownik_id, cc, self)
+        self.bcc_edit = RecipientEdit(pracownik_id, parent=self)
         self.subject_edit = QLineEdit(subject)
 
         self.body_edit = QTextEdit()
@@ -208,6 +210,16 @@ class ComposeDialog(QDialog):
     def _accept(self) -> None:
         if not split_addresses(self.to_edit.text()):
             QMessageBox.warning(self, "Wiadomość", "Podaj co najmniej jednego odbiorcę.")
+            return
+        try:
+            for field in (self.to_edit, self.cc_edit, self.bcc_edit):
+                addresses = split_addresses(field.text())
+                if field.text().strip(' ,;\t\n') and not addresses:
+                    raise ValueError('Niepoprawny odbiorca')
+                for address in addresses:
+                    normalize_email(address)
+        except ValueError:
+            QMessageBox.warning(self, 'Wiadomość', 'Wybierz kontakt z podpowiedzi lub podaj poprawny adres e-mail odbiorcy.')
             return
         self.accept()
 

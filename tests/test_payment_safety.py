@@ -105,7 +105,11 @@ class PaymentSafetyTests(DbTestCase):
                 transfer = self.transfer(currency, direction)
                 with self.assertRaises(PaymentError):
                     confirm_bank_payment(transfer, invoice, "1.00", 1)
-                self.assertNotIn(transfer, [row["id"] for row in list_unsettled_transfers(1)])
+                visible = [row['id'] for row in list_unsettled_transfers(1)]
+                if direction is None:
+                    self.assertIn(transfer, visible)  # visible legacy row still needs explicit confirmation
+                else:
+                    self.assertNotIn(transfer, visible)
         self.assertEqual(get_invoice_payment_summary(invoice, 1)["paid"], Decimal("0.00"))
 
     def test_partial_and_final_cash_payments_have_exact_remaining_balance(self):

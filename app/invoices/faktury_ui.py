@@ -246,7 +246,7 @@ class FakturyPage(QWidget):
     DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
     ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Podgląd", "Netto", "Brutto",
-                      "Zapłacono", "Pozostało", "Data zapłaty", "Data eksportu", "Numer KSeF", "Status KSeF",
+                      "Rozliczono", "Pozostało", "Data rozliczenia", "Data eksportu", "Numer KSeF", "Status KSeF",
                       "E-mail faktury"]
     ISSUED_NUMBER_COLUMN = 4
     ISSUED_PREVIEW_COLUMN = 5
@@ -613,8 +613,10 @@ class FakturyPage(QWidget):
             for item in rows:
                 row = self.settlement_table.rowCount()
                 self.settlement_table.insertRow(row)
-                source = ("Gotówka" if item["sposob"] == "gotowka" else "Przelew")
-                bank = " — ".join(filter(None, [item.get("bank_sender"), item.get("bank_title")]))
+                source = {'gotowka': 'Gotówka', 'kompensata': 'Rozliczenie korektą'}.get(item['sposob'], 'Przelew')
+                if item['sposob'] == 'bank':
+                    source = ('Ręczny + MT940' if item.get('manual_origin') else 'MT940') if item.get('transakcja_id') else 'Przelew ręczny'
+                bank = item.get('correction_number') or " — ".join(filter(None, [item.get("bank_sender"), item.get("bank_title")]))
                 values = [item["id"], _fmt_date(item["data_zaplaty"]), item["numer"],
                           _fmt_date(item["data_wystawienia"]), item["buyer"], f"{item['kwota']:.2f}",
                           source, bank, item.get("actor_name") or ""]
@@ -630,8 +632,9 @@ class FakturyPage(QWidget):
             return
         if QMessageBox.question(
             self, "Wycofaj rozliczenie",
-            f"Wycofać zaznaczone rozliczenia ({len(ids)})? Faktury odzyskają saldo, "
-            "a przelewy bankowe wrócą na listę nierozliczonych.",
+            f"Wycofać zaznaczone rozliczenia ({len(ids)})? Nowe wpłaty zostaną usunięte. "
+            "Dla wpłat ręcznych powiązanych z MT940 zostanie usunięte tylko powiązanie z wyciągiem; "
+            "ręczne oznaczenie zapłaty pozostanie. Przelewy wrócą na listę do uzgodnienia.",
         ) != QMessageBox.StandardButton.Yes:
             return
         errors = []
@@ -1168,7 +1171,9 @@ class FakturyPage(QWidget):
                     paid = payments.get(inv["id"], [])
                     paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
                     paid_sum = sum((Decimal(str(p["kwota"] or 0)) for p in paid), Decimal("0"))
-                    remaining = max(Decimal(str(inv["kwota_brutto"] or 0)) - paid_sum, Decimal("0"))
+                    refund = inv.get('rodzaj') == 'korekta' and Decimal(str(inv['kwota_brutto'] or 0)) < 0
+                    total = abs(Decimal(str(inv['kwota_brutto'] or 0))) if refund else Decimal(str(inv['kwota_brutto'] or 0))
+                    remaining = max(total - paid_sum, Decimal("0"))
                     state = "paid" if remaining == 0 else "partial" if paid_sum > 0 else "unpaid"
                     selected_state = self.payment_filter.currentData()
                     matching_states = {"all", state}
@@ -1178,13 +1183,14 @@ class FakturyPage(QWidget):
                         continue
                     values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
-                              f"{paid_sum:.2f}", f"{remaining:.2f}", paid_text,
+                              f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
                               inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
                     for column, value in enumerate(values):
                         self.issued_table.setItem(row, column, _cell(value, column in (6, 7, 8, 9)))
                     if paid:
-                        lines = "\n".join(f"{_fmt_date(p['data_zaplaty'])} — {p['kwota']:.2f} zł" for p in paid)
-                        self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Zapłacono:\n" + lines)
+                        lines = "\n".join(f"{_fmt_date(p['data_zaplaty'])} — {p['kwota']:.2f} zł"
+                                          + (' (rozliczenie korektą)' if p.get('sposob') == 'kompensata' else '') for p in paid)
+                        self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Rozliczono:\n" + lines)
                         self.issued_table.item(row, self.ISSUED_PAID_COLUMN).setToolTip(
                             f"FV {inv['numer']}\nwyst. {_fmt_date(inv.get('data_wystawienia'))}"
                         )

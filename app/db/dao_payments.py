@@ -21,7 +21,17 @@ class PaymentError(ValueError):
     pass
 
 
-PAYABLE_KINDS = ("faktura", "zaliczkowa", "proforma")
+PAYABLE_KINDS = ("faktura", "zaliczkowa", "proforma", "korekta")
+
+
+def invoice_payment_total(invoice):
+    total = _money(str(invoice['kwota_brutto']))
+    return abs(total) if invoice['rodzaj'] == 'korekta' else total
+
+
+def _paid_amount(conn, invoice_id):
+    return conn.execute('SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci '
+                        'WHERE faktura_id = %s OR source_correction_id = %s', (invoice_id, invoice_id)).fetchone()[0]
 
 
 def _allowed(actor_id: int) -> bool:
@@ -244,6 +254,19 @@ def bank_import_summary(actor_id: int) -> dict:
         return {"total": row["total"], "database": scope["database"], "schema": scope["schema"]}
 
 
+def bank_transfer_block_reason(transfer: dict) -> str:
+    if transfer.get('waluta', 'PLN') != 'PLN':
+        return 'Operacja w innej walucie — rozliczanie dotyczy PLN.'
+    if transfer.get('kierunek') not in (None, '', 'C', 'D'):
+        return 'Storno — nie jest zwykłą wpłatą ani zwrotem.'
+    amount = Decimal(str(transfer['kwota']))
+    if amount == 0 or (amount > 0 and transfer.get('kierunek') == 'D') or (amount < 0 and transfer.get('kierunek') == 'C'):
+        return 'Kwota i kierunek operacji nie odpowiadają wpłacie ani zwrotowi.'
+    if Decimal(str(transfer['remaining'])) <= Decimal('0.009'):
+        return 'Cała kwota przelewu jest już przypisana do rozliczeń.'
+    return ''
+
+
 def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit: int = 1000) -> list[dict[str, Any]]:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do przeglądania wyciągów.")
@@ -253,13 +276,13 @@ def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit:
     try:
         rows = conn.execute(
             """
-            SELECT b.*, b.kwota - COALESCE(p.used, 0) AS remaining
+            SELECT b.*, ABS(b.kwota) - COALESCE(p.used, 0) AS remaining
             FROM bank_transakcje b
             LEFT JOIN (
                 SELECT transakcja_id, SUM(kwota) AS used FROM faktury_platnosci
                 WHERE transakcja_id IS NOT NULL GROUP BY transakcja_id
             ) p ON p.transakcja_id = b.id
-            WHERE %s OR (b.kwota > 0 AND b.waluta = 'PLN' AND b.kierunek = 'C'
+            WHERE %s OR (b.kwota > 0 AND b.waluta = 'PLN' AND COALESCE(NULLIF(b.kierunek, ''), 'C') = 'C'
               AND b.kwota - COALESCE(p.used, 0) > 0.009)
             ORDER BY b.data_operacji DESC, b.id DESC
             LIMIT %s
@@ -284,15 +307,25 @@ def list_invoice_choices(
 
         rows = conn.execute(
             """
-            SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto,
+            WITH RECURSIVE families(id, root_id) AS (
+                SELECT id, id FROM faktury WHERE korygowana_faktura_id IS NULL
+                UNION ALL
+                SELECT child.id, parent.root_id FROM faktury child
+                JOIN families parent ON child.korygowana_faktura_id = parent.id
+            )
+            SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto, family.root_id,
                    COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
+                   i.rodzaj, i.korygowana_faktura_id,
                    COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, k.nip, '') AS nip,
                    COALESCE(f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa) AS buyer_full_name,
                    f.nazwa_skrocona AS buyer_short_name, i.nabywca_pelna AS buyer_invoice_name,
                    k.nazwa AS buyer_contractor_name,
                    f.konto_bankowe AS buyer_account,
-                   CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
+                   CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
+                        ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END - COALESCE(p.paid, 0) AS balance,
+                   COALESCE(p.manual_payments, '[]'::jsonb) AS manual_payments
             FROM faktury i
+            LEFT JOIN families family ON family.id = i.id
 
             LEFT JOIN firmy f
                 ON f.id = i.firma_id
@@ -301,22 +334,27 @@ def list_invoice_choices(
                 ON k.id = i.kontrahent_id
 
             LEFT JOIN (
-                SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id
+                SELECT faktura_id, SUM(kwota) AS paid,
+                       SUM(kwota) FILTER (WHERE transakcja_id IS NULL AND sposob = 'bank') AS manual_unlinked,
+                       jsonb_agg(jsonb_build_object('id', id, 'kwota', kwota, 'data_zaplaty', data_zaplaty) ORDER BY data_zaplaty, id)
+                           FILTER (WHERE transakcja_id IS NULL AND sposob = 'bank') AS manual_payments
+                FROM (
+                    SELECT faktura_id, id, kwota, data_zaplaty, sposob, transakcja_id FROM faktury_platnosci
+                    UNION ALL
+                    SELECT source_correction_id, id, kwota, data_zaplaty, 'kompensata', NULL FROM faktury_platnosci
+                    WHERE source_correction_id IS NOT NULL
+                ) all_payments GROUP BY faktura_id
             ) p ON p.faktura_id = i.id
-            WHERE i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma') AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
-              AND CAST(i.kwota_brutto AS NUMERIC(14,2)) > COALESCE(p.paid, 0)
+            WHERE i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma', 'korekta') AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
+              AND (CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
+                        ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END > COALESCE(p.paid, 0) OR COALESCE(p.manual_unlinked, 0) > 0)
             ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
             """
         ).fetchall()
 
-        return [
-            dict(row)
-            for row in rows
-            if can_access_invoice(
-                actor_id,
-                row["firma_id"]
-            )
-        ]
+        # _allowed already requires finance-wide access; do not re-read the
+        # employee's permissions for each of up to 2000 invoice choices.
+        return [dict(row) for row in rows]
 
     finally:
         conn.close()
@@ -456,6 +494,54 @@ def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, 
     return [invoice_id for _, invoice_id in results]
 
 
+def apply_invoice_correction(correction_id, invoice_id, amount, paid_on, actor_id):
+    """Apply an issued negative correction as credit, without inventing cash."""
+    if not _allowed(actor_id):
+        raise PermissionError('Brak uprawnień do rozliczania korekt.')
+    amount, when = _money(str(amount)), _check_date(paid_on)
+    if amount <= 0 or correction_id == invoice_id:
+        raise PaymentError('Wybierz korektę, fakturę i dodatnią kwotę rozliczenia.')
+    conn = get_conn()
+    try:
+        rows = conn.execute('SELECT * FROM faktury WHERE id = ANY(%s) ORDER BY id FOR UPDATE',
+                            (sorted({correction_id, invoice_id}),)).fetchall()
+        by_id = {row['id']: row for row in rows}
+        credit, debit = by_id.get(correction_id), by_id.get(invoice_id)
+        if not credit or not debit or any(not can_access_invoice(actor_id, row['firma_id']) for row in rows):
+            raise PaymentError('Nie znaleziono dostępnej korekty lub faktury.')
+        if any(not row['eksportowana'] or row['cancelled_at'] for row in rows):
+            raise PaymentError('Rozliczać można tylko wystawione i nieanulowane dokumenty.')
+        if credit['rodzaj'] != 'korekta' or Decimal(str(credit['kwota_brutto'])) >= 0 or Decimal(str(debit['kwota_brutto'])) <= 0:
+            raise PaymentError('Rozliczenie wymaga korekty ujemnej i dodatniej należności.')
+        def root(row):
+            seen = set()
+            while row['korygowana_faktura_id'] is not None:
+                if row['id'] in seen:
+                    raise PaymentError('Nieprawidłowy łańcuch korekt.')
+                seen.add(row['id'])
+                row = conn.execute('SELECT * FROM faktury WHERE id = %s', (row['korygowana_faktura_id'],)).fetchone()
+                if row is None:
+                    raise PaymentError('Brak faktury źródłowej korekty.')
+            return row['id']
+        def contractor(row):
+            return _contractor_key({**dict(row), 'nip': row['nabywca_nip'], 'buyer': row['nabywca_pelna']})
+        if contractor(credit) != contractor(debit) or root(credit) != root(debit):
+            raise PaymentError('Korekta musi dotyczyć tej samej faktury źródłowej i kontrahenta.')
+        if amount > invoice_payment_total(credit) - _paid_amount(conn, correction_id):
+            raise PaymentError('Kwota przekracza niewykorzystane saldo korekty.')
+        if amount > invoice_payment_total(debit) - _paid_amount(conn, invoice_id):
+            raise PaymentError('Kwota przekracza pozostałą należność faktury.')
+        conn.execute("INSERT INTO faktury_platnosci(faktura_id, source_correction_id, data_zaplaty, kwota, sposob, pracownik_id) "
+                     "VALUES (%s,%s,%s,%s,'kompensata',%s)", (invoice_id, correction_id, when, amount, actor_id))
+        create_draft_after_payment(conn, invoice_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _check_date(value: str) -> date:
     try:
         return date.fromisoformat(str(value))
@@ -474,14 +560,15 @@ def get_invoice_payment_summary(invoice_id: int, actor_id: int) -> dict[str, Any
         if invoice["rodzaj"] not in PAYABLE_KINDS or not invoice["eksportowana"]:
             raise PaymentError("Rozliczać można tylko wystawione faktury.")
         payments = [dict(row) for row in conn.execute(
-            "SELECT * FROM faktury_platnosci WHERE faktura_id = %s ORDER BY data_zaplaty, id",
-            (invoice_id,),
+            "SELECT * FROM faktury_platnosci WHERE faktura_id = %s OR source_correction_id = %s ORDER BY data_zaplaty, id",
+            (invoice_id, invoice_id),
         ).fetchall()]
         total = _money(str(invoice["kwota_brutto"]))
         paid = sum((row["kwota"] for row in payments), Decimal("0.00"))
         last_date = max((row["data_zaplaty"] for row in payments), default=None)
-        return {"total": total, "paid": paid, "balance": total - paid, "payments": payments,
-                "paid_on": last_date.isoformat() if last_date and total > 0 and paid >= total else None}
+        payable = invoice_payment_total(invoice)
+        return {"total": total, "paid": paid, "balance": payable - paid, "payments": payments,
+                "paid_on": last_date.isoformat() if last_date and payable > 0 and paid >= payable else None}
     finally:
         conn.close()
 
@@ -519,7 +606,8 @@ def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
         conn.close()
 
 
-def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, actor_id: int) -> None:
+def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, actor_id: int,
+                         *, manual_payment_id=None, allow_legacy_credit=False) -> None:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do rozliczania faktur.")
     amount = _money(str(amount))
@@ -535,23 +623,43 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
             raise PermissionError("Brak dostępu do wskazanej faktury.")
         if transfer["waluta"] != "PLN":
             raise PaymentError("Do faktury w PLN można przypisać wyłącznie przelew w PLN.")
-        if transfer["kierunek"] != "C":
-            raise PaymentError("Rozliczać można tylko zwykły wpływ, bez storna i zwrotów.")
+        if transfer['kierunek'] in (None, '') and not allow_legacy_credit:
+            raise PaymentError('Starszy import nie zawiera kierunku operacji. Potwierdź, że jest to zwykły wpływ.')
+        refund = invoice['rodzaj'] == 'korekta' and Decimal(str(invoice['kwota_brutto'])) < 0
+        if transfer["kierunek"] not in (('D', None, '') if refund else ('C', None, '')):
+            raise PaymentError('Wpływ przypisz do należności, a wypływ do zwrotu na korekcie ujemnej. Storna są wyłączone.')
         if invoice["cancelled_at"]:
             raise PaymentError("Faktura jest anulowana.")
-        if transfer["kwota"] <= 0 or invoice["rodzaj"] not in PAYABLE_KINDS or not invoice["eksportowana"]:
-            raise PaymentError("Można rozliczyć tylko wpływ na właściwą fakturę.")
+        if ((transfer['kwota'] >= 0 if refund else transfer['kwota'] <= 0)
+                or invoice["rodzaj"] not in PAYABLE_KINDS or not invoice["eksportowana"]):
+            raise PaymentError('Kierunek przelewu nie odpowiada należności lub zwrotowi na wystawionej fakturze.')
         already_transfer = conn.execute(
             "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE transakcja_id = %s",
             (transaction_id,),
         ).fetchone()[0]
-        already_invoice = conn.execute(
-            "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s",
-            (invoice_id,),
-        ).fetchone()[0]
-        if amount > transfer["kwota"] - already_transfer + Decimal("0.009"):
+        already_invoice = _paid_amount(conn, invoice_id)
+        if amount > abs(transfer["kwota"]) - already_transfer + Decimal("0.009"):
             raise PaymentError("Kwota przekracza niewykorzystaną wartość przelewu.")
-        if amount > Decimal(str(invoice["kwota_brutto"])) - already_invoice + Decimal("0.009"):
+        if manual_payment_id is not None:
+            manual = conn.execute('SELECT * FROM faktury_platnosci WHERE id = %s FOR UPDATE', (manual_payment_id,)).fetchone()
+            if (not manual or manual['faktura_id'] != invoice_id or manual['sposob'] != 'bank'
+                    or manual['transakcja_id'] is not None):
+                raise PaymentError('Ręczna wpłata jest już powiązana lub nie dotyczy tej faktury. Odśwież listę.')
+            if amount > manual['kwota']:
+                raise PaymentError('Kwota przekracza niepowiązaną ręczną wpłatę.')
+            if amount == manual['kwota']:
+                conn.execute('UPDATE faktury_platnosci SET transakcja_id = %s, manual_origin = true, '
+                             'bank_linked_by = %s, bank_linked_at = clock_timestamp() WHERE id = %s',
+                             (transaction_id, actor_id, manual_payment_id))
+            else:
+                conn.execute('UPDATE faktury_platnosci SET kwota = kwota - %s, manual_origin = true WHERE id = %s',
+                             (amount, manual_payment_id))
+                conn.execute("INSERT INTO faktury_platnosci(faktura_id, transakcja_id, data_zaplaty, kwota, sposob, pracownik_id, "
+                             "manual_origin, bank_linked_by, bank_linked_at) VALUES (%s,%s,%s,%s,'bank',%s,true,%s,clock_timestamp())",
+                             (invoice_id, transaction_id, manual['data_zaplaty'], amount, manual['pracownik_id'], actor_id))
+            conn.commit()
+            return
+        if amount > invoice_payment_total(invoice) - already_invoice + Decimal("0.009"):
             raise PaymentError("Kwota przekracza nierozliczone saldo faktury.")
         conn.execute(
             """
@@ -595,18 +703,15 @@ def _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, method):
             raise PaymentError("Faktura jest anulowana.")
         if not inv["eksportowana"]:
             raise PaymentError("Rozliczać można tylko wystawione faktury.")
-        paid = conn.execute(
-            "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s",
-            (invoice_id,),
-        ).fetchone()[0]
-        if payment > Decimal(str(inv["kwota_brutto"])) - paid + Decimal("0.009"):
+        paid = _paid_amount(conn, invoice_id)
+        if payment > invoice_payment_total(inv) - paid + Decimal("0.009"):
             raise PaymentError("Kwota przekracza pozostałe saldo faktury.")
         conn.execute(
             """
             INSERT INTO faktury_platnosci
-              (faktura_id, data_zaplaty, kwota, sposob, pracownik_id)
-            VALUES (%s, %s, %s, %s, %s)
-            """, (invoice_id, when, payment, method, actor_id),
+              (faktura_id, data_zaplaty, kwota, sposob, pracownik_id, manual_origin)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """, (invoice_id, when, payment, method, actor_id, method == 'bank'),
         )
         create_draft_after_payment(conn, invoice_id)
         conn.commit()
@@ -626,8 +731,7 @@ def list_company_choices(actor_id: int) -> list[dict[str, Any]]:
             "UNION ALL SELECT 'kontrahent', id, COALESCE(nazwa, ''), nip FROM kontrahenci "
             "ORDER BY 3"
         ).fetchall()
-        return [dict(row) for row in rows if row["buyer"] and (
-            can_access_invoice(actor_id, row["id"]) if row["kind"] == "firma" else can_access_invoice(actor_id, None))]
+        return [dict(row) for row in rows if row['buyer']]
     finally:
         conn.close()
 
@@ -640,12 +744,15 @@ def payments_for_invoices(invoice_ids: list[int]) -> dict[int, list[dict[str, An
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, faktura_id, data_zaplaty, kwota, sposob FROM faktury_platnosci "
-            "WHERE faktura_id = ANY(%s) ORDER BY data_zaplaty, id", (ids,),
+            "SELECT id, faktura_id, source_correction_id, data_zaplaty, kwota, sposob FROM faktury_platnosci "
+            "WHERE faktura_id = ANY(%s) OR source_correction_id = ANY(%s) ORDER BY data_zaplaty, id", (ids, ids),
         ).fetchall()
         result: dict[int, list[dict[str, Any]]] = {}
         for row in rows:
-            result.setdefault(row["faktura_id"], []).append(dict(row))
+            if row['faktura_id'] in ids:
+                result.setdefault(row["faktura_id"], []).append(dict(row))
+            if row['source_correction_id'] in ids:
+                result.setdefault(row['source_correction_id'], []).append(dict(row))
         return result
     finally:
         conn.close()
@@ -668,13 +775,14 @@ def list_settlements(actor_id: int, firma_id: int | None = None, search: str = "
             params += [f"%{search.strip()}%"] * 4
         rows = conn.execute(
             f"""
-            SELECT p.id, p.faktura_id, p.data_zaplaty, p.kwota, p.sposob, p.created_at,
-                   i.numer, i.data_wystawienia, i.firma_id, i.kwota_brutto,
+            SELECT p.id, p.faktura_id, p.data_zaplaty, p.kwota, p.sposob, p.created_at, p.transakcja_id, p.manual_origin,
+                   i.numer, i.data_wystawienia, i.firma_id, i.kwota_brutto, correction.numer AS correction_number,
                    COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
                    b.kontrahent AS bank_sender, b.tytul AS bank_title,
                    TRIM(COALESCE(w.imie, '') || ' ' || COALESCE(w.nazwisko, '')) AS actor_name
             FROM faktury_platnosci p
             JOIN faktury i ON i.id = p.faktura_id
+            LEFT JOIN faktury correction ON correction.id = p.source_correction_id
             LEFT JOIN firmy f ON f.id = i.firma_id
             LEFT JOIN bank_transakcje b ON b.id = p.transakcja_id
             LEFT JOIN pracownicy w ON w.id = p.pracownik_id
@@ -689,7 +797,7 @@ def list_settlements(actor_id: int, firma_id: int | None = None, search: str = "
 
 
 def revert_settlement(payment_id: int, actor_id: int) -> None:
-    """Wycofuje rozliczenie: faktura odzyskuje saldo, a przelew wraca na listę nierozliczonych."""
+    """Wycofuje wpłatę albo samo powiązanie ręcznej wpłaty z wyciągiem."""
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do wycofania rozliczenia.")
     conn = get_conn()
@@ -700,7 +808,11 @@ def revert_settlement(payment_id: int, actor_id: int) -> None:
         invoice = conn.execute("SELECT firma_id FROM faktury WHERE id = %s", (payment["faktura_id"],)).fetchone()
         if not invoice or not can_access_invoice(actor_id, invoice["firma_id"]):
             raise PermissionError("Brak dostępu do wskazanej faktury.")
-        conn.execute("DELETE FROM faktury_platnosci WHERE id = %s", (payment_id,))
+        if payment['manual_origin'] and payment['transakcja_id'] is not None:
+            conn.execute('UPDATE faktury_platnosci SET transakcja_id = NULL, bank_linked_by = NULL, bank_linked_at = NULL WHERE id = %s',
+                         (payment_id,))
+        else:
+            conn.execute("DELETE FROM faktury_platnosci WHERE id = %s", (payment_id,))
         conn.commit()
     except Exception:
         conn.rollback()
@@ -712,6 +824,7 @@ def revert_settlement(payment_id: int, actor_id: int) -> None:
 def delete_bank_transaction(
     transaction_id: int,
     actor_id: int,
+    *, preserve_payments: bool = False,
 ) -> None:
 
     if not _allowed(actor_id):
@@ -727,18 +840,21 @@ def delete_bank_transaction(
 
         payment = conn.execute(
             """
-            SELECT 1
+            SELECT manual_origin
             FROM faktury_platnosci
             WHERE transakcja_id = %s
-            LIMIT 1
+            ORDER BY id FOR UPDATE
             """,
             (transaction_id,),
-        ).fetchone()
+        ).fetchall()
 
-        if payment:
+        if not preserve_payments and any(not row['manual_origin'] for row in payment):
             raise PaymentError(
                 "Przelew jest już użyty w rozliczeniu faktury."
             )
+
+        conn.execute('UPDATE faktury_platnosci SET transakcja_id = NULL, manual_origin = true, bank_linked_by = NULL, bank_linked_at = NULL '
+                     'WHERE transakcja_id = %s', (transaction_id,))
 
         row = conn.execute(
             """

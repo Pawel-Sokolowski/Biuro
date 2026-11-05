@@ -7,7 +7,7 @@ from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
 
-SCHEMA_VERSION = "2026-11-05.1"
+SCHEMA_VERSION = "2026-11-05.2"
 
 
 def init_db():
@@ -18,6 +18,8 @@ def init_db():
         apply(conn)
         from app.db.address_book_schema import apply as apply_address_book
         apply_address_book(conn)
+        from app.db.payment_reconciliation_schema import apply as apply_payment_reconciliation
+        apply_payment_reconciliation(conn)
 
 
 def schema_is_current():

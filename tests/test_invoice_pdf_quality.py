@@ -15,8 +15,12 @@ SETTINGS = {'faktury_sprzedawca_nazwa': 'Biuro Łódź', 'faktury_sprzedawca_nip
             'faktury_sprzedawca_kraj': 'PL', 'faktury_sprzedawca_adres': 'Testowa 1'}
 INVOICE = {'numer': 'FV/0001/11/2026', 'data_wystawienia': '2026-11-05',
            'ksef_numer': '8522605060-20261105-4DCCB6C0000A-25',
-           'ksef_nip_wysylki': '8522605060', 'ksef_hash_faktury': 'Abcd+123/456=',
-           'nabywca_pelna': 'Nabywca Żółć', 'kwota_netto': 100, 'kwota_brutto': 123}
+           'ksef_nip_wysylki': '8522605060', 'ksef_hash_faktury': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+           'nabywca_pelna': 'Nabywca Żółć', 'nabywca_nip': '1234567890',
+           'nabywca_adres': 'Przykładowa 15', 'nabywca_kod': '71-450', 'nabywca_miasto': 'Szczecin',
+           'nabywca_regon': '987654321', 'nabywca_kraj': 'PL', 'nabywca_email': 'faktury@example.com',
+           'data_sprzedazy': '2026-11-05', 'termin_platnosci': '2026-11-12',
+           'konto_bankowe': '46105015591000000981362718', 'kwota_netto': 100, 'kwota_brutto': 123}
 
 
 class InvoicePdfQualityTests(TestCase):

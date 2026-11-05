@@ -24,6 +24,8 @@ from app.invoices.vat_summary import summary_html
 
 logger = logging.getLogger(__name__)
 
+INVOICE_FONT_PT = 12.0
+
 
 def _with_buyer_data(invoice: dict) -> dict:
     result = dict(invoice)
@@ -148,19 +150,19 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
         ksef_date = f"{number_part[1][:4]}-{number_part[1][4:6]}-{number_part[1][6:]}"
     return f"""
     <html><head><style>
-      body {{ background-color: white; font-family: 'Arial'; font-size: 9.5pt; color: #111; margin: 10px; }}
+      body {{ background-color: white; font-family: 'Arial'; font-size: {INVOICE_FONT_PT:g}pt; color: #111; margin: 10px; }}
       table {{ border-collapse: collapse; }}
       td {{ vertical-align: top; }}
-      .doc-title {{ font-size: 12pt; font-weight: bold; text-align: right; }}
-      .doc-number {{ font-size: 15pt; font-weight: bold; text-align: right; }}
-      .ksef-head {{ color: #d71920; font-size: 10pt; font-weight: bold; text-align: right; }}
-      .label {{ color: #444; font-size: 8pt; }}
-      .party-name {{ font-size: 10pt; font-weight: bold; }}
+      .doc-title {{ font-size: 13pt; font-weight: bold; text-align: right; }}
+      .doc-number {{ font-size: 16pt; font-weight: bold; text-align: right; }}
+      .ksef-head {{ color: #d71920; font-size: 12pt; font-weight: bold; text-align: right; }}
+      .label {{ color: #444; font-size: 12pt; }}
+      .party-name {{ font-size: 12pt; font-weight: bold; }}
       .items th {{ background: #eeeeee; padding: 6px 4px; }}
       .items td {{ padding: 7px 4px; }}
       .num {{ text-align: right; white-space: nowrap; }}
-      .grand {{ font-size: 12pt; font-weight: bold; }}
-      .ksef-number {{ font-family: monospace; font-size: 8pt; color: #333; }}
+      .grand {{ font-size: 14pt; font-weight: bold; }}
+      .ksef-number {{ font-family: monospace; font-size: 12pt; color: #333; }}
     </style></head><body>
     {('<h1>ANULOWANA</h1><p>' + _escape(invoice.get('cancelled_reason')) + '</p>') if invoice.get('cancelled_at') else ''}
       <table width="100%" border="0" cellspacing="0" cellpadding="8"><tr>
@@ -168,7 +170,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
         <td width="55%" align="right"><div class="doc-title">{document_title} nr</div>
         <div class="doc-number">{_escape(document_number)}</div><br>
         <b>Nr KSeF:</b><br><span class="ksef-head">{_escape(invoice.get('ksef_numer') or '—')}</span><br>
-        <span class="label">Data przyjęcia do KSeF:</span><br><b>{_escape(ksef_date or '—')}</b><br><br>
+        <span class="label">Data przyjęcia do KSeF:</span><br><b>{_escape(ksef_date or '—')}</b><br>
         <span class="label">Data wystawienia:</span> <b>{_escape(invoice.get('data_wystawienia'))}</b><br>
         <span class="label">Data sprzedaży:</span> <b>{_escape(invoice.get('data_sprzedazy'))}</b></td>
       </tr></table>
@@ -183,10 +185,10 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
         REGON: {_escape(invoice.get('nabywca_regon'))}<br>Kraj: {_escape(invoice.get('nabywca_kraj'))}<br>
         E-mail: {_escape(invoice.get('nabywca_email'))}</td>
       </tr></table>
-      <br><br>
+      <br>
       <table class="items" width="100%" border="1" cellspacing="0" cellpadding="4"><thead><tr>
-      <th width="5%">Lp.</th><th width="32%">Nazwa towaru lub usługi</th><th width="8%">Ilość</th><th width="7%">J.m.</th>
-      <th width="13%">Cena netto</th><th width="7%">VAT %</th><th width="14%">Netto</th><th width="14%">Brutto</th></tr></thead>
+      <th width="5%">Lp.</th><th width="27%">Nazwa towaru lub usługi</th><th width="8%">Ilość</th><th width="6%">J.m.</th>
+      <th width="14%">Cena netto</th><th width="8%">VAT&nbsp;%</th><th width="16%">Netto</th><th width="16%">Brutto</th></tr></thead>
       <tbody>{''.join(rows)}</tbody></table>
       <br>{summary_html(positions, paper=True, accepted_amounts=bool(invoice.get("_official")))}<br>
       <table width="100%" border="0" cellspacing="0" cellpadding="5"><tr>
@@ -198,13 +200,12 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       {f'<div><b>Faktura korygowana:</b> {_escape(invoice.get("korygowana_faktura_numer"))}<br><b>Przyczyna:</b> {_escape(invoice.get("przyczyna_korekty"))}</div>' if invoice.get('rodzaj') == 'korekta' else ''}
       <br>
       <table width="100%" border="0" cellspacing="0" cellpadding="6"><tr>
-        <td width="70%"><table border="0" cellspacing="0" cellpadding="3">
+        <td width="60%"><table border="0" cellspacing="0" cellpadding="3">
           <tr><td><b>Sposób zapłaty</b></td><td>{_escape(payment_method)}</td></tr>
           <tr><td><b>Termin zapłaty</b></td><td>{_escape(invoice.get('termin_platnosci'))}</td></tr>
-          <tr><td><b>Numer rachunku</b></td><td>{_escape(account)}</td></tr>
-          <tr><td><b>Numer KSeF</b></td><td><span class="ksef-number">{_escape(invoice.get('ksef_numer') or '—')}</span></td></tr>
+          <tr><td><b>Numer rachunku</b></td><td style="white-space: nowrap">{_escape(account)}</td></tr>
         </table></td>
-        <td width="30%" align="center">{qr_html}<span class="label">Zeskanuj kod, aby zweryfikować fakturę w KSeF</span>{verification_html}</td>
+        <td width="40%" align="center">{qr_html}<span class="label">Zeskanuj kod, aby zweryfikować fakturę w KSeF</span>{verification_html}</td>
       </tr></table>
     </body></html>
     """
@@ -225,7 +226,7 @@ def write_invoice_pdf(path, rendered_html, *, title="Faktura"):
     metrics.setDotsPerMeterY(round(96 / 0.0254))
     document.documentLayout().setPaintDevice(metrics)
     font = QFont("Arial")
-    font.setPointSizeF(9.5)
+    font.setPointSizeF(INVOICE_FONT_PT)
     font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     document.setDefaultFont(font)
     document.setUseDesignMetrics(True)

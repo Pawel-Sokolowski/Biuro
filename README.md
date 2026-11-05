@@ -437,3 +437,21 @@ W **Ustawienia → Faktury** uzupełnij REGON, kraj i e-mail sprzedawcy. Dane te
 wyświetlane w podglądzie i PDF. Danych własnego biura nie dopisujemy jako danych
 kontaktowych innego sprzedawcy w dokumentach KSeF. Zapisane wcześniej pliki PDF
 pozostają bez zmian — po aktualizacji wygeneruj PDF ponownie.
+
+
+Podstawowa czcionka podglądu i PDF faktury ma 12 pt. Opisy i dane
+weryfikacyjne również mają minimum 12 pt; szerokości kolumn i odstępy są dopasowane do większego
+tekstu. Celem jest lepsza czytelność przy powiększeniu 100%; wygląd wygładzania
+nadal zależy od ekranu i ustawień czytnika PDF. Po aktualizacji wygeneruj plik ponownie.
+
+
+**Zadania** otwierają się z filtrem **Nowe i w toku** oraz przypisaniem do
+zalogowanego pracownika, również dla administratora. Można ręcznie wybrać inne
+statusy lub pracownika. Dane sprzedawcy (w tym REGON i e-mail) są na górze
+przewijanej strony **Ustawienia → Faktury i KSeF**. Po aktualizacji kodu uruchom
+aplikację ponownie — Sync Project nie przeładowuje już otwartych okien.
+
+
+Powiadomienia systemowe o nowych e-mailach pokazują konto, nadawcę i temat.
+Przy większej liczbie wiadomości zawierają krótką listę i liczbę pozostałych,
+bez dodatkowego pobierania treści wiadomości.

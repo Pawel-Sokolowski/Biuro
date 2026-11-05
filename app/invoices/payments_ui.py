@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
-    list_unsettled_transfers, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
+    list_unsettled_transfers, record_manual_payment, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
     invoice_choices_for_transaction, match_invoice_contractor,
     invoice_contractor_key,
 )
@@ -513,21 +513,25 @@ class BankPaymentReview(QDialog):
 
 
 def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
+    return record_payment_in_dialog(invoice, actor_id, parent, cash_only=True)
+
+
+def record_payment_in_dialog(invoice: dict, actor_id: int, parent=None, *, cash_only=False) -> bool:
     from app.db.dao_payments import get_invoice_payment_summary
     try:
         summary = get_invoice_payment_summary(int(invoice["id"]), actor_id)
     except (PaymentError, PermissionError) as exc:
-        QMessageBox.warning(parent, "Gotówka", str(exc))
+        QMessageBox.warning(parent, "Zapłacono", str(exc))
         return False
     except Exception:
         logger.exception("Błąd odczytu salda faktury")
-        QMessageBox.warning(parent, "Gotówka", "Nie udało się odczytać salda faktury. Szczegóły w logach.")
+        QMessageBox.warning(parent, "Zapłacono", "Nie udało się odczytać salda faktury. Szczegóły w logach.")
         return False
     if summary["balance"] <= 0:
-        QMessageBox.information(parent, "Gotówka", "Ta faktura jest już w całości rozliczona.")
+        QMessageBox.information(parent, "Zapłacono", "Ta faktura jest już w całości rozliczona.")
         return False
     form = QDialog(parent)
-    form.setWindowTitle("Zapłata gotówką")
+    form.setWindowTitle("Zapłacono — ręczne oznaczenie wpłaty")
     layout = QFormLayout(form)
     date_input = QDateEdit(QDate.currentDate(), form)
     date_input.setCalendarPopup(True)
@@ -535,7 +539,13 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
     amount_edit = QLineEdit(form)
     amount_edit.setText(money_text(summary["balance"]))
     layout.addRow("Faktura:", QLabel(str(invoice.get("numer") or invoice["id"]), form))
-    layout.addRow("Data otrzymania gotówki:", date_input)
+    layout.addRow("Data zapłaty:", date_input)
+    method = QComboBox(form)
+    method.addItem("Przelew / wpłata bez importu MT940", "bank")
+    method.addItem("Gotówka", "gotowka")
+    method.setCurrentIndex(1 if cash_only else 0)
+    method.setEnabled(not cash_only)
+    layout.addRow("Sposób zapłaty:", method)
     layout.addRow("Pozostało do zapłaty:", QLabel(f"{money_text(summary['balance'])} PLN", form))
     layout.addRow("Kwota (PLN):", amount_edit)
     buttons = QDialogButtonBox(
@@ -552,10 +562,10 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
         if amount > summary["balance"]:
             raise PaymentError("Kwota przekracza pozostałe saldo faktury.")
     except PaymentError as exc:
-        QMessageBox.warning(parent, "Gotówka", str(exc))
+        QMessageBox.warning(parent, "Zapłacono", str(exc))
         return False
     if QMessageBox.question(
-        parent, "Potwierdź płatność gotówkową",
+        parent, "Potwierdź zapłatę",
         f"Zarejestrować wpłatę {amount} zł z dnia {date_input.date().toString('dd-MM-yyyy')} "
         f"na fakturę {invoice.get('numer') or invoice['id']}?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -563,15 +573,16 @@ def record_cash_in_dialog(invoice: dict, actor_id: int, parent=None) -> bool:
     ) != QMessageBox.StandardButton.Yes:
         return False
     try:
-        record_cash_payment(
+        save_payment = record_cash_payment if method.currentData() == "gotowka" else record_manual_payment
+        save_payment(
             int(invoice["id"]),
             date_input.date().toString("yyyy-MM-dd"), amount, actor_id,
         )
     except (PaymentError, PermissionError) as exc:
-        QMessageBox.warning(parent, "Gotówka", str(exc))
+        QMessageBox.warning(parent, "Zapłacono", str(exc))
         return False
     except Exception:
         logger.exception("Błąd zapisu płatności gotówkowej")
-        QMessageBox.warning(parent, "Gotówka", "Nie udało się zapisać płatności. Szczegóły w logach.")
+        QMessageBox.warning(parent, "Zapłacono", "Nie udało się zapisać płatności. Szczegóły w logach.")
         return False
     return True

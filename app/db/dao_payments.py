@@ -571,8 +571,17 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
 
 
 def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: int) -> None:
+    _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, "gotowka")
+
+
+def record_manual_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: int) -> None:
+    """Bank payment confirmed manually, without requiring an MT940 transaction."""
+    _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, "bank")
+
+
+def _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, method):
     if not _allowed(actor_id):
-        raise PermissionError("Brak uprawnień do oznaczenia płatności gotówką.")
+        raise PermissionError("Brak uprawnień do oznaczenia płatności.")
     when = _check_date(paid_on)
     payment = _money(str(amount))
     if payment <= 0:
@@ -596,8 +605,8 @@ def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: in
             """
             INSERT INTO faktury_platnosci
               (faktura_id, data_zaplaty, kwota, sposob, pracownik_id)
-            VALUES (%s, %s, %s, 'gotowka', %s)
-            """, (invoice_id, when, payment, actor_id),
+            VALUES (%s, %s, %s, %s, %s)
+            """, (invoice_id, when, payment, method, actor_id),
         )
         create_draft_after_payment(conn, invoice_id)
         conn.commit()

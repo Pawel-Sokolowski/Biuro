@@ -410,3 +410,17 @@ również rozliczone operacje, wypływy i inne waluty. Ich przypisywanie jako wp
 jest zablokowane. Przycisk „Wczytaj kolejne 1000 operacji” udostępnia starsze wpisy.
 Pod listą widnieje źródło danych i liczba zapisanych operacji, przydatne przy
 porównywaniu widoczności na dwóch stanowiskach.
+
+
+### Ręczne oznaczanie zapłaty
+
+W **Faktury → Wystawione** przycisk **Zapłacono** zapisuje wpłatę bez importowania
+wyciągu MT940. Kwota domyślna to pełne pozostałe saldo (dla niezapłaconej faktury:
+kwota brutto); można ją zmienić. Data zapłaty jest wybierana z kalendarza z nawigacją
+między miesiącami i może być wcześniejsza niż data wystawienia faktury.
+Można wskazać przelew/wpłatę ręczną albo gotówkę. Wpłata trafia do wspólnej ewidencji
+rozliczeń i można ją cofnąć w zakładce Rozliczenia.
+
+Filtr **Płatność** rozróżnia: wszystkie, zapłacone, częściowo zapłacone i niezapłacone.
+Niezapłacone obejmują wszystkie faktury z dodatnim pozostałym saldem, również częściowe
+wpłaty. Filtr uwzględnia łącznie płatności ręczne, gotówkę i rozliczenia MT940.

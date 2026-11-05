@@ -90,6 +90,22 @@ class InvoiceRefreshStateTests(DbTestCase):
         self.assertEqual(self.selected(), selected)
         self.assertEqual(self.page.issued_table.currentRow(), 55)
 
+    def test_number_search_combines_with_payment_filter_and_survives_refresh(self):
+        self.payments[self.rows[21]['id']] = []
+        self.page.invoice_number_filter.setText(' fv/002 ')
+        self.assertEqual(self.page.issued_table.rowCount(), 9)
+        self.assertEqual(self.page.issued_table.item(0, 4).text(), 'FV/0020/09/2026')
+        self.finish_poll()
+        self.assertEqual(self.page.invoice_number_filter.text(), ' fv/002 ')
+        self.assertEqual(self.page.issued_table.rowCount(), 9)
+        self.page.payment_filter.setCurrentIndex(self.page.payment_filter.findData('unpaid'))
+        self.assertEqual(self.page.issued_table.rowCount(), 1)
+        self.assertEqual(self.page.issued_table.item(0, 4).text(), 'FV/0021/09/2026')
+        self.page.invoice_number_filter.setText('no match')
+        self.assertEqual(self.page.issued_table.rowCount(), 0)
+        self.page.invoice_number_filter.clear()
+        self.assertEqual(self.page.issued_table.rowCount(), 1)
+
     def test_paid_filter_removes_newly_unpaid_row_and_never_selects_another_invoice(self):
         self.place_view()
         removed = self.rows[55]['id']

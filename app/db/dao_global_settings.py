@@ -287,6 +287,17 @@ def add_email_account(
         conn.close()
 
 
+def _retire_account_cache(conn, acc_id):
+    # Lock account before folders, matching generation-fenced sync writes.
+    conn.execute("SELECT id FROM foldery_email WHERE konto_id=%s ORDER BY id FOR UPDATE", (acc_id,)).fetchall()
+    conn.execute("UPDATE wiadomosci_email SET uid='retired:' || id::text || ':' || uid, usunieta=1 "
+                 "WHERE konto_id=%s AND uid NOT LIKE 'retired:%%'", (acc_id,))
+    conn.execute("UPDATE foldery_email SET uidvalidity=NULL WHERE konto_id=%s", (acc_id,))
+    conn.execute("DELETE FROM app_settings WHERE klucz=ANY(%s)",
+                 ([f"email_status_snapshot_{acc_id}", f"email_full_sweep_{acc_id}",
+                   f"email_initial_sync_complete_{acc_id}"],))
+
+
 def update_email_account(
     acc_id: int,
     email: str,
@@ -296,15 +307,14 @@ def update_email_account(
 ) -> None:
     conn = get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE konta_email
-            SET email = %s, serwer_imap = %s, serwer_smtp = %s, haslo_enc = %s
-            WHERE id = %s
-            """,
-            (email, imap_server, smtp_server, haslo_enc, acc_id),
-        )
+        before = conn.execute("SELECT * FROM konta_email WHERE id=%s FOR UPDATE", (acc_id,)).fetchone()
+        if before is None:
+            return
+        conn.execute("""UPDATE konta_email SET email=%s,serwer_imap=%s,serwer_smtp=%s,haslo_enc=%s,
+            connection_revision=connection_revision+1 WHERE id=%s""",
+            (email, imap_server, smtp_server, haslo_enc, acc_id))
+        if (before["email"], before["serwer_imap"]) != (email, imap_server):
+            _retire_account_cache(conn, acc_id)
         conn.commit()
     finally:
         conn.close()
@@ -322,15 +332,16 @@ def update_email_account_connection(
 ) -> None:
     conn = get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE konta_email
-            SET email=%s, serwer_imap=%s, port_imap=%s, serwer_smtp=%s, port_smtp=%s, ssl_imap=%s, ssl_smtp=%s
-            WHERE id=%s
-            """,
-            (email, imap, imap_port, smtp, smtp_port, ssl_imap, ssl_smtp, acc_id),
-        )
+        before = conn.execute("SELECT * FROM konta_email WHERE id=%s FOR UPDATE", (acc_id,)).fetchone()
+        if before is None:
+            return
+        identity_changed = (before["email"], before["serwer_imap"], before["port_imap"], before["ssl_imap"]) != (email, imap, imap_port, ssl_imap)
+        conn.execute("""UPDATE konta_email SET email=%s, serwer_imap=%s, port_imap=%s,
+            serwer_smtp=%s, port_smtp=%s, ssl_imap=%s, ssl_smtp=%s,
+            connection_revision=connection_revision+1 WHERE id=%s""",
+            (email, imap, imap_port, smtp, smtp_port, ssl_imap, ssl_smtp, acc_id))
+        if identity_changed:
+            _retire_account_cache(conn, acc_id)
         conn.commit()
     finally:
         conn.close()
@@ -340,7 +351,7 @@ def update_email_account_password(acc_id: int, haslo_enc: str) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE konta_email SET haslo_enc=%s WHERE id=%s", (haslo_enc, acc_id)
+            "UPDATE konta_email SET haslo_enc=%s, connection_revision=connection_revision+1 WHERE id=%s", (haslo_enc, acc_id)
         )
         conn.commit()
     finally:

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import requests
 
-from app.db import dao_calendar
+from app.db import dao_calendar, dao_calendar_sync as outbox
 from app.db.dao_app_settings import delete_setting, get_setting, set_setting
 from app.utils.crypto import decrypt_password, encrypt_password
 
@@ -89,42 +89,23 @@ def _pending_key(pracownik_id: int) -> str:
 
 
 def _pending_changes(pracownik_id: int) -> Dict[str, Dict[str, str]]:
-    raw = get_setting(_pending_key(pracownik_id)) or "{}"
-    try:
-        pending = json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        raise GoogleCalendarError("Nie można odczytać kolejki zmian Google Calendar.") from exc
-    if not isinstance(pending, dict):
-        raise GoogleCalendarError("Nieprawidłowa kolejka zmian Google Calendar.")
-    return {
-        str(key): value for key, value in pending.items()
-        if isinstance(value, dict) and value.get("kalendarz") and value.get("akcja")
-    }
+    outbox.migrate_google(pracownik_id)
+    return {op["remote_id"]: {"kalendarz": op["calendar_id"], "akcja": op["action"]}
+            for op in outbox.operations(pracownik_id, "google")}
 
 
-def _save_pending_changes(pracownik_id: int, pending: Dict[str, Dict[str, str]]) -> None:
-    key = _pending_key(pracownik_id)
-    if pending:
-        set_setting(key, json.dumps(pending))
-    else:
-        delete_setting(key)
-
-
-def mark_event_pending(
-    pracownik_id: int, calendar_id: str, google_event_id: str, action: str = "upsert"
-) -> None:
+def mark_event_pending(pracownik_id: int, calendar_id: str, google_event_id: str,
+                       action: str = "upsert") -> None:
     if action not in {"upsert", "delete"}:
         raise ValueError("Nieobsługiwana operacja Google Calendar.")
-    pending = _pending_changes(pracownik_id)
-    pending[google_event_id] = {"kalendarz": calendar_id, "akcja": action}
-    _save_pending_changes(pracownik_id, pending)
-
-
-def _clear_pending(pracownik_id: int, google_event_id: str) -> None:
-    pending = _pending_changes(pracownik_id)
-    if google_event_id in pending:
-        del pending[google_event_id]
-        _save_pending_changes(pracownik_id, pending)
+    from app.db.dao_conn import get_conn
+    outbox.migrate_google(pracownik_id)
+    with get_conn() as conn:
+        event = conn.execute("""SELECT * FROM wydarzenia WHERE pracownik_id=%s
+            AND google_calendar_id=%s AND google_event_id=%s FOR UPDATE""",
+            (pracownik_id, calendar_id, google_event_id)).fetchone()
+        outbox.enqueue(conn, pracownik_id, "google", calendar_id, google_event_id,
+                       event["id"] if event else None, action, dict(event) if event else {})
 
 
 def _events_url(calendar_id: str) -> str:
@@ -314,7 +295,7 @@ def _from_google(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check(resp: requests.Response) -> None:
-    if resp.status_code >= 400 and resp.status_code != 404:
+    if resp.status_code >= 400:
         raise GoogleCalendarError(f"Google Calendar: {resp.status_code} {resp.text[:200]}")
 
 
@@ -324,35 +305,46 @@ def _require_access(pracownik_id: int, calendar_id: Optional[str]) -> str:
     return calendar_id
 
 
-def push_event(pracownik_id: int, event: Dict[str, Any]) -> None:
-    """Wysyła nowe lub zmienione wydarzenie do jego kalendarza Google i zapisuje identyfikator."""
-    calendar_id = _require_access(pracownik_id, event.get("google_calendar_id"))
+def _send_operation(op):
+    actor, calendar_id, gid = op["pracownik_id"], op["calendar_id"], op["remote_id"]
+    _require_access(actor, calendar_id)
     url = _events_url(calendar_id)
     headers = _headers()
-    body = _to_google_body(event)
-    gid = event.get("google_event_id")
-    if gid:
-        resp = requests.patch(f"{url}/{gid}", json=body, headers=headers, timeout=TIMEOUT)
-        if resp.status_code != 404:
+    if op["action"] == "delete":
+        resp = requests.delete(f"{url}/{quote(gid, safe='')}", headers=headers, timeout=TIMEOUT)
+        if resp.status_code not in (200, 204, 404, 410):
             _check(resp)
-            dao_calendar.set_google_event_id(event["id"], gid, calendar_id)
-            _clear_pending(pracownik_id, gid)
-            return
-    resp = requests.post(url, json=body, headers=headers, timeout=TIMEOUT)
-    _check(resp)
-    dao_calendar.set_google_event_id(event["id"], resp.json()["id"], calendar_id)
-    if gid:
-        _clear_pending(pracownik_id, gid)
+    else:
+        body = _to_google_body(op["payload"])
+        # PATCH also reconciles a previous POST whose response was lost.
+        resp = requests.patch(f"{url}/{quote(gid, safe='')}", json=body, headers=headers, timeout=TIMEOUT)
+        if resp.status_code == 404:
+            resp = requests.post(url, json={**body, "id": gid}, headers=headers, timeout=TIMEOUT)
+            if resp.status_code == 409:
+                resp = requests.patch(f"{url}/{quote(gid, safe='')}", json=body, headers=headers, timeout=TIMEOUT)
+        _check(resp)
+        dao_calendar.set_google_event_id(op["event_id"], gid, calendar_id, expected_calendar_id=calendar_id)
+    outbox.acknowledge(op)
+
+
+def push_event(pracownik_id: int, event: Dict[str, Any]) -> None:
+    calendar_id = _require_access(pracownik_id, event.get("google_calendar_id"))
+    with outbox.calendar_lock(pracownik_id, "google", calendar_id):
+        op = outbox.stage(pracownik_id, "google", calendar_id, event["id"])
+        if op:
+            _send_operation(op)
 
 
 def delete_remote(pracownik_id: int, calendar_id: str, google_event_id: str) -> None:
     _require_access(pracownik_id, calendar_id)
-    resp = requests.delete(
-        f"{_events_url(calendar_id)}/{google_event_id}", headers=_headers(), timeout=TIMEOUT
-    )
-    if resp.status_code not in (200, 204, 404, 410):
-        _check(resp)
-    _clear_pending(pracownik_id, google_event_id)
+    with outbox.calendar_lock(pracownik_id, "google", calendar_id):
+        op = next((o for o in outbox.operations(pracownik_id, "google", calendar_id)
+                   if o["remote_id"] == google_event_id and o["action"] == "delete"), None)
+        if op is None:
+            mark_event_pending(pracownik_id, calendar_id, google_event_id, "delete")
+            op = next(o for o in outbox.operations(pracownik_id, "google", calendar_id)
+                      if o["remote_id"] == google_event_id)
+        _send_operation(op)
 
 
 # ---------- test połączenia i lista kalendarzy ----------
@@ -399,25 +391,16 @@ def sync(pracownik_id: int, days_back: int = 30, days_ahead: int = 365) -> Dict[
     if not allowed:
         raise GoogleCalendarError("Nie przypisano Ci żadnego kalendarza Google.")
 
-    for google_event_id, change in list(_pending_changes(pracownik_id).items()):
-        calendar_id = change["kalendarz"]
-        if calendar_id not in allowed:
-            _clear_pending(pracownik_id, google_event_id)
-            continue
-        if change["akcja"] == "delete":
-            delete_remote(pracownik_id, calendar_id, google_event_id)
-        else:
-            event = dao_calendar.get_event_by_google_id(pracownik_id, google_event_id)
-            if event:
-                push_event(pracownik_id, event)
-            else:
-                delete_remote(pracownik_id, calendar_id, google_event_id)
-        stats["wyslane"] += 1
-
+    outbox.migrate_google(pracownik_id)
+    # Stage legacy unsynced events; new edits are already enqueued by the DAO.
     for event in dao_calendar.list_unsynced_events(pracownik_id):
         if event.get("google_calendar_id") in allowed:
-            push_event(pracownik_id, event)
-            stats["wyslane"] += 1
+            outbox.stage(pracownik_id, "google", event["google_calendar_id"], event["id"])
+    for calendar_id in allowed:
+        with outbox.calendar_lock(pracownik_id, "google", calendar_id):
+            for op in outbox.operations(pracownik_id, "google", calendar_id):
+                _send_operation(op)
+                stats["wyslane"] += 1
 
     headers = _headers()
     now = datetime.utcnow()
@@ -429,7 +412,8 @@ def sync(pracownik_id: int, days_back: int = 30, days_ahead: int = 365) -> Dict[
         "maxResults": 250,
     }
     for calendar_id in allowed:
-        _pull_calendar(pracownik_id, calendar_id, headers, dict(base_params), stats)
+        with outbox.calendar_lock(pracownik_id, "google", calendar_id):
+            _pull_calendar(pracownik_id, calendar_id, headers, dict(base_params), stats)
     stats["usuniete"] += dao_calendar.remove_local_duplicates(pracownik_id)
     return stats
 
@@ -444,10 +428,12 @@ def _pull_calendar(
         _check(resp)
         data = resp.json()
         for item in data.get("items", []):
-            existing = dao_calendar.get_event_by_google_id(pracownik_id, item["id"])
+            if outbox.remote_pending(pracownik_id, "google", calendar_id, item["id"]):
+                continue
+            existing = dao_calendar.get_event_by_google_id(pracownik_id, item["id"], calendar_id)
             if item.get("status") == "cancelled":
                 if existing:
-                    dao_calendar.delete_event(existing["id"], pracownik_id)
+                    dao_calendar.delete_event(existing["id"], pracownik_id, from_remote=True)
                     stats["usuniete"] += 1
                 continue
             if "start" not in item or "end" not in item:
@@ -457,7 +443,7 @@ def _pull_calendar(
             if existing:
                 values["id"] = existing["id"]
                 values["firma_id"] = existing.get("firma_id")
-            dao_calendar.save_event(pracownik_id, values)
+            dao_calendar.save_event(pracownik_id, values, from_remote=True)
             stats["pobrane"] += 1
         token = data.get("nextPageToken")
         if not token:

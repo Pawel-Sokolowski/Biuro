@@ -1,7 +1,7 @@
 # app/reports/reports_ui.py
 from app.utils.ui_imports import *
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QCheckBox, QCalendarWidget
+from PyQt6.QtWidgets import QCheckBox, QCalendarWidget, QFileDialog
 from PyQt6.QtCharts import (
     QChart, QChartView,
     QBarSeries, QBarSet,
@@ -11,7 +11,7 @@ from PyQt6.QtCharts import (
 from PyQt6.QtGui import QPainter
 import datetime
 import logging
-from app.utils.background import TaskRunner
+from app.utils.background import TaskRunner, CommandRunner
 
 from app.reports.reports_logic import (
     get_all_companies,
@@ -26,21 +26,25 @@ DAILY_MODE = "Raport dzienny"
 DAILY_HEADERS = ["Data", "Pracownik", "Firma", "Zadanie / czynność", "Czas"]
 
 
-def daily_display_rows(rows):
+def iter_daily_display_rows(rows):
     """Data i pracownik tylko przy pierwszym wystąpieniu; pusty wiersz między dniami."""
-    out, last_day, last_emp = [], None, None
+    last_day, last_emp = None, None
     for item in rows:
         if last_day is not None and item["data"] != last_day:
-            out.append([""] * len(DAILY_HEADERS))
+            yield [""] * len(DAILY_HEADERS)
             last_emp = None
         new_day = item["data"] != last_day
-        out.append([
+        yield [
             datetime.date.fromisoformat(item["data"]).strftime("%d/%m/%Y") if new_day else "",
             item["pracownik"] if new_day or item["pracownik"] != last_emp else "",
             item.get("firma") or "", item["czynnosc"], format_hours(item["sekundy"]),
-        ])
+        ]
         last_day, last_emp = item["data"], item["pracownik"]
-    return out
+
+
+
+def daily_display_rows(rows):
+    return list(iter_daily_display_rows(rows))
 
 
 def daily_range(day: datetime.date, whole_month: bool) -> tuple[str, str]:
@@ -81,7 +85,8 @@ class ReportsPage(QWidget):
         super().__init__()
         self.pracownik_id = pracownik_id
         self._report_jobs = TaskRunner(self)
-        self._import_jobs = TaskRunner(self)
+        self._import_jobs = CommandRunner(self)
+        self._export_jobs = CommandRunner(self)
         self._import_busy = False
         self._build_ui()
         for signal in (self.mode_combo.currentTextChanged, self.month_start.currentTextChanged,
@@ -188,7 +193,7 @@ class ReportsPage(QWidget):
         layout.addWidget(btn)
 
         btn_export = QPushButton("Eksport do Excel")
-        btn_export.clicked.connect(self._export_to_excel)
+        btn_export.clicked.connect(lambda: self._export_to_excel(background=True))
         layout.addWidget(btn_export)
 
         import_box = QHBoxLayout()
@@ -890,130 +895,81 @@ class ReportsPage(QWidget):
     # ZAROBEK NA GODZINĘ — SŁUPKI
     # ============================================================
 
-    def _export_to_excel(self):
-        import openpyxl
-        from openpyxl.styles import Font
-        from PyQt6.QtWidgets import QFileDialog
-        from app.utils.xlsx_safe import safe_row
-
-        mode = self.mode_combo.currentText()
-
-        if mode == DAILY_MODE:
-            daily = self._daily_rows()
-            if daily is None:
-                return
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, "Zapisz raport dzienny Excel", "", "Pliki Excel (*.xlsx)"
-            )
+    def _export_to_excel(self, background=False):
+        """Capture controls on the GUI thread; query and write in the export queue."""
+        if getattr(self, "_export_busy", False):
+            return
+        self._export_busy = True
+        submitted = False
+        try:
+            mode = self.mode_combo.currentText()
+            actor = self.pracownik_id
+            if mode == DAILY_MODE:
+                request = self._daily_request()
+                if request is None:
+                    return
+                def rows():
+                    return iter_daily_display_rows(build_daily_report(*request, actor))
+                title, headers = "Raport dzienny", DAILY_HEADERS
+            else:
+                selected = [self.firm_list.item(i).data(Qt.ItemDataRole.UserRole)
+                            for i in range(self.firm_list.count()) if self.firm_list.item(i).isSelected()]
+                if not selected:
+                    QMessageBox.warning(self, "Błąd", "Wybierz firmę przed eksportem.")
+                    return
+                if mode == "Raport roczny":
+                    year = int(self.year_combo.currentText())
+                    months = [f"{year}-{m:02d}" for m in range(1, 13)]
+                else:
+                    months = get_months_range(self.month_start.currentText(), self.month_end.currentText())
+                if mode == PROFIT_MODE:
+                    title, headers = "Rentowność", ["Firma", "Miesiąc", "Dział", "Sprzedaż", "Koszt", "Zysk"]
+                    def rows():
+                        from app.reports.import_dao import build_profitability_report
+                        agg = ReportsPage._aggregate_profit(build_profitability_report(selected, months, actor))
+                        for (company, month, section), (price, cost) in sorted(agg.items()):
+                            yield [company, month, SEKCJA_LABELS[section], round(price, 2), round(cost, 2), round(price-cost, 2)]
+                else:
+                    title = "Raport"
+                    headers = ["Firma ID", "Miesiąc", "Ilość dokumentów", "Ilość umów", "Kwota Kadry", "Kwota Księgowość",
+                               "Czas Kadry (H:MM)", "Czas Księgowość (H:MM)", "Zarobek/h Kadry", "Zarobek/h Księgowość"]
+                    def rows():
+                        data = build_report(selected, months, actor)
+                        for fid in selected:
+                            for month in months:
+                                row = data[fid][month]
+                                yield [fid, month, row.get("dokumenty", ""), row.get("umowy", ""),
+                                       row.get("koszt_kadry", row.get("profit_kadry", 0)),
+                                       row.get("koszt_ksiegowosc", row.get("profit_ksiegowosc", 0)),
+                                       format_hours(row.get("godziny_kadry", 0)), format_hours(row.get("godziny_ksiegowosc", 0)),
+                                       round(row.get("profit_kadry", row.get("koszt_na_godzine_kadry", 0)), 2),
+                                       round(row.get("profit_ksiegowosc", row.get("koszt_na_godzine_ksiegowosc", 0)), 2)]
+            filepath, _ = QFileDialog.getSaveFileName(self, "Zapisz raport Excel", "", "Pliki Excel (*.xlsx)")
             if not filepath:
                 return
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Raport dzienny"
-            ws.append(DAILY_HEADERS)
-            for col in range(1, len(DAILY_HEADERS) + 1):
-                ws.cell(row=1, column=col).font = Font(bold=True)
-            for values in daily_display_rows(daily):
-                ws.append(safe_row(values))
-            wb.save(filepath)
-            QMessageBox.information(self, "Sukces", f"Raport zapisany:\n{filepath}")
-            return
+            def work():
+                from app.reports.excel_export import write_report
+                write_report(filepath, title, headers, rows())
+                return filepath
+            if background:
+                self._export_jobs.submit(work, self._export_finished, self._export_failed)
+                submitted = True
+            else:
+                self._export_finished(work())
+        except Exception as exc:
+            self._export_failed(exc)
+        finally:
+            if not submitted:
+                self._export_busy = False
 
-        selected = [
-            self.firm_list.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.firm_list.count())
-            if self.firm_list.item(i).isSelected()
-        ]
-
-        if not selected:
-            QMessageBox.warning(self, "Błąd", "Wybierz firmę przed eksportem.")
-            return
-
-        if mode == "Raport roczny":
-            year = int(self.year_combo.currentText())
-            months = [f"{year}-{m:02d}" for m in range(1, 13)]
-            data = build_report(selected, months, self.pracownik_id)
-        else:
-            start = self.month_start.currentText()
-            end = self.month_end.currentText()
-            months = get_months_range(start, end)
-
-            if mode == "Raport miesięczny":
-                data = build_report(selected, months, self.pracownik_id)
-            elif mode == PROFIT_MODE:
-                rows = self._profit_rows(selected, months)
-                filepath, _ = QFileDialog.getSaveFileName(
-                    self, "Zapisz rentowność Excel", "", "Pliki Excel (*.xlsx)"
-                )
-                if not filepath:
-                    return
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "Rentowność"
-                ws.append(["Firma", "Miesiąc", "Dział", "Sprzedaż", "Koszt", "Zysk"])
-                for col in range(1, 7):
-                    ws.cell(row=1, column=col).font = Font(bold=True)
-                agg = self._aggregate_profit(rows)
-                for (klient, miesiac, sekcja), (cena, koszt) in sorted(
-                        agg.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
-                    ws.append(safe_row([klient, miesiac, SEKCJA_LABELS[sekcja],
-                                        round(cena, 2), round(koszt, 2), round(cena - koszt, 2)]))
-                wb.save(filepath)
-                QMessageBox.information(self, "Sukces", f"Raport zapisany:\n{filepath}")
-                return
-
-        filepath, _ = QFileDialog.getSaveFileName(
-            self,
-            "Zapisz raport Excel",
-            "",
-            "Pliki Excel (*.xlsx)"
-        )
-        if not filepath:
-            return
-
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Raport"
-
-        headers = [
-            "Firma ID",
-            "Miesiąc",
-            "Ilość dokumentów",
-            "Ilość umów",
-            "Kwota Kadry",
-            "Kwota Księgowość",
-            "Czas Kadry (H:MM)",
-            "Czas Księgowość (H:MM)",
-            "Zarobek/h Kadry",
-            "Zarobek/h Księgowość"
-        ]
-        ws.append(headers)
-
-        for col in range(1, len(headers) + 1):
-            ws.cell(row=1, column=col).font = Font(bold=True)
-
-        for fid in selected:
-            for m in months:
-                row = data[fid][m]
-
-                godz_kadry = format_hours(row.get("godziny_kadry", 0))
-                godz_ks = format_hours(row.get("godziny_ksiegowosc", 0))
-
-                ws.append([
-                    fid,
-                    m,
-                    row.get("dokumenty", ""),
-                    row.get("umowy", ""),
-                    row.get("koszt_kadry", row.get("profit_kadry", 0)),
-                    row.get("koszt_ksiegowosc", row.get("profit_ksiegowosc", 0)),
-                    godz_kadry,
-                    godz_ks,
-                    round(row.get("profit_kadry", row.get("koszt_na_godzine_kadry", 0)), 2),
-                    round(row.get("profit_ksiegowosc", row.get("koszt_na_godzine_ksiegowosc", 0)), 2)
-                ])
-
+    def _export_finished(self, filepath):
         try:
-            wb.save(filepath)
             QMessageBox.information(self, "Sukces", f"Raport zapisany:\n{filepath}")
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać pliku:\n{e}")
+        finally:
+            self._export_busy = False
+
+    def _export_failed(self, exc):
+        try:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać pliku:\n{exc}")
+        finally:
+            self._export_busy = False

@@ -100,7 +100,8 @@ from app.email.email_helpers import (
     safe_attachment_name,
 )
 import logging
-from app.utils.background import TaskRunner
+from app.utils.background import TaskRunner, CommandRunner, LatestRead
+from app.email.mail_model import MailItem, MailTreeView
 from app.email.email_storage import get_mail_page
 
 logger = logging.getLogger(__name__)
@@ -445,6 +446,9 @@ class EmailPage(QWidget):
         super().__init__()
         self.pracownik_id = pracownik_id
         self._list_jobs = TaskRunner(self)
+        self._message_jobs = TaskRunner(self)
+        self._command_jobs = CommandRunner(self)
+        self._sync_jobs = CommandRunner(self)
         self._mail_rows = []
         self._mail_cursor = None
         self._mail_context = None
@@ -601,7 +605,11 @@ class EmailPage(QWidget):
                 self.sync_finished.emit(not errors)
             except RuntimeError:
                 pass
-        threading.Thread(target=work, daemon=True).start()
+        try:
+            self._sync_jobs.submit(work)
+        except Exception:
+            self._sync_running = False
+            raise
 
     def stop_background_sync(self):
         self._sync_cancel.set()
@@ -610,6 +618,7 @@ class EmailPage(QWidget):
         self._headers_refresh_timer.stop()
         self._search_timer.stop()
         self._cancel_mail_load()
+        self._message_jobs.invalidate()
 
     def _on_sync_failed(self, message):
         self._last_sync_error = message
@@ -728,7 +737,7 @@ class EmailPage(QWidget):
         main_layout.addWidget(splitter)
 
         # Labels and folder tree
-        self.mail_list = QTreeWidget()
+        self.mail_list = MailTreeView(ROLE_ROW_ID)
 
         self.folder_tree = FolderTree(self.mail_list)
         self.folder_tree.setColumnCount(2)
@@ -806,8 +815,8 @@ class EmailPage(QWidget):
             else:
                 shortcut.activated.connect(lambda n=number: self._toggle_employee_by_number(n))
         self.mail_list.setStyleSheet(
-            "QTreeWidget::item { padding: 5px 6px; }"
-            "QTreeWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
+            "QTreeView::item { padding: 5px 6px; }"
+            "QTreeView::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
         )
         hdr = self.mail_list.header()
         hdr.setStretchLastSection(False)
@@ -1290,6 +1299,7 @@ class EmailPage(QWidget):
         return pending
 
     def _read_state_changed(self):
+        self._mail_presentation = None
         pending = self._cancel_mail_load()
         if pending:
             # Preserve a requested older page when restarting the stale read.
@@ -1373,16 +1383,17 @@ class EmailPage(QWidget):
                       else getattr(self, "_current_message_row_id", None)) if keep_view else None
 
         self.mail_list.blockSignals(True)
-        self.mail_list.clear()
+        if not keep_view:
+            self.mail_list.clear()
 
         if not keep_view:
             self._clear_view()
             self.cached_message = None
 
-        self.unread_map.clear()
-        self.assign_map = {}
-
         if not self.current_account:
+            self.mail_list.clear()
+            self.unread_map.clear()
+            self.assign_map = {}
             self.mail_list.blockSignals(False)
             return
 
@@ -1398,7 +1409,31 @@ class EmailPage(QWidget):
             except Exception:
                 logger.exception("Nie można wczytać listy wiadomości")
                 _payload = ([], False, None, {}, {}, set())
-        rows, more, cursor, roles, self.assign_map, self.completed_map = _payload
+        rows, more, cursor, roles, assignments, completed = _payload
+        presentation = (dict(roles), tuple((e["id"], employee_tag(e)) for e in self.employees), dict(self.label_numbers))
+        unchanged = (keep_view and request == self._mail_context and rows == self._mail_rows
+                     and assignments == self.assign_map and completed == self.completed_map
+                     and presentation == getattr(self, "_mail_presentation", None)
+                     and len(self.mail_list.model().items) == len(rows))
+        self.assign_map, self.completed_map = assignments, completed
+        self._mail_presentation = presentation
+        self._mail_cursor = cursor
+        self.older_messages.setEnabled(True)
+        self.older_messages.setVisible(more)
+        if unchanged:
+            restore = self.mail_list.model().items.get(restore_id)
+            if restore is not None:
+                parent = restore.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                self.mail_list.setCurrentItem(restore, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
+                self.mail_list.verticalScrollBar().setValue(scroll)
+            self._mail_rows = list(rows)
+            self.mail_list.blockSignals(False)
+            self._refresh_chips()
+            return
+        self.unread_map.clear()
         current_row_id = getattr(self, "_current_message_row_id", None)
         if keep_view and current_row_id is not None and current_row_id not in {row["id"] for row in rows}:
             # A reused UID is a different message. Never restore its predecessor's
@@ -1490,7 +1525,7 @@ class EmailPage(QWidget):
             if r.get("has_attachments"):
                 subject = "📎 " + subject
 
-            item = QTreeWidgetItem([
+            item = MailItem([
                 subject,
                 display_names(full),
                 format_list_date(
@@ -1635,6 +1670,7 @@ class EmailPage(QWidget):
                 ]
             )
 
+        heads = []
         for members in grouped:
 
             head = members[0]
@@ -1663,9 +1699,7 @@ class EmailPage(QWidget):
                         True,
                     )
 
-            self.mail_list.addTopLevelItem(
-                head
-            )
+            heads.append(head)
 
             if (
                     any(
@@ -1680,6 +1714,9 @@ class EmailPage(QWidget):
             ):
                 head.setExpanded(True)
 
+        self.mail_list.apply_items(heads)
+        restore = self.mail_list.resolve(restore)
+        to_select = [self.mail_list.resolve(item) for item in to_select]
         if restore is not None:
             self.mail_list.setCurrentItem(
                 restore, 0, QItemSelectionModel.SelectionFlag.NoUpdate
@@ -1794,15 +1831,11 @@ class EmailPage(QWidget):
         self.search_input.blockSignals(False)
         self.load_folders_from_db()
         self.load_mail_list_from_db(self.current_folder_local, ensure_row=message)
-        from PyQt6.QtWidgets import QTreeWidgetItemIterator
-        iterator = QTreeWidgetItemIterator(self.mail_list)
         found = None
-        while iterator.value():
-            item = iterator.value()
+        for item in self.mail_list.all_items():
             if item.data(0, ROLE_ROW_ID) == message["id"]:
                 found = item
                 break
-            iterator += 1
         if found is None:
             QMessageBox.information(self, "Powiadomienie", "Wiadomość nie jest dostępna na bieżącej liście.")
             return False
@@ -1830,18 +1863,8 @@ class EmailPage(QWidget):
     # Asynchroniczne akcje (sieć poza wątkiem interfejsu)
     # ------------------------------------------------------------------
     def _run_async(self, work, done) -> None:
-        def target() -> None:
-            try:
-                payload = (done, work(), None)
-            except Exception as exc:
-                logger.warning("Akcja e-mail nie powiodła się", exc_info=True)
-                payload = (done, None, exc)
-            try:
-                self.async_result.emit(payload)
-            except RuntimeError:
-                pass  # widżet został już zamknięty
-
-        threading.Thread(target=target, daemon=True).start()
+        runner = self._message_jobs if isinstance(work, LatestRead) else self._command_jobs
+        runner.submit(work, lambda result: done(result, None), lambda exc: done(None, exc))
 
     def _on_async_result(self, payload) -> None:
         done, result, error = payload
@@ -2171,12 +2194,12 @@ class EmailPage(QWidget):
 
         try:
             self._run_async(
-                lambda: load_message(
+                LatestRead(lambda: load_message(
                     konto_id,
                     local_folder,
                     uid,
                     expected_row_id=row_id,
-                ),
+                )),
                 done,
             )
         except Exception:
@@ -2209,14 +2232,10 @@ class EmailPage(QWidget):
                 break
         # A retained-page refresh may have replaced the clicked Qt item while
         # its body was loading. Resolve the current item from the captured ID.
-        from PyQt6.QtWidgets import QTreeWidgetItemIterator
-        iterator = QTreeWidgetItemIterator(self.mail_list)
-        while iterator.value():
-            current = iterator.value()
+        for current in self.mail_list.all_items():
             if current.data(0, ROLE_ROW_ID) == row_id:
                 self._style_mail_item(current, False)
                 break
-            iterator += 1
         self._read_state_changed()
         self.load_folders_from_db()
         self._refresh_chips()
@@ -2488,49 +2507,48 @@ class EmailPage(QWidget):
             self, from_addr=label, title=title, pracownik_id=self.pracownik_id,
             accounts=self.accounts, account_id=sender["id"], **kwargs,
         )
-        while dlg.exec() == QDialog.DialogCode.Accepted:
+        def compose():
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return False
             values = dlg.values()
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                account_id = values["account_id"] or sender["id"]
+            account_id = values["account_id"] or sender["id"]
+            accounts = [dict(a) for a in self.accounts]
+            in_reply_to = str(reply_to.get("Message-ID") or "").strip() if reply_to else None
+            references = str(reply_to.get("References") or "").strip() if reply_to else None
+
+            def send():
                 target = copy_folder
                 if target is None:
-                    try:
-                        from app.email.email_actions import choose_copy_folder
-                        account = next((a for a in self.accounts if a["id"] == account_id), sender)
-                        target = choose_copy_folder(
-                            account_id, account.get("email", ""),
-                            list(values["to"]) + list(values["cc"] or []), values["subject"],
-                        )
-                    except Exception:
-                        target = None
-                ok, info = send_email_smtp(
-                    account_id,
-                    values["to"],
-                    values["subject"],
-                    values["body"],
-                    values["attachments"] or None,
-                    cc=values["cc"] or None,
-                    bcc=values["bcc"] or None,
-                    html_body=values["html"],
-                    in_reply_to=str(reply_to.get("Message-ID") or "").strip() if reply_to else None,
-                    references=str(reply_to.get("References") or "").strip() if reply_to else None,
-                    save_copy=True,
-                    copy_folder=target,
-                )
-            finally:
-                QApplication.restoreOverrideCursor()
-            if ok:
-                QMessageBox.information(self, "Email", "Wiadomość została wysłana.")
-                return True
-            QMessageBox.warning(self, "Email", f"Nie udało się wysłać wiadomości:\n{info}")
-        return False
+                    from app.email.email_actions import choose_copy_folder
+                    account = next((a for a in accounts if a["id"] == account_id), sender)
+                    target = choose_copy_folder(account_id, account.get("email", ""),
+                                                list(values["to"]) + list(values["cc"] or []), values["subject"])
+                return send_email_smtp(
+                    account_id, values["to"], values["subject"], values["body"], values["attachments"] or None,
+                    cc=values["cc"] or None, bcc=values["bcc"] or None, html_body=values["html"],
+                    in_reply_to=in_reply_to, references=references, save_copy=True, copy_folder=target)
+
+            def finished(result, error):
+                if error is None and result[0]:
+                    QMessageBox.information(self, "Email", "Wiadomość została wysłana.")
+                else:
+                    info = str(error) if error is not None else result[1]
+                    QMessageBox.warning(self, "Email", f"Nie udało się potwierdzić wysłania wiadomości:\n{info}")
+                    compose()
+            try:
+                self._run_async(send, finished)
+            except Exception as exc:
+                finished(None, exc)
+            return True
+        return compose()
 
     def _current_original(self) -> Optional[email.message.Message]:
-        if not self.current_account or not self.current_uid or not self.current_folder_local:
+        if (not self.current_account or not self.current_uid or not self.current_folder_local
+                or getattr(self, "_current_message_row_id", None) is None):
             return None
         original = load_message(
-            self.current_account["id"], self.current_folder_local, self.current_uid
+            self.current_account["id"], self.current_folder_local, self.current_uid,
+            expected_row_id=getattr(self, "_current_message_row_id", None),
         )
         if original is None:
             QMessageBox.warning(self, "Email", "Nie udało się wczytać wiadomości.")

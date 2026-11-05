@@ -303,11 +303,14 @@ numer faktury, do której dopisano czynność (albo „faktura robocza”).
 ## Testy
 
 ```powershell
+pip install --require-hashes -r requirements.lock -r requirements-test.lock
 python run_tests.py                      # wszystkie pliki testowe
 python -m unittest tests.test_invoices   # pojedynczy plik
 ```
 
-Każdy test działa na osobnym, tymczasowym schemacie PostgreSQL.
+Testy bazodanowe działają na osobnych, tymczasowych schematach PostgreSQL.
+Testy generowane używają Hypothesis (zależność wyłącznie testowa).
+Opis kolejki synchronizacji i pomiarów wydajności: [docs/sync-workflows.md](docs/sync-workflows.md).
 
 ## Zrzuty ekranu do dokumentacji
 

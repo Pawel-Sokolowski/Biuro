@@ -189,7 +189,7 @@ class DatabaseOptimizationTests(DbTestCase):
             upgrade_database()
         self.assertEqual(bootstrap.call_count, 1)
         with get_conn() as conn:
-            self.assertEqual(conn.execute("SELECT version_num FROM alembic_version").fetchone()[0], "20261104_01")
+            self.assertEqual(conn.execute("SELECT version_num FROM alembic_version").fetchone()[0], "20261104_02")
 
 
 class BackgroundAndStreamTests(unittest.TestCase):

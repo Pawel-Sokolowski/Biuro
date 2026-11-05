@@ -32,12 +32,27 @@ class BankReviewSafetyTests(unittest.TestCase):
         ]
         self.choices_patch = patch("app.invoices.payments_ui.list_invoice_choices", return_value=self.invoices)
         self.transfers_patch = patch("app.invoices.payments_ui.list_unsettled_transfers", return_value=self.transfers)
+        summary_patch = patch("app.invoices.payments_ui.bank_import_summary", return_value={"total": 2, "database": "test", "schema": "public"})
+        summary_patch.start()
+        self.addCleanup(summary_patch.stop)
         self.choices_patch.start()
         self.transfers_patch.start()
         self.addCleanup(self.choices_patch.stop)
         self.addCleanup(self.transfers_patch.stop)
         self.dialog = BankPaymentReview(1)
         self.addCleanup(self.dialog.close)
+
+    def test_non_pln_import_is_visible_without_offering_settlement(self):
+        self.transfers[0]["waluta"] = "EUR"
+        self.dialog.refresh()
+        self.assertTrue(self.dialog.all_imports.isChecked())
+        self.assertEqual(self.dialog.table.rowCount(), 2)
+        self.assertFalse(self.dialog.table.cellWidget(0, self.dialog.COL_INVOICE).isEnabled())
+        self.assertIsNone(self.dialog.table.cellWidget(0, self.dialog.COL_INVOICE).currentData())
+        self.dialog.table.selectRow(0)
+        with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, patch.object(QMessageBox, "warning"):
+            self.dialog._confirm()
+        confirm.assert_not_called()
 
     def test_editing_invoice_selects_its_transfer_and_caps_split_amount(self):
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(0)
@@ -262,6 +277,71 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
             conn.close()
         mark_exported([self.invoice_id], 1)
 
+    def test_manual_payment_dialog_defaults_amount_and_accepts_date_before_issuance(self):
+        from PyQt6.QtWidgets import QDateEdit
+        from PyQt6.QtCore import QDate
+        from app.invoices.payments_ui import record_payment_in_dialog
+        from app.db.dao_payments import get_invoice_payment_summary
+        captured = []
+        def accept(form):
+            amount = form.findChild(QLineEdit)
+            captured.append(amount.text())
+            calendar = form.findChild(QDateEdit)
+            self.assertTrue(calendar.calendarPopup())
+            self.assertTrue(calendar.calendarWidget().isNavigationBarVisible())
+            calendar.calendarWidget().setCurrentPage(2026, 8)
+            calendar.calendarWidget().showPreviousMonth()
+            self.assertEqual(calendar.calendarWidget().monthShown(), 7)
+            calendar.setDate(QDate(2026, 8, 5))
+            amount.setText("45,67")
+            return QDialog.DialogCode.Accepted
+        with patch.object(QDialog, "exec", accept), patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.assertTrue(record_payment_in_dialog(get_invoice_by_id(self.invoice_id), 1))
+        self.assertEqual(captured, ["123.00"])
+        summary = get_invoice_payment_summary(self.invoice_id, 1)
+        self.assertEqual(summary["paid"], Decimal("45.67"))
+        self.assertEqual(summary["balance"], Decimal("77.33"))
+        self.assertEqual(str(summary["payments"][0]["data_zaplaty"]), "2026-08-05")
+        self.assertIsNone(summary["payments"][0]["transakcja_id"])
+
+    def test_invoice_paid_filter_includes_manual_and_cash_payments(self):
+        from app.db.dao_payments import record_manual_payment
+        page = self.page()
+        def count(state):
+            page.payment_filter.setCurrentIndex(page.payment_filter.findData(state))
+            page.refresh()
+            return page.issued_table.rowCount()
+        self.assertEqual(count("unpaid"), 1)
+        self.assertEqual(count("paid"), 0)
+        record_manual_payment(self.invoice_id, "2026-08-01", "23.00", 1)
+        self.assertEqual(count("partial"), 1)
+        self.assertEqual(count("unpaid"), 1)
+        record_cash_payment(self.invoice_id, "2026-08-02", "100.00", 1)
+        self.assertEqual(count("paid"), 1)
+        self.assertEqual(page.issued_table.item(0, 8).text(), "123.00")
+        self.assertEqual(count("unpaid"), 0)
+        self.assertEqual(count("partial"), 0)
+        self.assertEqual(count("all"), 1)
+
+    def test_payment_read_failure_does_not_classify_all_invoices_as_unpaid(self):
+        page = self.page()
+        with patch("app.invoices.faktury_ui.payments_for_invoices", side_effect=RuntimeError("read failed")):
+            page.refresh()
+        self.assertEqual(page.issued_table.rowCount(), 0)
+        self.assertIn("Nie udało się", page.payment_filter_status.text())
+        page.refresh()
+        self.assertEqual(page.issued_table.rowCount(), 1)
+        self.assertEqual(page.payment_filter_status.text(), "")
+
+    def test_manual_payment_keeps_overpayment_and_permission_guards(self):
+        from app.db.dao_payments import record_manual_payment, PaymentError
+        record_manual_payment(self.invoice_id, "2026-08-01", "123.00", 1)
+        with self.assertRaises(PaymentError):
+            record_manual_payment(self.invoice_id, "2026-08-02", "1.00", 1)
+        employee = self.make_employee("no-finance@example.com")
+        with self.assertRaises(PermissionError):
+            record_manual_payment(self.invoice_id, "2026-08-01", "1.00", employee)
+
     def test_unmatched_ksef_invoice_can_be_assigned_from_searchable_company_list(self):
         item = {
             "invoice_number": "FV/KSEF/1", "buyer_nip": "9999999999",
@@ -300,7 +380,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
 
         self.assertEqual(texts(page.tab_wystawione), [
             "Podgląd faktury", "JPK_V7M", "Wystaw korektę", "Anuluj fakturę", "Pobierz z KSeF",
-            "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Rozlicz MT940", "Rozlicz gotówką",
+            "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Rozlicz MT940", "Zapłacono",
             "Wyślij pdf e-mailem", "Przenieś do kosza", "Kosz…"])
         drafts = texts(page.tab_robocze)
         self.assertEqual(drafts[:2], ["Generuj faktury", "Wystaw faktury"])

@@ -30,7 +30,7 @@ from app.invoices.invoice_preview import InvoicePreviewDialog
 from app.invoices.ksef_client import KsefError
 from app.invoices.ksef_sync import assign_downloaded_invoice, is_configured as ksef_configured, sync_month
 from app.invoices.ksef_submission import process_invoice_batch
-from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog
+from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog, record_payment_in_dialog
 from app.db.dao_payments import list_settlements, payments_for_invoices, revert_settlement
 from app.monthly_view.month_picker import MonthPicker
 from app.security.authorization import can, is_administrator
@@ -440,13 +440,13 @@ class FakturyPage(QWidget):
         self.btn_bank = QPushButton("Rozlicz ING MT940")
         self.btn_bank.clicked.connect(self._open_bank_payments)
         self.btn_cash = QPushButton("Zapłata gotówką")
-        self.btn_cash.clicked.connect(self._mark_cash_payment)
+        self.btn_cash.clicked.connect(self._mark_manual_payment)
         self.btn_delete_issued = QPushButton("Anuluj fakturę")
         self.btn_delete_issued.clicked.connect(self._delete_selected_issued)
         self.btn_view.setText("Podgląd faktury")
         self.btn_jpk.setText("JPK_V7M")
         self.btn_bank.setText("Rozlicz MT940")
-        self.btn_cash.setText("Rozlicz gotówką")
+        self.btn_cash.setText("Zapłacono")
         self.btn_email_pdf = QPushButton("Wyślij pdf e-mailem")
         self.btn_email_pdf.clicked.connect(self._email_selected_pdfs)
         self.btn_trash = QPushButton("Przenieś do kosza")
@@ -467,6 +467,19 @@ class FakturyPage(QWidget):
 
         self.send_pdf_after_ksef = QCheckBox("Po przyjęciu w KSeF wyślij PDF do klienta")
         layout.addWidget(self.send_pdf_after_ksef)
+        payment_filters = QHBoxLayout()
+        payment_filters.addWidget(QLabel("Płatność:"))
+        self.payment_filter = QComboBox()
+        for label, value in (("Wszystkie", "all"), ("Zapłacone", "paid"),
+                             ("Częściowo zapłacone", "partial"), ("Niezapłacone", "unpaid")):
+            self.payment_filter.addItem(label, value)
+        self.payment_filter.setToolTip("Niezapłacone: wszystkie faktury z pozostałym saldem, także częściowo zapłacone.")
+        self.payment_filter.currentIndexChanged.connect(self.refresh)
+        payment_filters.addWidget(self.payment_filter)
+        self.payment_filter_status = QLabel()
+        payment_filters.addWidget(self.payment_filter_status)
+        payment_filters.addStretch()
+        layout.addLayout(payment_filters)
         self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
         self.issued_table.setColumnHidden(0, True)
         self._configure_issued_columns()
@@ -781,6 +794,14 @@ class FakturyPage(QWidget):
             QMessageBox.warning(self, "ING MT940", str(exc))
         self.refresh()
 
+    def _mark_manual_payment(self):
+        if not self._can_manage_payments():
+            return
+        invoice = self._selected_single_issued()
+        if invoice and record_payment_in_dialog(invoice, self.pracownik_id, self):
+            QMessageBox.information(self, "Zapłacono", "Zapisano wpłatę do faktury.")
+            self.refresh()
+
     def _mark_cash_payment(self):
         if not self._can_manage_payments():
             return
@@ -1040,14 +1061,23 @@ class FakturyPage(QWidget):
             payments = payments_for_invoices([inv["id"] for inv in invoices])
         except Exception:
             logger.exception("Nie udało się wczytać dat zapłaty")
-            payments = {}
+            self.payment_filter_status.setText("Nie udało się odczytać płatności. Odśwież listę.")
+            return
+        self.payment_filter_status.clear()
         for inv in invoices:
-            row = self.issued_table.rowCount()
-            self.issued_table.insertRow(row)
             paid = payments.get(inv["id"], [])
             paid_text = ", ".join(dict.fromkeys(_fmt_date(p["data_zaplaty"]) for p in paid))
             paid_sum = sum((Decimal(str(p["kwota"] or 0)) for p in paid), Decimal("0"))
             remaining = max(Decimal(str(inv["kwota_brutto"] or 0)) - paid_sum, Decimal("0"))
+            state = "paid" if remaining == 0 else "partial" if paid_sum > 0 else "unpaid"
+            selected_state = self.payment_filter.currentData()
+            matching_states = {"all", state}
+            if remaining > 0:
+                matching_states.add("unpaid")
+            if selected_state not in matching_states:
+                continue
+            row = self.issued_table.rowCount()
+            self.issued_table.insertRow(row)
             values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                       f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                       f"{paid_sum:.2f}", f"{remaining:.2f}", paid_text,

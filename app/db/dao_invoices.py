@@ -1277,7 +1277,6 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
 
 
 def _assign_invoice_number(conn, invoice_id: int) -> str:
-    import re
     conn.execute("SELECT pg_advisory_xact_lock(748202)")
     row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
     if row is None:
@@ -1286,14 +1285,16 @@ def _assign_invoice_number(conn, invoice_id: int) -> str:
     if not numer:
         issued = datetime.strptime(str(row["data_wystawienia"] or _now_date())[:10], DATE_FMT)
         prefix = {"korekta": "KFV", "zaliczkowa": "FZ", "proforma": "PRO"}.get(row["rodzaj"], "FV")
-        suffix = f"/{issued.month:02d}/{issued.year}"
-        pattern = re.compile(rf"^{prefix}/(\d+){suffix}$")
+        from app.invoices.numbering import KEY, DEFAULT, compile_pattern, render
+        setting = conn.execute("SELECT wartosc FROM app_settings WHERE klucz=%s", (KEY,)).fetchone()
+        template = setting[0] if setting and setting[0] else DEFAULT
+        pattern = compile_pattern(template, prefix, issued)
         existing = conn.execute(
             "SELECT numer FROM invoice_number_ledger UNION "
             "SELECT numer FROM faktury WHERE cancelled_at IS NULL"
         ).fetchall()
-        used = [int(m.group(1)) for r in existing if (m := pattern.match(r[0] or ""))]
-        numer = f"{prefix}/{max(used, default=0) + 1:04d}{suffix}"
+        used = [int(m.group("number")) for r in existing if (m := pattern.match(r[0] or ""))]
+        numer = render(template, prefix, issued, max(used, default=0) + 1)
     if row["cancelled_at"]:
         raise InvoiceLockedError("Anulowanej faktury nie można ponownie wystawić.")
     _reserve_number(conn, invoice_id, numer)

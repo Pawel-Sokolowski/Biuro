@@ -31,6 +31,8 @@ class InvoiceRefreshStateTests(DbTestCase):
         self.payments = {row['id']: [{'data_zaplaty': '2026-08-31', 'kwota': 123}] for row in self.rows}
         self.drafts = []
         def listing(actor, issued, *args):
+            if issued is None:
+                return deepcopy(self.rows + self.drafts)
             return deepcopy(self.rows if issued else self.drafts)
         self.settings = QSettings(str(Path(self._tmp) / "invoice-view.ini"), QSettings.Format.IniFormat)
         patchers = [mock.patch("app.invoices.faktury_ui.QSettings", return_value=self.settings), mock.patch('app.invoices.faktury_ui.list_invoices', side_effect=listing),
@@ -90,8 +92,44 @@ class InvoiceRefreshStateTests(DbTestCase):
         self.assertEqual(self.selected(), selected)
         self.assertEqual(self.page.issued_table.currentRow(), 55)
 
+    def test_filters_combine_without_database_reads(self):
+        self.rows[20]['rodzaj'] = 'korekta'
+        self.rows[21]['rodzaj'] = 'korekta'
+        self.payments[self.rows[21]['id']] = []
+        self.page.refresh()
+        with mock.patch('app.invoices.faktury_ui.list_invoices') as invoices, \
+                mock.patch('app.invoices.faktury_ui.payments_for_invoices') as payments:
+            self.page.invoice_kind_filter.setCurrentIndex(self.page.invoice_kind_filter.findData('korekta'))
+            self.page.invoice_number_filter.setText('002')
+            self.assertEqual(self.page.issued_table.rowCount(), 1)
+            self.assertEqual(self.page.issued_table.item(0, 4).text(), self.rows[20]['numer'])
+            self.page.payment_filter.setCurrentIndex(self.page.payment_filter.findData('unpaid'))
+            self.assertEqual(self.page.issued_table.item(0, 4).text(), self.rows[21]['numer'])
+            self.page.invoice_kind_filter.setCurrentIndex(self.page.invoice_kind_filter.findData('sale'))
+            self.assertEqual(self.page.issued_table.rowCount(), 0)
+            invoices.assert_not_called()
+            payments.assert_not_called()
+
+    def test_refresh_fetches_both_invoice_lists_once_and_shows_short_buyer(self):
+        with mock.patch('app.invoices.faktury_ui.list_invoices', return_value=deepcopy(self.rows)) as listing:
+            self.page.refresh()
+        listing.assert_called_once_with(1, None, '2026-09', None, None)
+        self.assertEqual(self.page.issued_table.item(0, 2).text(), 'Refresh')
+        self.assertGreaterEqual(self.page.issued_table.columnWidth(2), 240)
+
+    def test_extra_activities_load_once_when_tab_is_opened(self):
+        self.assertIsNone(self.page.extra_activities)
+        with mock.patch('app.tasks.extra_activities_ui.dao_services.list_extra_activities', return_value=[]) as listing:
+            self.page.tabs.setCurrentWidget(self.page.tab_dodatkowe)
+            self.assertEqual(self.page.extra_activities.month.currentText(), '2026-09')
+            listing.assert_called_once()
+            self.page.tabs.setCurrentWidget(self.page.tab_wystawione)
+            self.page.tabs.setCurrentWidget(self.page.tab_dodatkowe)
+            listing.assert_called_once()
+
     def test_number_search_combines_with_payment_filter_and_survives_refresh(self):
         self.payments[self.rows[21]['id']] = []
+        self.page.refresh()
         self.page.invoice_number_filter.setText(' fv/002 ')
         self.assertEqual(self.page.issued_table.rowCount(), 9)
         self.assertEqual(self.page.issued_table.item(0, 4).text(), 'FV/0020/09/2026')

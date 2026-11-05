@@ -437,3 +437,9 @@ W **Ustawienia → Faktury** uzupełnij REGON, kraj i e-mail sprzedawcy. Dane te
 wyświetlane w podglądzie i PDF. Danych własnego biura nie dopisujemy jako danych
 kontaktowych innego sprzedawcy w dokumentach KSeF. Zapisane wcześniej pliki PDF
 pozostają bez zmian — po aktualizacji wygeneruj PDF ponownie.
+
+
+Podstawowa czcionka podglądu i PDF faktury ma 11 pt. Mniejsze opisy i dane
+weryfikacyjne mają 9,5 pt; szerokości kolumn i odstępy są dopasowane do większego
+tekstu. Celem jest lepsza czytelność przy powiększeniu 100%; wygląd wygładzania
+nadal zależy od ekranu i ustawień czytnika PDF. Po aktualizacji wygeneruj plik ponownie.

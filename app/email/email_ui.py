@@ -2053,6 +2053,11 @@ class EmailPage(QWidget):
 
     def _fill_move_menu(self, menu: QMenu, nodes: List[Dict[str, Any]], exclude: set,
                         under_staff: bool) -> None:
+        # Qt otherwise wraps long menus into columns on Windows. Force vertical
+        # scrolling for every level of the destination-folder menu.
+        menu.setStyleSheet('QMenu { menu-scrollable: 1; }')
+        screen = self.screen()
+        menu.setMaximumHeight(min(420, max(120, screen.availableGeometry().height() - 80)) if screen else 420)
         for node in nodes:
             folder = node["folder"]
             selectable = folder is not None and "\\noselect" not in (folder.get("attributes") or "").lower()

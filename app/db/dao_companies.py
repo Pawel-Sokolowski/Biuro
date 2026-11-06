@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from app.db.dao_conn import get_conn, Row
+from app.companies.company_names import company_display_name
 from app.security.authorization import assigned_company_ids, can, is_administrator
 
 # ============================================================
@@ -110,7 +111,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
     sql = """
-        SELECT f.id, f.nazwa, f.nip, f.miasto, f.status, f.uslugi_zawieszone,
+        SELECT f.id, f.nazwa, f.nazwa_skrocona, f.nip, f.miasto, f.status, f.uslugi_zawieszone,
                f.glowny_cennik, f.limit_dokumentow,
                f.typ_rozliczenia, f.vat_czynny, f.forma_opodatkowania,
                TRIM(COALESCE(pk.imie, '') || ' ' || COALESCE(pk.nazwisko, '')) AS ksiegowa,
@@ -134,7 +135,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     from app.utils.polish_sort import polish_sort_key
 
     return _attach_pelnomocnictwa(sorted(
-        (dict(r) for r in rows), key=lambda row: polish_sort_key(row.get("nazwa"))
+        (dict(r) for r in rows), key=lambda row: polish_sort_key(company_display_name(row))
     ))
 
 
@@ -167,7 +168,7 @@ def get_companies_filtered(
     cur = conn.cursor()
 
     base_select = """
-        SELECT f.id, f.nazwa, f.nip, f.miasto,
+        SELECT f.id, f.nazwa, f.nazwa_skrocona, f.nip, f.miasto,
                COALESCE(f.status, 'Aktywne') AS status, f.uslugi_zawieszone,
                f.glowny_cennik, f.limit_dokumentow, f.typ_rozliczenia, f.vat_czynny,
                f.forma_opodatkowania,
@@ -186,9 +187,9 @@ def get_companies_filtered(
         params.append(employee_id)
 
     if search:
-        where.append("(LOWER(f.nazwa) LIKE %s OR LOWER(f.nip) LIKE %s)")
+        where.append("(LOWER(f.nazwa) LIKE %s OR LOWER(f.nazwa_skrocona) LIKE %s OR LOWER(f.nip) LIKE %s)")
         q = f"%{search.lower()}%"
-        params.extend([q, q])
+        params.extend([q, q, q])
 
     if status and status != "Wszystkie":
         where.append("COALESCE(f.status, 'Aktywne') = %s")
@@ -203,7 +204,7 @@ def get_companies_filtered(
     from app.utils.polish_sort import polish_sort_key
 
     return _attach_pelnomocnictwa(sorted(
-        (dict(r) for r in rows), key=lambda row: polish_sort_key(row.get("nazwa"))
+        (dict(r) for r in rows), key=lambda row: polish_sort_key(company_display_name(row))
     ))
 
 

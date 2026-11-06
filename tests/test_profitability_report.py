@@ -73,7 +73,15 @@ class ProfitabilityReportTests(DbTestCase):
             ["Alfa", SEKCJA_LABELS["ksiegowosc"], "350.00 zł", "300.00 zł", "50.00 zł"],
             ["Alfa", SEKCJA_LABELS["kadry"], "30.00 zł", "10.00 zł", "20.00 zł"],
             ["Beta", SEKCJA_LABELS["kadry"], "80.00 zł", "20.00 zł", "60.00 zł"],
-        ], key=lambda r: (r[0], r[1])))
+        ], key=lambda r: float(r[-1].split()[0])))
+
+    def test_detail_tables_sort_by_numeric_profit_including_losses(self):
+        rows = [row('Alfa', '2026-01', 'ksiegowosc', 1000, 0),
+                row('Zeta', '2026-01', 'ksiegowosc', 20, 90),
+                row('Beta', '2026-01', 'ksiegowosc', 10, 0)]
+        self.page._render_import_report(rows)
+        self.assertEqual([r[0] for r in cells(self.page.import_table)], ['Zeta', 'Beta', 'Alfa'])
+        self.assertEqual([r[0] for r in cells(self.page.company_table)], ['Zeta', 'Beta', 'Alfa'])
 
     def test_negative_profit_is_marked_red(self):
         self.page._render_import_report([row("Alfa", "2026-01", "ksiegowosc", 10.0, 50.0)])
@@ -103,10 +111,10 @@ class ProfitabilityReportTests(DbTestCase):
         self.assertEqual(sheet.title, "Rentowność")
         self.assertEqual(data[0], ["Firma", "Miesiąc", "Dział", "Sprzedaż", "Koszt", "Zysk"])
         self.assertEqual(data[1:], [
-            ["Alfa", "2026-01", SEKCJA_LABELS["kadry"], 30.0, 10.0, 20.0],
-            ["Alfa", "2026-01", SEKCJA_LABELS["ksiegowosc"], 150.0, 50.0, 100.0],
             ["Alfa", "2026-02", SEKCJA_LABELS["ksiegowosc"], 200.0, 250.0, -50.0],
+            ["Alfa", "2026-01", SEKCJA_LABELS["kadry"], 30.0, 10.0, 20.0],
             ["Beta", "2026-01", SEKCJA_LABELS["kadry"], 80.0, 20.0, 60.0],
+            ["Alfa", "2026-01", SEKCJA_LABELS["ksiegowosc"], 150.0, 50.0, 100.0],
         ])
 
     def test_excel_export_requires_selected_company(self):

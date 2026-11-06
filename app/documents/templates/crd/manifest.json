@@ -1,0 +1,55 @@
+{
+  "http://crd.gov.pl/wzor/2018/11/02/6046/schemat.xsd": {
+    "path": "UPL/schemat.xsd",
+    "sha256": "c72429189cd0fec4389a6f051895c2d62f8bc8f524c71b3a4dcf3f6591de20da"
+  },
+  "http://crd.gov.pl/wzor/2018/11/02/6046/styl.xsl": {
+    "path": "UPL/styl.xsl",
+    "sha256": "c0a48e6d33732046fef6015be28ec3a8068da62368916d85fc0cd138399133c9"
+  },
+  "http://crd.gov.pl/wzor/2018/11/02/6046/wyroznik.xml": {
+    "path": "UPL/wyroznik.xml",
+    "sha256": "5d7d4aef86adf650c5f9049b6be68b98ffba374a23fe001adbf38927e2b95428"
+  },
+  "http://crd.gov.pl/wzor/2012/11/29/1053/schemat.xsd": {
+    "path": "PEL/schemat.xsd",
+    "sha256": "eefd7173bb6521588eb44947e760c44af6026e511da097f037176c9eea645035"
+  },
+  "http://crd.gov.pl/wzor/2012/11/29/1053/styl.xsl": {
+    "path": "PEL/styl.xsl",
+    "sha256": "e42cc4d6bb6c6b5f9493faa2327e69edab6c724c13cd10225693b1f0911ad7c1"
+  },
+  "http://crd.gov.pl/wzor/2012/11/29/1053/wyroznik.xml": {
+    "path": "PEL/wyroznik.xml",
+    "sha256": "57bc04f4e4ba37d4b9ea8e6dde85da1ab84451789d61e9088ed3a23b0416f76c"
+  },
+  "http://crd.gov.pl/xml/schematy/adres/2009/11/09/adres.xsd": {
+    "path": "shared/adres.xsd",
+    "sha256": "4e09bc5931caba664bc11060e4d23296554af79ff0c56eb42f413be3a4a3a443"
+  },
+  "http://crd.gov.pl/xml/schematy/struktura/2009/11/16/struktura.xsd": {
+    "path": "shared/struktura.xsd",
+    "sha256": "43357b41167c34efb3780fccdb68030bce75de9a9b8fb0ff0ed9092cf6b878c6"
+  },
+  "http://crd.gov.pl/xml/schematy/meta/2009/11/16/meta.xsd": {
+    "path": "shared/meta.xsd",
+    "sha256": "fe9e92f38474318a3891313bd427f14b415f7ded295c88eaec3d010b2e41884e"
+  },
+  "http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/instytucja.xsd": {
+    "path": "shared/instytucja.xsd",
+    "sha256": "9ac928bc1c91449e14cf4c9c04e8e2ea616e393e4cf47cc9691f6ad028f93ca3"
+  },
+  "http://crd.gov.pl/xml/schematy/osoba/2009/11/16/osoba.xsd": {
+    "path": "shared/osoba.xsd",
+    "sha256": "98ddc0fc996380f0f1b7077fe0d5247638393d9e8f2faa504178e4d019a351f6"
+  },
+  "http://www.w3.org/TR/xmldsig-core/xmldsig-core-schema.xsd": {
+    "path": "shared/xmldsig-core-schema.xsd",
+    "sha256": "a20a787c597743db55c963968ff66639e7257ab3e6c2f3f5357bea751716a072",
+    "normalization": "Removed browser status line; preserved schema and copyright comment."
+  },
+  "http://crd.gov.pl/xml/schematy/zewnetrzne/2008/05/09/CountryCode.xsd": {
+    "path": "shared/CountryCode.xsd",
+    "sha256": "bda9c6135f36fa70b7f395d58c71eaaaebbb078f607762b6bf42981b5d57c365"
+  }
+}

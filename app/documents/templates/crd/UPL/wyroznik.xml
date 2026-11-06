@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="http://crd.gov.pl/wzor/2008/05/09/1/styl.xsl"?><wyr:Dokument xmlns:adr="http://crd.gov.pl/xml/schematy/adres/2008/05/09/" xmlns:inst="http://crd.gov.pl/xml/schematy/instytucja/2008/05/09/" xmlns:meta="http://crd.gov.pl/xml/schematy/meta/2008/05/09/" xmlns:oso="http://crd.gov.pl/xml/schematy/osoba/2008/05/09/" xmlns:str="http://crd.gov.pl/xml/schematy/struktura/2008/05/09/" xmlns:wyr="http://crd.gov.pl/wzor/2008/05/09/1/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://crd.gov.pl/wzor/2008/05/09/1/ http://crd.gov.pl/wzor/2008/05/09/1/schemat.xsd">
+	<wyr:OpisDokumentu>
+		<meta:Data typDaty="opublikowany">
+			</meta:Data>
+		<meta:Identyfikator typIdentyfikatora="JednolityIdentyfikator">
+			<meta:Wartosc>http://crd.gov.pl/wzor/2018/11/02/6046/wyroznik.xml</meta:Wartosc>
+		</meta:Identyfikator>
+		<meta:Relacja>
+			<meta:Identyfikator typIdentyfikatora="URIXSD">
+				<meta:Wartosc>http://crd.gov.pl/wzor/2018/11/02/6046/schemat.xsd</meta:Wartosc>
+			</meta:Identyfikator>
+			<meta:RodzajRelacji>maCzesc</meta:RodzajRelacji>
+		</meta:Relacja>
+		<meta:Relacja>
+			<meta:Identyfikator typIdentyfikatora="URIXSL">
+				<meta:Wartosc>http://crd.gov.pl/wzor/2018/11/02/6046/styl.xsl</meta:Wartosc>
+			</meta:Identyfikator>
+			<meta:RodzajRelacji>maCzesc</meta:RodzajRelacji>
+		</meta:Relacja>
+	</wyr:OpisDokumentu>
+	<wyr:DaneDokumentu>
+		<str:Naglowek>
+			<str:NazwaDokumentu>UPL-1 Wyróżnik wzoru pełnomocnictwa do podpisywania deklaracji składanej za pomocą środków komunikacji elektronicznej</str:NazwaDokumentu>
+		</str:Naglowek>
+		<str:Nadawcy>
+			<meta:Podmiot typPodmiotu="Tworca Wzoru Dokumentu Elektronicznego">
+				<inst:Instytucja>
+					<inst:IdInstytucji>
+						<inst:NIP>5260250274</inst:NIP>
+					</inst:IdInstytucji>
+					<inst:NazwaInstytucji>Ministerstwo Finansów</inst:NazwaInstytucji>
+					<adr:Adres>
+						<adr:KodPocztowy>00-916</adr:KodPocztowy>
+						<adr:Poczta>Warszawa</adr:Poczta>
+						<adr:Miejscowosc>Warszawa</adr:Miejscowosc>
+						<adr:Ulica rodzajUlicy="ulica">Świętokrzyska</adr:Ulica>
+						<adr:Budynek>12</adr:Budynek>
+						<adr:Lokal/>
+						<adr:Kraj>PL</adr:Kraj>
+						<adr:Wojewodztwo>mazowieckie</adr:Wojewodztwo>
+					</adr:Adres>
+				</inst:Instytucja>
+			</meta:Podmiot>
+		</str:Nadawcy>
+	</wyr:DaneDokumentu>
+	<wyr:TrescDokumentu format="text/xml" kodowanie="XML">
+		<wyr:Wartosc>
+			<wyr:NazwaDokumentu>UPL-1 PEŁNOMOCNICTWO DO PODPISYWANIA DEKLARACJI SKŁADANEJ ZA POMOCĄ ŚRODKÓW KOMUNIKACJI ELEKTRONICZNEJ</wyr:NazwaDokumentu>
+			<wyr:RodzajDokumentu>pełnomocnictwo</wyr:RodzajDokumentu>
+			<wyr:PodstawaPrawna>
+				<wyr:NazwaPodstawy>Art. 80a § 5 ustawy z dnia 29 sierpnia 1997 r. – Ordynacja podatkowa (Dz.U. z 2018 r. poz. 800 z późn. zm.)</wyr:NazwaPodstawy>
+				<wyr:JednolityIdentyfikatorPodstawy>URI://Dziennik_Ustaw/2018/800/80a/5</wyr:JednolityIdentyfikatorPodstawy>
+			</wyr:PodstawaPrawna>
+			<wyr:WaznoscWzoru typDaty="waznosci">
+				<meta:Od>2018-10-29</meta:Od>
+			</wyr:WaznoscWzoru>
+			<wyr:OpisWzoru>UPL-1(6) PEŁNOMOCNICTWO DO PODPISYWANIA DEKLARACJI SKŁADANEJ ZA POMOCĄ ŚRODKÓW KOMUNIKACJI ELEKTRONICZNEJ</wyr:OpisWzoru>
+		</wyr:Wartosc>
+	</wyr:TrescDokumentu>
+<ds:Signature Id="ID-804c9290-de97-11e8-9200-005056880b4f" xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:SignedInfo Id="ID-804b5a10-de97-11e8-9200-005056880b4f" xmlns:adr="http://crd.gov.pl/xml/schematy/adres/2008/05/09/" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:inst="http://crd.gov.pl/xml/schematy/instytucja/2008/05/09/" xmlns:meta="http://crd.gov.pl/xml/schematy/meta/2008/05/09/" xmlns:oso="http://crd.gov.pl/xml/schematy/osoba/2008/05/09/" xmlns:str="http://crd.gov.pl/xml/schematy/struktura/2008/05/09/" xmlns:wyr="http://crd.gov.pl/wzor/2008/05/09/1/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><ds:CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><ds:SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/><ds:Reference Id="ID-804b5a11-de97-11e8-9200-005056880b4f" URI=""><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/TR/1999/REC-xpath-19991116"><ds:XPath xmlns:xades="http://uri.etsi.org/01903/v1.3.2#">not(ancestor-or-self::ds:Signature)</ds:XPath></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><ds:DigestValue>xVQRKrttjgKByB7nMJwCyE4Dkkg=</ds:DigestValue></ds:Reference><ds:Reference Id="ID-804bf650-de97-11e8-9200-005056880b4f" URI="schemat.xsd"><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><ds:DigestValue>F6gJffkNeHtF8khXjsKzuzQUG+4=</ds:DigestValue></ds:Reference><ds:Reference Id="ID-804bf651-de97-11e8-9200-005056880b4f" URI="styl.xsl"><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><ds:DigestValue>sYqPGCR6MctwvJLQ14YBfRVPcJo=</ds:DigestValue></ds:Reference><ds:Reference Id="ID-80540ca2-de97-11e8-9200-005056880b4f" Type="http://uri.etsi.org/01903#SignedProperties" URI="#ID-80540ca0-de97-11e8-9200-005056880b4f"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><ds:DigestValue>lQKatOp+dXFl+RjkT1fziCWx0RE=</ds:DigestValue></ds:Reference></ds:SignedInfo><ds:SignatureValue Id="ID-80674680-de97-11e8-9200-005056880b4f">WnM9LljawyA9pyeGtgvGpyLX2tBNS4oX6tbFuUYNXFcpH1J350HuNECVwjsTwdhpHR9KEm0b7LmZ/iGkOZ4YySMkWXKmhJaQg4uwg351lRSDDSJ9+uW9EeMzZmJGGNuoWJ8RcjgY2Ip4UWAaejvgB596cNjpS5qOiC9hNBjAHSQHqjMIwCTnGRqkPhl9QZgjdmzViqF6vDtzWYArQLPy27k3LP/T/UOoS0idS5mHaBsAoIr+jLjwtUHVGN/6/zfipI/tqok36RIB1W06R4W+OtyAAoqxwWSLEDLtGpCIBL2xXY8thHs+M79X0bkR5e1Pa+VIgolaRd9rnLLg+J7oFA==</ds:SignatureValue><ds:KeyInfo><ds:X509Data><ds:X509Certificate>
+MIIFAzCCA+ugAwIBAgIUBnwuqkZHTZ/F/75AeydKE8YUArswDQYJKoZIhvcNAQEF
+BQAwgakxCzAJBgNVBAYTAlBMMTgwNgYDVQQKDC9Qb2xza2EgV3l0d8Ozcm5pYSBQ
+YXBpZXLDs3cgV2FydG/Fm2Npb3d5Y2ggUy5BLjE9MDsGA1UECww0U2lnaWxsdW0g
+UG9sc2tpZSBDZW50cnVtIENlcnR5ZmlrYWNqaSBFbGVrdHJvbmljem5lajEhMB8G
+A1UEAwwYU2lnaWxsdW0gUENDRSAtIENBTGV2ZWwzMB4XDTE3MDQxMjE0NDIxMFoX
+DTIwMDQxMjIzNTk1OVowMzELMAkGA1UEBhMCUEwxDjAMBgNVBAoMBU1TV2lBMRQw
+EgYDVQQDDAtlUFVBUCBDUlcgMjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC
+ggEBAIqJ9J0Il+JG+57UHERjND5G/i7nWG+fNp9XpHoIzNbKNYwIAujLmWoRNx3z
+Kbt29MKa0c7Tpy8hqYIhIGo+HP+577gu1R7VUr5GPXtj7XJTTVlPrsFoQGVs2jMW
+gewHs6OF87dqu3TTLh0fVxPWMnfWQ2pJuQY+wzZOJkOjr3eA5l75ncadKt7eL62H
+rQPrn5VBTzYKWbo39hSMjjRw0Z1C7L2PZAARx740ERHahGHRFXQUbR9cWeptKZHn
+MuArZ7gWqcgq3nxQt887wMZIL2V3bJquAVsHo5+kP1PoZ9pstt3gHforNzUp8GkP
+ICumOeEqhrtuk6leNsB1N00Ye9sCAwEAAaOCAZYwggGSMA4GA1UdDwEB/wQEAwIG
+wDAMBgNVHRMBAf8EAjAAMIIBLgYDVR0gAQH/BIIBIjCCAR4wggEaBgsqhGgBhvcY
+AYN0BTCCAQkwLwYIKwYBBQUHAgEWI2h0dHA6Ly93d3cuc2lnaWxsdW0ucGwvcmVw
+b3p5dG9yaXVtMIHVBggrBgEFBQcCAjCByDAzFixQb2xza2EgV3l0d/NybmlhIFBh
+cGllcvN3IFdhcnRvnGNpb3d5Y2ggUy5BLjADAgEBHoGQAEMAZQByAHQAeQBmAGkA
+awBhAHQAIAB3AHkAawBvAHIAegB5AHMAdAB5AHcAYQBuAHkAIABkAG8AIAB3AGUA
+cgB5AGYAaQBrAGEAYwBqAGkAIABwAG8AZABwAGkAcwB1ACAAUAByAG8AZgBpAGwA
+dQAgAFoAYQB1AGYAYQBuAGUAZwBvACAAZQBQAFUAQQBQMEAGA1UdHwQ5MDcwNaAz
+oDGGL2h0dHA6Ly8xOTMuMTc4LjE2NC4xNi9yZXBvenl0b3JpdW0vY2FsZXZlbDMu
+Y3JsMA0GCSqGSIb3DQEBBQUAA4IBAQBMyOthopuFlKIfb3+6OAfXR08T6RkBr9Nt
++ZJwtwMqWV28DPYAad+sZsXujPTz3xS44yI25K9IjAVMIoX0VuK/UM1+hlNBO4+C
+tm7zrEB7Fxs31Qzz/kUsiL+0YUoWqCHR9Kbk7ANsZsfXHTGhZzD7rDlfT8nCBcFb
+FU+16B6tS9138KIxgdYcNuG/SS8cTPazb/l6G2DL2KwIWtcWlTwdyw/dp/T5pXEr
+d30VZGzgiiLGO07762vXUDeofBXwcdGaE2ZCN2Hz27Njaw7JgChqlgtIzFdYSHJn
+zzRkgjoeqfnnf5qYPGONYZ6iiSFUQCjBV3Hc+wBlsMYvVHImOmxC
+
+</ds:X509Certificate></ds:X509Data></ds:KeyInfo><ds:Object><xades:QualifyingProperties Id="ID-80540ca1-de97-11e8-9200-005056880b4f" Target="#ID-804c9290-de97-11e8-9200-005056880b4f" xmlns:xades="http://uri.etsi.org/01903/v1.3.2#"><xades:SignedProperties Id="ID-80540ca0-de97-11e8-9200-005056880b4f" xmlns:adr="http://crd.gov.pl/xml/schematy/adres/2008/05/09/" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:inst="http://crd.gov.pl/xml/schematy/instytucja/2008/05/09/" xmlns:meta="http://crd.gov.pl/xml/schematy/meta/2008/05/09/" xmlns:oso="http://crd.gov.pl/xml/schematy/osoba/2008/05/09/" xmlns:str="http://crd.gov.pl/xml/schematy/struktura/2008/05/09/" xmlns:wyr="http://crd.gov.pl/wzor/2008/05/09/1/" xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><xades:SignedSignatureProperties><xades:SigningTime>2018-11-02T12:04:50Z</xades:SigningTime><xades:SigningCertificate><xades:Cert><xades:CertDigest><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/><ds:DigestValue>LqAE+PPaRxYnnhvnHPgtRc7ehYU=</ds:DigestValue></xades:CertDigest><xades:IssuerSerial><ds:X509IssuerName>CN=Sigillum PCCE - CALevel3, OU=Sigillum Polskie Centrum Certyfikacji Elektronicznej, O=Polska Wytwórnia Papierów Wartościowych S.A., C=PL</ds:X509IssuerName><ds:X509SerialNumber>37023302136132259131828952075105358741696152251</ds:X509SerialNumber></xades:IssuerSerial></xades:Cert></xades:SigningCertificate><xades:SignaturePolicyIdentifier><xades:SignaturePolicyImplied/></xades:SignaturePolicyIdentifier></xades:SignedSignatureProperties><xades:SignedDataObjectProperties><xades:DataObjectFormat ObjectReference="#ID-804b5a11-de97-11e8-9200-005056880b4f"><xades:Description/><xades:MimeType>text/xml</xades:MimeType></xades:DataObjectFormat><xades:DataObjectFormat ObjectReference="#ID-804bf650-de97-11e8-9200-005056880b4f"><xades:Description>schemat.xsd</xades:Description><xades:MimeType>text/xml</xades:MimeType></xades:DataObjectFormat><xades:DataObjectFormat ObjectReference="#ID-804bf651-de97-11e8-9200-005056880b4f"><xades:Description>styl.xsl</xades:Description><xades:MimeType>text/xml</xades:MimeType></xades:DataObjectFormat></xades:SignedDataObjectProperties></xades:SignedProperties></xades:QualifyingProperties></ds:Object></ds:Signature></wyr:Dokument>

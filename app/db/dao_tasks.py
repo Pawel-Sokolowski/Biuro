@@ -63,7 +63,7 @@ def list_tasks_for_timer(
     try:
         rows = conn.execute(
             """
-            SELECT z.*, f.nazwa AS firma_nazwa,
+            SELECT z.*, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS firma_nazwa,
                    p.imie || ' ' || p.nazwisko AS pracownik_nazwa
             FROM zadania z
             LEFT JOIN firmy f ON f.id = z.firma_id
@@ -127,7 +127,7 @@ def list_tasks(
         where = f"WHERE {' AND '.join(filters)}" if filters else ""
         rows = conn.execute(
             f"""
-            SELECT z.*, f.nazwa AS firma_nazwa,
+            SELECT z.*, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS firma_nazwa,
                    p.imie || ' ' || p.nazwisko AS pracownik_nazwa
             FROM zadania z
             LEFT JOIN firmy f ON f.id = z.firma_id
@@ -230,7 +230,7 @@ def notify_company_event(
     Tytuł dostaje sufiks z nazwą firmy. Zwraca id utworzonych zadań."""
     conn = get_conn()
     try:
-        firma = conn.execute("SELECT nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
+        firma = conn.execute("SELECT COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
         if not firma:
             return []
         if everyone:

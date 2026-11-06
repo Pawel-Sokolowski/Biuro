@@ -1,5 +1,7 @@
 import os
 import unittest
+from unittest import mock
+from datetime import datetime
 
 from openpyxl import Workbook
 
@@ -99,6 +101,55 @@ class ExcelImportTests(DbTestCase):
         count = conn.execute("SELECT COUNT(*) FROM firmy WHERE nip = '9240000010'").fetchone()[0]
         conn.close()
         self.assertEqual(count, 1)
+
+    def test_same_name_with_another_nip_does_not_overwrite_existing_company(self):
+        existing = self.make_company(ROW[4], nip='1234563218', adres_email='original@example.test')
+        result = import_companies_from_excel_file(self._make_workbook())
+        self.assertEqual((result['created'], result['updated']), (1, 0))
+        with get_conn() as conn:
+            original = conn.execute('SELECT nip, adres_email FROM firmy WHERE id = %s', (existing,)).fetchone()
+        self.assertEqual((original['nip'], original['adres_email']), ('1234563218', 'original@example.test'))
+
+    def test_blank_company_name_is_skipped_not_counted_as_an_update(self):
+        wb = Workbook(); wb.active.append(['NIP', 'Nazwa Firmy']); wb.active.append(['9240000010', ''])
+        path = os.path.join(self._tmp, 'empty-name.xlsx'); wb.save(path)
+        result = import_companies_from_excel_file(path)
+        self.assertEqual((result['created'], result['updated']), (0, 0))
+        self.assertTrue(any('pustą nazwę' in w for w in result['warnings']))
+
+    def test_master_excel_numeric_ids_dates_addresses_contact_and_assignments(self):
+        employee = self.make_employee('excel@example.test', 'Anna', 'Importowa')
+        values = dict(zip(HEADERS, ROW))
+        values.update({'NIP': 674100628, 'KRS': 1234, 'PESEL': 1010112345,
+                       'Przypisani pracownicy': 'Anna Importowa', 'Ulica': 'Długa 12/3',
+                       'Data rozpoczęcia działalności gospodarczej': datetime(2020, 2, 3),
+                       'Data rozpoczęcia sprzedaży dla osoby   fizycznej': datetime(2021, 3, 4),
+                       'Rachunki walutowe': 'EUR: PL00123456789012345678901234'})
+        values.pop('Data rozpoczęcia sprzedaży dla osoby fizycznej')
+        wb = Workbook(); wb.active.append(list(values)); wb.active.append(list(values.values()))
+        path = os.path.join(self._tmp, 'master.xlsx'); wb.save(path)
+        from app.utils.importers import import_companies_fast_from_excel_file, import_companies_from_excel_file_payloads
+        payloads, warnings = import_companies_from_excel_file_payloads(path)
+        self.assertEqual(payloads[0]['data_rozpoczecia_sprzedazy'], '2021-03-04')
+        self.assertTrue(any('Rachunki walutowe' in w for w in warnings))
+        result = import_companies_from_excel_file(path)
+        self.assertTrue(any('Rachunki walutowe' in w for w in result['warnings']))
+        with mock.patch('app.utils.importers.enrich_payload', return_value=None), \
+                mock.patch('app.utils.importers.check_ceidg_status_for_company', return_value='pominięto'), \
+                mock.patch('app.utils.importers.check_vat_for_company'):
+            repeated = import_companies_fast_from_excel_file(path)
+        self.assertEqual((repeated['created'], repeated['updated']), (0, 1))
+        self.assertTrue(any('Rachunki walutowe' in w for w in repeated['warnings']))
+        with get_conn() as conn:
+            firm = conn.execute("SELECT * FROM firmy WHERE nip = '0674100628'").fetchone()
+            contacts = conn.execute('SELECT * FROM company_contacts WHERE firma_id = %s', (firm['id'],)).fetchall()
+            assigned = conn.execute('SELECT pracownik_id FROM pracownik_firma WHERE firma_id = %s', (firm['id'],)).fetchall()
+        self.assertEqual((firm['krs'], firm['pesel']), ('0000001234', '01010112345'))
+        self.assertEqual((firm['ulica'], firm['adres_budynek'], firm['adres_lokal']), ('Długa', '12', '3'))
+        self.assertEqual(str(firm['data_rozpoczecia_dg']), '2020-02-03')
+        self.assertEqual(len(contacts), 1)
+        self.assertEqual((contacts[0]['email'], contacts[0]['imie'], contacts[0]['nazwisko']), ('biuro@example.com', 'Jan', 'Kowalski'))
+        self.assertIn(employee, [r['pracownik_id'] for r in assigned])
 
 
 class ImportDetailsTests(DbTestCase):

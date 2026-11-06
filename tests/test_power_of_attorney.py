@@ -107,6 +107,75 @@ class PowerOfAttorneyXmlTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'inną wersję'):
                 upl_paper.overlay_commands(data())
 
+    def test_legal_forms_drive_upl_and_modern_pel_checkboxes(self):
+        from app.documents.power_of_attorney import principal_kind_for_company
+        from app.documents import upl_paper, pel_paper
+        forms = {'JDG': 'person', 'Osoba fizyczna (KPiR)': 'person',
+                 'Osoba fizyczna (Ryczałt)': 'person', 'Spółka z o.o.': 'legal',
+                 'Spółka akcyjna': 'legal', 'Spółka jawna': 'other',
+                 'Spółka cywilna': 'other', 'Spółka komandytowa': 'other', 'Spółka partnerska': 'other'}
+        for form, kind in forms.items():
+            with self.subTest(form=form):
+                self.assertEqual(principal_kind_for_company(dict(forma_dzialalnosci=form, krs='123')), kind)
+                values = dict(data(), principal_kind=kind, principal_first_name='Anna', principal_surname='Nowak', pel_ezus='full')
+                upl = upl_paper.overlay_commands(values)
+                marks = [(x, y) for x, y, t, w in upl[0]['text'] if t == 'X']
+                self.assertIn((386 if kind == 'person' else 165, 488.5), marks)
+                self.assertNotIn((165 if kind == 'person' else 386, 488.5), marks)
+                self.assertIn((64.5, 599), marks)  # Ordinary tax-office selection stays independent of legal form.
+                pel = pel_paper.overlay_commands(values)
+                self.assertEqual(any(t == 'X' and y == 69.4 for x, y, t, w in pel[0]['text']), kind == 'person')
+                self.assertEqual(any(t == 'X' and y == 733 for x, y, t, w in pel[1]['text']), kind != 'person')
+                ezus_y = 447.3 if kind == 'person' else 378.7
+                self.assertIn((46.77, ezus_y, 'X', 12), pel[2]['text'])
+        self.assertEqual(principal_kind_for_company({'krs': '123'}), '')
+        self.assertEqual(principal_kind_for_company({'forma_dzialalnosci': 'Inna', 'krs': '123'}), '')
+
+    def test_modern_pel_preserves_three_pages_and_employee_office_address(self):
+        from app.documents import pel_paper
+        from app.documents.print_renderer import paint_overlay
+        values = data()
+        values['representatives'][0].update(street='Reprezentanta', building='12', city='Szczecin')
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / 'PEL.pdf'
+            pel_paper.write_pdf(values, out, lambda op, pages, path: paint_overlay(pages, path))
+            result = PdfReader(out)
+            self.assertEqual(len(result.pages), 3)
+            self.assertIn('NOWAK', result.pages[0].extract_text())
+            self.assertIn('REPREZENTANTA', result.pages[0].extract_text())
+            self.assertNotIn('CHOPINA', result.pages[0].extract_text())
+            self.assertIn('CHOPINA', result.pages[1].extract_text())
+            self.assertIn('PRZYKŁADOWA SPÓŁKA', ' '.join(result.pages[1].extract_text().split()))
+            self.assertIn('579/26', result.pages[2].extract_text())
+        with patch.object(pel_paper, 'TEMPLATE_SHA256', 'other'):
+            with self.assertRaisesRegex(ValueError, 'inną wersję'):
+                pel_paper.overlay_commands(values)
+
+    def test_modern_pel_case_leaves_validity_dates_empty_and_ezus_is_explicit(self):
+        from app.documents.pel_paper import overlay_commands
+        values = dict(data(), pel_scope='case', pel_case='Rozliczenie konta', authority_until='30.11.2026')
+        pages = overlay_commands(values)
+        self.assertFalse(any(y == 252.1 for x, y, t, w in pages[2]['text']))
+        self.assertFalse(any(t == 'X' for x, y, t, w in pages[2]['text']))
+        self.assertTrue(any(t == 'ROZLICZENIE KONTA' for x, y, t, w in pages[1]['text']))
+        pages = overlay_commands(dict(values, pel_ezus='correspondence', pel_ezus_requests='RWN', pel_pit=True))
+        self.assertIn((314.64, 378.7, 'X', 12), pages[2]['text'])
+        self.assertTrue(any(t == 'RWN' for x, y, t, w in pages[2]['text']))
+        with self.assertRaisesRegex(ValueError, 'eZUS'):
+            overlay_commands(dict(values, pel_ezus='invalid'))
+
+    def test_modern_pel_requires_representative_and_marks_only_actual_pel_z_attachment(self):
+        from app.documents.pel_paper import overlay_commands
+        with self.assertRaisesRegex(ValueError, 'przedstawiciela'):
+            overlay_commands(dict(data(), representatives=[]))
+        values = data()
+        values['representatives'] *= 2
+        with self.assertRaisesRegex(ValueError, 'PEL-Z'):
+            overlay_commands(values)
+        pages = overlay_commands(dict(values, pel_z_attached=True))
+        self.assertIn((528.94, 733, 'X', 12), pages[1]['text'])
+        self.assertNotIn((528.94, 733, 'X', 12), overlay_commands(data())[1]['text'])
+
     def test_only_empty_browser_tail_pages_are_removed_before_merging(self):
         from app.documents.print_renderer import paint_overlay, trim_empty_browser_tail
         with tempfile.TemporaryDirectory() as directory:
@@ -186,10 +255,12 @@ class EmployeeAuthorityTests(DbTestCase):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / 'forms.pdf'
             generate_pack(self.company, 1, values, ['11_upl', '12_pel'], out, form_renderer=render)
-            self.assertEqual(len(PdfReader(out).pages), 3)
-            self.assertIn(OFFICE_EMAIL, rendered_html[0])
-            self.assertNotIn('private@example.test', rendered_html[0])
-            self.assertNotIn('Prywatna', rendered_html[0])
+            self.assertEqual(len(PdfReader(out).pages), 5)
+            text = '\n'.join(p.extract_text() for p in PdfReader(out).pages)
+            self.assertIn(OFFICE_EMAIL, text)
+            self.assertNotIn('private@example.test', text)
+            self.assertNotIn('PRYWATNA', text)
+            self.assertEqual(rendered_html, [])
             archive = Path(directory) / 'forms.zip'
             generate_pack(self.company, 1, values, ['11_upl'], archive, form_renderer=render, docx_only=True)
             with ZipFile(archive) as bundle:

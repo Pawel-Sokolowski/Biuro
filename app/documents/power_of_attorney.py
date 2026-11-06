@@ -93,6 +93,20 @@ def pesel_birth_date(pesel):
     return ''
 
 
+def principal_kind_for_company(company):
+    """Use the recorded legal form; KRS alone does not imply legal personality."""
+    form = ' '.join(str(company.get('forma_dzialalnosci') or '').strip().casefold().split())
+    if form == 'jdg' or form.startswith('osoba fizyczna'):
+        return 'person'
+    if form in ('spółka cywilna', 'spółka jawna', 'spółka komandytowa', 'spółka partnerska',
+                'spółka komandytowo-akcyjna'):
+        return 'other'
+    if form in ('spółka z o.o.', 'spółka z ograniczoną odpowiedzialnością', 'spółka akcyjna',
+                'prosta spółka akcyjna', 'fundacja', 'stowarzyszenie'):
+        return 'legal'
+    return ''
+
+
 def reviewed_data(data, kind):
     attorney = dict(data.get('attorney') or {})
     attorney['email'] = OFFICE_EMAIL
@@ -108,7 +122,7 @@ def reviewed_data(data, kind):
         raise ValueError('NIP pełnomocnika musi mieć 10 cyfr.')
     if not (pesel or nip or identity):
         raise ValueError('Uzupełnij PESEL, NIP albo dokument tożsamości pełnomocnika.')
-    if kind in ('PEL', 'PEL-Z') and not (pesel or identity):
+    if kind in ('PEL', 'PEL-PAPER', 'PEL-Z') and not (pesel or identity):
         raise ValueError('W PEL podaj PESEL pełnomocnika albo jego dokument tożsamości.')
     attorney.update(pesel=pesel, nip=nip, identity_number=identity)
     attorney['birth_date'] = _date(attorney['birth_date']) if attorney.get('birth_date') else pesel_birth_date(pesel)
@@ -131,11 +145,11 @@ def reviewed_data(data, kind):
     end = _date(data['authority_until']) if data.get('authority_until') else ''
     if end and end < start:
         raise ValueError('Data końca pełnomocnictwa nie może być wcześniejsza niż początek.')
-    if kind == 'PEL' and data.get('pel_scope') not in ('all', 'receive', 'correspondence', 'case'):
+    if kind in ('PEL', 'PEL-PAPER') and data.get('pel_scope') not in ('all', 'receive', 'correspondence', 'case'):
         raise ValueError('Wybierz zakres pełnomocnictwa PEL.')
     if kind == 'PEL' and len(str(data.get('short_name') or '')) > 31:
         raise ValueError('Nazwa skrócona do PEL może mieć maksymalnie 31 znaków. Popraw ją w zakładce UPL / PEL.')
-    if kind == 'PEL' and data.get('pel_scope') == 'case' and not str(data.get('pel_case') or '').strip():
+    if kind in ('PEL', 'PEL-PAPER') and data.get('pel_scope') == 'case' and not str(data.get('pel_case') or '').strip():
         raise ValueError('Opisz sprawę objętą pełnomocnictwem PEL.')
     if kind == 'UPL' and not str(data.get('tax_office') or '').strip():
         raise ValueError('Uzupełnij Urząd Skarbowy dla UPL.')

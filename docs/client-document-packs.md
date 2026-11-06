@@ -75,12 +75,19 @@ W zakładce **Dokumenty** zaznacz potrzebne pełnomocnictwa:
   osobno z danych sprawdzonych w oknie. Przesłany starszy XSD wymaga daty
   uwierzytelnienia w całym bloku podpisów; nie jest ona wymyślana, a ten blok
   jest pomijany w wewnętrznym niepodpisanym XML.
-- **PEL** jest generowany według przekazanego wzoru XML/XSL CRD
-  `2012/11/29/1053`, z jego pięciostronicową wizualizacją, a nie według innego
-  współczesnego trzystronicowego PDF-u. Użytkownik powinien sprawdzić właściwą
-  wersję przed podpisaniem. Zawartość XML przechodzi pełną walidację XSD przed
-  wizualizacją. Puste strony powstające wyłącznie na końcu wydruku przeglądarki
-  są usuwane; nie usuwa się stron z treścią ani rozdzielających dokumenty.
+- **PEL** używa przesłanego trzystronicowego PDF-u `PEL_pobierz_druk.pdf`
+  (druk 579/26). Dla JDG wypełnia dane właściciela i zaznacza działanie w imieniu
+  „mojej firmy”. Dla osoby prawnej lub pozostałej spółki wpisuje pierwszego
+  wybranego przedstawiciela, zaznacza „innego podmiotu” i dodaje nazwę, adres
+  oraz REGON tego podmiotu. Przy wielu przedstawicielach trzeba wybrać PEL-Z;
+  zaznaczenie załączenia wynika z rzeczywiście wybranych dokumentów.
+  Dostęp do eZUS wybiera się osobno (rola płatnika składek, pełna lub ograniczona
+  do korespondencji albo E-ZLA); zaznaczenie roli trafia do odpowiedniej sekcji
+  własnej firmy lub reprezentowanego podmiotu. PIT wymaga osobnego zaznaczenia.
+  Dla konkretnej czynności/sprawy program pozostawia daty obowiązywania puste,
+  zgodnie z instrukcją druku. Ten PEL nie ma pola e-mail.
+  Stary wzór XML/XSL CRD pozostaje zasobem do walidacji, ale nie jest już używany
+  do generowania PEL w komplecie do druku.
 - **PEL-Z** używa przesłanego trzystronicowego PDF-u. Aplikacja odczytuje
   etykiety i wektorowe granice pól tej wersji, wpisując identyfikatory, datę
   wypełnienia, dane przedstawicieli i ich adresy. Podpisy pozostają puste.
@@ -88,13 +95,21 @@ W zakładce **Dokumenty** zaznacz potrzebne pełnomocnictwa:
   tożsamości do PEL-Z. Szablon obsługuje do czterech przedstawicieli; obecne
   okno umów udostępnia dwóch zgodnie z podstawowymi szablonami umów.
 
-Wzory PDF UPL i PEL-Z są sprawdzane sumą SHA-256. Nie zastosuje się położenia
+Wzory PDF UPL, PEL i PEL-Z są sprawdzane sumą SHA-256. Nie zastosuje się położenia
 pól do innego pliku lub nieznanej wersji formularza. Tekst jest wektorowy,
 czcionka danych ma 12 pt, z dopasowaniem do szerokości ograniczonych pól.
 E-mail zachowuje dokładną pisownię. Formularze są dopisywane do jednego PDF-u
 po wybranych dokumentach Word; eksport ZIP zawiera DOCX oraz gotowe PDF-y
 pełnomocnictw. Zapis nie wysyła dokumentów, nie podpisuje ich elektronicznie
 ani nie nadaje uprawnień w urzędzie/ZUS.
+
+Rodzaj mocodawcy wynika z zapisanej formy działalności, z możliwością ręcznej
+zmiany: JDG i osoby fizyczne → osoba fizyczna; spółki cywilne, jawne,
+komandytowe i partnerskie → inny podmiot; spółki z o.o. i akcyjne → osoba
+prawna. Sam numer KRS nie ustawia rodzaju. Nieznana forma wymaga wyboru.
+W UPL tylko JDG/osoba fizyczna zaznacza „osoba fizyczna”; oba pozostałe
+rodzaje zaznaczają „podmiot niebędący osobą fizyczną”. Funkcję przedstawiciela
+w UPL wpisuje się dla podmiotów niebędących osobą fizyczną.
 
 Wszystkie zależności XSD, w tym `CountryCode.xsd` i schemat podpisu XML, są
 zapisane lokalnie w `app/documents/templates/crd/` z katalogiem źródłowych

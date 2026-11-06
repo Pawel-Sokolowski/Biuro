@@ -71,6 +71,15 @@ class ContractTemplateTests(unittest.TestCase):
         self.assertIn('01.10.2026 r.', text)
         self.assertNotIn('09.02.2026 r.', text)
 
+    def test_representative_role_is_printed_in_both_agreements_and_pesel_is_optional(self):
+        self.data['representatives'] = [dict(imie_pierwsze='Anna', nazwisko='Nowak', stanowisko='Prezes zarządu', pesel='')]
+        for key in ('00_framework', '03_processing'):
+            with self.subTest(key=key):
+                table = self.fill(key).tables[0]
+                self.assertIn('Anna Nowak — Prezes zarządu', table.cell(6, 0).text)
+                self.assertEqual(table.cell(8, 1).text, '')
+                self.assertEqual(table.cell(7, 3).text, 'Nowak')
+
     def test_parameters_fee_pep_and_authorization_are_filled_without_answering_declarations(self):
         result = self.fill('04_checklist')
         self.assertEqual(result.tables[0].cell(0, 1).text, '50')
@@ -100,6 +109,9 @@ class ContractTemplateTests(unittest.TestCase):
         self.assertEqual(context['address'], 'Długa 5/2, 71-450 Szczecin')
         self.assertEqual(context['representatives'], [])
         self.assertEqual(context['partners'][0]['adres_zamieszkania'], 'Krótka 3')
+        contact = pack.company_context({'nazwa': 'Firma'}, contacts=[dict(imie='Anna', nazwisko='Nowak',
+            telefon='123456789', rola='Prezes zarządu')])['representative_candidates'][0]
+        self.assertEqual((contact['imie_pierwsze'], contact['stanowisko']), ('Anna', 'Prezes zarządu'))
 
     def test_converter_missing_or_not_producing_output_is_reported(self):
         with patch.object(pack.os, 'name', 'posix'), patch.object(pack.shutil, 'which', return_value=None):
@@ -194,4 +206,26 @@ class ContractPackTests(DbTestCase):
             self.assertEqual(result, str(out))
         dialog._set_busy(False)
         self.assertTrue(out.exists())
+        self.assertIsNotNone(app)
+
+    def test_representative_can_be_chosen_edited_or_cleared_with_optional_pesel(self):
+        from PyQt6.QtWidgets import QApplication
+        from app.db.dao_companies import save_partner
+        from app.documents.contract_pack_ui import ContractPackDialog
+        app = QApplication.instance() or QApplication(['contract-representative-tests'])
+        save_partner(self.company_id, dict(imie_pierwsze='Anna', nazwisko='Nowak', telefon='123456789', stanowisko='Prezes zarządu'))
+        dialog = ContractPackDialog(self.company_id, 1)
+        self.addCleanup(dialog.close)
+        self.assertEqual(dialog.representative_choices[0].currentIndex(), 0)
+        dialog.representative_choices[0].setCurrentIndex(1)
+        person = dialog.values()['representatives'][0]
+        self.assertEqual((person['imie_pierwsze'], person['nazwisko'], person['pesel'], person['nr_telefonu']),
+                         ('Anna', 'Nowak', '', '123456789'))
+        # A role can always be supplied/changed, even if absent from the card.
+        dialog.representatives[0]['stanowisko'].setCurrentText('Członek zarządu')
+        self.assertEqual(dialog.values()['representatives'][0]['stanowisko'], 'Członek zarządu')
+        self.assertTrue(dialog.agreement_date.calendarPopup())
+        self.assertTrue(dialog.agreement_date.calendarWidget().isNavigationBarVisible())
+        dialog.representative_choices[0].setCurrentIndex(0)
+        self.assertTrue(all(not v for v in dialog.values()['representatives'][0].values()))
         self.assertIsNotNone(app)

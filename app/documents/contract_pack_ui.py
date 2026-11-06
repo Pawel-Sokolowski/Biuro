@@ -1,8 +1,8 @@
 """Generate the office's printable onboarding pack from the selected client."""
 from pathlib import Path
 
-from PyQt6.QtCore import QDate, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QDate, QUrl, QRegularExpression
+from PyQt6.QtGui import QDesktopServices, QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
@@ -42,15 +42,33 @@ class ContractPackDialog(QDialog):
         client_form.addRow('Pierwszy okres księgowy', self.first_period)
 
         reps = self._tab(tabs, 'Reprezentanci')
-        reps.addRow(QLabel('Wpisz osoby uprawnione do reprezentowania klienta. Udziałowiec nie musi być reprezentantem.'))
+        reps.addRow(QLabel('Wybierz osobę z kartoteki lub wpisz inną. Potwierdź jej funkcję; PESEL jest opcjonalny.'))
+        self.representative_choices = []
         for index in range(2):
             reps.addRow(QLabel(f'<b>Reprezentant {index + 1}</b>'))
+            choice = QComboBox()
+            choice.addItem('Wpisz inną osobę', None)
+            for person in self.context.get('representative_candidates', ()):
+                name = ' '.join(str(person.get(k) or '') for k in ('imie_pierwsze', 'nazwisko')).strip()
+                if name:
+                    choice.addItem(name, person)
+            self.representative_choices.append(choice)
+            reps.addRow('Przedstawiciel', choice)
             fields = {}
-            for key, label in (('imie_pierwsze', 'Imię'), ('nazwisko', 'Nazwisko'), ('pesel', 'PESEL'), ('nr_telefonu', 'Telefon')):
+            for key, label in (('imie_pierwsze', 'Imię'), ('nazwisko', 'Nazwisko'), ('pesel', 'PESEL (opcjonalnie)'), ('nr_telefonu', 'Telefon')):
                 widget = QLineEdit()
+                if key == 'pesel':
+                    widget.setMaxLength(11)
+                    widget.setValidator(QRegularExpressionValidator(QRegularExpression('[0-9]{0,11}'), widget))
                 fields[key] = widget
                 reps.addRow(label, widget)
+            role = QComboBox()
+            role.setEditable(True)
+            role.addItems(['', 'Prezes zarządu', 'Członek zarządu', 'Wiceprezes zarządu', 'Prokurent', 'Właściciel', 'Pełnomocnik'])
+            fields['stanowisko'] = role
+            reps.addRow('Funkcja / rola', role)
             self.representatives.append(fields)
+            choice.currentIndexChanged.connect(lambda _, i=index: self._representative_changed(i))
         self._field(reps, 'pep_person', 'Osoba składająca oświadczenie PEP')
         self._field(reps, 'authorized_person', 'Osoba upoważniona: imię, nazwisko, seria/numer dowodu i organ wydający')
 
@@ -149,6 +167,15 @@ class ContractPackDialog(QDialog):
             self.main_date.setDate(date)
         self._previous_agreement_date = date
 
+    def _representative_changed(self, index):
+        person = self.representative_choices[index].currentData() or {}
+        for key, widget in self.representatives[index].items():
+            value = str(person.get(key) or (person.get('telefon') if key == 'nr_telefonu' else '') or '')
+            if isinstance(widget, QComboBox):
+                widget.setCurrentText(value)
+            else:
+                widget.setText(value)
+
     def values(self):
         values = {key: widget.text().strip() for key, widget in self.fields.items()}
         values.update(agreement_date=self.agreement_date.date().toString('dd.MM.yyyy'),
@@ -157,7 +184,8 @@ class ContractPackDialog(QDialog):
                       termination_date=self.termination_date.date().toString('dd.MM.yyyy'),
                       accounting=self.accounting.currentData(), payroll=self.payroll.currentData(),
                       invoicing=self.invoicing.isChecked(), transfers=self.transfers.isChecked(),
-                      representatives=[{key: w.text().strip() for key, w in fields.items()} for fields in self.representatives])
+                      representatives=[{key: (w.currentText() if isinstance(w, QComboBox) else w.text()).strip()
+                                        for key, w in fields.items()} for fields in self.representatives])
         return values
 
     def _generate(self, docx_only):

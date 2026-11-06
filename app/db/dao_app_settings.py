@@ -4,11 +4,13 @@ from __future__ import annotations
 from typing import Dict, Iterable, Optional
 
 from app.db.dao_conn import get_conn
+from app.utils.request_cache import cached, clear_request_cache
 
 
 TRUTHY_VALUES = {"1", "true", "tak", "t", "yes", "y", "x"}
 
 
+@cached
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     conn = get_conn()
     try:
@@ -38,6 +40,7 @@ def get_setting_bool(keys: Iterable[str], default: bool = False) -> bool:
 
 
 def set_setting(key: str, value: str) -> None:
+    clear_request_cache()
     conn = get_conn()
     try:
         cur = conn.cursor()
@@ -55,6 +58,7 @@ def set_setting(key: str, value: str) -> None:
 
 
 def delete_setting(key: str) -> None:
+    clear_request_cache()
     conn = get_conn()
     try:
         cur = conn.cursor()

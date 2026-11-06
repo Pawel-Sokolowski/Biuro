@@ -1,10 +1,13 @@
 """Exact money allocation shared by reports and financial boundaries."""
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
+from typing import Any, Mapping, TypeVar
+
+Key = TypeVar('Key')
 
 CENT = Decimal('0.01')
 
 
-def decimal_amount(value):
+def decimal_amount(value: Any) -> Decimal:
     try:
         amount = Decimal(str(value if value is not None else 0).replace(' ', '').replace('\xa0', '').replace(',', '.'))
     except (InvalidOperation, ValueError) as exc:
@@ -14,11 +17,11 @@ def decimal_amount(value):
     return amount
 
 
-def money(value):
+def money(value: Any) -> Decimal:
     return decimal_amount(value).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def allocate_money(total, weights):
+def allocate_money(total: Any, weights: Mapping[Key, Any]) -> dict[Key, Decimal]:
     """Largest-remainder allocation; negative corrections retain their sign."""
     if not weights:
         return {}

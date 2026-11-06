@@ -57,6 +57,7 @@ from app.email.email_storage import (
     record_mailbox_generation,
 )
 from app.utils.crypto import decrypt_password
+from app.utils.sync_lock import account_sync_lock
 
 logger = logging.getLogger(__name__)
 
@@ -1498,11 +1499,15 @@ def sync_and_prefetch(
     try:
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError("Synchronizacja przerwana.")
-        result = _sync_and_prefetch_impl(
-            konto_id, folders, first_run=first_run, on_headers=on_headers,
-            on_progress=on_progress, all_folders=all_folders,
-            full_mailbox=full_mailbox, headers_only=headers_only, cancel_event=cancel_event,
-        )
+        with account_sync_lock(konto_id) as leader:
+            if not leader:
+                logger.info('imap_sync account=%s skipped: another workstation is synchronizing', konto_id)
+                return 0
+            result = _sync_and_prefetch_impl(
+                konto_id, folders, first_run=first_run, on_headers=on_headers,
+                on_progress=on_progress, all_folders=all_folders,
+                full_mailbox=full_mailbox, headers_only=headers_only, cancel_event=cancel_event,
+            )
         if full_mailbox or (first_run and not headers_only):
             set_setting(f"email_initial_sync_complete_{konto_id}", "1")
             set_setting(f"email_initial_sync_pending_{konto_id}", "0")
@@ -1755,7 +1760,7 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
     if not ordered:
         return []
 
-    def headers(account):
+    def headers_impl(account):
         konto_id = account["id"]
         folders = []
         lock = _account_sync_lock(konto_id)
@@ -1800,6 +1805,15 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         finally:
             lock.release()
 
+    def headers(account):
+        try:
+            with account_sync_lock(account['id'], cooldown=90) as leader:
+                if not leader:
+                    return account['id'], [], None
+                return headers_impl(account)
+        except Exception as exc:
+            return account['id'], [], f"Konto #{account['id']}: {exc}"
+
     with ThreadPoolExecutor(max_workers=min(4, len(ordered))) as pool:
         futures = [pool.submit(copy_context().run, headers, account) for account in ordered]
         jobs = [future.result() for future in futures]
@@ -1817,7 +1831,9 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
                 if not lock.acquire(blocking=False):
                     continue
                 try:
-                    prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
+                    with account_sync_lock(konto_id) as leader:
+                        if leader:
+                            prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
                 finally:
                     lock.release()
             except Exception as exc:

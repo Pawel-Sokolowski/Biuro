@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 import atexit
+import logging
+from time import perf_counter
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -119,10 +121,15 @@ def get_conn() -> PooledConnection:
                 dsn, min_size=0, max_size=_POOL_MAX, timeout=10,
                 max_idle=60, max_lifetime=1800,
                 kwargs={"row_factory": _row_factory, "options": options, "connect_timeout": 10},
-                check=ConnectionPool.check_connection,
+                check=ConnectionPool.check_connection, open=True,
             )
             _pool[key] = pool
-    return PooledConnection(pool.getconn(), pool)
+    started = perf_counter()
+    conn = pool.getconn()
+    elapsed = perf_counter() - started
+    if elapsed >= 0.1:
+        logging.getLogger(__name__).info('database_pool_wait duration=%.3f stats=%s', elapsed, pool.get_stats())
+    return PooledConnection(conn, pool)
 
 
 atexit.register(close_all_pools)

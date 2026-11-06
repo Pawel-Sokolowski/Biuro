@@ -110,11 +110,26 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
             ).fetchall()}
             contracts = contracts_by_month(conn, company_ids, months)
             history = {**monthly_documents, **documents}
+            # One prefix scan per company; each requested month is a binary
+            # lookup instead of rescanning all companies' entire history.
+            from bisect import bisect_right
+            by_company = {}
+            for (company_id, period), count in history.items():
+                if count > 0:
+                    by_company.setdefault(company_id, []).append((period, count))
+            prefixes = {}
+            for company_id, entries in by_company.items():
+                entries.sort()
+                periods, sums = [], [0]
+                for period, count in entries:
+                    periods.append(period)
+                    sums.append(sums[-1] + count)
+                prefixes[company_id] = periods, sums
             for company_id, month in {(row['firma_id'], row['miesiac']) for row in rows if row['firma_id'] is not None}:
-                positive = [count for (fid, period), count in history.items()
-                            if fid == company_id and period <= month and count > 0]
-                averages[company_id, month] = ((Decimal(sum(positive)) / Decimal(len(positive))).quantize(
-                    Decimal('0.01'), rounding=ROUND_HALF_UP) if positive else None, len(positive))
+                periods, sums = prefixes.get(company_id, ([], [0]))
+                count = bisect_right(periods, month)
+                averages[company_id, month] = ((Decimal(sums[count]) / Decimal(count)).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP) if count else None, count)
     finally:
         conn.close()
     totals: Dict[tuple, Dict[str, Any]] = {}
@@ -235,70 +250,11 @@ def get_extra_services_by_department(firma_id: int, miesiac: str) -> Dict[str, f
     return totals
 
 
-def build_summary_report(
-    firma_ids: List[int],
-    months: List[str],
-    pracownik_id: int | None = None,
-) -> List[Dict[str, Any]]:
-    """Return employee-attributed work rows for the Reports/Zestawienie view."""
-    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
-    if not firma_ids or not months:
-        return []
-
-    conn = get_conn()
-    placeholders_firm = ",".join("%s" for _ in firma_ids)
-    placeholders_month = ",".join("%s" for _ in months)
-    rows = conn.execute(
-        f"""
-        SELECT c.firma_id, c.miesiac, c.typ, c.sekundy, c.usluga_id, u.kategoria AS service_category,
-               COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS klient,
-               COALESCE(p.imie || ' ' || p.nazwisko, 'Nieprzypisany') AS ksiegowa
-        FROM czasomierze c
-        JOIN firmy f ON f.id = c.firma_id
-        LEFT JOIN pracownicy p ON p.id = c.pracownik_id
-        LEFT JOIN uslugi_dodatkowe u ON u.id = c.usluga_id
-        WHERE c.firma_id IN ({placeholders_firm})
-          AND c.miesiac IN ({placeholders_month})
-        ORDER BY COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa), c.miesiac, ksiegowa, c.typ
-        """,
-        [*firma_ids, *months],
-    ).fetchall()
-    conn.close()
-
-    summary: Dict[tuple, Dict[str, Any]] = {}
-    for row in rows:
-        department = timer_department(row['typ'], row['service_category']) if row['usluga_id'] else row['typ']
-        key = (row["firma_id"], row["miesiac"], row["ksiegowa"], department)
-        item = summary.setdefault(
-            key,
-            {
-                "firma_id": row["firma_id"],
-                "miesiac": row["miesiac"],
-                "klient": row["klient"],
-                "ksiegowa": row["ksiegowa"],
-                "typ": department,
-                "sekundy": 0,
-            },
-        )
-        item["sekundy"] += int(row["sekundy"] or 0)
-
-    # Existing monthly pricing is used as the service value, divided by the
-    # department's tracked time so every employee row remains comparable.
-    for item in summary.values():
-        koszt = oblicz_miesieczny_koszt(item["firma_id"], item["miesiac"])
-        extra = get_extra_services_by_department(item["firma_id"], item["miesiac"])
-        department = timer_department(item['typ'], '')
-        value = float(koszt["zdrowotna"] if department == "kadry" else koszt["netto"]) + extra[department]
-        total = max(1, sum(
-            x["sekundy"]
-            for x in summary.values()
-            if x["firma_id"] == item["firma_id"]
-            and x["miesiac"] == item["miesiac"]
-            and x["typ"] == item["typ"]
-        ))
-        item["cena_za_usluge"] = round(value * item["sekundy"] / total, 2)
-
-    return list(summary.values())
+def build_summary_report(firma_ids, months, pracownik_id=None):
+    """Compatibility view of the canonical invoice/time profitability dataset."""
+    from app.reports.import_dao import build_profitability_report
+    return [dict(row, ksiegowa=row['pracownik'], typ=row['sekcja'], cena_za_usluge=row['cena'])
+            for row in build_profitability_report(firma_ids, months, pracownik_id)]
 
 
 # ============================================================
@@ -422,91 +378,40 @@ def build_yearly_report(firma_id: int, year: int) -> Dict[str, Any]:
 # ============================================================
 # PORÓWNANIE FIRM — POPRAWIONE
 # ============================================================
-def compare_companies(
-    firma_ids: List[int],
-    miesiac: str,
-    pracownik_id: int | None = None,
-) -> Dict[str, Any]:
-    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
-    out = {}
-
-    for firma_id in firma_ids:
-        koszt = oblicz_miesieczny_koszt(firma_id, miesiac)
-        godziny = get_hours_for_company_month(firma_id, miesiac)
-        by_department = get_extra_services_by_department(firma_id, miesiac)
-        extra = sum(by_department.values())
-
-        koszt_ksieg = koszt["netto"] + by_department['ksiegowosc']
-        koszt_kadry = koszt["zdrowotna"] + by_department['kadry']
-
-        out[firma_id] = {
-            "koszt_ksiegowosc": koszt_ksieg,
-            "koszt_kadry": koszt_kadry,
-            "godziny_ksiegowosc": godziny["ksiegowosc"],
-            "godziny_kadry": godziny["kadry"],
-            "koszt_na_godzine_ksiegowosc": koszt_ksieg / godziny["ksiegowosc"] if godziny["ksiegowosc"] > 0 else 0,
-            "koszt_na_godzine_kadry": koszt_kadry / godziny["kadry"] if godziny["kadry"] > 0 else 0,
-            "extra": extra
-        }
-
+def compare_companies(firma_ids, miesiac, pracownik_id=None):
+    """Compare actual billed department revenue and tracked time."""
+    from app.reports.import_dao import build_profitability_report
+    allowed = _authorized_company_ids(firma_ids, pracownik_id)
+    out = {fid: dict(koszt_ksiegowosc=0.0, koszt_kadry=0.0, godziny_ksiegowosc=0,
+                    godziny_kadry=0, extra=0.0) for fid in allowed}
+    for row in build_profitability_report(allowed, [miesiac], pracownik_id):
+        slot = out[row['firma_id']]
+        slot['koszt_'+row['sekcja']] += row['cena']
+        slot['godziny_'+row['sekcja']] += row['sekundy']
+        slot['extra'] += row['cena_dodatkowa']
+    for slot in out.values():
+        for department in ('ksiegowosc','kadry'):
+            seconds = slot['godziny_'+department]
+            slot['koszt_na_godzine_'+department] = slot['koszt_'+department] / (seconds / 3600) if seconds else 0
     return out
 
 
-# ============================================================
-# ZAROBEK NA GODZINĘ — POPRAWIONY
-# ============================================================
-def build_profit_report(
-    firma_ids: List[int],
-    months: List[str],
-    pracownik_id: int | None = None,
-) -> Dict[str, Any]:
-    firma_ids = _authorized_company_ids(firma_ids, pracownik_id)
-    imported = get_imported_seconds(firma_ids, months)
-    conn = get_conn()
-    cur = conn.cursor()
-    extra_seconds = _extra_timer_seconds(conn, firma_ids, months) if firma_ids and months else {}
-
-    out = {}
-
-    for fid in firma_ids:
-        out[fid] = {}
-
-        for miesiac in months:
-            cur.execute("""
-                SELECT sekundy_ksiegowosc, sekundy_kadry, wartosc_uslug
-                FROM statusy_miesieczne
-                WHERE firma_id = %s AND miesiac = %s
-            """, (fid, miesiac))
-
-            row = cur.fetchone()
-            imp = imported.get((fid, miesiac), {})
-            extra_time = extra_seconds.get((fid, miesiac), {})
-            by_department = get_extra_services_by_department(fid, miesiac)
-
-            if not row and not imp and not extra_time and not any(by_department.values()):
-                out[fid][miesiac] = {
-                    "profit_kadry": 0,
-                    "profit_ksiegowosc": 0
-                }
-                continue
-
-            sek_ks = float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imp.get("ksiegowosc", 0.0) + extra_time.get('ksiegowosc', 0)
-            sek_kad = float((row["sekundy_kadry"] if row else 0) or 0) + imp.get("kadry", 0.0) + extra_time.get('kadry', 0)
-            wartosc = float((row["wartosc_uslug"] if row else 0) or 0)
-
-            extra = sum(by_department.values())
-
-            wart_ks = wartosc * 0.5 + by_department['ksiegowosc']
-            wart_kad = wartosc * 0.5 + by_department['kadry']
-
-            profit_ks = wart_ks / (sek_ks / 3600) if sek_ks > 0 else 0
-            profit_kad = wart_kad / (sek_kad / 3600) if sek_kad > 0 else 0
-
-            out[fid][miesiac] = {
-                "profit_kadry": profit_kad,
-                "profit_ksiegowosc": profit_ks,
-                "extra": extra
-            }
-
-    conn.close()
+def build_profit_report(firma_ids, months, pracownik_id=None):
+    """Compatibility hourly revenue report, using the same actual data as profitability."""
+    from app.reports.import_dao import build_profitability_report
+    allowed = _authorized_company_ids(firma_ids, pracownik_id)
+    totals = {(fid, month): {'ksiegowosc': [0.0,0], 'kadry': [0.0,0], 'extra': 0.0}
+              for fid in allowed for month in months}
+    for row in build_profitability_report(allowed, months, pracownik_id):
+        slot = totals[row['firma_id'], row['miesiac']]
+        slot[row['sekcja']][0] += row['cena']
+        slot[row['sekcja']][1] += row['sekundy']
+        slot['extra'] += row['cena_dodatkowa']
+    out = {fid: {} for fid in allowed}
+    for (fid, month), slot in totals.items():
+        result = {'extra': slot['extra']}
+        for department in ('ksiegowosc','kadry'):
+            price, seconds = slot[department]
+            result['profit_'+department] = price / (seconds / 3600) if seconds else 0
+        out[fid][month] = result
     return out

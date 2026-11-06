@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import re
 import unicodedata
+from app.reports.dto import ProfitRow
 from typing import Any, Dict, Iterable, List, Optional
 from decimal import Decimal
 from app.utils.money import allocate_money, decimal_amount, money
@@ -418,10 +419,10 @@ def _shares(per_emp: Dict[str, Dict[str, int]], kind: str) -> Dict[str, float]:
 def compute_employee_report(
     work: List[Dict[str, Any]],
     invoices: List[Dict[str, Any]],
-    rates: Dict[str, float],
+    rates: Dict[Any, float],
     counts: Optional[Dict[tuple, int]] = None,
     months: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+) -> List[ProfitRow]:
     """Wiersze (sekcja, firma, miesiąc, pracownik).
 
     Każda sekcja (księgowość/kadry) ma: czas główny + cena główna oraz czas i cenę usług
@@ -463,7 +464,7 @@ def compute_employee_report(
         slot = price.setdefault((sekcja, inv["firma_id"], inv["miesiac"]), {"glowny": Decimal(0), "dodatkowy": Decimal(0)})
         slot[kind] += decimal_amount(inv.get("wartosc_netto") or 0)
 
-    result = []
+    result: List[ProfitRow] = []
     for key in set(hours) | set(price):
         sekcja, firma_id, miesiac = key
         if months is not None and miesiac not in months:

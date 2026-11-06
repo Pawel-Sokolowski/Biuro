@@ -4,6 +4,13 @@ SCHEMA_VERSION = '2026-11-06.1'
 
 
 def apply(conn):
+    for table, fields in (('faktury', ('kwota_netto', 'kwota_brutto')),
+                          ('import_faktury_pozycje', ('wartosc_netto',))):
+        for field in fields:
+            conn.execute(f'ALTER TABLE {table} ALTER COLUMN {field} TYPE NUMERIC(18,2) USING round({field}::numeric,2)')
+            constraint = f'ck_{table}_{field}_finite'
+            conn.execute(f'ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {constraint}')
+            conn.execute(f"ALTER TABLE {table} ADD CONSTRAINT {constraint} CHECK ({field} <> 'NaN'::numeric)")
     conn.execute('ALTER TABLE faktury ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1')
     conn.execute('''CREATE OR REPLACE FUNCTION bump_invoice_revision() RETURNS trigger AS $$
         BEGIN NEW.revision := OLD.revision + 1; RETURN NEW; END;
@@ -18,5 +25,24 @@ def apply(conn):
         elapsed_seconds INTEGER NOT NULL DEFAULT 0 CHECK(elapsed_seconds >= 0),
         owner_token UUID NOT NULL, recovered_at TIMESTAMPTZ)''')
     conn.execute('CREATE INDEX IF NOT EXISTS ix_active_timer_employee ON active_timer_sessions(pracownik_id)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS account_sync_state (
+        konto_id INTEGER PRIMARY KEY REFERENCES konta_email(id) ON DELETE CASCADE,
+        checked_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    # pg_trgm is optional on databases where the application role cannot create
+    # extensions. Searches retain their exact semantics without the extension.
+    conn.execute('''DO $$ BEGIN
+        CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE 'pg_trgm unavailable: ask the database administrator to enable it';
+        END $$''')
+    for column in ('temat', 'nadawca', 'odbiorca'):
+        conn.execute(f'''DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM pg_opclass oc JOIN pg_namespace ns ON ns.oid=oc.opcnamespace
+                       WHERE oc.opcname='gin_trgm_ops' AND ns.nspname='public') THEN
+                CREATE INDEX IF NOT EXISTS ix_mail_search_{column}
+                ON wiadomosci_email USING gin ((COALESCE({column}, '')) public.gin_trgm_ops)
+                WHERE COALESCE(usunieta, 0)=0;
+            END IF;
+        END $$''')
     conn.execute("""INSERT INTO app_settings(klucz, wartosc) VALUES ('schema_hash', '2026-11-06.1')
                     ON CONFLICT(klucz) DO UPDATE SET wartosc = EXCLUDED.wartosc""")

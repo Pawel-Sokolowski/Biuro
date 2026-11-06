@@ -616,6 +616,9 @@ class MonthlyViewPage(QWidget):
 
         self.btn_refresh = QPushButton("Odśwież")
         filters_layout.addWidget(self.btn_refresh)
+        recover = QPushButton('Odzyskaj stoper…')
+        recover.clicked.connect(self._recover_timer)
+        filters_layout.addWidget(recover)
 
         main_layout.addLayout(filters_layout)
 
@@ -764,9 +767,40 @@ class MonthlyViewPage(QWidget):
         self._reload_rows()
 
     def _setup_timer(self):
+        from app.utils.background import CommandRunner
+        self._checkpoint_jobs = CommandRunner(self)
+        self._checkpoint_timer = QTimer(self)
+        self._checkpoint_timer.setInterval(15000)
+        self._checkpoint_timer.timeout.connect(self._checkpoint_timers)
+        self._checkpoint_timer.start()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_running_timer)
         self._timer.start(1000)
+
+    def _checkpoint_timers(self):
+        from app.db.dao_active_timers import checkpoint
+        snapshots = self.logic.timer_checkpoints()
+        if snapshots:
+            self._checkpoint_jobs.submit(lambda: checkpoint(snapshots), error=lambda exc: self.setToolTip('Nie zapisano punktu kontrolnego stopera: ' + str(exc)))
+
+    def _recover_timer(self):
+        from app.db.dao_active_timers import recoverable
+        from PyQt6.QtWidgets import QInputDialog
+        rows = recoverable(self.logic.pracownik_id)
+        if not rows:
+            QMessageBox.information(self, 'Odzyskiwanie stopera', 'Brak przerwanych stoperów. Po awarii odczekaj 90 sekund; stopery aktywne na innym komputerze nie podlegają odzyskaniu.')
+            return
+        labels = [f"{row['company']} · {row['miesiac']} · {row['typ']} · {self.logic.format_seconds(row['elapsed_seconds'])}" for row in rows]
+        label, accepted = QInputDialog.getItem(self, 'Odzyskaj stoper', 'Wybierz przerwany stoper. Czas wyłączenia aplikacji nie zostanie doliczony.', labels, 0, False)
+        if not accepted:
+            return
+        try:
+            row = rows[labels.index(label)]
+            self.month_combo.setCurrentText(row['miesiac'])
+            self.logic.resume_timer(str(row['session_id']))
+            self._reload_rows()
+        except Exception as exc:
+            QMessageBox.warning(self, 'Odzyskiwanie stopera', str(exc))
 
     def _load_employee_filter(self):
         self.employee_combo.clear()

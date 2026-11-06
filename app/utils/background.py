@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from contextvars import copy_context
 import threading
+import logging
+from time import perf_counter
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 from app.config import get_schema, schema_context
+from app.utils.request_cache import request_scope
 
 
 _pool = QThreadPool()
@@ -25,6 +28,7 @@ class _Job(QRunnable):
         self.cancelled = threading.Event()
 
     def run(self):
+        started = perf_counter()
         if self.cancelled.is_set():
             try:
                 self.signals.finished.emit((self.generation, None, None))
@@ -32,7 +36,7 @@ class _Job(QRunnable):
                 pass
             return
         def execute():
-            with schema_context(self.schema):
+            with schema_context(self.schema), request_scope():
                 return self.work()
         try:
             result = (self.generation, self.context.run(execute), None)
@@ -42,6 +46,7 @@ class _Job(QRunnable):
             self.signals.finished.emit(result)
         except RuntimeError:
             pass  # The owning page/application has been destroyed.
+        logging.getLogger(__name__).info('background_job work=%s generation=%s duration=%.3f failed=%s', getattr(self.work, '__qualname__', type(self.work).__name__), self.generation, perf_counter() - started, result[2] is not None)
 
 
 class TaskRunner(QObject):

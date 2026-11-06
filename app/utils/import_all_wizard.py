@@ -4,7 +4,7 @@ import logging
 
 from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-FILTER = "Pliki danych (*.xlsx *.xls *.csv);;Wszystkie pliki (*)"
+FILTER = "Pliki danych (*.xlsx *.csv);;Wszystkie pliki (*)"
 FILTER_XLSX = "Pliki Excel (*.xlsx)"
 
 
@@ -31,27 +31,11 @@ def _import_urzedy(path, parent):
 
 
 def _import_firmy(path, parent):
-    from PyQt6.QtWidgets import QApplication, QProgressDialog
-    from PyQt6.QtCore import Qt
+    from app.utils.import_progress import run_import, confirm_company_import
     from app.utils.importers import import_companies_fast_from_excel_file
-
-    dialog = QProgressDialog("Przygotowanie importu...", None, 0, 0, parent)
-    dialog.setWindowTitle("Import firm")
-    dialog.setWindowModality(Qt.WindowModality.WindowModal)
-    dialog.setMinimumWidth(420)
-    dialog.setMinimumDuration(0)
-    dialog.setAutoClose(False)
-    dialog.setAutoReset(False)
-    dialog.show()
-
-    def progress(text):
-        dialog.setLabelText(text)
-        QApplication.processEvents()
-
-    try:
-        r = import_companies_fast_from_excel_file(path, progress=progress)
-    finally:
-        dialog.close()
+    if not confirm_company_import(path, parent):
+        raise InterruptedError
+    r = run_import(lambda progress: import_companies_fast_from_excel_file(path, progress=progress), parent)
     text = f"zaimportowano firm: {r.get('created', 0) + r.get('updated', 0)} (nowych: {r.get('created', 0)}, zaktualizowanych: {r.get('updated', 0)})"
     if r.get("warnings"):
         text += f"\nOstrzeżeń: {len(r['warnings'])}\n\n" + "\n".join(r["warnings"][:15])
@@ -88,7 +72,8 @@ def _import_faktury(path, parent):
         parent, "Faktury",
         "Nadpisać istniejące ilości dokumentów w widoku miesięcznym?",
     ) == QMessageBox.StandardButton.Yes
-    r = import_dao.import_invoices_file(path, month, overwrite)
+    from app.utils.import_progress import run_import
+    r = run_import(lambda _: import_dao.import_invoices_file(path, month, overwrite), parent)
     return (f"dodano {r['dodane']}, pominięto {r['pominiete']}, bez firmy {r['bez_firmy']}, "
             f"uzupełniono ilość dokumentów: {r.get('ilosc_dok', 0)}")
 
@@ -103,7 +88,7 @@ STEPS = [
 ]
 
 
-def run_import_wizard(parent=None) -> list:
+def _run_import_wizard(parent=None) -> list:
     """Prowadzi użytkownika przez kolejne importy. Zwraca listę wyników."""
     total = len(STEPS)
     results = []
@@ -124,7 +109,11 @@ def run_import_wizard(parent=None) -> list:
             results.append("Przerwano.")
             break
         try:
-            message = handler(path, parent)
+            if handler in (_import_firmy, _import_faktury):
+                message = handler(path, parent)
+            else:
+                from app.utils.import_progress import run_import
+                message = run_import(lambda _: handler(path, None), parent)
             results.append(f"{label}: {message}")
             QMessageBox.information(parent, f"Krok {number} z {total}: {label}", message[:1].upper() + message[1:])
         except InterruptedError:
@@ -138,3 +127,17 @@ def run_import_wizard(parent=None) -> list:
                 break
     QMessageBox.information(parent, "Import danych — podsumowanie", "\n".join(results))
     return results
+
+
+_running = False
+
+
+def run_import_wizard(parent=None) -> list:
+    global _running
+    if _running:
+        return []
+    _running = True
+    try:
+        return _run_import_wizard(parent)
+    finally:
+        _running = False

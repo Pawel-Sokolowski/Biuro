@@ -21,8 +21,10 @@ from app.db.dao_invoices import (
     validate_invoice_extra_services_ready,
 )
 from app.invoices.positions import normalize_position, totals
+from app.utils.background import TaskRunner
 from app.invoices.vat_summary import VatSummary
 from app.invoices.table_state import preserve_table_view
+from app.invoices.list_table import InvoiceListTable, PreviewDelegate
 from app.invoices.invoice_delivery import review_delivery, queue_deliveries
 from app.db.dao_global_settings import get_extra_services
 from app.invoices.faktury_logic import FakturyLogic
@@ -46,9 +48,10 @@ logger = logging.getLogger(__name__)
 KSEF_LINK_COLOR = QColor("#1c70b7")
 
 
-def _make_table(headers, multi=False):
-    table = QTableWidget(0, len(headers))
-    table.setHorizontalHeaderLabels(headers)
+def _make_table(headers, multi=False, virtual=False):
+    table = InvoiceListTable(headers) if virtual else QTableWidget(0, len(headers))
+    if not virtual:
+        table.setHorizontalHeaderLabels(headers)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -239,7 +242,7 @@ class KsefUnmatchedDialog(QDialog):
         self.table.cellWidget(row, 4).setEnabled(False)
         self.table.cellWidget(row, 5).setEnabled(False)
         if self.parent():
-            self.parent().refresh()
+            self.parent().refresh_async()
 
 
 class FakturyPage(QWidget):
@@ -270,9 +273,11 @@ class FakturyPage(QWidget):
         self._issued_number_filter = None
         self._issued_kind_filter = None
         self._refresh_later = QTimer(self)
+        self._invoice_reads = TaskRunner(self)
+        self._settlement_reads = TaskRunner(self)
         self._refresh_later.setSingleShot(True)
         self._refresh_later.setInterval(250)
-        self._refresh_later.timeout.connect(self.refresh)
+        self._refresh_later.timeout.connect(self.refresh_async)
         self._ksef_thread = None
         self._ksef_worker = None
         self._ksef_progress = None
@@ -304,7 +309,7 @@ class FakturyPage(QWidget):
         self._build_tab_dodatkowe()
         self._build_tab_rozliczenia()
         self.tabs.setCurrentWidget(self.tab_wystawione)
-        self.refresh()
+        self.refresh_async()
 
     def closeEvent(self, event):
         timer = getattr(self, "_refresh_later", None)
@@ -354,7 +359,7 @@ class FakturyPage(QWidget):
         completer.setFilterMode(Qt.MatchFlag.MatchContains)
         completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         completer.activated[str].connect(self._company_text_chosen)
-        self.firma_combo.currentIndexChanged.connect(self.refresh)
+        self.firma_combo.currentIndexChanged.connect(self.refresh_async)
         controls.addWidget(QLabel("Firma:"))
         controls.addWidget(self.firma_combo)
 
@@ -372,7 +377,7 @@ class FakturyPage(QWidget):
         self.btn_generate_all = QPushButton("Generuj faktury")
         self.btn_generate_all.clicked.connect(self._on_generate_clicked)
         btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self.refresh)
+        btn_refresh.clicked.connect(self.refresh_async)
         controls.addWidget(btn_refresh)
         controls.addStretch()
         return controls
@@ -534,7 +539,8 @@ class FakturyPage(QWidget):
         payment_filters.addWidget(self.payment_filter_status)
         payment_filters.addStretch()
         layout.addLayout(payment_filters)
-        self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True)
+        self.issued_table = _make_table(self.ISSUED_HEADERS, multi=True, virtual=True)
+        self.issued_table.setItemDelegateForColumn(self.ISSUED_PREVIEW_COLUMN, PreviewDelegate(self.issued_table))
         self.issued_table.setColumnHidden(0, True)
         self._configure_issued_columns()
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
@@ -568,9 +574,9 @@ class FakturyPage(QWidget):
         top = QHBoxLayout()
         self.settlement_search = QLineEdit()
         self.settlement_search.setPlaceholderText("Szukaj: numer faktury, nabywca, nadawca lub tytuł przelewu")
-        self.settlement_search.returnPressed.connect(self._fill_settlements)
+        self.settlement_search.returnPressed.connect(self._refresh_settlements_async)
         self.btn_settlement_search = QPushButton("Szukaj")
-        self.btn_settlement_search.clicked.connect(self._fill_settlements)
+        self.btn_settlement_search.clicked.connect(self._refresh_settlements_async)
         self.btn_settlement_revert = QPushButton("Wycofaj zaznaczone rozliczenie")
         self.btn_settlement_revert.clicked.connect(self._revert_selected_settlements)
         top.addWidget(self.settlement_search, 1)
@@ -581,7 +587,7 @@ class FakturyPage(QWidget):
         self.settlement_table.setColumnHidden(0, True)
         layout.addWidget(self.settlement_table)
         self.tabs.currentChanged.connect(
-            lambda _i: self._fill_settlements() if self.tabs.currentWidget() is self.tab_rozliczenia else None
+            lambda _i: self._refresh_settlements_async() if self.tabs.currentWidget() is self.tab_rozliczenia else None
         )
 
     def _company_text_chosen(self, text):
@@ -597,9 +603,24 @@ class FakturyPage(QWidget):
         value = self.firma_combo.currentData()
         return -value if isinstance(value, int) and value < 0 else None
 
-    def _fill_settlements(self):
+    def _refresh_settlements_async(self):
+        search = self.settlement_search.text()
+        actor = self.pracownik_id
+
+        def loaded(rows):
+            if search == self.settlement_search.text():
+                self._fill_settlements(rows)
+
+        def failed(exc):
+            self.settlement_table.setRowCount(0)
+            self.settlement_search.setToolTip('Nie udało się wczytać rozliczeń: ' + str(exc))
+
+        self._settlement_reads.submit(lambda: list_settlements(actor, None, search), loaded, failed)
+
+    def _fill_settlements(self, rows=None):
         try:
-            rows = list_settlements(self.pracownik_id, None, self.settlement_search.text())
+            if rows is None:
+                rows = list_settlements(self.pracownik_id, None, self.settlement_search.text())
         except PermissionError:
             self.settlement_table.setRowCount(0)
             return
@@ -646,7 +667,7 @@ class FakturyPage(QWidget):
                 errors.append(str(exc))
         if errors:
             QMessageBox.warning(self, "Rozliczenia", "\n".join(errors[:5]))
-        self.refresh()
+        self.refresh_async()
 
     def _build_tab_dodatkowe(self):
         self.extra_activities = None
@@ -670,7 +691,7 @@ class FakturyPage(QWidget):
             self.pracownik_id, list_companies(self.pracownik_id), list_employees(), self.tab_dodatkowe,
             month=self._current_month(),
         )
-        self.extra_activities.activities_changed.connect(self.refresh)
+        self.extra_activities.activities_changed.connect(self.refresh_async)
         self.extra_activities.open_task.connect(self._open_extra_task)
         layout.addWidget(self.extra_activities)
 
@@ -824,7 +845,7 @@ class FakturyPage(QWidget):
 
     def _ksef_sync_finished(self, month, result):
         self._cleanup_ksef_sync()
-        self.refresh()
+        self.refresh_async()
         message = (f"Miesiąc {month}\nZnaleziono w KSeF: {result.get('znalezione', len(result.get('dopasowane', [])))}"
                    f"\nJuż zapisane lokalnie: {len(result.get('pominiete', []))}"
                    f"\nUtworzono: {len(result.get('utworzone', []))}"
@@ -866,7 +887,7 @@ class FakturyPage(QWidget):
         except Exception as exc:
             logger.exception("Nie udało się otworzyć uzgadniania banku")
             QMessageBox.warning(self, "ING MT940", str(exc))
-        self.refresh()
+        self.refresh_async()
 
     def _mark_manual_payment(self):
         if not self._can_manage_payments():
@@ -874,7 +895,7 @@ class FakturyPage(QWidget):
         invoice = self._selected_single_issued()
         if invoice and record_payment_in_dialog(invoice, self.pracownik_id, self):
             QMessageBox.information(self, "Zapłacono", "Zapisano wpłatę do faktury.")
-            self.refresh()
+            self.refresh_async()
 
     def _mark_cash_payment(self):
         if not self._can_manage_payments():
@@ -882,7 +903,7 @@ class FakturyPage(QWidget):
         invoice = self._selected_single_issued()
         if invoice and record_cash_in_dialog(invoice, self.pracownik_id, self):
             QMessageBox.information(self, "Gotówka", "Zapisano zapłatę gotówką.")
-            self.refresh()
+            self.refresh_async()
 
     def _send_selected_to_ksef(self, *, drafts=False):
         if not self._can_export():
@@ -1007,7 +1028,7 @@ class FakturyPage(QWidget):
         if issues:
             message += "\n" + "\n".join(f"Faktura #{entry['id']}: {entry['description']}" for entry in issues[:10])
         self.ksef_send_status.setText(message)
-        self.refresh()
+        self.refresh_async()
         if any(self._ksef_poll_counts.get(invoice_id, 0) < 60 for invoice_id in self._ksef_pending):
             self._ksef_poll_timer.start()
             self.ksef_send_status.setText(message + "\nPonowienie oczekujących operacji za minutę.")
@@ -1048,7 +1069,7 @@ class FakturyPage(QWidget):
 
     def _invoice_month_changed(self, month):
         self._load_extra_activities()
-        self.refresh()
+        self.refresh_async()
 
     # ---------------- generowanie ----------------
     def _on_generate_clicked(self):
@@ -1083,21 +1104,23 @@ class FakturyPage(QWidget):
             if len(errors) > 15:
                 message += f"\n… i {len(errors) - 15} więcej (szczegóły w logach)."
             QMessageBox.warning(self, "Generowanie zbiorcze", message)
-            self.refresh()
+            self.refresh_async()
             return
         QMessageBox.information(self, "Generowanie zbiorcze", message)
-        self.refresh()
+        self.refresh_async()
 
     # ---------------- odświeżanie ----------------
     def _new_manual_invoice(self):
         dialog = ManualInvoiceDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.refresh()
+            self.refresh_async()
 
     def _manage_contractors(self):
         KontrahenciDialog(self).exec()
 
     def refresh(self):
+        """Synchronous compatibility entry point for scripts and explicit checks."""
+        self._invoice_reads.invalidate()
         # Never destroy a live inline editor while a background result arrives.
         if self.positions_table.state() == QAbstractItemView.State.EditingState:
             if not self._refresh_later.isActive():
@@ -1118,6 +1141,35 @@ class FakturyPage(QWidget):
             self._fill_settlements()
         logger.info("Invoice refresh: rows=%d query=%.3fs tables_and_payments=%.3fs",
                     len(invoices), fetched - started, perf_counter() - fetched)
+
+    def refresh_async(self):
+        if self.positions_table.state() == QAbstractItemView.State.EditingState:
+            self._refresh_later.start()
+            return
+        if self.tabs.currentWidget() is self.tab_rozliczenia:
+            self._refresh_settlements_async()
+        request = (self._current_period(), self._selected_company_id(), self._selected_contractor_id())
+        actor = self.pracownik_id
+        started = perf_counter()
+
+        def read():
+            period, company, contractor = request
+            rows = list_invoices(actor, None, period, company, contractor)
+            payments = payments_for_invoices([r['id'] for r in rows if r.get('eksportowana')])
+            return rows, payments
+
+        def loaded(result):
+            if request != (self._current_period(), self._selected_company_id(), self._selected_contractor_id()):
+                return
+            if self.positions_table.state() == QAbstractItemView.State.EditingState:
+                self._refresh_later.start()
+                return
+            rows, payments = result
+            self._fill_drafts([r for r in rows if not r.get('eksportowana')])
+            self._fill_issued([r for r in rows if r.get('eksportowana')], payments=payments)
+            logger.info('invoice_read rows=%d duration=%.3f', len(rows), perf_counter() - started)
+
+        self._invoice_reads.submit(read, loaded, lambda exc: self.payment_filter_status.setText('Nie udało się odświeżyć faktur. ' + str(exc)))
 
     def _fill_drafts(self, invoices):
         if self._draft_rows == invoices:
@@ -1196,10 +1248,8 @@ class FakturyPage(QWidget):
                         )
                     else:
                         self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Brak zapłaty")
-                    preview = QPushButton("Podgląd", self.issued_table)
-                    preview.setToolTip("Wyświetl fakturę i umożliw zapis do PDF")
-                    preview.clicked.connect(lambda _checked=False, invoice_id=inv["id"]: self._open_invoice_preview(invoice_id))
-                    self.issued_table.setCellWidget(row, self.ISSUED_PREVIEW_COLUMN, preview)
+                    self.issued_table.item(row, self.ISSUED_PREVIEW_COLUMN).setText('Podgląd')
+                    self.issued_table.item(row, self.ISSUED_PREVIEW_COLUMN).setToolTip('Wyświetl fakturę i umożliw zapis do PDF')
                     ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
                     if inv["ksef_numer"]:
                         font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
@@ -1319,7 +1369,7 @@ class FakturyPage(QWidget):
                              expected_revision=self._shown_draft_revision)
         if self._shown_draft_revision is not None:
             self._shown_draft_revision += 1
-        self.refresh()
+        self.refresh_async()
         self._select_draft(invoice_id)
         return True
 
@@ -1416,7 +1466,7 @@ class FakturyPage(QWidget):
             QMessageBox.warning(self, "Brak uprawnień", "Nie masz dostępu do tej faktury.")
             return
         if InvoiceEditorDialog(invoice, self).exec() == QDialog.DialogCode.Accepted:
-            self.refresh()
+            self.refresh_async()
 
     def _delete_selected_draft(self):
         ids = self._selected_ids(self.draft_table)
@@ -1437,7 +1487,7 @@ class FakturyPage(QWidget):
                     delete_draft_invoice(invoice_id)
                 except InvoiceLockedError as exc:
                     QMessageBox.warning(self, "Faktura", str(exc))
-        self.refresh()
+        self.refresh_async()
 
     def _trash_selected_issued(self):
         ids = self._selected_ids(self.issued_table)
@@ -1456,12 +1506,12 @@ class FakturyPage(QWidget):
                 trash_invoice(invoice_id, self.pracownik_id)
             except (ValueError, PermissionError) as exc:
                 QMessageBox.warning(self, "Kosz", str(exc))
-        self.refresh()
+        self.refresh_async()
 
     def _open_trash(self):
         from app.invoices.invoice_trash_dialog import InvoiceTrashDialog
         InvoiceTrashDialog(self.pracownik_id, self).exec()
-        self.refresh()
+        self.refresh_async()
 
     def _delete_selected_issued(self):
         ids = self._selected_ids(self.issued_table)
@@ -1479,7 +1529,7 @@ class FakturyPage(QWidget):
                 cancel_invoice(invoice_id, self.pracownik_id, reason)
             except (ValueError, PermissionError) as exc:
                 QMessageBox.warning(self, "Faktura", str(exc))
-        self.refresh()
+        self.refresh_async()
 
     # ---------------- eksport ----------------
     def _prepare_saldeo_correction(self, invoice_id=None):
@@ -1503,7 +1553,7 @@ class FakturyPage(QWidget):
             SaldeoCorrectionDialog(invoice, self.pracownik_id, self).exec()
         except ValueError as exc:
             QMessageBox.warning(self, "Korekta", str(exc))
-        self.refresh()
+        self.refresh_async()
 
     def _can_export(self):
         if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data"):
@@ -1527,7 +1577,7 @@ class FakturyPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Wystawianie faktur", str(exc))
             return
-        self.refresh()
+        self.refresh_async()
         self.tabs.setCurrentWidget(self.tab_wystawione)
 
     def _reexport_selected(self):
@@ -1623,7 +1673,7 @@ class FakturyPage(QWidget):
         except Exception as exc:
             logger.exception("Błąd eksportu faktur")
             QMessageBox.critical(self, "Błąd", f"Nie udało się wyeksportować faktur: {exc}")
-        self.refresh()
+        self.refresh_async()
 
     @staticmethod
     def _company_name(firma_id):
@@ -1674,7 +1724,7 @@ class FakturyPage(QWidget):
             return
         self.tabs.setCurrentWidget(self.tab_robocze)
         self.month_button.setCurrentText(invoice["miesiac"])
-        self.refresh()
+        self.refresh_async()
         self._open_editor(correction_id)
 
     def _edit_ksef_number(self):
@@ -1690,10 +1740,10 @@ class FakturyPage(QWidget):
         )
         if ok:
             set_ksef_number(ids[0], value)
-            self.refresh()
+            self.refresh_async()
 
     def _on_issued_cell_clicked(self, row, column):
-        if column == self.ISSUED_NUMBER_COLUMN:
+        if column in (self.ISSUED_NUMBER_COLUMN, self.ISSUED_PREVIEW_COLUMN):
             self._open_invoice_preview(int(self.issued_table.item(row, 0).text()))
             return
         if column != self.ISSUED_KSEF_COLUMN:

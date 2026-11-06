@@ -89,7 +89,7 @@ class PayrollInvoiceNamePersistenceTests(DbTestCase):
         saved = get_invoice_by_id(self.invoice)
         positions = json.loads(saved["pozycje_json"])
         self.assertEqual([p["nazwa"] for p in positions], ["Usługa płacowa – UoP"])
-        self.assertEqual((positions[0]["ilosc"], saved["kwota_netto"], saved["kwota_brutto"]), (2, Decimal("80.00"), Decimal("98.40")))
+        self.assertEqual((positions[0]["ilosc"], saved["kwota_netto"], saved["kwota_brutto"]), (2, 80.0, 98.4))
 
     def test_issued_document_keeps_legacy_name(self):
         mark_exported([self.invoice], 1)
@@ -100,7 +100,7 @@ class PayrollInvoiceNamePersistenceTests(DbTestCase):
         self.assertTrue(result["skipped"])
         after = get_invoice_by_id(self.invoice)
         self.assertEqual(after["pozycje_json"], before["pozycje_json"])
-        self.assertEqual((after["kwota_netto"], after["kwota_brutto"]), (Decimal("80.00"), Decimal("98.40")))
+        self.assertEqual((after["kwota_netto"], after["kwota_brutto"]), (80.0, 98.4))
 
 
 if __name__ == "__main__":

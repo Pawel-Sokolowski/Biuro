@@ -210,7 +210,7 @@ class ExtraServicesSettings(QWidget):
             self,
             "Importuj usługi dodatkowe",
             "",
-            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls)"
+            "Pliki cennika (*.csv *.xlsx);;CSV (*.csv);;Excel (*.xlsx)"
         )
         if not path:
             return

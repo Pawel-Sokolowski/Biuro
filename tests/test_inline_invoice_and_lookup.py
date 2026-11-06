@@ -33,7 +33,7 @@ class InlineInvoiceTests(unittest.TestCase):
         self.page.tab_robocze = QWidget(self.page)
         self.page.btn_generate_all = QPushButton("Generuj faktury", self.page)
         self.page._build_tab_robocze()
-        self.page.refresh = self.page._show_draft_positions
+        self.page.refresh_async = self.page._show_draft_positions
         mocks = [patch.object(ui, "get_invoice_by_id", side_effect=lambda _: dict(self.invoice)),
                  patch.object(ui, "get_invoice_positions", side_effect=lambda _: deepcopy(self.positions)),
                  patch.object(ui, "can_access_invoice", return_value=True),

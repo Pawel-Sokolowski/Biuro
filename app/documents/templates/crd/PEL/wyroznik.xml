@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="http://crd.gov.pl/wzor/2008/05/09/1/styl.xsl" ?>
+<wyr:Dokument xmlns:adr="http://crd.gov.pl/xml/schematy/adres/2008/05/09/" xmlns:inst="http://crd.gov.pl/xml/schematy/instytucja/2008/05/09/" xmlns:meta="http://crd.gov.pl/xml/schematy/meta/2008/05/09/" xmlns:oso="http://crd.gov.pl/xml/schematy/osoba/2008/05/09/" xmlns:str="http://crd.gov.pl/xml/schematy/struktura/2008/05/09/" xmlns:wyr="http://crd.gov.pl/wzor/2008/05/09/1/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://crd.gov.pl/wzor/2008/05/09/1/ http://crd.gov.pl/wzor/2008/05/09/1/schemat.xsd">
+	<wyr:OpisDokumentu>
+		<meta:Data typDaty="opublikowany">
+			<meta:Czas>2012-11-29</meta:Czas>
+		</meta:Data>
+		<meta:Identyfikator typIdentyfikatora="JednolityIdentyfikator">
+			<meta:Wartosc>http://crd.gov.pl/wzor/2012/11/29/1053/wyroznik.xml</meta:Wartosc>
+		</meta:Identyfikator>
+		<meta:Dostep>
+			<meta:Dostepnosc>wszystko</meta:Dostepnosc>
+			<meta:Uwagi>Wyróżnik dostępny bez ograniczeń</meta:Uwagi>
+			<meta:Data typDaty="dostepnyPo">
+				<meta:Od>2010-10-10</meta:Od>
+			</meta:Data>
+		</meta:Dostep>
+		<meta:RodzajDokumentu>
+			<meta:Kategoria>tekst</meta:Kategoria>
+			<meta:RodzajKategorii>Wyróżnik</meta:RodzajKategorii>
+		</meta:RodzajDokumentu>
+		<meta:Relacja>
+			<meta:Identyfikator typIdentyfikatora="URIXSD">
+				<meta:Wartosc>http://crd.gov.pl/wzor/2012/11/29/1053/schemat.xsd</meta:Wartosc>
+			</meta:Identyfikator>
+			<meta:RodzajRelacji>maCzesc</meta:RodzajRelacji>
+		</meta:Relacja>
+		<meta:Relacja>
+			<meta:Identyfikator typIdentyfikatora="URIXSL">
+				<meta:Wartosc>http://crd.gov.pl/wzor/2012/11/29/1053/styl.xsl</meta:Wartosc>
+			</meta:Identyfikator>
+			<meta:RodzajRelacji>maCzesc</meta:RodzajRelacji>
+		</meta:Relacja>
+		<meta:Jezyk kodJezyka="pol">polski</meta:Jezyk>
+	</wyr:OpisDokumentu>
+	<wyr:DaneDokumentu>
+		<str:Naglowek>
+			<str:NazwaDokumentu>Wyróżnik wzoru pełnomocnictwa do wykonywania czynności prawnych w relacjach z Zakładem Ubezpieczeń Społecznych - ZUS PEL</str:NazwaDokumentu>
+		</str:Naglowek>
+		<str:Nadawcy>
+			<meta:Podmiot typPodmiotu="TworcaWyroznika">
+				<inst:Instytucja>
+					<inst:NazwaInstytucji>Zakład Ubezpieczeń Społecznych</inst:NazwaInstytucji>
+					<adr:Adres>
+						<adr:KodPocztowy>01-748</adr:KodPocztowy>
+						<adr:Miejscowosc>Warszawa</adr:Miejscowosc>
+						<adr:Ulica rodzajUlicy="ulica">Szamocka</adr:Ulica>
+						<adr:Budynek>3,5</adr:Budynek>
+						<adr:Lokal>
+						</adr:Lokal>
+					</adr:Adres>
+				</inst:Instytucja>
+			</meta:Podmiot>
+		</str:Nadawcy>
+	</wyr:DaneDokumentu>
+	<wyr:TrescDokumentu format="text/xml" kodowanie="XML">
+		<wyr:Wartosc>
+			<wyr:NazwaDokumentu>Pełnomocnictwo do wykonywania czynności prawnych w relacjach z Zakładem Ubezpieczeń Społecznych - ZUS PEL</wyr:NazwaDokumentu>
+			<wyr:RodzajDokumentu>Pełnomocnictwo</wyr:RodzajDokumentu>
+			<wyr:PodstawaPrawna>
+				<wyr:NazwaPodstawy>Rozporządzenie Prezesa Rady Ministrów z dnia 14 września 2011r. w sprawie sporządzania pism w postaci dokumentów elektronicznych, doręczania dokumentów elektronicznych oraz udostępniania formularzy, wzorów i kopii dokumentów elektronicznych (Dz.U.2011r. Nr 206 poz.1216)</wyr:NazwaPodstawy>
+				<wyr:JednolityIdentyfikatorPodstawy>URI://Dziennik_Ustaw/2011/206/1216/27/2</wyr:JednolityIdentyfikatorPodstawy>
+			</wyr:PodstawaPrawna>
+			<wyr:WaznoscWzoru typDaty="wyslany">
+				<meta:Czas>2030-12-31</meta:Czas>
+			</wyr:WaznoscWzoru>
+			<wyr:OpisWzoru>Wzór pełnomocnictwa do wykonywania czynności prawnych w relacjach z Zakładem Ubezpieczeń Społecznych (ZUS PEL)</wyr:OpisWzoru>
+		</wyr:Wartosc>
+	</wyr:TrescDokumentu>
+<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" Id="ID-7b960ee0-3a2c-11e2-b167-001a645ace88"><ds:SignedInfo Id="ID-7b94d660-3a2c-11e2-b167-001a645ace88"><ds:CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"></ds:SignatureMethod><ds:Reference Id="ID-7b94d661-3a2c-11e2-b167-001a645ace88" URI=""><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/TR/1999/REC-xpath-19991116"><ds:XPath xmlns:xades="http://uri.etsi.org/01903/v1.3.2#">not(ancestor-or-self::ds:Signature)</ds:XPath></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></ds:DigestMethod><ds:DigestValue>PCCEGG3251+FPLkRJMa8J7kB7tY=</ds:DigestValue></ds:Reference><ds:Reference Id="ID-7b95c0c0-3a2c-11e2-b167-001a645ace88" URI="schemat.xsd"><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></ds:DigestMethod><ds:DigestValue>WAs+Bbx1xiY/M6Ue/tKvPsYGI4w=</ds:DigestValue></ds:Reference><ds:Reference Id="ID-7b95c0c1-3a2c-11e2-b167-001a645ace88" URI="styl.xsl"><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></ds:DigestMethod><ds:DigestValue>l3N2NNJ4LBtYRa9EfHCxnNqCqmo=</ds:DigestValue></ds:Reference><ds:Reference Id="ID-7ba43fb2-3a2c-11e2-b167-001a645ace88" Type="http://uri.etsi.org/01903#SignedProperties" URI="#ID-7ba43fb0-3a2c-11e2-b167-001a645ace88"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></ds:DigestMethod><ds:DigestValue>oX2eIL3a3RvXFWsQyaYpNK6zyAo=</ds:DigestValue></ds:Reference></ds:SignedInfo><ds:SignatureValue Id="ID-7bb5f2f0-3a2c-11e2-b167-001a645ace88">AvrsaFUG5+mS07igQ8xP3BADHoCpgnUdunZvi/OLK4KXgN36YRobScpb6Bp3yjSEc017DUHXBpi9fSvJAGMRA4CKe3kCXHJw+h4asCXPVH6rmqojORLnXvBugpzpzNHp6Ky+lTvvAX0FWGYBNN9SyvCnYDX3WrUWtADVvr4ZewBgVmS8tL7nYSFoAlDr20XyAb99WcFlVuNbIlh1OXiWw8DWNnhKdWBdLnERFM0lFjxtlQlUzQDzXzZMnRR+gw3UHPJ/fejPc9ETdbnVStI/ffHm0Fp66cbDk1sgqsoTbaEqAeFbLglC6yKnP4DFla2EJNTfSwQy4BdoY6PgfdLGLQ==</ds:SignatureValue><ds:KeyInfo><ds:X509Data><ds:X509Certificate>
+MIIFHjCCBAagAwIBAgIUBTf45ZbdL5spwejoz713mbqSJW0wDQYJKoZIhvcNAQEF
+BQAwgakxCzAJBgNVBAYTAlBMMTgwNgYDVQQKDC9Qb2xza2EgV3l0d8Ozcm5pYSBQ
+YXBpZXLDs3cgV2FydG/Fm2Npb3d5Y2ggUy5BLjE9MDsGA1UECww0U2lnaWxsdW0g
+UG9sc2tpZSBDZW50cnVtIENlcnR5ZmlrYWNqaSBFbGVrdHJvbmljem5lajEhMB8G
+A1UEAwwYU2lnaWxsdW0gUENDRSAtIENBTGV2ZWwzMB4XDTExMDQyOTEwNDkwNFoX
+DTE0MDQyOTIzNTk1OVowMzELMAkGA1UEBhMCUEwxDjAMBgNVBAoMBU1TV2lBMRQw
+EgYDVQQDDAtlUFVBUCBDUlcgMjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC
+ggEBAIqJ9J0Il+JG+57UHERjND5G/i7nWG+fNp9XpHoIzNbKNYwIAujLmWoRNx3z
+Kbt29MKa0c7Tpy8hqYIhIGo+HP+577gu1R7VUr5GPXtj7XJTTVlPrsFoQGVs2jMW
+gewHs6OF87dqu3TTLh0fVxPWMnfWQ2pJuQY+wzZOJkOjr3eA5l75ncadKt7eL62H
+rQPrn5VBTzYKWbo39hSMjjRw0Z1C7L2PZAARx740ERHahGHRFXQUbR9cWeptKZHn
+MuArZ7gWqcgq3nxQt887wMZIL2V3bJquAVsHo5+kP1PoZ9pstt3gHforNzUp8GkP
+ICumOeEqhrtuk6leNsB1N00Ye9sCAwEAAaOCAbEwggGtMAsGA1UdDwQEAwIGwDAM
+BgNVHRMBAf8EAjAAMIIBTAYDVR0gAQH/BIIBQDCCATwwggE4BgsqhGgBhvcYAYN0
+AzCCAScwLwYIKwYBBQUHAgEWI2h0dHA6Ly93d3cuc2lnaWxsdW0ucGwvcmVwb3p5
+dG9yaXVtMIHzBggrBgEFBQcCAjCB5jAzFixQb2xza2EgV3l0d/NybmlhIFBhcGll
+cvN3IFdhcnRvnGNpb3d5Y2ggUy5BLjADAgEBHoGuAE4AaQBuAGkAZQBqAHMAegB5
+ACAAYwBlAHIAdAB5AGYAaQBrAGEAdAAgAHUAbQBvAXwAbABpAHcAaQBhACAAdwBl
+AHIAeQBmAGkAawBhAGMAagEZACAAdwB6AG8AcgB1ACAAdwAgAEMAZQBuAHQAcgBh
+AGwAbgB5AG0AIABSAGUAcABvAHoAeQB0AG8AcgBpAHUAbQAgAFcAegBvAHIA8wB3
+ACAAZQBQAFUAQQBQMEAGA1UdHwQ5MDcwNaAzoDGGL2h0dHA6Ly8xOTMuMTc4LjE2
+NC4xNi9yZXBvenl0b3JpdW0vY2FsZXZlbDMuY3JsMA0GCSqGSIb3DQEBBQUAA4IB
+AQAzITZMmtRf3aR58OHlMhUbBqoXkNyVmo+gmMkA19bNgBZS0sw8LX8X6n7DJPkc
+rAO3WoR5N7Zqu2isHRHFOkPbLujf0JZ2df7CGlcAtIXZ3RXeSeKgr3JtHDp71969
+9kXfEPDRXp2z+GdvJ7pqV1QBzWF23l2ExpRnykJtxAFFzBpHyB+JV+aHJv52qqwZ
+/kYhHh+XWu01rkFJyem3d7i4wyWAgoTfGK2jAisVSN7wqrWimAFmwqFnaJq2A9Ds
+TNytyqWDsn5T9Gm23CZZubPLhk5EbBgVHw4v7jabb+9MzpnCrye0/Fh5dCYdLaP3
+BbXA7qZWtpezVn80uIehiwwM
+
+</ds:X509Certificate></ds:X509Data></ds:KeyInfo><ds:Object><xades:QualifyingProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Id="ID-7ba43fb1-3a2c-11e2-b167-001a645ace88" Target="#ID-7b960ee0-3a2c-11e2-b167-001a645ace88"><xades:SignedProperties Id="ID-7ba43fb0-3a2c-11e2-b167-001a645ace88"><xades:SignedSignatureProperties><xades:SigningTime>2012-11-29T13:55:50Z</xades:SigningTime><xades:SigningCertificate><xades:Cert><xades:CertDigest><ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></ds:DigestMethod><ds:DigestValue>Jxad3UFauIswcx6O4ksM6RkFAu4=</ds:DigestValue></xades:CertDigest><xades:IssuerSerial><ds:X509IssuerName>CN=Sigillum PCCE - CALevel3, OU=Sigillum Polskie Centrum Certyfikacji Elektronicznej, O=Polska Wytwórnia Papierów Wartościowych S.A., C=PL</ds:X509IssuerName><ds:X509SerialNumber>29793176812144145870040126884304518181878375789</ds:X509SerialNumber></xades:IssuerSerial></xades:Cert></xades:SigningCertificate><xades:SignaturePolicyIdentifier><xades:SignaturePolicyImplied></xades:SignaturePolicyImplied></xades:SignaturePolicyIdentifier></xades:SignedSignatureProperties><xades:SignedDataObjectProperties><xades:DataObjectFormat ObjectReference="#ID-7b95c0c0-3a2c-11e2-b167-001a645ace88"><xades:Description>schemat.xsd</xades:Description></xades:DataObjectFormat><xades:DataObjectFormat ObjectReference="#ID-7b95c0c1-3a2c-11e2-b167-001a645ace88"><xades:Description>styl.xsl</xades:Description></xades:DataObjectFormat></xades:SignedDataObjectProperties></xades:SignedProperties></xades:QualifyingProperties></ds:Object></ds:Signature></wyr:Dokument>

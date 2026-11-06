@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:oso="http://crd.gov.pl/xml/schematy/osoba/2009/11/16/" xmlns:adr="http://crd.gov.pl/xml/schematy/adres/2009/11/09/" xmlns:inst="http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/" xmlns:str="http://crd.gov.pl/xml/schematy/struktura/2009/11/16/" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:meta="http://crd.gov.pl/xml/schematy/meta/2009/11/16/" xmlns="http://crd.gov.pl/wzor/2012/11/29/1053/" targetNamespace="http://crd.gov.pl/wzor/2012/11/29/1053/" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/adres/2009/11/09/" schemaLocation="http://crd.gov.pl/xml/schematy/adres/2009/11/09/adres.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/osoba/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/osoba/2009/11/16/osoba.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/meta/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/meta/2009/11/16/meta.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/instytucja.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/struktura/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/struktura/2009/11/16/struktura.xsd"/>
+	<xs:import namespace="http://www.w3.org/2000/09/xmldsig#" schemaLocation="http://www.w3.org/TR/xmldsig-core/xmldsig-core-schema.xsd"/>
+	<xs:element name="Dokument" type="DokumentTyp"/>
+	<xs:complexType name="DokumentTyp">
+		<xs:sequence>
+			<xs:element name="OpisDokumentu" type="str:OpisDokumentuTyp" minOccurs="0"/>
+			<xs:element name="DaneDokumentu" type="str:DaneDokumentuTyp" minOccurs="0"/>
+			<xs:element name="TrescDokumentu" type="TrescDokumentuTyp"/>
+			<xs:element ref="ds:Signature" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="TrescDokumentuTyp">
+		<xs:complexContent>
+			<xs:extension base="str:TrescDokumentuTyp">
+				<xs:sequence>
+					<xs:element name="DaneMocodawcy" type="DaneMocodawcyTyp" minOccurs="0"/>
+					<xs:element name="DaneIdentyfikacyjneMocodawcy" type="DaneIdentyfikacyjneMocodawcyTyp" minOccurs="0"/>
+					<xs:element name="AdresSiedzibyPlatnikaSkladek" type="AdresTyp" minOccurs="0"/>
+					<xs:element name="ZakresPelnomocnictwa" type="ZakresPelnomocnictwaTyp" minOccurs="0"/>
+					<xs:element name="DanePelnomocnika" type="DanePelnomocnikaTyp" minOccurs="0"/>
+					<xs:element name="OswiadczenieOUstanowieniuPelnomocnika" type="OswiadczenieOUstanowieniuPelnomocnikaTyp" minOccurs="0"/>
+					<xs:element name="Zalaczniki" type="str:ZalacznikiTyp" minOccurs="0"/>
+				</xs:sequence>
+			</xs:extension>
+		</xs:complexContent>
+	</xs:complexType>
+	<xs:simpleType name="ZagranicznyKodPocztowyTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="12"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="NumerDomuTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="10"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="NazwaPanstwaTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="100"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="RodzajDokumentuTyp">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+			<xs:enumeration value="2"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="NazwaSkroconaTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="31"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="NazwaPelnaTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="200"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="TextAreaTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="4000"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="ImieNazwiskoTyp">
+		<xs:restriction base="xs:string">
+			<xs:maxLength value="200"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:complexType name="AdresTyp">
+		<xs:sequence>
+			<xs:element name="KodPocztowy" type="adr:KodPocztowyTyp" minOccurs="0"/>
+			<xs:element name="Poczta" type="adr:PocztaTyp" minOccurs="0"/>
+			<xs:element name="GminaDzielnica" type="adr:GminaTyp" minOccurs="0"/>
+			<xs:element name="Miejscowosc" type="adr:MiejscowoscTyp" minOccurs="0"/>
+			<xs:element name="Ulica" type="adr:UlicaTyp" minOccurs="0"/>
+			<xs:element name="NumerDomu" type="NumerDomuTyp" minOccurs="0"/>
+			<xs:element name="NumerLokalu" type="adr:LokalTyp" minOccurs="0"/>
+			<xs:element name="NumerTelefonu" type="adr:TelefonTyp" minOccurs="0"/>
+			<xs:element name="SymbolPanstwa" type="adr:KrajTyp" minOccurs="0"/>
+			<xs:element name="ZagranicznyKodPocztowy" type="ZagranicznyKodPocztowyTyp" minOccurs="0"/>
+			<xs:element name="NazwaPanstwa" type="NazwaPanstwaTyp" minOccurs="0"/>
+			<xs:element name="AdresPocztyElektronicznej" type="adr:EmailTyp" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="DaneIdentyfikacyjneMocodawcyTyp">
+		<xs:sequence>
+			<xs:element name="NIP" type="oso:NIPTyp" minOccurs="0"/>
+			<xs:element name="REGON" type="inst:REGONTyp" minOccurs="0"/>
+			<xs:element name="PESEL" type="oso:PESELTyp" minOccurs="0"/>
+			<xs:element name="RodzajDokumentu" type="RodzajDokumentuTyp" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>1-dowód osobisty; 2-paszport</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="SeriaINumerDokumentu" type="oso:NrDowoduTozsamosciTyp" minOccurs="0"/>
+			<xs:element name="NazwaSkrocona" type="NazwaSkroconaTyp" minOccurs="0"/>
+			<xs:element name="NazwaPelna" type="NazwaPelnaTyp" minOccurs="0"/>
+			<xs:element name="Nazwisko" type="oso:NazwiskoTyp" minOccurs="0"/>
+			<xs:element name="Imie" type="oso:ImieTyp" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="DaneIdentyfikacyjneTyp">
+		<xs:sequence>
+			<xs:element name="PESEL" type="oso:PESELTyp" minOccurs="0"/>
+			<xs:element name="RodzajDokumentu" type="RodzajDokumentuTyp" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>1-dowód osobisty; 2-paszport</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="SeriaINumerDokumentu" type="oso:NrDowoduTozsamosciTyp" minOccurs="0"/>
+			<xs:element name="Nazwisko" type="oso:NazwiskoTyp" minOccurs="0"/>
+			<xs:element name="Imie" type="oso:ImieTyp" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="DaneMocodawcyTyp">
+		<xs:sequence>
+			<xs:element name="PodmiotUdzielajacyPelnomocnictwa" minOccurs="0">
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="Platnik" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="Ubezpieczony" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="Swiadczeniobiorca" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="InnyPodmiot" type="xs:boolean" minOccurs="0"/>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+			<xs:element name="ReprezentowanyPlatnikSkladek" minOccurs="0">
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="OsobaPrawna" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="OsobaFizyczna" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="InnyPodmiot" type="xs:boolean" minOccurs="0"/>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="ZakresPelnomocnictwaTyp">
+		<xs:sequence>
+			<xs:element name="ZakresUprawnienia" minOccurs="0">
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="UprawnienieDoWszelkiejCzynnosci" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="UprawnienieDoOkreslonejCzynnosci" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="Czynnosc" minOccurs="0">
+							<xs:complexType>
+								<xs:sequence>
+									<xs:element name="OdbiorKorespondencji" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="WyslanieKorespondencji" type="xs:boolean" minOccurs="0"/>
+								</xs:sequence>
+							</xs:complexType>
+						</xs:element>
+						<xs:element name="UprawnienieDoOkreslonejSprawy" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="Sprawa" minOccurs="0">
+							<xs:complexType>
+								<xs:sequence>
+									<xs:element name="DokonaniePierwszejDalszychCzynnosciSprawie" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="OpisSprawy" type="TextAreaTyp" minOccurs="0"/>
+									<xs:element name="SprawaOIdentyfikatorze" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="IdentyfikatorSprawy" minOccurs="0">
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:maxLength value="32"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:element>
+								</xs:sequence>
+							</xs:complexType>
+						</xs:element>
+						<xs:element name="UprawnienieDoSpraw" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="Sprawy" minOccurs="0">
+							<xs:complexType>
+								<xs:sequence>
+									<xs:element name="DochodzenieNaleznosci" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="UdzielanieUlg" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="RozliczanieKontPlatnikowSkladek" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="SwiadczenieEmerytalnoRentowe" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="ZasilkiSwiadczenieRehabilitacyjne" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="WydawanieZaswiadczen" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="WnioskiOZwrotNadplaconychSkladek" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="ZapisowDanychNaKontachSubkontach" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="OFE" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PodstawaWymiaruSkladekUbezpieczenSpolecznych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PodstawaWymiaruSkladekUbezpieczenZdrowotnych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PodleganiaNiePodleganiaUbezpieczenSpolecznych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="ObowiazekOpladaniaSkladekNaFunduszPracy" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="ObowiazekOpladaniaSkladekNaFunduszSwiadczenPracowniczych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="ObowiazekOpladaniaSkladekNaFunduszEmeryturPomostowych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PodstawaWymiaruSkladekNaFunduszPracy" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PodstawaWymiaruSkladekNaFunduszSwiadczenPracowniczych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PodstawaWymiaruSkladekNaFunduszEmeryturPomostowych" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="StopaProcentowaSkladekNaUbezpieczenieWypadkowe" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="UstalenieWlasciwegoUstawodawstwaUbezpieczeniowego" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="PisemnychInterpretacji" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="Inne" type="xs:boolean" minOccurs="0"/>
+									<xs:element name="OpisInne" type="TextAreaTyp" minOccurs="0"/>
+								</xs:sequence>
+							</xs:complexType>
+						</xs:element>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+			<xs:element name="DataUstanowienia" type="xs:date" minOccurs="0"/>
+			<xs:element name="OkresObowiazywaniaPelnomocnictwa" minOccurs="0">
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="DoOdwolania" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="DoDnia" type="xs:boolean" minOccurs="0"/>
+						<xs:element name="Data" type="xs:date" minOccurs="0"/>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="DanePelnomocnikaTyp">
+		<xs:sequence>
+			<xs:element name="DaneIdentyfikacyjne" type="DaneIdentyfikacyjneTyp" minOccurs="0"/>
+			<xs:element name="DaneAdresowe" type="AdresTyp" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="OswiadczenieOUstanowieniuPelnomocnikaTyp">
+		<xs:sequence>
+			<xs:element name="Mocodawca1" type="MocodawcaTyp" minOccurs="0"/>
+			<xs:element name="Mocodawca2" type="MocodawcaTyp" minOccurs="0"/>
+			<xs:element name="Mocodawca3" type="MocodawcaTyp" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="MocodawcaTyp">
+		<xs:sequence>
+			<xs:element name="PESEL" type="oso:PESELTyp" minOccurs="0"/>
+			<xs:element name="RodzajDokumentu" type="RodzajDokumentuTyp" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>1-dowód osobisty; 2-paszport</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="SeriaINumerDokumentu" type="oso:NrDowoduTozsamosciTyp" minOccurs="0"/>
+			<xs:element name="Nazwisko" type="oso:NazwiskoTyp" minOccurs="0"/>
+			<xs:element name="Imie" type="oso:ImieTyp" minOccurs="0"/>
+			<xs:element name="StanowiskoFunkcja" minOccurs="0">
+				<xs:simpleType>
+					<xs:restriction base="xs:string">
+						<xs:maxLength value="100"/>
+					</xs:restriction>
+				</xs:simpleType>
+			</xs:element>
+			<xs:element name="Miejscowosc" type="adr:MiejscowoscTyp" minOccurs="0"/>
+			<xs:element name="Data" type="xs:date" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="AdnotacjeZusTyp">
+		<xs:sequence>
+			<xs:element name="PelnomocnictwoWpisaneDoWnioskuOWpisDoCEIDG" type="xs:boolean" minOccurs="0"/>
+			<xs:element name="Opis" type="TextAreaTyp" minOccurs="0"/>
+			<xs:element name="Inne" type="xs:boolean" minOccurs="0"/>
+			<xs:element name="OpisInne" type="TextAreaTyp" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+</xs:schema>

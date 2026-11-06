@@ -12,6 +12,7 @@ from PyQt6.QtGui import QPainter
 import datetime
 import logging
 from app.utils.background import TaskRunner, CommandRunner
+from app.utils.item_table import ItemTable
 
 from app.reports.reports_logic import (
     get_all_companies,
@@ -316,8 +317,7 @@ class ReportsPage(QWidget):
     @staticmethod
     def _make_profit_table(sekcja):
         headers = PROFIT_HEADERS[sekcja]
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
+        table = ItemTable(headers)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
@@ -453,6 +453,7 @@ class ReportsPage(QWidget):
         tables = {"ksiegowosc": self.import_table, "kadry": self.import_table_kadry}
         totals = {}
         for sekcja, table in tables.items():
+            table.begin_batch()
             table.setRowCount(0)
             sek = cena = koszt = 0.0
             for item in rows:
@@ -471,6 +472,7 @@ class ReportsPage(QWidget):
                 cena += item["cena"]
                 koszt += item["koszt"]
             totals[sekcja] = (sek, cena, koszt)
+            table.end_batch()
             table.resizeColumnsToContents()
             fit_table_height(table)
         if not rows:

@@ -1,23 +1,23 @@
 import os
 
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-    "--disable-gpu "
-    "--disable-software-rasterizer "
-    "--disable-gpu-compositing "
-)
-
-os.environ["QT_OPENGL"] = "software"
 import sys
 
 from app.utils.env_config import load_environment, ensure_encryption_key
 
 load_environment()
 ensure_encryption_key()
+# Hardware rendering is the normal path. Drivers that need the software
+# fallback can opt in without rebuilding the installed application.
+if os.environ.get("BIO_SOFTWARE_RENDERING") == "1" or os.environ.get("QT_OPENGL") == "software":
+    os.environ.setdefault("QT_OPENGL", "software")
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-gpu-compositing")
+
+from app.diagnostics import configure_logging
+configure_logging()
 from PyQt6.QtCore import Qt, QCoreApplication
 
-QCoreApplication.setAttribute(
-    Qt.ApplicationAttribute.AA_UseSoftwareOpenGL
-)
+if os.environ.get("QT_OPENGL") == "software":
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL)
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QApplication, QDialog)
 import traceback
@@ -27,13 +27,18 @@ from app.utils.i18n import install_polish_translations
 from app.main_ui import OfficeManagerApp
 
 def excepthook(type, value, tb):
-    print("=== PYQT EXCEPTION CAUGHT ===")
-    traceback.print_exception(type, value, tb)
-    sys.__excepthook__(type, value, tb)
+    import logging
+    logging.getLogger('app').critical('uncaught_exception', exc_info=(type, value, tb))
+    if sys.stderr is not None:
+        sys.__excepthook__(type, value, tb)
 
 sys.excepthook = excepthook
 
 if __name__ == "__main__":
+    if '--smoke-test' in sys.argv:
+        from app.release_smoke import run
+        app = QApplication(sys.argv)
+        sys.exit(run())
     if "--migrate" in sys.argv:
         # Biuro.exe --migrate: aktualizacja schematu bazy (bez okna logowania)
         from app.db.schema import upgrade_database, schema_is_current
@@ -45,7 +50,8 @@ if __name__ == "__main__":
             msg = "Baza danych jest aktualna." if ok else "Aktualizacja bazy nie powiodła się."
         except Exception as exc:
             ok, msg = False, f"Błąd aktualizacji bazy:\n{exc}"
-        (QMessageBox.information if ok else QMessageBox.critical)(None, "Aktualizacja bazy", msg)
+        if '--non-interactive' not in sys.argv:
+            (QMessageBox.information if ok else QMessageBox.critical)(None, "Aktualizacja bazy", msg)
         sys.exit(0 if ok else 1)
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)

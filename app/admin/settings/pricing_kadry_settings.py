@@ -213,7 +213,7 @@ class PricingKadrySettings(QWidget):
             self,
             "Importuj cennik kadry",
             "",
-            "Pliki cennika (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls)"
+            "Pliki cennika (*.csv *.xlsx);;CSV (*.csv);;Excel (*.xlsx)"
         )
         if not path:
             return

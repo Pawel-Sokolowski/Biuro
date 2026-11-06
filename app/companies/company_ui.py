@@ -14,10 +14,11 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 
 from app.companies.company_names import company_display_name
+from app.utils.background import TaskRunner
 from app.db.dao_companies import (
     list_companies,
     get_companies_filtered,
@@ -31,6 +32,11 @@ class CompanyUI(QWidget):
     def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
+        self._reads = TaskRunner(self)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self.refresh_async)
         self.setWindowTitle("Firmy")
         self.resize(1100, 700)
 
@@ -96,18 +102,18 @@ class CompanyUI(QWidget):
         # -------------------------
         # SYGNAŁY
         # -------------------------
-        self.btn_search.clicked.connect(self._search)
+        self.btn_search.clicked.connect(self.refresh_async)
         self.btn_clear.clicked.connect(self._clear_filters)
         self.btn_add.clicked.connect(self._add_company)
         self.btn_edit.clicked.connect(self._edit_company)
         self.btn_delete.clicked.connect(self._delete_company)
         self.btn_restore.clicked.connect(self._restore_company)
-        self.btn_refresh.clicked.connect(self._refresh)
+        self.btn_refresh.clicked.connect(self.refresh_async)
         self.btn_documents.clicked.connect(self._generate_documents)
-        self.status_filter.currentIndexChanged.connect(self._search)
-        self.search_input.textChanged.connect(self._search)
+        self.status_filter.currentIndexChanged.connect(self.refresh_async)
+        self.search_input.textChanged.connect(self._queue_search)
 
-        self._refresh()
+        QTimer.singleShot(0, self.refresh_async)
 
     # ============================================================
     #  LOAD TABLE
@@ -124,12 +130,17 @@ class CompanyUI(QWidget):
             logging.getLogger(__name__).exception("Nie udało się odczytać statusu backupu")
             return {}
 
-    def _load_table(self, rows: List[Dict[str, Any]]):
+    def _load_table(self, rows: List[Dict[str, Any]], backups=None, stored=None):
+        from app.invoices.table_state import preserve_table_view
+        with preserve_table_view(self.table):
+            self._populate_table(rows, backups, stored)
+
+    def _populate_table(self, rows, backups, stored):
         self.table.setRowCount(0)
-        backups = self._backup_by_company()
+        backups = self._backup_by_company() if backups is None else backups
         try:
             from app.utils.backup_status import stored_backup_dates
-            stored = stored_backup_dates()
+            stored = stored_backup_dates() if stored is None else stored
         except Exception:
             stored = {}
         for r in rows:
@@ -182,21 +193,42 @@ class CompanyUI(QWidget):
             return
         firma_id = int(self.table.item(row, 0).text())
         set_company_status(firma_id, 'Aktywne')
-        self._refresh()
+        self.refresh_async()
 
     # ============================================================
     #  FILTERS
     # ============================================================
     def _search(self):
+        self._reads.invalidate()
         search = self.search_input.text().strip()
         status = self.status_filter.currentText()
         rows = get_companies_filtered(search, status, None, self.pracownik_id)
         self._load_table(rows)
 
+    def _queue_search(self):
+        self._reads.invalidate()
+        self._search_timer.start()
+
+    def refresh_async(self):
+        self._search_timer.stop()
+        request = (self.search_input.text().strip(), self.status_filter.currentText())
+        actor = self.pracownik_id
+
+        def read():
+            from app.utils.backup_status import stored_backup_dates
+            rows = get_companies_filtered(*request, None, actor)
+            return rows, self._backup_by_company(), stored_backup_dates()
+
+        def loaded(result):
+            if request == (self.search_input.text().strip(), self.status_filter.currentText()):
+                self._load_table(*result)
+
+        self._reads.submit(read, loaded, lambda exc: logging.getLogger(__name__).warning('company_read failed: %s', exc))
+
     def _clear_filters(self):
         self.search_input.clear()
         self.status_filter.setCurrentIndex(0)
-        self._refresh()
+        self.refresh_async()
 
     # ============================================================
     #  CRUD
@@ -204,7 +236,7 @@ class CompanyUI(QWidget):
     def _add_company(self):
         dlg = CompanyForm(None, self, actor_id=self.pracownik_id)
         if dlg.exec():
-            self._refresh()
+            self.refresh_async()
 
     def _generate_documents(self):
         row = self.table.currentRow()
@@ -232,7 +264,7 @@ class CompanyUI(QWidget):
 
         dlg = CompanyForm(firma_id, self, actor_id=self.pracownik_id)
         if dlg.exec():
-            self._refresh()
+            self.refresh_async()
 
     def _delete_company(self):
         row = self.table.currentRow()
@@ -256,7 +288,7 @@ class CompanyUI(QWidget):
 
         try:
             delete_company(firma_id, actor_id=self.pracownik_id)
-            self._refresh()
+            self.refresh_async()
         except PermissionError as exc:
             QMessageBox.warning(self, "Brak uprawnień", str(exc))
         except Exception as e:

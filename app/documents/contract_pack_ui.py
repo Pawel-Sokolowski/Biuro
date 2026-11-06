@@ -70,9 +70,9 @@ class ContractPackDialog(QDialog):
             role.addItems(['', 'Prezes zarządu', 'Członek zarządu', 'Wiceprezes zarządu', 'Prokurent', 'Właściciel', 'Pełnomocnik'])
             fields['stanowisko'] = role
             reps.addRow('Funkcja / rola', role)
-            for field, label in (('birth_date', 'Data urodzenia do PEL-Z, gdy brak PESEL'),
-                                 ('identity_number', 'Dokument tożsamości do PEL-Z, gdy brak PESEL'),
-                                 ('street', 'Adres przedstawiciela do PEL-Z — ulica'), ('building', 'Numer domu'),
+            for field, label in (('birth_date', 'Data urodzenia do PEL / PEL-Z, gdy brak PESEL'),
+                                 ('identity_number', 'Dokument tożsamości do PEL / PEL-Z, gdy brak PESEL'),
+                                 ('street', 'Adres przedstawiciela do PEL / PEL-Z — ulica'), ('building', 'Numer domu'),
                                  ('apartment', 'Numer lokalu'), ('postcode', 'Kod pocztowy'),
                                  ('city', 'Miejscowość'), ('country', 'Państwo (jeśli poza Polską)')):
                 widget = QLineEdit()
@@ -89,9 +89,11 @@ class ContractPackDialog(QDialog):
             self.principal_kind.addItem(label, value)
         self.principal_kind.setCurrentIndex(max(0, self.principal_kind.findData(self.context.get('principal_kind'))))
         powers.addRow('Mocodawca', self.principal_kind)
-        self._field(powers, 'short_name', 'Nazwa skrócona do PEL (maks. 31 znaków)', self.context.get('short_name', ''))
+        self._field(powers, 'short_name', 'Nazwa skrócona', self.context.get('short_name', ''))
         self._field(powers, 'principal_first_name', 'Imię mocodawcy (osoba fizyczna)')
         self._field(powers, 'principal_surname', 'Nazwisko mocodawcy (osoba fizyczna)')
+        self._field(powers, 'principal_birth_date', 'Data urodzenia mocodawcy, gdy brak PESEL (DD.MM.RRRR)')
+        self._field(powers, 'principal_identity_number', 'Dokument tożsamości mocodawcy, gdy brak PESEL')
         for field, label in (('street', 'Ulica klienta'), ('building', 'Numer domu'), ('apartment', 'Numer lokalu'),
                              ('postcode', 'Kod pocztowy klienta'), ('city', 'Miejscowość klienta'), ('country', 'Kod kraju (np. PL)'),
                              ('region', 'Województwo'), ('county', 'Powiat'), ('municipality', 'Gmina')):
@@ -141,7 +143,18 @@ class ContractPackDialog(QDialog):
             self.pel_scope.addItem(label, value)
         powers.addRow('Zakres PEL', self.pel_scope)
         self._field(powers, 'pel_case', 'Opis sprawy (jeżeli wybrano)')
-        powers_notice = QLabel('UPL korzysta z przesłanego druku UPL-1(6). PEL korzysta z dostarczonej wizualizacji CRD 1053. '
+        self.pel_ezus = QComboBox()
+        for label, value in (('Bez dostępu do eZUS', ''), ('Płatnik składek — pełny dostęp', 'full'),
+                             ('Płatnik składek — tylko korespondencja', 'correspondence'),
+                             ('Płatnik składek — tylko E-ZLA', 'ezla')):
+            self.pel_ezus.addItem(label, value)
+        powers.addRow('Dostęp do eZUS (osobne upoważnienie)', self.pel_ezus)
+        self._field(powers, 'pel_ezus_requests', 'Ograniczenie korespondencji eZUS do typów wniosków (opcjonalnie)')
+        self.pel_pit = QCheckBox('Upoważnienie do otrzymywania deklaracji PIT z ZUS')
+        powers.addRow(self.pel_pit)
+        powers_notice = QLabel('UPL korzysta z przesłanego druku UPL-1(6), a PEL z trzystronicowego PDF 579/26. '
+                               'Dla spółki dane osoby udzielającej PEL pochodzą z pierwszego przedstawiciela. '
+                               'Przy wielu przedstawicielach wybierz też PEL-Z. Dla konkretnej sprawy PEL daty obowiązywania pozostają puste zgodnie z drukiem. '
                                'Sprawdź podgląd i właściwą wersję formularza przed podpisaniem. Podpisy pozostają puste.')
         powers_notice.setWordWrap(True)
         powers.addRow(powers_notice)
@@ -280,7 +293,8 @@ class ContractPackDialog(QDialog):
                                     **{key: w.text().strip() for key, w in self.attorney_fields.items()}),
                       authority_from=self.authority_from.date().toString('dd.MM.yyyy'),
                       authority_until='' if self.authority_indefinite.isChecked() else self.authority_until.date().toString('dd.MM.yyyy'),
-                      pel_scope=self.pel_scope.currentData())
+                      pel_scope=self.pel_scope.currentData(), pel_ezus=self.pel_ezus.currentData(),
+                      pel_pit=self.pel_pit.isChecked())
         return values
 
     def _generate(self, docx_only):

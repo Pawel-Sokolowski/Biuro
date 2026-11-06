@@ -32,13 +32,13 @@ DOCUMENTS = (
     ('09_authorization', 'Upoważnienie do odbioru dokumentów', True),
     ('10_termination', 'Wypowiedzenie umowy', False),
     ('11_upl', 'UPL-1(6) — formularz do druku', False),
-    ('12_pel', 'PEL — wizualizacja wzoru CRD 1053', False),
+    ('12_pel', 'PEL — formularz do druku (3 strony)', False),
     ('13_pel_z', 'PEL-Z — załącznik z przedstawicielami', False),
 )
 
 
 def company_context(company, partners=(), contacts=()):
-    from app.documents.power_of_attorney import split_street
+    from app.documents.power_of_attorney import split_street, principal_kind_for_company
     structured_street = split_street(company.get('ulica'))
     street = str(company.get('ulica') or '').strip()
     building = str(company.get('adres_budynek') or '').strip()
@@ -67,7 +67,7 @@ def company_context(company, partners=(), contacts=()):
         'extra_document_price': '' if company.get('cena_ponad_limit') is None else str(company['cena_ponad_limit']),
         'tax_office': company.get('urzad_skarbowy') or '',
         'short_name': company.get('nazwa_skrocona') or '', 'regon': company.get('regon') or '',
-        'principal_kind': 'person' if str(company.get('forma_dzialalnosci') or '').casefold() == 'jdg' else 'legal' if company.get('krs') else '',
+        'principal_kind': principal_kind_for_company(company),
         'street': structured_street['street'] if not building or structured_street['building'] == building else company.get('ulica') or '',
         'building': building or structured_street['building'], 'apartment': apartment or structured_street['apartment'],
         'postcode': company.get('kod_pocztowy') or '', 'city': company.get('miasto') or '',
@@ -318,7 +318,6 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
     from datetime import datetime
     datetime.strptime(data.get('agreement_date', ''), '%d.%m.%Y')
     form_keys = [key for key, _, _ in DOCUMENTS if key in selected and key in ('11_upl', '12_pel', '13_pel_z')]
-    form_xml = {}
     if form_keys:
         from app.documents.power_of_attorney import build_xml, resolve_employee, split_street, formatted_address
         data['attorney'] = resolve_employee(data)
@@ -328,8 +327,9 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
             raise ValueError('Uzupełnij kod pocztowy i miejscowość klienta w danych do pełnomocnictwa.')
         data['address'] = formatted_address(data)
         for key in form_keys:
-            if key != '13_pel_z':
-                form_xml[key] = build_xml('UPL' if key == '11_upl' else 'PEL', data)
+            if key == '11_upl':
+                build_xml('UPL', data)
+        data['pel_z_attached'] = '13_pel_z' in form_keys
         if form_renderer is None:
             raise ValueError('Generowanie PDF pełnomocnictw wymaga mechanizmu wydruku aplikacji.')
     destination = Path(destination)
@@ -355,8 +355,8 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
                 from app.documents.pel_z import write_pdf
                 write_pdf(data, pdf, form_renderer)
             else:
-                from app.documents.crd_forms import render_xml_to_print_html
-                form_renderer('html', render_xml_to_print_html('PEL', form_xml[key]), pdf)
+                from app.documents.pel_paper import write_pdf
+                write_pdf(data, pdf, form_renderer)
             if not pdf.is_file() or not PdfReader(pdf).pages:
                 raise RuntimeError('Nie powstał poprawny PDF pełnomocnictwa.')
             form_pdfs.append(pdf)

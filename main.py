@@ -22,9 +22,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QApplication, QDialog)
 import traceback
 
-from app.main_ui import LoginWindow
 from app.utils.i18n import install_polish_translations
-from app.main_ui import OfficeManagerApp
 
 def excepthook(type, value, tb):
     import logging
@@ -49,10 +47,14 @@ if __name__ == "__main__":
             ok = schema_is_current()
             msg = "Baza danych jest aktualna." if ok else "Aktualizacja bazy nie powiodła się."
         except Exception as exc:
+            import logging
+            logging.getLogger('app').exception('database_migration_failed')
             ok, msg = False, f"Błąd aktualizacji bazy:\n{exc}"
         if '--non-interactive' not in sys.argv:
             (QMessageBox.information if ok else QMessageBox.critical)(None, "Aktualizacja bazy", msg)
         sys.exit(0 if ok else 1)
+
+    from app.main_ui import LoginWindow, OfficeManagerApp
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)

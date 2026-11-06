@@ -87,7 +87,7 @@ jobs:
         run: |
           $pgBin = (Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\initdb.exe' | Sort-Object FullName | Select-Object -Last 1).DirectoryName
           if (-not $pgBin) { throw 'PostgreSQL tools missing from runner' }
-          & "$pgBin\initdb.exe" -D "$env:RUNNER_TEMP\biuro-pg" -U biuro -A trust
+          & "$pgBin\initdb.exe" -D "$env:RUNNER_TEMP\biuro-pg" -U biuro -A trust --encoding=UTF8 --locale=C
           if ($LASTEXITCODE) { throw 'initdb failed' }
           & "$pgBin\pg_ctl.exe" -D "$env:RUNNER_TEMP\biuro-pg" -l "$env:RUNNER_TEMP\biuro-pg.log" -o '-h 127.0.0.1 -p 55432' -w start
           & "$pgBin\createdb.exe" -h 127.0.0.1 -p 55432 -U biuro biuro_release_test

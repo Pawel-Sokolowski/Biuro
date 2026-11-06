@@ -50,7 +50,6 @@
   },
   "http://crd.gov.pl/xml/schematy/zewnetrzne/2008/05/09/CountryCode.xsd": {
     "path": "shared/CountryCode.xsd",
-    "sha256": null,
-    "status": "missing"
+    "sha256": "bda9c6135f36fa70b7f395d58c71eaaaebbb078f607762b6bf42981b5d57c365"
   }
 }

@@ -18,12 +18,13 @@ dokumenty można odznaczyć. Opcja dwustronna dodaje pustą stronę między
 dokumentami, jeśli jest potrzebna, aby kolejny dokument zaczynał się na
 nowej kartce. Nie wysyła pliku automatycznie do drukarki.
 
-PDF wymaga zainstalowanego Microsoft Word na Windows lub LibreOffice.
+PDF-y dokumentów Word wymagają zainstalowanego Microsoft Word na Windows lub LibreOffice.
+UPL, PEL i PEL-Z aplikacja tworzy samodzielnie, bez zewnętrznego konwertera.
 Generator zachowuje źródłowy układ Worda, nie przepisuje dokumentów do HTML.
 Konwersja działa w tle. Word uruchamiany jest z wyłączonymi makrami i
 aktualizacją linków. Nie zmienia globalnych ustawień polityki PowerShell;
 polityka organizacji może zablokować automatyzację. Wtedy można użyć
-LibreOffice lub zapisać **Komplet DOCX (ZIP)** bez konwertera PDF.
+LibreOffice lub zapisać **Komplet DOCX + PDF (ZIP)** bez konwertera PDF.
 Różne programy i brakujące czcionki mogą wpływać na podział stron.
 Niezmieniane OWU są wstawiane z dostarczonego przez użytkownika PDF, dzięki
 czemu zachowują jego oryginalny dziewięciostronicowy układ. DOCX OWU jest
@@ -45,39 +46,70 @@ wypowiedzenia zawiera adres biura z kodem 96-515. Te postanowienia/dane
 generator nie poprawia ich samodzielnie. Daty zawarcia powierzenia i umowy
 głównej są zastępowane datami wybranymi w formularzu.
 
-## UPL-1 i PEL
+## UPL-1, PEL i PEL-Z
 
-Można dołączyć sprawdzone PDF-y przyciskiem **Dodaj PDF-y, np. UPL-1 / PEL…**.
-Są dopisywane po dokumentach Word w kolejności wyboru. Ta funkcja nie
-wypełnia automatycznie ich pól i nie nadaje pełnomocnictw w urzędzie/ZUS.
+W zakładce **UPL / PEL** wybierz pracownika jako pełnomocnika. Imię i nazwisko
+pochodzą z jego konta; nie można podstawić innej osoby przez edycję danych
+wydruku. Pracownik jest ponownie sprawdzany przy generowaniu i musi być aktywny.
+Jego adres do korespondencji pochodzi z danych biura w **Ustawienia → Faktury
+i KSeF**, a e-mail jest zawsze `biuro@szczecin-ksiegowosc.pl`, niezależnie od
+prywatnego e-maila pracownika i e-maila sprzedawcy na fakturach. Można tam
+uzupełnić również województwo, powiat i gminę biura. Prywatnego adresu
+pracownika nie używa się w formularzach.
 
-Oficjalne źródła sprawdzone 6 listopada 2026:
+Uzupełnij identyfikator pełnomocnika (PESEL, NIP w UPL lub dokument tożsamości),
+rodzaj mocodawcy, daty i zakres PEL. Zakres nie jest wybierany automatycznie.
+Przesłany XSD UPL wymaga daty urodzenia pełnomocnika; można ją wyliczyć z PESEL
+albo wpisać, gdy używany jest inny identyfikator. Przy zmianie pracownika
+poprzednie identyfikatory są czyszczone. Dane identyfikacyjne wpisane w oknie
+nie są zapisywane do kartoteki pracownika. PESEL przedstawiciela klienta nadal
+pozostaje opcjonalny. Adres klienta ma jeden zestaw pól wspólny dla umów i
+pełnomocnictw.
 
-- [MF: formularze pełnomocnictw, UPL-1(6)](https://podatki.gov.pl/pozostale/pelnomocnictwa/formularze-pelnomocnictwa)
-- [UPL-1(6) PDF](https://podatki.gov.pl/media/nx3lnwfo/upl-1_06-08-2.pdf)
-- [ZUS: PEL, wersja interaktywna i do druku](https://www.zus.pl/wzory-formularzy/pelnomocnictwo/pel-pelnomocnictwo)
+W zakładce **Dokumenty** zaznacz potrzebne pełnomocnictwa:
 
-Użytkownik dostarczył później zestawy CRD: UPL z identyfikatorem
-`2018/11/02/6046` i PEL `2012/11/29/1053`, ich XSL i XSD oraz pięć
-schematów wspólnych i schemat podpisu XML. Zapisano je lokalnie w
-`app/documents/templates/crd/` z katalogiem źródłowych URL-i i sumami SHA-256.
-Ze skopiowanego schematu podpisu usunięto tylko komunikat przeglądarki
-poprzedzający XML, zachowując treść schematu i informację licencyjną.
+- **UPL-1(6)** zachowuje oryginalny dwustronicowy PDF `upl-1_06-04.pdf`
+  dostarczony przez użytkownika. Aplikacja wpisuje dane w sprawdzonym układzie;
+  użytkownik nie tworzy ani nie rozmieszcza pól. Podpisy i uwierzytelnienie
+  pozostają puste. Imiona, nazwiska i funkcje przedstawicieli są drukowane
+  osobno z danych sprawdzonych w oknie. Przesłany starszy XSD wymaga daty
+  uwierzytelnienia w całym bloku podpisów; nie jest ona wymyślana, a ten blok
+  jest pomijany w wewnętrznym niepodpisanym XML.
+- **PEL** jest generowany według przekazanego wzoru XML/XSL CRD
+  `2012/11/29/1053`, z jego pięciostronicową wizualizacją, a nie według innego
+  współczesnego trzystronicowego PDF-u. Użytkownik powinien sprawdzić właściwą
+  wersję przed podpisaniem. Zawartość XML przechodzi pełną walidację XSD przed
+  wizualizacją. Puste strony powstające wyłącznie na końcu wydruku przeglądarki
+  są usuwane; nie usuwa się stron z treścią ani rozdzielających dokumenty.
+- **PEL-Z** używa przesłanego trzystronicowego PDF-u. Aplikacja odczytuje
+  etykiety i wektorowe granice pól tej wersji, wpisując identyfikatory, datę
+  wypełnienia, dane przedstawicieli i ich adresy. Podpisy pozostają puste.
+  W danych reprezentanta można uzupełnić adres, datę urodzenia i dokument
+  tożsamości do PEL-Z. Szablon obsługuje do czterech przedstawicieli; obecne
+  okno umów udostępnia dwóch zgodnie z podstawowymi szablonami umów.
 
-Moduł `crd_forms.py` rozwiązuje zależności wyłącznie z lokalnego katalogu,
-sprawdza wersję XML i udostępnia transformację oficjalnym XSL dopiero po
-pełnej walidacji XSD. To przygotowanie obsługi wzorów, nie gotowe
-automatyczne wypełnianie w oknie kompletu. Nadal brakuje `CountryCode.xsd`,
-importowanego przez `adres.xsd`:
-[plik źródłowy](http://crd.gov.pl/xml/schematy/zewnetrzne/2008/05/09/CountryCode.xsd).
-Walidator jawnie blokuje generowanie wizualizacji przez to API przy
-brakujących zależnościach; nie podstawia uproszczonych schematów. Po
-uzupełnieniu zależności trzeba jeszcze sprawdzić poprawne dokumenty oraz
-aktualność i przydatność dostarczonych wersji przed integracją generatora.
+Wzory PDF UPL i PEL-Z są sprawdzane sumą SHA-256. Nie zastosuje się położenia
+pól do innego pliku lub nieznanej wersji formularza. Tekst jest wektorowy,
+czcionka danych ma 12 pt, z dopasowaniem do szerokości ograniczonych pól.
+E-mail zachowuje dokładną pisownię. Formularze są dopisywane do jednego PDF-u
+po wybranych dokumentach Word; eksport ZIP zawiera DOCX oraz gotowe PDF-y
+pełnomocnictw. Zapis nie wysyła dokumentów, nie podpisuje ich elektronicznie
+ani nie nadaje uprawnień w urzędzie/ZUS.
 
-Przesłany PEL-Z jest trzystronicowym PDF-em bez AcroForm/XFA. Nie ma jeszcze
-obsługi automatycznego wypełniania tego pliku; można dołączyć go jako PDF
-przez istniejący przycisk załączników.
+Wszystkie zależności XSD, w tym `CountryCode.xsd` i schemat podpisu XML, są
+zapisane lokalnie w `app/documents/templates/crd/` z katalogiem źródłowych
+URL-i i sumami kontrolnymi. Schematy UPL `2018/11/02/6046` i PEL
+`2012/11/29/1053` kompilują się w pełni offline. Nie podstawia się uproszczonych
+schematów ani nie pomija walidacji przy brakujących zasobach. Z wklejonego
+schematu podpisu usunięto wyłącznie komunikat przeglądarki, zachowując jego
+zawartość i notę licencyjną. Wewnętrzny XML nie jest eksportowany jako dokument
+przeznaczony do elektronicznego składania.
+
+Można też dołączać własne gotowe PDF-y. Ta opcja nie wypełnia automatycznie
+nieznanych formularzy. Oficjalne źródła wersji formularzy:
+
+- [MF: pełnomocnictwa UPL-1](https://podatki.gov.pl/pozostale/pelnomocnictwa/formularze-pelnomocnictwa)
+- [ZUS: PEL](https://www.zus.pl/wzory-formularzy/pelnomocnictwo/pel-pelnomocnictwo)
 
 ## Wdrożenie i sprawdzenie
 

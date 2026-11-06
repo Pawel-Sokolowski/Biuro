@@ -6,6 +6,7 @@ Missing schema dependencies must never be replaced with permissive placeholders.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -106,3 +107,14 @@ def render_xml_to_html(kind, xml):
     stylesheet = etree.parse(str(RESOURCES / kind / 'styl.xsl'), _parser())
     transform = etree.XSLT(stylesheet, access_control=etree.XSLTAccessControl.DENY_ALL)
     return str(transform(document))
+
+
+def render_xml_to_print_html(kind, xml):
+    """Keep the official layout, omitting the last forced blank browser page."""
+    document = etree.HTML(render_xml_to_html(kind, xml))
+    breaks = [node for node in document.xpath('//*[@style]')
+              if re.search(r'page-break-after\s*:\s*always', node.get('style'), re.I)]
+    if breaks:
+        last = breaks[-1]
+        last.set('style', re.sub(r'page-break-after\s*:\s*always', 'page-break-after:auto', last.get('style'), flags=re.I))
+    return etree.tostring(document, encoding='unicode', method='html')

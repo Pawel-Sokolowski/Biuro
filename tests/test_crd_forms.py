@@ -2,7 +2,10 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from lxml import etree
 
@@ -20,13 +23,11 @@ class CrdResourcesTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), entry['sha256'])
                 etree.parse(str(path), crd._parser())
 
-    def test_complete_transitive_walk_finds_only_missing_country_code(self):
-        expected = ['http://crd.gov.pl/xml/schematy/zewnetrzne/2008/05/09/CountryCode.xsd']
+    def test_all_transitive_dependencies_and_both_full_schemas_are_available_offline(self):
         for kind in crd.VERSIONS:
             with self.subTest(kind=kind):
-                self.assertEqual(crd.missing_dependencies(kind), expected)
-                with self.assertRaisesRegex(crd.MissingSchemaDependency, 'CountryCode.xsd'):
-                    crd.schema(kind)
+                self.assertEqual(crd.missing_dependencies(kind), [])
+                self.assertIsInstance(crd.schema(kind), etree.XMLSchema)
 
     def test_both_official_stylesheets_compile_with_external_access_disabled(self):
         for kind in crd.VERSIONS:
@@ -38,8 +39,18 @@ class CrdResourcesTests(unittest.TestCase):
     def test_unsigned_xml_is_not_rendered_without_full_schema_validation(self):
         for kind in crd.VERSIONS:
             xml = ('<Dokument xmlns="' + crd.VERSIONS[kind] + '"/>').encode()
-            with self.assertRaisesRegex(crd.MissingSchemaDependency, 'CountryCode.xsd'):
+            with self.assertRaises(etree.DocumentInvalid):
                 crd.render_xml_to_html(kind, xml)
+
+    def test_a_missing_dependency_still_blocks_validation_without_network_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            resources = Path(directory) / 'crd'
+            shutil.copytree(crd.RESOURCES, resources)
+            (resources / 'shared/CountryCode.xsd').unlink()
+            with patch.object(crd, 'RESOURCES', resources):
+                for kind in crd.VERSIONS:
+                    with self.assertRaisesRegex(crd.MissingSchemaDependency, 'CountryCode.xsd'):
+                        crd.schema(kind)
 
     def test_wrong_versions_and_external_entities_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'wersję'):

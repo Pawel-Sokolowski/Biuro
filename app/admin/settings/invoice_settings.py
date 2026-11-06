@@ -55,6 +55,9 @@ class InvoiceSettings(QWidget):
             ("Kod pocztowy:", "faktury_sprzedawca_kod"),
             ("Miejscowość:", "faktury_sprzedawca_miasto"),
             ("Kraj:", "faktury_sprzedawca_kraj"),
+            ("Województwo biura (pełnomocnictwa):", "faktury_sprzedawca_wojewodztwo"),
+            ("Powiat biura (pełnomocnictwa):", "faktury_sprzedawca_powiat"),
+            ("Gmina biura (pełnomocnictwa):", "faktury_sprzedawca_gmina"),
         ):
             field = QLineEdit(self.logic.get_setting(key) or "")
             self.seller_fields[key] = field

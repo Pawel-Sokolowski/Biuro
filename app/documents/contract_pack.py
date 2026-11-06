@@ -34,7 +34,7 @@ DOCUMENTS = (
 )
 
 
-def company_context(company, partners=()):
+def company_context(company, partners=(), contacts=()):
     street = str(company.get('ulica') or '').strip()
     building = str(company.get('adres_budynek') or '').strip()
     apartment = str(company.get('adres_lokal') or '').strip()
@@ -62,18 +62,21 @@ def company_context(company, partners=()):
         'extra_document_price': '' if company.get('cena_ponad_limit') is None else str(company['cena_ponad_limit']),
         'tax_office': company.get('urzad_skarbowy') or '',
         'representatives': [], 'partners': partner_data,
+        'representative_candidates': [*partner_data, *[
+            dict(imie_pierwsze=c.get('imie') or '', nazwisko=c.get('nazwisko') or '',
+                 telefon=c.get('telefon') or '', stanowisko=c.get('rola') or '') for c in contacts]],
     }
 
 
 def load_context(company_id, actor_id):
     from app.security.authorization import assigned_company_ids
-    from app.db.dao_companies import get_company, get_partners
+    from app.db.dao_companies import get_company, get_partners, get_contacts
     if not actor_id or company_id not in assigned_company_ids(actor_id):
         raise PermissionError('Brak dostępu do firmy.')
     company = get_company(company_id)
     if not company:
         raise ValueError('Firma nie istnieje.')
-    return company_context(company, get_partners(company_id))
+    return company_context(company, get_partners(company_id), get_contacts(company_id))
 
 
 def _cell(cell, text):
@@ -135,6 +138,14 @@ def fill_template(key, data, destination):
         for index, representative in enumerate(data.get('representatives', ())[:2]):
             for row, col, field in ((7, 1, 'imie_pierwsze'), (7, 3, 'nazwisko'), (8, 1, 'pesel'), (8, 3, 'nr_telefonu')):
                 _cell(table.cell(row + index * 2, col), representative.get(field))
+        roles = []
+        for person in data.get('representatives', ())[:2]:
+            name = ' '.join(str(person.get(key) or '').strip() for key in ('imie_pierwsze', 'nazwisko')).strip()
+            role = str(person.get('stanowisko') or '').strip()
+            if name and role:
+                roles.append(name + ' — ' + role)
+        if roles:
+            _cell(table.cell(6, 0), 'zwanym dalej Zleceniodawcą, reprezentowanym przez:\n' + '; '.join(roles))
         for paragraph in document.paragraphs:
             if paragraph.text.startswith('Zawarta dnia'):
                 _replace(paragraph, '_____________________' if key == '00_framework' else '09.06.2026', data['agreement_date'])

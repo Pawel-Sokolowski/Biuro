@@ -5,6 +5,11 @@ Sprawdź pełną nazwę, adres, identyfikatory, daty, reprezentantów, zakres
 obsługi i parametry usługi. Zmiany w tym oknie dotyczą wyłącznie generowanego
 kompletu, nie zmieniają kartoteki klienta. Wybory firm w programie pokazują
 nazwy skrócone, dokumenty otrzymują pełną nazwę prawną.
+Daty wybiera się z kalendarza z nawigacją miesięcy. Przedstawiciela można
+wybrać spośród osób kontaktowych i wspólników zapisanych przy firmie lub
+wpisać nową osobę. Funkcja (np. Prezes zarządu lub Członek zarządu) jest
+edytowalna i drukuje się przy wskazanym reprezentancie w obu umowach.
+PESEL przedstawiciela jest opcjonalny.
 
 **Generuj komplet PDF…** zapisuje jeden plik w kolejności: umowa ramowa,
 OWU, cennik, powierzenie, lista kontrolna, PEP, uzgodnienie KSeF, klauzula

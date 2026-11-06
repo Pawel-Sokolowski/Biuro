@@ -14,6 +14,7 @@ from app.reports.import_parse import (
     kadry_contract_type,
     iter_invoice_rows,
     iter_work_rows,
+    timer_department,
 )
 from app.reports.reports_logic import _authorized_company_ids
 
@@ -395,9 +396,10 @@ def _live_work(conn, firma_ids: List[int], months: List[str], skip: set) -> List
         f"""
         SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac,
                TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')) AS pracownik_nazwa,
-               c.typ, c.usluga_id, c.sekundy
+               c.typ, c.usluga_id, c.sekundy, u.kategoria AS service_category
         FROM czasomierze c JOIN firmy f ON f.id = c.firma_id
         LEFT JOIN pracownicy p ON p.id = c.pracownik_id
+        LEFT JOIN uslugi_dodatkowe u ON u.id = c.usluga_id
         WHERE c.firma_id IN ({ph_f}) AND c.miesiac IN ({ph_m})
         """,
         [*firma_ids, *months],
@@ -406,7 +408,7 @@ def _live_work(conn, firma_ids: List[int], months: List[str], skip: set) -> List
     for r in rows:
         if (r["firma_id"], r["miesiac"]) in skip:
             continue
-        kadry = r["typ"] == "kadry"
+        kadry = timer_department(r['typ'], r['service_category']) == 'kadry'
         extra = r["typ"] in ("dodatkowe", "ogolne") or bool(r["usluga_id"])
         dzial = ("inne_kadry" if extra else "kadry") if kadry else ("inne_ksiegowosc" if extra else "ksiegowosc")
         result.append({"firma_id": r["firma_id"], "firma_nazwa": r["firma_nazwa"], "miesiac": r["miesiac"],
@@ -430,6 +432,8 @@ def _live_invoices(conn, firma_ids: List[int], months: List[str], skip: set) -> 
         [*firma_ids, *months],
     ).fetchall()
     result = []
+    categories = {row['id']: row['kategoria'] for row in conn.execute(
+        "SELECT id, kategoria FROM uslugi_dodatkowe").fetchall()}
     for r in rows:
         if (r["firma_id"], r["miesiac"]) in skip:
             continue
@@ -438,9 +442,15 @@ def _live_invoices(conn, firma_ids: List[int], months: List[str], skip: set) -> 
         except (TypeError, ValueError):
             continue
         for position in positions if isinstance(positions, list) else []:
+            if not isinstance(position, dict):
+                continue
             kategoria = fold(position.get("kategoria"))
             rodzaj = classify_invoice_item(position.get("nazwa"))
-            if rodzaj == "inne":
+            service_id = str(position.get('usluga_id') or '')
+            if service_id.isdigit():
+                category = kategoria if any(word in kategoria for word in ('kadr', 'plac', 'ksiegow')) else categories.get(int(service_id))
+                rodzaj = 'inne_' + timer_department('', category)
+            elif rodzaj == "inne":
                 rodzaj = "kadry" if "kadr" in kategoria else "ksiegowosc" if "ksiegow" in kategoria else "inne"
             result.append({"firma_id": r["firma_id"], "kontrahent": r["kontrahent"], "miesiac": r["miesiac"],
                            "rodzaj": rodzaj, "wartosc_netto": float(position.get("netto") or 0)})

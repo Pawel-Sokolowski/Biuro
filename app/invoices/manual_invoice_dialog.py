@@ -293,7 +293,12 @@ class ManualInvoiceDialog(QDialog):
         conn = get_conn()
         try:
             like = f"%{term}%"
-            companies = conn.execute("SELECT id, nazwa, nip FROM firmy WHERE nazwa ILIKE %s OR nip ILIKE %s ORDER BY lower(nazwa) LIMIT 30", (like, like)).fetchall()
+            companies = conn.execute(
+                """SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa, nip
+                   FROM firmy WHERE nazwa ILIKE %s OR nazwa_skrocona ILIKE %s OR nip ILIKE %s
+                   ORDER BY lower(COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa)), id LIMIT 30""",
+                (like, like, like),
+            ).fetchall()
         finally:
             conn.close()
         for entity in companies:

@@ -751,6 +751,7 @@ lxml==6.1.3 \
     # via
     #   -r requirements.txt
     #   caldav
+    #   python-docx
 mako==1.4.3 \
     --hash=sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f \
     --hash=sha256:cd6537fe88d5fec315c55c2f8529bc4ce7a9a352ad7db3eeaa6a66e2dd4ec37a
@@ -1085,6 +1086,10 @@ pycparser==3.12 ; implementation_name != 'PyPy' and platform_python_implementati
     --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e \
     --hash=sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6
     # via cffi
+pypdf==6.21.4 \
+    --hash=sha256:33e4fb41ca352810eb4e9838aa0d82d6888a5f8bf682f43e99cce5faa666255c \
+    --hash=sha256:c8817e3f888d47a087872ded69812c1ef30cacb871d6e053e0c00bbaf0bc2163
+    # via -r requirements.txt
 pyqt6==6.11.0 \
     --hash=sha256:0734959955adde095af9a074213a7f73386d1bbbddfc27346b4c0621641a692e \
     --hash=sha256:45dd60aa69976de1918b5ced6b4e7b6a25abd2a919ecef5fd5826ecc76718889 \
@@ -1178,6 +1183,10 @@ python-dateutil==2.9.0.post0 \
     #   -r requirements.txt
     #   icalendar
     #   recurring-ical-events
+python-docx==1.2.0 \
+    --hash=sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7 \
+    --hash=sha256:7bc9d7b7d8a69c9c02ca09216118c86552704edc23bac179283f2e38f86220ce
+    # via -r requirements.txt
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc \
     --hash=sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0
@@ -1417,6 +1426,7 @@ typing-extensions==4.16.0 \
     #   icalendar
     #   psycopg
     #   psycopg-pool
+    #   python-docx
     #   sqlalchemy
     #   winrt-runtime
 tzdata==2026.6 \

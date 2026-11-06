@@ -17,9 +17,11 @@ except ImportError as exc:
 try:
     import qrcode.image.pil
     import lxml.etree
+    import docx
+    import pypdf
 except ImportError as exc:
     raise SystemExit(
-        "Invoice PDF/KSeF dependencies unavailable. Run: "
+        "Invoice/contract PDF dependencies unavailable. Run: "
         "python -m pip install -r requirements.txt"
     ) from exc
 
@@ -28,6 +30,7 @@ APP = ROOT / "app"
 
 datas = [
     (str(APP / "icons"), "app/icons"),
+    (str(APP / "documents" / "templates"), "app/documents/templates"),
     (str(APP / "db" / "migrations"), "app/db/migrations"),
     (str(APP / "invoices" / "schemas"), "app/invoices/schemas"),
 ]

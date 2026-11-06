@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:str="http://crd.gov.pl/xml/schematy/struktura/2009/11/16/" xmlns:meta="http://crd.gov.pl/xml/schematy/meta/2009/11/16/" xmlns:inst="http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/" xmlns:adr="http://crd.gov.pl/xml/schematy/adres/2009/11/09/" xmlns:oso="http://crd.gov.pl/xml/schematy/osoba/2009/11/16/" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:wnio="http://crd.gov.pl/wzor/2018/11/02/6046/" targetNamespace="http://crd.gov.pl/wzor/2018/11/02/6046/" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/struktura/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/struktura/2009/11/16/struktura.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/meta/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/meta/2009/11/16/meta.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/instytucja.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/adres/2009/11/09/" schemaLocation="http://crd.gov.pl/xml/schematy/adres/2009/11/09/adres.xsd"/>
+	<xs:import namespace="http://crd.gov.pl/xml/schematy/osoba/2009/11/16/" schemaLocation="http://crd.gov.pl/xml/schematy/osoba/2009/11/16/osoba.xsd"/>
+	<xs:import namespace="http://www.w3.org/2000/09/xmldsig#" schemaLocation="http://www.w3.org/TR/xmldsig-core/xmldsig-core-schema.xsd"/>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_wnio_NazwaUrzedu_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_wnio_Pobierz_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_wnio_DaneUrzedu_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_type">
+		<xs:sequence>
+			<xs:element name="NazwaUrzedu" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_wnio_NazwaUrzedu_type"/>
+			<xs:element name="Pobierz" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_wnio_Pobierz_type"/>
+			<xs:element name="DaneUrzedu" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_wnio_DaneUrzedu_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorPESEL_wnio_PESEL_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorPESEL_type">
+		<xs:sequence>
+			<xs:element name="PESEL" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorPESEL_wnio_PESEL_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorNIP_wnio_NIP_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorNIP_type">
+		<xs:sequence>
+			<xs:element name="NIP" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorNIP_wnio_NIP_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_IdentyfikatorPESEL_type">
+		<xs:sequence>
+			<xs:element ref="oso:PESEL" minOccurs="0" maxOccurs="unbounded"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_IdentyfikatorNIP_type">
+		<xs:sequence>
+			<xs:element ref="oso:NIP" minOccurs="0" maxOccurs="unbounded"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_DataUrodzenia_type">
+		<xs:restriction base="xs:date"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_Identyfikator_type">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+			<xs:enumeration value="2"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_KrajWydania_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_NumerDokumentu_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_type">
+		<xs:sequence>
+			<xs:element name="IdentyfikatorPESEL" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_IdentyfikatorPESEL_type" minOccurs="0"/>
+			<xs:element name="IdentyfikatorNIP" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_IdentyfikatorNIP_type" minOccurs="0"/>
+			<xs:element name="DataUrodzenia" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_DataUrodzenia_type"/>
+			<xs:element ref="adr:Adres" minOccurs="0" maxOccurs="unbounded"/>
+			<xs:element ref="adr:Kontakt" minOccurs="0" maxOccurs="unbounded"/>
+			<xs:element name="Identyfikator" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_Identyfikator_type"/>
+			<xs:element ref="adr:URIKontakt" minOccurs="0" maxOccurs="unbounded"/>
+			<xs:element name="KrajWydania" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_KrajWydania_type"/>
+			<xs:element name="NumerDokumentu" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_wnio_NumerDokumentu_type"/>
+			<xs:element ref="oso:Nazwisko" minOccurs="0" maxOccurs="unbounded"/>
+			<xs:element ref="oso:Imie" minOccurs="0" maxOccurs="unbounded"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_TypIdentyfikatoraPodatnika_type">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+			<xs:enumeration value="2"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_NumerEgzemplarza_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_LiczbaEgzemplarzy_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_DataUwierzytelnienia_type">
+		<xs:restriction base="xs:date"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_DataPodpisu_type">
+		<xs:restriction base="xs:date"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Podpis3_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Imie3_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Funkcja3_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Nazwisko3_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Podpis2_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Imie2_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Funkcja2_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Nazwisko2_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Podpis1_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Imie1_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Funkcja1_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Nazwisko1_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_type">
+		<xs:sequence>
+			<xs:element ref="adr:Miejscowosc" minOccurs="0" maxOccurs="unbounded"/>
+			<xs:element name="DataUwierzytelnienia" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_DataUwierzytelnienia_type"/>
+			<xs:element name="DataPodpisu" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_DataPodpisu_type"/>
+			<xs:element name="Podpis3" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Podpis3_type"/>
+			<xs:element name="Imie3" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Imie3_type"/>
+			<xs:element name="Funkcja3" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Funkcja3_type"/>
+			<xs:element name="Nazwisko3" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Nazwisko3_type"/>
+			<xs:element name="Podpis2" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Podpis2_type"/>
+			<xs:element name="Imie2" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Imie2_type"/>
+			<xs:element name="Funkcja2" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Funkcja2_type"/>
+			<xs:element name="Nazwisko2" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Nazwisko2_type"/>
+			<xs:element name="Podpis1" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Podpis1_type"/>
+			<xs:element name="Imie1" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Imie1_type"/>
+			<xs:element name="Funkcja1" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Funkcja1_type"/>
+			<xs:element name="Nazwisko1" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_wnio_Nazwisko1_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Waznosc_wnio_DataDo_type">
+		<xs:restriction base="xs:date"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Waznosc_type">
+		<xs:sequence>
+			<xs:element name="DataDo" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Waznosc_wnio_DataDo_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Bezterminowo_type">
+		<xs:list itemType="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Bezterminowo_elements_type"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Bezterminowo_elements_type">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_DataOd_type">
+		<xs:restriction base="xs:date"/>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_type">
+		<xs:sequence>
+			<xs:element name="Waznosc" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Waznosc_type" minOccurs="0"/>
+			<xs:element name="Bezterminowo" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_Bezterminowo_type"/>
+			<xs:element name="DataOd" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_wnio_DataOd_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodmiotZobowiazany_type">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+			<xs:enumeration value="2"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodstawaPrawna_type">
+		<xs:restriction base="str:Tekst2000Typ"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodmiotZagraniczny_type">
+		<xs:restriction base="xs:string"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik4_type">
+		<xs:list itemType="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik4_elements_type"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik4_elements_type">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik5_type">
+		<xs:list itemType="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik5_elements_type"/>
+	</xs:simpleType>
+	<xs:simpleType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik5_elements_type">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="1"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_type">
+		<xs:sequence>
+			<xs:element name="AdresyUrzedow" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_AdresyUrzedow_type" minOccurs="0"/>
+			<xs:element name="IdentyfikatorPESEL" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorPESEL_type" minOccurs="0"/>
+			<xs:element name="IdentyfikatorNIP" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_IdentyfikatorNIP_type" minOccurs="0"/>
+			<xs:element name="Pelnomocnik" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Pelnomocnik_type" minOccurs="0"/>
+			<xs:element name="TypIdentyfikatoraPodatnika" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_TypIdentyfikatoraPodatnika_type"/>
+			<xs:element name="NumerEgzemplarza" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_NumerEgzemplarza_type"/>
+			<xs:element name="LiczbaEgzemplarzy" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_LiczbaEgzemplarzy_type"/>
+			<xs:element name="PodpisWnioskodawcy" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodpisWnioskodawcy_type" minOccurs="0"/>
+			<xs:element name="OkresObowiazywania" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_OkresObowiazywania_type" minOccurs="0"/>
+			<xs:element name="PodmiotZobowiazany" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodmiotZobowiazany_type"/>
+			<xs:element name="PodstawaPrawna" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodstawaPrawna_type"/>
+			<xs:element name="PodmiotZagraniczny" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_PodmiotZagraniczny_type"/>
+			<xs:element name="Naczelnik4" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik4_type"/>
+			<xs:element name="Naczelnik5" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_wnio_Naczelnik5_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="documentSchema_wnio_Dokument_wnio_TrescDokumentu_type">
+		<xs:complexContent>
+			<xs:extension base="str:TrescDokumentuTyp">
+				<xs:sequence>
+					<xs:element name="Wartosc" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_wnio_Wartosc_type"/>
+				</xs:sequence>
+			</xs:extension>
+		</xs:complexContent>
+	</xs:complexType>
+	<xs:complexType name="documentSchema_wnio_Dokument_type">
+		<xs:sequence>
+			<xs:element name="OpisDokumentu" type="str:OpisDokumentuTyp"/>
+			<xs:element name="DaneDokumentu" type="str:DaneDokumentuTyp"/>
+			<xs:element name="TrescDokumentu" type="wnio:documentSchema_wnio_Dokument_wnio_TrescDokumentu_type"/>
+			<xs:element ref="ds:Signature" minOccurs="0" maxOccurs="unbounded"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="documentSchema_type">
+		<xs:sequence>
+			<xs:element name="Dokument" type="wnio:documentSchema_wnio_Dokument_type"/>
+		</xs:sequence>
+	</xs:complexType>
+	<xs:element name="Dokument" type="wnio:documentSchema_wnio_Dokument_type"/>
+</xs:schema>

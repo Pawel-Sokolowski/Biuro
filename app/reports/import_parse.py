@@ -139,9 +139,21 @@ def kadry_contract_type(pozycja: Any) -> Optional[str]:
 
 def invoice_item_dzial(rodzaj: str) -> str:
     """Do którego działu liczymy przychód z pozycji faktury."""
+    if rodzaj in ("inne_kadry", "inne_ksiegowosc"):
+        return rodzaj
     if rodzaj in ("kadry", "zdrowotna"):
         return "kadry"
     return "inne_ksiegowosc" if rodzaj == "inne" else "ksiegowosc"
+
+
+def timer_department(timer_type, service_category):
+    """A linked service's category takes precedence over the employee/timer type."""
+    category = fold(service_category)
+    if 'kadr' in category or 'plac' in category:
+        return 'kadry'
+    if 'ksiegow' in category:
+        return 'ksiegowosc'
+    return 'kadry' if timer_type in ('kadry', 'inne_kadry') else 'ksiegowosc'
 
 
 def month_from_invoice_number(number: Any) -> Optional[str]:

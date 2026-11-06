@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.companies.company_names import company_display_name
 from app.db.dao_companies import list_companies
 from app.db.dao_employees import list_employees
 from app.db.dao_tasks import TASK_STATUSES, delete_tasks, list_tasks, save_task, set_tasks_status
@@ -259,7 +260,7 @@ class TaskDialog(QDialog):
         self.company = QComboBox()
         self.company.addItem("Brak przypisania", None)
         for company in companies:
-            self.company.addItem(company["nazwa"], company["id"])
+            self.company.addItem(company_display_name(company), company["id"])
         self.company.setCurrentIndex(max(0, self.company.findData(self.task.get("firma_id"))))
         self.employee = QComboBox()
         self.employee.addItem("Brak przypisania", None)

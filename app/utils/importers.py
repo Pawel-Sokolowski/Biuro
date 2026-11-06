@@ -545,10 +545,8 @@ def import_companies_from_excel_file_payloads(filepath: str) -> Tuple[List[Dict[
 
         payloads.append(payload)
 
-    known = set(_CONSUMED_HEADERS)
-    unknown = [h for h in headers if h and re.sub(r"\s+", " ", h).strip().casefold() not in known]
-    if payloads and unknown:
-        warnings.append("Nie rozpoznano kolumn (dane z nich nie zostaną zaimportowane): " + ", ".join(unknown))
+    if payloads:
+        warnings.extend(_unknown_column_warnings(headers))
 
     return payloads, warnings
 
@@ -563,6 +561,12 @@ def _pricing_key(prefix: str, values: Dict[str, Any]) -> str:
 
 
 _CONSUMED_HEADERS: set = set()
+
+
+def _unknown_column_warnings(headers):
+    unknown = [h for h in headers if h and re.sub(r"\s+", " ", h).strip().casefold() not in _CONSUMED_HEADERS]
+    return (["Nie rozpoznano kolumn (dane z nich nie zostaną zaimportowane): " + ", ".join(unknown)]
+            if unknown else [])
 
 _VAT_ACTIVE_VALUES = {
     "tak", "t", "true", "yes", "y", "x", "1", "czynny", "vat czynny", "czynna",
@@ -838,7 +842,10 @@ def _apply_payload_to_db(
         company_id = row_db[0] if row_db else None
 
     if company_id is None:
-        cursor.execute("SELECT id FROM firmy WHERE nazwa = %s", (company_name,))
+        # Equal legal names do not make companies with different NIPs identical.
+        # A named legacy row without a NIP can still acquire its identifier.
+        cursor.execute("SELECT id FROM firmy WHERE nazwa = %s "
+                       "AND (%s = '' OR COALESCE(TRIM(nip), '') = '')", (company_name, normalized_nip))
         row_db = cursor.fetchone()
         company_id = row_db[0] if row_db else None
 
@@ -964,6 +971,9 @@ def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = Non
             if not any(value not in (None, "") for value in row):
                 continue
             payload = _build_payload_from_row(headers, header_index, row)
+            if not str(payload.get('nazwa') or '').strip():
+                warnings.append(f'Wiersz {row_number}: pominięto pustą nazwę firmy.')
+                continue
             if _apply_payload_to_db(cursor, payload, row_number, warnings):
                 created_count += 1
             else:
@@ -971,6 +981,8 @@ def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = Non
             if row_number % 20 == 0:
                 conn.commit()
 
+        if created_count or updated_count:
+            warnings.extend(_unknown_column_warnings(headers))
         conn.commit()
         result = {"created": created_count, "updated": updated_count, "warnings": warnings}
         record_import("firmy", filepath, result)
@@ -991,7 +1003,7 @@ def save_imported_payload(
     try:
         created = _apply_payload_to_db(cursor, payload, row_number, warnings)
         conn.commit()
-        return {"created": int(created), "updated": int(not created), "warnings": warnings}
+        return {"created": int(created), "updated": int(not created and bool(str(payload.get('nazwa') or '').strip())), "warnings": warnings}
     finally:
         conn.close()
 
@@ -1025,6 +1037,9 @@ def import_companies_fast_from_excel_file(
         total = len(data_rows)
         for index, (row_number, row) in enumerate(data_rows, start=1):
             payload = _build_payload_from_row(headers, header_index, row)
+            if not str(payload.get('nazwa') or '').strip():
+                warnings.append(f'Wiersz {row_number}: pominięto pustą nazwę firmy.')
+                continue
             head = f"Firma {index} z {total}: {payload.get('nazwa') or ''}".rstrip(": ")
             report(f"{head}\nCEIDG/KRS/GUS: pobieranie...")
             problem = enrich_payload(payload)
@@ -1058,6 +1073,8 @@ def import_companies_fast_from_excel_file(
                 conn = None
             report(f"{head}\n{registry}\nStatus w CEIDG: {ceidg_state}\nVAT: {vat_state}")
 
+        if created or updated:
+            warnings.extend(_unknown_column_warnings(headers))
         result = {"created": created, "updated": updated, "warnings": warnings}
         record_import("firmy_fast", filepath, result)
         return result

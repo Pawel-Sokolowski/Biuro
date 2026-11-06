@@ -449,6 +449,7 @@ class ReportsPage(QWidget):
                 f"{item['koszt']:.2f} zł", f"{item['zysk']:.2f} zł"]
 
     def _render_import_report(self, rows):
+        rows = sorted(rows, key=lambda r: (r['zysk'], r['klient'].casefold(), r['miesiac'], r['pracownik']))
         tables = {"ksiegowosc": self.import_table, "kadry": self.import_table_kadry}
         totals = {}
         for sekcja, table in tables.items():
@@ -489,7 +490,7 @@ class ReportsPage(QWidget):
             cur[1] += koszt
         self._fill_money_table(self.company_table, [
             [klient, SEKCJA_LABELS[sekcja], v[0], v[1]]
-            for (klient, sekcja), v in sorted(per_company.items(), key=lambda kv: (kv[0][0], kv[0][1]))
+            for (klient, sekcja), v in per_company.items()
         ])
         months = sorted({item["miesiac"] for item in rows})
         self.chart_top.setChart(self._profit_chart("Kadry — zarobek vs koszt i czas", rows, "kadry", months))
@@ -505,7 +506,7 @@ class ReportsPage(QWidget):
     def _fill_money_table(table, rows):
         """Wiersze: [etykiety..., Fv, koszt]; kolumna zysku jest liczona."""
         table.setRowCount(0)
-        for values in rows:
+        for values in sorted(rows, key=lambda r: (round(r[-2] - r[-1], 2), tuple(str(v).casefold() for v in r[:-2]))):
             *labels, cena, koszt = values
             zysk = cena - koszt
             row = table.rowCount()
@@ -935,7 +936,8 @@ class ReportsPage(QWidget):
                     def rows():
                         from app.reports.import_dao import build_profitability_report
                         agg = ReportsPage._aggregate_profit(build_profitability_report(selected, months, actor))
-                        for (company, month, section), (price, cost) in sorted(agg.items()):
+                        for (company, month, section), (price, cost) in sorted(
+                                agg.items(), key=lambda kv: (round(kv[1][0] - kv[1][1], 2), kv[0])):
                             yield [company, month, SEKCJA_LABELS[section], round(price, 2), round(cost, 2), round(price-cost, 2)]
                 else:
                     title = "Raport"

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from app.companies.company_names import company_display_name
 from app.db import dao_calendar
 from app.db.dao_companies import get_employees_list, list_companies
 from app.kalendarz import caldav_sync, google_sync, ics_import
@@ -51,7 +52,7 @@ class EventDialog(QDialog):
         self.company = QComboBox()
         self.company.addItem("— brak —", None)
         for c in list_companies(pracownik_id):
-            self.company.addItem(c.get("nazwa") or "", c["id"])
+            self.company.addItem(company_display_name(c), c["id"])
         idx = self.company.findData(self.event.get("firma_id"))
         self.company.setCurrentIndex(max(idx, 0))
 

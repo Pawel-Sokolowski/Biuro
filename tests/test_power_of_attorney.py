@@ -151,18 +151,24 @@ class PowerOfAttorneyXmlTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'inną wersję'):
                 pel_paper.overlay_commands(values)
 
-    def test_modern_pel_case_leaves_validity_dates_empty_and_ezus_is_explicit(self):
+    def test_modern_pel_always_grants_full_zus_and_ezus_and_ignores_obsolete_restrictions(self):
         from app.documents.pel_paper import overlay_commands
-        values = dict(data(), pel_scope='case', pel_case='Rozliczenie konta', authority_until='30.11.2026')
-        pages = overlay_commands(values)
-        self.assertFalse(any(y == 252.1 for x, y, t, w in pages[2]['text']))
-        self.assertFalse(any(t == 'X' for x, y, t, w in pages[2]['text']))
-        self.assertTrue(any(t == 'ROZLICZENIE KONTA' for x, y, t, w in pages[1]['text']))
-        pages = overlay_commands(dict(values, pel_ezus='correspondence', pel_ezus_requests='RWN', pel_pit=True))
-        self.assertIn((314.64, 378.7, 'X', 12), pages[2]['text'])
-        self.assertTrue(any(t == 'RWN' for x, y, t, w in pages[2]['text']))
-        with self.assertRaisesRegex(ValueError, 'eZUS'):
-            overlay_commands(dict(values, pel_ezus='invalid'))
+        for principal in ('person', 'legal', 'other'):
+            for old_scope in ('', 'case', 'receive', 'all'):
+                with self.subTest(principal=principal, old_scope=old_scope):
+                    values = dict(data(), principal_kind=principal, principal_first_name='Anna', principal_surname='Nowak',
+                                  pel_scope=old_scope, pel_case='OLD CASE', authority_until='30.11.2026',
+                                  pel_ezus='correspondence', pel_ezus_requests='OLD RESTRICTION')
+                    pages = overlay_commands(values)
+                    self.assertIn((46.77, 270.5, 'X', 12), pages[1]['text'])
+                    self.assertNotIn((46.77, 117.8, 'X', 12), pages[1]['text'])
+                    marks = {(x, y) for x, y, t, w in pages[2]['text'] if t == 'X'}
+                    expected = {(46.77, 733), (46.77, 499.1), (46.77, 447.3)} if principal == 'person' else {(46.77, 733), (46.77, 378.7)}
+                    self.assertEqual(marks, expected)
+                    self.assertTrue(any(y == 252.1 for x, y, t, w in pages[2]['text']))
+                    self.assertFalse(any('OLD' in t for p in pages for x, y, t, w in p['text']))
+        pages = overlay_commands(dict(data(), pel_pit=True))
+        self.assertIn((46.77, 191.1, 'X', 12), pages[1]['text'])
 
     def test_modern_pel_requires_representative_and_marks_only_actual_pel_z_attachment(self):
         from app.documents.pel_paper import overlay_commands

@@ -69,7 +69,7 @@ class ContractPackDialog(QDialog):
             role.setEditable(True)
             role.addItems(['', 'Prezes zarządu', 'Członek zarządu', 'Wiceprezes zarządu', 'Prokurent', 'Właściciel', 'Pełnomocnik'])
             fields['stanowisko'] = role
-            reps.addRow('Funkcja / rola', role)
+            reps.addRow('Stanowisko / funkcja', role)
             for field, label in (('birth_date', 'Data urodzenia do PEL / PEL-Z, gdy brak PESEL'),
                                  ('identity_number', 'Dokument tożsamości do PEL / PEL-Z, gdy brak PESEL'),
                                  ('street', 'Adres przedstawiciela do PEL / PEL-Z — ulica'), ('building', 'Numer domu'),
@@ -136,25 +136,16 @@ class ContractPackDialog(QDialog):
         self.authority_until = self._date(powers, 'Pełnomocnictwo ważne do')
         self.authority_until.setEnabled(False)
         self.authority_indefinite.toggled.connect(lambda checked: self.authority_until.setEnabled(not checked))
-        self.pel_scope = QComboBox()
-        for label, value in (('Wybierz zakres PEL', ''), ('Wszelkie czynności w relacjach z ZUS', 'all'),
-                             ('Odbiór korespondencji', 'receive'), ('Odbiór i wysyłanie korespondencji', 'correspondence'),
-                             ('Określona sprawa', 'case')):
-            self.pel_scope.addItem(label, value)
-        powers.addRow('Zakres PEL', self.pel_scope)
-        self._field(powers, 'pel_case', 'Opis sprawy (jeżeli wybrano)')
-        self.pel_ezus = QComboBox()
-        for label, value in (('Bez dostępu do eZUS', ''), ('Płatnik składek — pełny dostęp', 'full'),
-                             ('Płatnik składek — tylko korespondencja', 'correspondence'),
-                             ('Płatnik składek — tylko E-ZLA', 'ezla')):
-            self.pel_ezus.addItem(label, value)
-        powers.addRow('Dostęp do eZUS (osobne upoważnienie)', self.pel_ezus)
-        self._field(powers, 'pel_ezus_requests', 'Ograniczenie korespondencji eZUS do typów wniosków (opcjonalnie)')
+        powers.addRow('Zakres PEL', QLabel('Załatwianie spraw w ZUS oraz przez portal eZUS — bez ograniczeń'))
+        roles_notice = QLabel('JDG / osoba fizyczna: Ubezpieczony i Płatnik składek. '
+                              'Spółki i pozostałe podmioty: Płatnik składek w sekcji reprezentowanego podmiotu.')
+        roles_notice.setWordWrap(True)
+        powers.addRow('Role eZUS', roles_notice)
         self.pel_pit = QCheckBox('Upoważnienie do otrzymywania deklaracji PIT z ZUS')
         powers.addRow(self.pel_pit)
         powers_notice = QLabel('UPL korzysta z przesłanego druku UPL-1(6), a PEL z trzystronicowego PDF 579/26. '
                                'Dla spółki dane osoby udzielającej PEL pochodzą z pierwszego przedstawiciela. '
-                               'Przy wielu przedstawicielach wybierz też PEL-Z. Dla konkretnej sprawy PEL daty obowiązywania pozostają puste zgodnie z drukiem. '
+                               'Przy wielu przedstawicielach wybierz też PEL-Z. Stanowisko / funkcję wybierzesz przy przedstawicielu. '
                                'Sprawdź podgląd i właściwą wersję formularza przed podpisaniem. Podpisy pozostają puste.')
         powers_notice.setWordWrap(True)
         powers.addRow(powers_notice)
@@ -293,7 +284,7 @@ class ContractPackDialog(QDialog):
                                     **{key: w.text().strip() for key, w in self.attorney_fields.items()}),
                       authority_from=self.authority_from.date().toString('dd.MM.yyyy'),
                       authority_until='' if self.authority_indefinite.isChecked() else self.authority_until.date().toString('dd.MM.yyyy'),
-                      pel_scope=self.pel_scope.currentData(), pel_ezus=self.pel_ezus.currentData(),
+                      pel_scope='all', pel_ezus='full',
                       pel_pit=self.pel_pit.isChecked())
         return values
 

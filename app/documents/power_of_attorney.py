@@ -61,7 +61,7 @@ def resolve_employee(data):
     office = office_address()
     if not office['street'] or not office['postcode'] or not office['city']:
         raise ValueError('Uzupełnij firmowy adres, kod i miejscowość w ustawieniach danych sprzedawcy.')
-    attorney = {key: selected.get(key) or '' for key in ('pesel', 'nip', 'birth_date', 'identity_number', 'identity_country', 'electronic_address', 'identity_type')}
+    attorney = {key: selected.get(key) or '' for key in ('pesel', 'nip', 'birth_date', 'identity_number', 'identity_country', 'identity_type')}
     attorney['identity_type'] = attorney.get('identity_type') or '1'
     attorney.update(office, employee_id=employee['id'], imie_pierwsze=employee['imie'], nazwisko=employee['nazwisko'])
     # A private employee e-mail/address is never copied into correspondence fields.
@@ -110,6 +110,7 @@ def principal_kind_for_company(company):
 def reviewed_data(data, kind):
     attorney = dict(data.get('attorney') or {})
     attorney['email'] = OFFICE_EMAIL
+    attorney['electronic_address'] = ''
     for key in ('imie_pierwsze', 'nazwisko'):
         if not str(attorney.get(key) or '').strip():
             raise ValueError('Uzupełnij imię i nazwisko pełnomocnika.')
@@ -142,9 +143,9 @@ def reviewed_data(data, kind):
     if principal_kind == 'person' and not (data.get('principal_first_name') and data.get('principal_surname')):
         raise ValueError('Dla osoby fizycznej uzupełnij imię i nazwisko mocodawcy.')
     start = _date(data.get('authority_from') or data.get('agreement_date'))
-    end = _date(data['authority_until']) if data.get('authority_until') else ''
-    if end and end < start:
-        raise ValueError('Data końca pełnomocnictwa nie może być wcześniejsza niż początek.')
+    # Office authorizations always remain valid until revoked, including when
+    # an older caller supplies a previously selected expiry date.
+    end = ''
     if kind in ('PEL', 'PEL-PAPER') and data.get('pel_scope') not in ('all', 'receive', 'correspondence', 'case'):
         raise ValueError('Wybierz zakres pełnomocnictwa PEL.')
     if kind == 'PEL' and len(str(data.get('short_name') or '')) > 31:

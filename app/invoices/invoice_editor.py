@@ -206,6 +206,7 @@ class InvoiceEditorDialog(QDialog):
                 termin_platnosci=self.termin.date().toString("yyyy-MM-dd"),
                 przyczyna_korekty=self.przyczyna.text().strip(),
                 podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
+                expected_revision=self.invoice.get('revision'),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Faktura", str(exc))

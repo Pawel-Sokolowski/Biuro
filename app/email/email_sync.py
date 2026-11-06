@@ -136,7 +136,21 @@ def _select_folder(
 
 
 def _supports_move(imap_conn: imaplib.IMAP4) -> bool:
-    return "MOVE" in getattr(imap_conn, "capabilities", ())
+    return 'MOVE' in _capabilities(imap_conn)
+
+
+def _capabilities(conn):
+    return {value.decode('ascii', 'replace').upper() if isinstance(value, bytes) else str(value).upper()
+            for value in getattr(conn, 'capabilities', ())}
+
+
+def _expunge_selected(conn, uids):
+    # Without UIDPLUS, leave the selected messages flagged Deleted. A plain
+    # EXPUNGE would also remove mail marked by another client in this folder.
+    if 'UIDPLUS' in _capabilities(conn):
+        typ, _ = conn.uid('EXPUNGE', uids)
+        if typ != 'OK':
+            raise RuntimeError('Nie udało się zatwierdzić usunięcia wybranych wiadomości.')
 
 
 class _Session:
@@ -1004,13 +1018,14 @@ def move_message(
         conn = session.conn
         if _supports_move(conn):
             typ, _ = conn.uid("MOVE", uid, quote_mailbox(dest_folder))
-            if typ == "OK":
-                return True
+            return typ == 'OK'
         typ, _ = conn.uid("COPY", uid, quote_mailbox(dest_folder))
         if typ != "OK":
             return False
-        conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
-        conn.expunge()
+        typ, _ = conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
+        if typ != 'OK':
+            raise RuntimeError('Wiadomość została skopiowana, ale nie usunięto jej z folderu źródłowego. Odśwież widok przed kolejną operacją.')
+        _expunge_selected(conn, uid)
         return True
 
 
@@ -1028,7 +1043,7 @@ def delete_message(
         typ, _ = session.conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
         if typ != "OK":
             return False
-        session.conn.expunge()
+        _expunge_selected(session.conn, uid)
         return True
 
 def _store_folders(

@@ -5,6 +5,8 @@ import hashlib
 import re
 import unicodedata
 from typing import Any, Dict, Iterable, List, Optional
+from decimal import Decimal
+from app.utils.money import allocate_money, decimal_amount, money
 
 MIN_YEAR = 2026
 KADRY_EMPLOYEE_MARKER = "czajkowska"
@@ -431,6 +433,7 @@ def compute_employee_report(
     counts = counts or {}
     names: Dict[Any, str] = {}
     hours: Dict[tuple, Dict[str, Dict[str, int]]] = {}
+    employees = {}
     price: Dict[tuple, Dict[str, float]] = {}
 
     for w in work:
@@ -438,7 +441,10 @@ def compute_employee_report(
             continue
         names.setdefault(w["firma_id"], w.get("firma_nazwa"))
         key = (dzial_sekcja(w["dzial"]), w["firma_id"], w["miesiac"])
-        emp = (w.get("pracownik_nazwa") or "").strip() or NO_EMPLOYEE
+        label = (w.get("pracownik_nazwa") or "").strip() or NO_EMPLOYEE
+        employee_id = w.get('pracownik_id')
+        emp = f'id:{employee_id}' if employee_id is not None else 'name:' + fold(label)
+        employees[emp] = (employee_id, label)
         slot = hours.setdefault(key, {}).setdefault(emp, {"glowny": 0, "dodatkowy": 0})
         kind = "dodatkowy" if w["dzial"] in ("inne_ksiegowosc", "inne_kadry") else "glowny"
         slot[kind] += int(w.get("sekundy") or 0)
@@ -454,8 +460,8 @@ def compute_employee_report(
         if rodzaj == "zdrowotna" and not has_time("kadry", inv["firma_id"], inv["miesiac"]):
             sekcja, dzial = "ksiegowosc", "ksiegowosc"
         kind = "dodatkowy" if dzial in ("inne_ksiegowosc", "inne_kadry") else "glowny"
-        slot = price.setdefault((sekcja, inv["firma_id"], inv["miesiac"]), {"glowny": 0.0, "dodatkowy": 0.0})
-        slot[kind] += float(inv.get("wartosc_netto") or 0)
+        slot = price.setdefault((sekcja, inv["firma_id"], inv["miesiac"]), {"glowny": Decimal(0), "dodatkowy": Decimal(0)})
+        slot[kind] += decimal_amount(inv.get("wartosc_netto") or 0)
 
     result = []
     for key in set(hours) | set(price):
@@ -464,28 +470,31 @@ def compute_employee_report(
             continue
         per_emp = hours.get(key) or {NO_EMPLOYEE: {"glowny": 0, "dodatkowy": 0}}
         cena = price.get(key, {"glowny": 0.0, "dodatkowy": 0.0})
-        share_main = _shares(per_emp, "glowny")
-        share_extra = _shares(per_emp, "dodatkowy")
+        share_main = allocate_money(cena['glowny'], _shares(per_emp, "glowny"))
+        share_extra = allocate_money(cena['dodatkowy'], _shares(per_emp, "dodatkowy"))
         for emp, sek in per_emp.items():
+            employee_id, employee_name = employees.get(emp, (None, NO_EMPLOYEE))
             total_sek = sek["glowny"] + sek["dodatkowy"]
-            koszt = total_sek / 3600 * float(rates.get(fold(emp), 0) or 0)
-            cena_glowna = cena["glowny"] * share_main[emp]
-            cena_dod = cena["dodatkowy"] * share_extra[emp]
+            rate = rates.get(employee_id, rates.get(fold(employee_name), 0))
+            koszt = money(Decimal(total_sek) / 3600 * decimal_amount(rate or 0))
+            cena_glowna = share_main[emp]
+            cena_dod = share_extra[emp]
             result.append({
                 "sekcja": sekcja,
                 "firma_id": firma_id,
                 "klient": names.get(firma_id) or "",
                 "miesiac": miesiac,
                 "ilosc": int(counts.get(key, 0)),
-                "pracownik": emp,
+                "pracownik": employee_name,
+                "pracownik_id": employee_id,
                 "sek_glowny": sek["glowny"],
-                "cena_glowna": round(cena_glowna, 2),
+                "cena_glowna": float(cena_glowna),
                 "sek_dodatkowy": sek["dodatkowy"],
-                "cena_dodatkowa": round(cena_dod, 2),
+                "cena_dodatkowa": float(cena_dod),
                 "sekundy": total_sek,
-                "cena": round(cena_glowna + cena_dod, 2),
-                "koszt": round(koszt, 2),
-                "zysk": round(cena_glowna + cena_dod - koszt, 2),
+                "cena": float(cena_glowna + cena_dod),
+                "koszt": float(koszt),
+                "zysk": float(cena_glowna + cena_dod - koszt),
             })
     result.sort(key=lambda r: (r["sekcja"], fold(r["klient"]), r["miesiac"], fold(r["pracownik"])))
     return result

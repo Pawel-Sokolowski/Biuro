@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
-    InvoiceLockedError, can_access_invoice, create_correction, delete_draft_invoice,
+    InvoiceLockedError, InvoiceConflictError, can_access_invoice, create_correction, delete_draft_invoice,
     delete_issued_invoice, get_invoice_by_id, get_invoice_positions, list_invoices, mark_exported, set_ksef_number,
     update_invoice_draft,
     validate_invoice_extra_services_ready,
@@ -1264,6 +1264,7 @@ class FakturyPage(QWidget):
 
     def _show_draft_positions(self):
         self._shown_draft_id = None
+        self._shown_draft_revision = None
         self._set_inline_enabled(False)
         self.positions_table.blockSignals(True)
         self.positions_table.setRowCount(0)
@@ -1277,6 +1278,7 @@ class FakturyPage(QWidget):
             if not invoice or invoice.get("eksportowana") or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
                 return
             self._shown_draft_id = ids[0]
+            self._shown_draft_revision = invoice.get('revision')
             positions = [normalize_position(p) for p in get_invoice_positions(ids[0])]
             for position in positions:
                 row = self.positions_table.rowCount()
@@ -1313,7 +1315,10 @@ class FakturyPage(QWidget):
                              data_sprzedazy=header.get("data_sprzedazy", invoice.get("data_sprzedazy")),
                              termin_platnosci=header.get("termin_platnosci", invoice.get("termin_platnosci")),
                              przyczyna_korekty=header.get("przyczyna_korekty", invoice.get("przyczyna_korekty")),
-                             podstawa_zwolnienia=header.get("podstawa_zwolnienia", invoice.get("podstawa_zwolnienia")))
+                             podstawa_zwolnienia=header.get("podstawa_zwolnienia", invoice.get("podstawa_zwolnienia")),
+                             expected_revision=self._shown_draft_revision)
+        if self._shown_draft_revision is not None:
+            self._shown_draft_revision += 1
         self.refresh()
         self._select_draft(invoice_id)
         return True
@@ -1340,6 +1345,8 @@ class FakturyPage(QWidget):
             position[field] = value
             positions[index.row()] = normalize_position(position)
             self._save_inline_positions(positions)
+        except InvoiceConflictError as exc:
+            QMessageBox.warning(self, 'Konflikt zmian', str(exc))
         except (TypeError, ValueError, InvoiceLockedError) as exc:
             QMessageBox.warning(self, "Pozycja faktury", f"Nie udało się zapisać pozycji: {exc}")
             self._show_draft_positions()

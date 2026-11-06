@@ -17,6 +17,10 @@ class InvoiceLockedError(ValueError):
     """Próba zmiany faktury, która została już wystawiona (wyeksportowana)."""
 
 
+class InvoiceConflictError(ValueError):
+    """The caller edited a revision that has since been replaced."""
+
+
 def _now_date() -> str:
     return datetime.now().strftime(DATE_FMT)
 
@@ -1023,7 +1027,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 # Lista, edycja, korekty i KSeF
 # ---------------------------------------------------------------------------
 INVOICE_LIST_SQL = """
-    SELECT f.id, f.firma_id, f.kontrahent_id, f.reczna,
+    SELECT f.id, f.firma_id, f.kontrahent_id, f.reczna, f.revision,
            COALESCE(NULLIF(f.nabywca_pelna, ''), c.nazwa, k.nazwa, '?') AS firma_nazwa,
            COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?') AS nazwa_skrocona,
            f.miesiac, f.rodzaj, f.numer, f.status,
@@ -1110,6 +1114,7 @@ def update_invoice_draft(
     termin_platnosci: Optional[str] = None,
     przyczyna_korekty: Optional[str] = None,
     podstawa_zwolnienia: Optional[str] = None,
+    expected_revision: Optional[int] = None,
 ) -> Tuple[float, float]:
     """Zapisuje pozycje i nagłówek roboczej faktury; zwraca (netto, brutto)."""
     invoice = get_invoice_by_id(invoice_id)
@@ -1117,6 +1122,8 @@ def update_invoice_draft(
         raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
     if invoice.get("eksportowana"):
         raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
+    if expected_revision is None:
+        expected_revision = invoice['revision']
     normalized = [normalize_position(p) for p in pozycje]
     if not normalized:
         raise ValueError("Faktura musi zawierać co najmniej jedną pozycję.")
@@ -1129,6 +1136,8 @@ def update_invoice_draft(
         locked = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not locked or locked["eksportowana"]:
             raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
+        if locked['revision'] != expected_revision:
+            raise InvoiceConflictError('Faktura została zmieniona przez innego pracownika. Twoje zmiany pozostają w edytorze. Porównaj je z aktualną fakturą przed ponownym zapisem.')
         invoice = dict(locked)
         updated = conn.execute(
             """

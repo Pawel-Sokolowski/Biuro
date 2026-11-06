@@ -253,7 +253,7 @@ class CompaniesSettings(QWidget):
                     return default
 
             fid = get_field(f, "id", "")
-            nazwa = get_field(f, "nazwa", "")
+            nazwa = str(get_field(f, "nazwa_skrocona", "") or "").strip() or get_field(f, "nazwa", "")
             nip = get_field(f, "nip", "")
             miasto = get_field(f, "miasto", "")
 

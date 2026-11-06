@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
+from app.companies.company_names import company_display_name
 from app.db.dao_companies import (
     list_companies,
     get_companies_filtered,
@@ -133,7 +134,9 @@ class CompanyUI(QWidget):
             self.table.insertRow(row)
 
             self.table.setItem(row, 0, QTableWidgetItem(str(r.get("id", ""))))
-            self.table.setItem(row, 1, QTableWidgetItem(r.get("nazwa") or ""))
+            name_item = QTableWidgetItem(company_display_name(r))
+            name_item.setToolTip(r.get("nazwa") or "")
+            self.table.setItem(row, 1, name_item)
             self.table.setItem(row, 2, QTableWidgetItem(r.get("nip") or ""))
             self.table.setItem(row, 3, QTableWidgetItem(r.get("miasto") or ""))
             self.table.setItem(row, 4, QTableWidgetItem(r.get("status") or ""))

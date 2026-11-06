@@ -20,3 +20,8 @@ def sole_proprietor_short_name(first_name, surname):
     if not first_name or not surname:
         return ""
     return f"{surname} {first_name}"
+
+
+def company_display_name(company):
+    """Use the stored short name in navigation; keep legal names for documents."""
+    return str(company.get("nazwa_skrocona") or "").strip() or str(company.get("nazwa") or "").strip()

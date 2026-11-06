@@ -396,7 +396,7 @@ def _live_work(conn, firma_ids: List[int], months: List[str], skip: set) -> List
         f"""
         SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac,
                TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')) AS pracownik_nazwa,
-               c.typ, c.usluga_id, c.sekundy, u.kategoria AS service_category
+               c.typ, c.usluga_id, c.sekundy, c.pracownik_id, u.kategoria AS service_category
         FROM czasomierze c JOIN firmy f ON f.id = c.firma_id
         LEFT JOIN pracownicy p ON p.id = c.pracownik_id
         LEFT JOIN uslugi_dodatkowe u ON u.id = c.usluga_id
@@ -412,7 +412,7 @@ def _live_work(conn, firma_ids: List[int], months: List[str], skip: set) -> List
         extra = r["typ"] in ("dodatkowe", "ogolne") or bool(r["usluga_id"])
         dzial = ("inne_kadry" if extra else "kadry") if kadry else ("inne_ksiegowosc" if extra else "ksiegowosc")
         result.append({"firma_id": r["firma_id"], "firma_nazwa": r["firma_nazwa"], "miesiac": r["miesiac"],
-                       "pracownik_nazwa": r["pracownik_nazwa"], "dzial": dzial, "sekundy": r["sekundy"]})
+                       "pracownik_nazwa": r["pracownik_nazwa"], 'pracownik_id': r['pracownik_id'], "dzial": dzial, "sekundy": r["sekundy"]})
     return result
 
 
@@ -470,7 +470,7 @@ def build_profitability_report(
     try:
         work = [dict(r) for r in conn.execute(
             f"""
-            SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac, c.pracownik_nazwa, c.dzial, c.sekundy
+            SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac, c.pracownik_nazwa, c.pracownik_id, c.dzial, c.sekundy
             FROM import_czas_pracy c JOIN firmy f ON f.id = c.firma_id
             WHERE c.firma_id IN ({ph_f}) AND c.miesiac IN ({ph_m})
             """,
@@ -517,12 +517,11 @@ def build_profitability_report(
         all_months = sorted({m for y in years for m in (f"{y}-{n:02d}" for n in range(1, 13))} | set(months))
         for (fid, month), total in contracts_by_month(conn, firma_ids, all_months).items():
             counts[("kadry", fid, month)] = total
-        rates = {
-            fold(f"{r['imie']} {r['nazwisko']}"): float(r["stawka_godzinowa"] or 0)
-            for r in conn.execute(
-                "SELECT imie, nazwisko, stawka_godzinowa FROM pracownicy"
-            ).fetchall()
-        }
+        rates, name_rates = {}, {}
+        for r in conn.execute('SELECT id, imie, nazwisko, stawka_godzinowa FROM pracownicy').fetchall():
+            rates[r['id']] = r['stawka_godzinowa'] or 0
+            name_rates.setdefault(fold(f"{r['imie']} {r['nazwisko']}"), []).append(r['stawka_godzinowa'] or 0)
+        rates.update({name: values[0] for name, values in name_rates.items() if len(values) == 1})
     finally:
         conn.close()
     return compute_employee_report(work, invoices, rates, counts, months)

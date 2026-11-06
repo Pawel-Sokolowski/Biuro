@@ -7,6 +7,25 @@ from app.db.dao_conn import get_conn
 from app.db.dao_monthly import contracts_by_month
 from app.utils.months import month_bounds
 from app.security.authorization import assigned_company_ids, can, is_administrator
+from app.reports.import_parse import timer_department
+
+
+def _extra_timer_seconds(conn, firma_ids, months):
+    """Add service time and move any counters stored under the wrong department."""
+    rows = conn.execute(
+        "SELECT c.firma_id, c.miesiac, c.typ, u.kategoria, SUM(c.sekundy) AS sek "
+        "FROM czasomierze c JOIN uslugi_dodatkowe u ON u.id = c.usluga_id "
+        "WHERE c.firma_id = ANY(%s) AND c.miesiac = ANY(%s) "
+        "GROUP BY c.firma_id, c.miesiac, c.typ, u.kategoria", (firma_ids, months),
+    ).fetchall()
+    out = {}
+    for row in rows:
+        slot = out.setdefault((row['firma_id'], row['miesiac']), {'ksiegowosc': 0.0, 'kadry': 0.0})
+        seconds = float(row['sek'] or 0)
+        if row['typ'] in ('ksiegowosc', 'kadry'):
+            slot[row['typ']] -= seconds
+        slot[timer_department(row['typ'], row['kategoria'])] += seconds
+    return out
 
 # ============================================================
 # LISTA FIRM
@@ -180,12 +199,13 @@ def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]
     """, (firma_id, miesiac))
 
     row = cur.fetchone()
+    extra_time = _extra_timer_seconds(conn, [firma_id], [miesiac]).get((firma_id, miesiac), {})
     conn.close()
 
     imported = get_imported_seconds([firma_id], [miesiac]).get((firma_id, miesiac), {})
     return {
-        "ksiegowosc": float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imported.get("ksiegowosc", 0.0),
-        "kadry": float((row["sekundy_kadry"] if row else 0) or 0) + imported.get("kadry", 0.0),
+        "ksiegowosc": float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imported.get("ksiegowosc", 0.0) + extra_time.get('ksiegowosc', 0),
+        "kadry": float((row["sekundy_kadry"] if row else 0) or 0) + imported.get("kadry", 0.0) + extra_time.get('kadry', 0),
     }
 
 
@@ -193,19 +213,26 @@ def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]
 # USŁUGI DODATKOWE — SUMA
 # ============================================================
 def get_extra_services_value(firma_id: int, miesiac: str) -> float:
+    return sum(get_extra_services_by_department(firma_id, miesiac).values())
+
+
+def get_extra_services_by_department(firma_id: int, miesiac: str) -> Dict[str, float]:
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT SUM(ilosc * cena_netto) AS suma
-        FROM uslugi_dodatkowe_firma
-        WHERE firma_id = %s AND miesiac = %s AND fakturowac = 1
+        SELECT u.kategoria, SUM(uf.ilosc * uf.cena_netto) AS suma
+        FROM uslugi_dodatkowe_firma uf JOIN uslugi_dodatkowe u ON u.id = uf.usluga_id
+        WHERE uf.firma_id = %s AND uf.miesiac = %s AND uf.fakturowac = 1
+        GROUP BY u.kategoria
     """, (firma_id, miesiac))
 
-    row = cur.fetchone()
+    rows = cur.fetchall()
     conn.close()
-
-    return float(row["suma"] or 0)
+    totals = {'ksiegowosc': 0.0, 'kadry': 0.0}
+    for row in rows:
+        totals[timer_department('', row['kategoria'])] += float(row['suma'] or 0)
+    return totals
 
 
 def build_summary_report(
@@ -223,12 +250,13 @@ def build_summary_report(
     placeholders_month = ",".join("%s" for _ in months)
     rows = conn.execute(
         f"""
-        SELECT c.firma_id, c.miesiac, c.typ, c.sekundy,
+        SELECT c.firma_id, c.miesiac, c.typ, c.sekundy, c.usluga_id, u.kategoria AS service_category,
                COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS klient,
                COALESCE(p.imie || ' ' || p.nazwisko, 'Nieprzypisany') AS ksiegowa
         FROM czasomierze c
         JOIN firmy f ON f.id = c.firma_id
         LEFT JOIN pracownicy p ON p.id = c.pracownik_id
+        LEFT JOIN uslugi_dodatkowe u ON u.id = c.usluga_id
         WHERE c.firma_id IN ({placeholders_firm})
           AND c.miesiac IN ({placeholders_month})
         ORDER BY COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa), c.miesiac, ksiegowa, c.typ
@@ -239,7 +267,8 @@ def build_summary_report(
 
     summary: Dict[tuple, Dict[str, Any]] = {}
     for row in rows:
-        key = (row["firma_id"], row["miesiac"], row["ksiegowa"], row["typ"])
+        department = timer_department(row['typ'], row['service_category']) if row['usluga_id'] else row['typ']
+        key = (row["firma_id"], row["miesiac"], row["ksiegowa"], department)
         item = summary.setdefault(
             key,
             {
@@ -247,7 +276,7 @@ def build_summary_report(
                 "miesiac": row["miesiac"],
                 "klient": row["klient"],
                 "ksiegowa": row["ksiegowa"],
-                "typ": row["typ"],
+                "typ": department,
                 "sekundy": 0,
             },
         )
@@ -257,8 +286,9 @@ def build_summary_report(
     # department's tracked time so every employee row remains comparable.
     for item in summary.values():
         koszt = oblicz_miesieczny_koszt(item["firma_id"], item["miesiac"])
-        extra = get_extra_services_value(item["firma_id"], item["miesiac"])
-        value = float(koszt["zdrowotna"] if item["typ"] == "kadry" else koszt["netto"] + extra)
+        extra = get_extra_services_by_department(item["firma_id"], item["miesiac"])
+        department = timer_department(item['typ'], '')
+        value = float(koszt["zdrowotna"] if department == "kadry" else koszt["netto"]) + extra[department]
         total = max(1, sum(
             x["sekundy"]
             for x in summary.values()
@@ -302,12 +332,15 @@ def build_report(
                 GROUP BY firma_id, substr(data_wyst, 1, 7)
             ),
             extras AS (
-                SELECT firma_id, miesiac, SUM(ilosc * cena_netto) AS extra
-                FROM uslugi_dodatkowe_firma
-                WHERE firma_id IN ({placeholders_firm})
-                  AND miesiac IN ({placeholders_month})
-                  AND fakturowac = 1
-                GROUP BY firma_id, miesiac
+                SELECT uf.firma_id, uf.miesiac, SUM(uf.ilosc * uf.cena_netto) AS extra,
+                       SUM(CASE WHEN u.kategoria ILIKE '%%kadr%%' OR u.kategoria ILIKE '%%płac%%'
+                                     OR u.kategoria ILIKE '%%plac%%'
+                                THEN uf.ilosc * uf.cena_netto ELSE 0 END) AS extra_kadry
+                FROM uslugi_dodatkowe_firma uf JOIN uslugi_dodatkowe u ON u.id = uf.usluga_id
+                WHERE uf.firma_id IN ({placeholders_firm})
+                  AND uf.miesiac IN ({placeholders_month})
+                  AND uf.fakturowac = 1
+                GROUP BY uf.firma_id, uf.miesiac
             )
             SELECT f.id AS firma_id, m.miesiac,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
@@ -317,6 +350,7 @@ def build_report(
                    -- Limit firmy wpływa wyłącznie na cenę, nigdy na tę liczbę.
                    COALESCE(NULLIF(dc.dokumenty, 0), sm.ilosc_dok, 0) AS dokumenty,
                    COALESCE(ex.extra, 0) AS extra,
+                   COALESCE(ex.extra_kadry, 0) AS extra_kadry,
                    COALESCE(c.netto, c.cena_netto_ksiegowosc, 0) AS netto,
                    COALESCE(c.brutto, c.cena_brutto_ksiegowosc, 0) AS brutto,
                    COALESCE(c.zdrowotna, 0) AS zdrowotna,
@@ -346,6 +380,7 @@ def build_report(
     conn = get_conn()
     try:
         contracts = contracts_by_month(conn, firma_ids, months)
+        extra_seconds = _extra_timer_seconds(conn, firma_ids, months)
     finally:
         conn.close()
     out = {firma_id: {} for firma_id in firma_ids}
@@ -355,11 +390,13 @@ def build_report(
         extra_docs = max(0, docs - limit) if limit else 0
         netto = float(row["netto"] or 0) + extra_docs * float(row["cena_za_dokument"] or 0)
         extra = float(row["extra"] or 0)
-        koszt_ksieg = netto + extra
-        koszt_kadry = float(row["zdrowotna"] or 0)
+        extra_kadry = float(row['extra_kadry'] or 0)
+        koszt_ksieg = netto + extra - extra_kadry
+        koszt_kadry = float(row["zdrowotna"] or 0) + extra_kadry
         imp = imported.get((row["firma_id"], row["miesiac"]), {})
-        godz_ksieg = float(row["sekundy_ksiegowosc"] or 0) + imp.get("ksiegowosc", 0.0)
-        godz_kadry = float(row["sekundy_kadry"] or 0) + imp.get("kadry", 0.0)
+        extra_time = extra_seconds.get((row['firma_id'], row['miesiac']), {})
+        godz_ksieg = float(row["sekundy_ksiegowosc"] or 0) + imp.get("ksiegowosc", 0.0) + extra_time.get('ksiegowosc', 0)
+        godz_kadry = float(row["sekundy_kadry"] or 0) + imp.get("kadry", 0.0) + extra_time.get('kadry', 0)
         out[row["firma_id"]][row["miesiac"]] = {
             "koszt_ksiegowosc": round(koszt_ksieg, 2),
             "koszt_kadry": round(koszt_kadry, 2),
@@ -396,10 +433,11 @@ def compare_companies(
     for firma_id in firma_ids:
         koszt = oblicz_miesieczny_koszt(firma_id, miesiac)
         godziny = get_hours_for_company_month(firma_id, miesiac)
-        extra = get_extra_services_value(firma_id, miesiac)
+        by_department = get_extra_services_by_department(firma_id, miesiac)
+        extra = sum(by_department.values())
 
-        koszt_ksieg = koszt["netto"] + extra
-        koszt_kadry = koszt["zdrowotna"]
+        koszt_ksieg = koszt["netto"] + by_department['ksiegowosc']
+        koszt_kadry = koszt["zdrowotna"] + by_department['kadry']
 
         out[firma_id] = {
             "koszt_ksiegowosc": koszt_ksieg,
@@ -426,6 +464,7 @@ def build_profit_report(
     imported = get_imported_seconds(firma_ids, months)
     conn = get_conn()
     cur = conn.cursor()
+    extra_seconds = _extra_timer_seconds(conn, firma_ids, months) if firma_ids and months else {}
 
     out = {}
 
@@ -441,23 +480,24 @@ def build_profit_report(
 
             row = cur.fetchone()
             imp = imported.get((fid, miesiac), {})
+            extra_time = extra_seconds.get((fid, miesiac), {})
+            by_department = get_extra_services_by_department(fid, miesiac)
 
-            if not row and not imp:
+            if not row and not imp and not extra_time and not any(by_department.values()):
                 out[fid][miesiac] = {
                     "profit_kadry": 0,
                     "profit_ksiegowosc": 0
                 }
                 continue
 
-            sek_ks = float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imp.get("ksiegowosc", 0.0)
-            sek_kad = float((row["sekundy_kadry"] if row else 0) or 0) + imp.get("kadry", 0.0)
+            sek_ks = float((row["sekundy_ksiegowosc"] if row else 0) or 0) + imp.get("ksiegowosc", 0.0) + extra_time.get('ksiegowosc', 0)
+            sek_kad = float((row["sekundy_kadry"] if row else 0) or 0) + imp.get("kadry", 0.0) + extra_time.get('kadry', 0)
             wartosc = float((row["wartosc_uslug"] if row else 0) or 0)
 
-            extra = get_extra_services_value(fid, miesiac)
-            wartosc += extra
+            extra = sum(by_department.values())
 
-            wart_ks = wartosc * 0.5
-            wart_kad = wartosc * 0.5
+            wart_ks = wartosc * 0.5 + by_department['ksiegowosc']
+            wart_kad = wartosc * 0.5 + by_department['kadry']
 
             profit_ks = wart_ks / (sek_ks / 3600) if sek_ks > 0 else 0
             profit_kad = wart_kad / (sek_kad / 3600) if sek_kad > 0 else 0

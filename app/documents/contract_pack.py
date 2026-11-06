@@ -31,10 +31,15 @@ DOCUMENTS = (
     ('07_gdpr', 'Klauzula RODO', True),
     ('09_authorization', 'Upoważnienie do odbioru dokumentów', True),
     ('10_termination', 'Wypowiedzenie umowy', False),
+    ('11_upl', 'UPL-1(6) — formularz do druku', False),
+    ('12_pel', 'PEL — wizualizacja wzoru CRD 1053', False),
+    ('13_pel_z', 'PEL-Z — załącznik z przedstawicielami', False),
 )
 
 
 def company_context(company, partners=(), contacts=()):
+    from app.documents.power_of_attorney import split_street
+    structured_street = split_street(company.get('ulica'))
     street = str(company.get('ulica') or '').strip()
     building = str(company.get('adres_budynek') or '').strip()
     apartment = str(company.get('adres_lokal') or '').strip()
@@ -61,6 +66,13 @@ def company_context(company, partners=(), contacts=()):
         'document_limit': '' if company.get('limit_dokumentow') is None else str(company['limit_dokumentow']),
         'extra_document_price': '' if company.get('cena_ponad_limit') is None else str(company['cena_ponad_limit']),
         'tax_office': company.get('urzad_skarbowy') or '',
+        'short_name': company.get('nazwa_skrocona') or '', 'regon': company.get('regon') or '',
+        'principal_kind': 'person' if str(company.get('forma_dzialalnosci') or '').casefold() == 'jdg' else 'legal' if company.get('krs') else '',
+        'street': structured_street['street'] if not building or structured_street['building'] == building else company.get('ulica') or '',
+        'building': building or structured_street['building'], 'apartment': apartment or structured_street['apartment'],
+        'postcode': company.get('kod_pocztowy') or '', 'city': company.get('miasto') or '',
+        'country': 'PL' if str(company.get('kraj') or 'PL').casefold() in ('pl', 'polska', 'poland') else company['kraj'],
+        'region': company.get('wojewodztwo') or '', 'county': company.get('powiat') or '', 'municipality': company.get('gmina') or '',
         'representatives': [], 'partners': partner_data,
         'representative_candidates': [*partner_data, *[
             dict(imie_pierwsze=c.get('imie') or '', nazwisko=c.get('nazwisko') or '',
@@ -127,7 +139,7 @@ def _check(element, selected):
 
 
 def fill_template(key, data, destination):
-    if key not in {key for key, _, _ in DOCUMENTS}:
+    if key not in {key for key, _, _ in DOCUMENTS if key not in ('11_upl', '12_pel', '13_pel_z')}:
         raise ValueError('Nieznany dokument.')
     document = Document(TEMPLATES / (key + '.docx'))
     if key in ('00_framework', '03_processing'):
@@ -295,7 +307,7 @@ def merge_pdfs(paths, destination, duplex=False):
         writer.close()
 
 
-def generate_pack(company_id, actor_id, overrides, selected, destination, *, extra_pdfs=(), duplex=False, docx_only=False):
+def generate_pack(company_id, actor_id, overrides, selected, destination, *, extra_pdfs=(), duplex=False, docx_only=False, form_renderer=None):
     data = load_context(company_id, actor_id)  # Recheck access at execution time.
     data.update(overrides)
     known = {key for key, _, _ in DOCUMENTS}
@@ -305,6 +317,21 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
         raise ValueError('Uzupełnij pełną nazwę firmy i adres.')
     from datetime import datetime
     datetime.strptime(data.get('agreement_date', ''), '%d.%m.%Y')
+    form_keys = [key for key, _, _ in DOCUMENTS if key in selected and key in ('11_upl', '12_pel', '13_pel_z')]
+    form_xml = {}
+    if form_keys:
+        from app.documents.power_of_attorney import build_xml, resolve_employee, split_street, formatted_address
+        data['attorney'] = resolve_employee(data)
+        if not data.get('building'):
+            data.update(split_street(data.get('street')))
+        if not data.get('postcode') or not data.get('city'):
+            raise ValueError('Uzupełnij kod pocztowy i miejscowość klienta w danych do pełnomocnictwa.')
+        data['address'] = formatted_address(data)
+        for key in form_keys:
+            if key != '13_pel_z':
+                form_xml[key] = build_xml('UPL' if key == '11_upl' else 'PEL', data)
+        if form_renderer is None:
+            raise ValueError('Generowanie PDF pełnomocnictw wymaga mechanizmu wydruku aplikacji.')
     destination = Path(destination)
     if destination.resolve() in {Path(p).resolve() for p in extra_pdfs}:
         raise ValueError('Plik wynikowy musi być inny niż dołączone PDF-y.')
@@ -313,15 +340,32 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
         staging = Path(temp)
         documents = []
         for key, _, _ in DOCUMENTS:
-            if key in selected:
+            if key in selected and key not in form_keys:
                 path = staging / (key + '.docx')
                 fill_template(key, data, path)
                 documents.append(path)
         result = staging / ('komplet.zip' if docx_only else 'komplet.pdf')
+        form_pdfs = []
+        for key in form_keys:
+            pdf = staging / (key + '.pdf')
+            if key == '11_upl':
+                from app.documents.upl_paper import write_pdf
+                write_pdf(data, pdf, form_renderer)
+            elif key == '13_pel_z':
+                from app.documents.pel_z import write_pdf
+                write_pdf(data, pdf, form_renderer)
+            else:
+                from app.documents.crd_forms import render_xml_to_print_html
+                form_renderer('html', render_xml_to_print_html('PEL', form_xml[key]), pdf)
+            if not pdf.is_file() or not PdfReader(pdf).pages:
+                raise RuntimeError('Nie powstał poprawny PDF pełnomocnictwa.')
+            form_pdfs.append(pdf)
         if docx_only:
             with ZipFile(result, 'w', ZIP_DEFLATED) as archive:
                 for path in documents:
                     archive.write(path, path.name)
+                for pdf in form_pdfs:
+                    archive.write(pdf, pdf.name)
                 for index, path in enumerate(extra_pdfs):
                     archive.write(path, f'zalacznik_{index + 1}_{Path(path).name}')
         else:
@@ -330,6 +374,7 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
             by_key = {path.stem: path for path in converted}
             by_key.update(STATIC_PDFS)
             pdfs = [by_key[path.stem] for path in documents]
+            pdfs.extend(form_pdfs)
             merge_pdfs([*pdfs, *extra_pdfs], result, duplex=duplex)
         os.replace(result, destination)
     return str(destination)

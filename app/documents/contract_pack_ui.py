@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.documents.contract_pack import DOCUMENTS, generate_pack, load_context
+from app.documents.power_of_attorney import OFFICE_EMAIL, office_address
 from app.utils.background import CommandRunner
 
 
@@ -22,6 +23,8 @@ class ContractPackDialog(QDialog):
         self.resize(760, 690)
         self._busy = False
         self.runner = CommandRunner(self)
+        from app.documents.print_renderer import PrintRenderer
+        self.print_renderer = PrintRenderer(self)
         self.fields, self.representatives, self.documents, self.extra_pdfs = {}, [], {}, []
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel('Sprawdź dane przed wygenerowaniem. Zmiany dotyczą tylko tego kompletu dokumentów.'))
@@ -67,10 +70,81 @@ class ContractPackDialog(QDialog):
             role.addItems(['', 'Prezes zarządu', 'Członek zarządu', 'Wiceprezes zarządu', 'Prokurent', 'Właściciel', 'Pełnomocnik'])
             fields['stanowisko'] = role
             reps.addRow('Funkcja / rola', role)
+            for field, label in (('birth_date', 'Data urodzenia do PEL-Z, gdy brak PESEL'),
+                                 ('identity_number', 'Dokument tożsamości do PEL-Z, gdy brak PESEL'),
+                                 ('street', 'Adres przedstawiciela do PEL-Z — ulica'), ('building', 'Numer domu'),
+                                 ('apartment', 'Numer lokalu'), ('postcode', 'Kod pocztowy'),
+                                 ('city', 'Miejscowość'), ('country', 'Państwo (jeśli poza Polską)')):
+                widget = QLineEdit()
+                fields[field] = widget
+                reps.addRow(label, widget)
             self.representatives.append(fields)
             choice.currentIndexChanged.connect(lambda _, i=index: self._representative_changed(i))
         self._field(reps, 'pep_person', 'Osoba składająca oświadczenie PEP')
         self._field(reps, 'authorized_person', 'Osoba upoważniona: imię, nazwisko, seria/numer dowodu i organ wydający')
+
+        powers = self._tab(tabs, 'UPL / PEL')
+        self.principal_kind = QComboBox()
+        for label, value in (('Wybierz rodzaj podmiotu', ''), ('Osoba fizyczna / JDG', 'person'), ('Osoba prawna', 'legal'), ('Inny podmiot', 'other')):
+            self.principal_kind.addItem(label, value)
+        self.principal_kind.setCurrentIndex(max(0, self.principal_kind.findData(self.context.get('principal_kind'))))
+        powers.addRow('Mocodawca', self.principal_kind)
+        self._field(powers, 'short_name', 'Nazwa skrócona do PEL (maks. 31 znaków)', self.context.get('short_name', ''))
+        self._field(powers, 'principal_first_name', 'Imię mocodawcy (osoba fizyczna)')
+        self._field(powers, 'principal_surname', 'Nazwisko mocodawcy (osoba fizyczna)')
+        for field, label in (('street', 'Ulica klienta'), ('building', 'Numer domu'), ('apartment', 'Numer lokalu'),
+                             ('postcode', 'Kod pocztowy klienta'), ('city', 'Miejscowość klienta'), ('country', 'Kod kraju (np. PL)'),
+                             ('region', 'Województwo'), ('county', 'Powiat'), ('municipality', 'Gmina')):
+            self._field(client_form, field, label, self.context.get(field, ''))
+            self.fields[field].textChanged.connect(self._sync_client_address)
+        self.fields['address'].setReadOnly(True)
+        self._sync_client_address()
+        self.employee = QComboBox()
+        self.employee.addItem('Wybierz pracownika', None)
+        from app.db.dao_employees import list_employees
+        self._employees = {p['id']: p for p in list_employees() if p.get('aktywny')}
+        for employee in self._employees.values():
+            self.employee.addItem(' '.join(str(employee.get(k) or '') for k in ('imie', 'nazwisko')).strip(), employee['id'])
+        powers.addRow('Pełnomocnik — pracownik', self.employee)
+        self.attorney_fields = {}
+        for field, label in (('pesel', 'PESEL pełnomocnika'), ('nip', 'NIP pełnomocnika (zamiast PESEL w UPL)'),
+                             ('birth_date', 'Data urodzenia, gdy brak PESEL (DD.MM.RRRR)'),
+                             ('identity_number', 'Dokument tożsamości, gdy brak PESEL'),
+                             ('identity_country', 'Kraj wydania dokumentu (np. PL)'),
+                             ('electronic_address', 'Adres elektroniczny pełnomocnika (jeżeli wymagany)')):
+            field_widget = QLineEdit()
+            self.attorney_fields[field] = field_widget
+            powers.addRow(label, field_widget)
+        self.employee.currentIndexChanged.connect(self._employee_changed)
+        self.identity_type = QComboBox()
+        self.identity_type.addItem('Dowód osobisty', '1')
+        self.identity_type.addItem('Paszport', '2')
+        powers.addRow('Rodzaj dokumentu pełnomocnika, gdy brak PESEL', self.identity_type)
+        address = office_address()
+        office = QLabel(', '.join(v for v in (' '.join(address.get(k, '') for k in ('street', 'building', 'apartment')).strip(),
+                                             ' '.join(address.get(k, '') for k in ('postcode', 'city')).strip()) if v))
+        office.setWordWrap(True)
+        powers.addRow('Adres pełnomocnika — firmowy', office)
+        powers.addRow('E-mail pełnomocnika — stały', QLabel(OFFICE_EMAIL))
+        powers.addRow(QLabel('Adres i dane administracyjne biura uzupełnisz w Ustawienia → Faktury i KSeF.'))
+        self.authority_from = self._date(powers, 'Pełnomocnictwo ważne od')
+        self.authority_indefinite = QCheckBox('Bezterminowo / do odwołania')
+        self.authority_indefinite.setChecked(True)
+        powers.addRow(self.authority_indefinite)
+        self.authority_until = self._date(powers, 'Pełnomocnictwo ważne do')
+        self.authority_until.setEnabled(False)
+        self.authority_indefinite.toggled.connect(lambda checked: self.authority_until.setEnabled(not checked))
+        self.pel_scope = QComboBox()
+        for label, value in (('Wybierz zakres PEL', ''), ('Wszelkie czynności w relacjach z ZUS', 'all'),
+                             ('Odbiór korespondencji', 'receive'), ('Odbiór i wysyłanie korespondencji', 'correspondence'),
+                             ('Określona sprawa', 'case')):
+            self.pel_scope.addItem(label, value)
+        powers.addRow('Zakres PEL', self.pel_scope)
+        self._field(powers, 'pel_case', 'Opis sprawy (jeżeli wybrano)')
+        powers_notice = QLabel('UPL korzysta z przesłanego druku UPL-1(6). PEL korzysta z dostarczonej wizualizacji CRD 1053. '
+                               'Sprawdź podgląd i właściwą wersję formularza przed podpisaniem. Podpisy pozostają puste.')
+        powers_notice.setWordWrap(True)
+        powers.addRow(powers_notice)
 
         scope = self._tab(tabs, 'Zakres i parametry')
         self.accounting = QComboBox()
@@ -113,12 +187,12 @@ class ContractPackDialog(QDialog):
                         'Dołączone PDF-y są wstawiane w wybranej kolejności; sprawdź ich treść przed drukiem.')
         notice.setWordWrap(True)
         layout.addWidget(notice)
-        self.status = QLabel('PDF wymaga zainstalowanego Worda (Windows) lub LibreOffice.')
+        self.status = QLabel('Dokumenty Word wymagają Worda lub LibreOffice. PDF-y pełnomocnictw tworzy aplikacja.')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         actions = QHBoxLayout()
         self.pdf_button = QPushButton('Generuj komplet PDF…')
-        self.docx_button = QPushButton('Zapisz komplet DOCX (ZIP)…')
+        self.docx_button = QPushButton('Zapisz komplet DOCX + PDF (ZIP)…')
         self.pdf_button.clicked.connect(lambda: self._generate(False))
         self.docx_button.clicked.connect(lambda: self._generate(True))
         self.close_button = QPushButton('Zamknij')
@@ -165,16 +239,31 @@ class ContractPackDialog(QDialog):
     def _agreement_changed(self, date):
         if self.main_date.date() == self._previous_agreement_date:
             self.main_date.setDate(date)
+        if hasattr(self, 'authority_from') and self.authority_from.date() == self._previous_agreement_date:
+            self.authority_from.setDate(date)
         self._previous_agreement_date = date
 
     def _representative_changed(self, index):
         person = self.representative_choices[index].currentData() or {}
+        aliases = dict(nr_telefonu='telefon', street='ulica', building='nr_domu', apartment='nr_mieszkania',
+                       postcode='kod_pocztowy', city='miejscowosc', country='panstwo', birth_date='data_urodzenia')
         for key, widget in self.representatives[index].items():
-            value = str(person.get(key) or (person.get('telefon') if key == 'nr_telefonu' else '') or '')
+            value = str(person.get(key) or person.get(aliases.get(key)) or '')
             if isinstance(widget, QComboBox):
                 widget.setCurrentText(value)
             else:
                 widget.setText(value)
+
+    def _employee_changed(self):
+        # Identity details from the previous employee must never follow a new name.
+        for widget in self.attorney_fields.values():
+            widget.clear()
+        self.identity_type.setCurrentIndex(0)
+
+    def _sync_client_address(self):
+        from app.documents.power_of_attorney import formatted_address
+        values = {key: self.fields[key].text().strip() for key in ('street', 'building', 'apartment', 'postcode', 'city') if key in self.fields}
+        self.fields['address'].setText(formatted_address(values))
 
     def values(self):
         values = {key: widget.text().strip() for key, widget in self.fields.items()}
@@ -186,6 +275,12 @@ class ContractPackDialog(QDialog):
                       invoicing=self.invoicing.isChecked(), transfers=self.transfers.isChecked(),
                       representatives=[{key: (w.currentText() if isinstance(w, QComboBox) else w.text()).strip()
                                         for key, w in fields.items()} for fields in self.representatives])
+        values.update(principal_kind=self.principal_kind.currentData(),
+                      attorney=dict(employee_id=self.employee.currentData(), identity_type=self.identity_type.currentData(),
+                                    **{key: w.text().strip() for key, w in self.attorney_fields.items()}),
+                      authority_from=self.authority_from.date().toString('dd.MM.yyyy'),
+                      authority_until='' if self.authority_indefinite.isChecked() else self.authority_until.date().toString('dd.MM.yyyy'),
+                      pel_scope=self.pel_scope.currentData())
         return values
 
     def _generate(self, docx_only):
@@ -195,6 +290,9 @@ class ContractPackDialog(QDialog):
         selected = [key for key, checkbox in self.documents.items() if checkbox.isChecked()]
         if not data['name'] or not data['address'] or not selected:
             QMessageBox.warning(self, 'Komplet dokumentów', 'Uzupełnij nazwę i adres oraz wybierz dokumenty.')
+            return
+        if any(key in ('11_upl', '12_pel', '13_pel_z') for key in selected) and not self.employee.currentData():
+            QMessageBox.warning(self, 'Pełnomocnictwa', 'Wybierz pracownika jako pełnomocnika w zakładce UPL / PEL.')
             return
         suffix = '.zip' if docx_only else '.pdf'
         # Snapshot input before a native file dialog can re-enter the event loop.
@@ -216,7 +314,8 @@ class ContractPackDialog(QDialog):
         self.status.setText('Generowanie kompletu…')
         try:
             self.runner.submit(lambda: generate_pack(self.company_id, self.actor_id, data, selected, path,
-                                extra_pdfs=extra_pdfs, duplex=duplex, docx_only=docx_only), self._done, self._error)
+                                extra_pdfs=extra_pdfs, duplex=duplex, docx_only=docx_only,
+                                form_renderer=self.print_renderer.render), self._done, self._error)
         except Exception as error:
             self._error(error)
 

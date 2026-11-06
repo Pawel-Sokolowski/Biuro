@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Tuple
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from app.utils.money import decimal_amount
 
 CENT = Decimal("0.01")
 
@@ -32,6 +33,9 @@ def vat_percent(value: Any, default: float = 23.0) -> float:
 def normalize_position(position: Dict[str, Any], *, preserve_amounts: bool = False) -> Dict[str, Any]:
     """Uzupełnia pozycję: cena jednostkowa, wartość netto i brutto zgodne z ilością i VAT."""
     result = dict(position)
+    for field in ('ilosc', 'cena_netto', 'netto', 'brutto'):
+        if result.get(field) not in (None, ''):
+            decimal_amount(result[field])
     ilosc = decimal_value(result.get("ilosc"), 1)
     vat = vat_percent(result.get("vat", result.get("stawka_vat")))
 

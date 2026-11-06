@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 
 from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt, QDateTime, QTimer, QSignalBlocker, pyqtSignal
+from app.utils.background import TaskRunner, CommandRunner
 from typing import Optional
 
 from app.chat.chat_model import (
@@ -80,9 +81,59 @@ class ChatPage(QWidget):
         self._build_ui()
         self.refresh_chat_conversations()
         self._poll_timer = QTimer(self)
-        self._poll_timer.timeout.connect(self._poll_new_messages)
+        self._reads = TaskRunner(self)
+        self._writes = CommandRunner(self)
+        self._poll_busy = False
+        self._poll_timer.timeout.connect(self._poll_async)
         self._poll_timer.start(3000)
-        self._poll_new_messages()
+        self._poll_async()
+
+    def _poll_async(self):
+        if self._poll_busy:
+            return
+        ids = [self.chat_conversations.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.chat_conversations.count())]
+        ids = [i for i in ids if i is not None]
+        actor = self.pracownik_id
+        conversation = self.current_konwersacja
+        visible = self.isVisible()
+        limit = self.offset + self.page_size
+        previous_ids = dict(self._seen_ids)
+        self._poll_busy = True
+
+        def read():
+            latest = get_latest_message_ids(ids)
+            counts = get_unread_counts(actor)
+            newest = latest.get(conversation, {}).get('id')
+            changed = newest and newest > previous_ids.get(conversation, newest)
+            messages = get_messages(conversation, limit=limit, offset=0) if conversation and visible and changed else None
+            attachments = get_attachments([message['id'] for message in messages]) if messages else {}
+            return latest, counts, messages, attachments
+
+        def loaded(result):
+            self._poll_busy = False
+            latest, counts, messages, attachments = result
+            if conversation != self.current_konwersacja or limit != self.offset + self.page_size:
+                return
+            previous = self._seen_ids.get(conversation)
+            newest = latest.get(conversation, {}).get('id')
+            if messages is not None and previous is not None and newest and newest > previous:
+                bar = self.scroll_area.verticalScrollBar()
+                self._render_grouped_messages(messages, scroll_to_bottom=bar.value() >= bar.maximum() - 40, attachments=attachments)
+            self._seen_ids.update({key: value['id'] for key, value in latest.items()})
+            if counts != self._unread:
+                grew = sum(counts.values()) > sum(self._unread.values())
+                self._unread = counts
+                self._refresh_unread_marks()
+                if grew:
+                    QApplication.beep()
+            if conversation and visible:
+                self._writes.submit(lambda: mark_conversation_read(conversation, actor))
+
+        def failed(exc):
+            self._poll_busy = False
+            self.setToolTip('Nie udało się odświeżyć czatu: ' + str(exc))
+
+        self._reads.submit(read, loaded, failed)
 
     def _poll_new_messages(self):
         try:
@@ -333,13 +384,14 @@ class ChatPage(QWidget):
             if w:
                 w.deleteLater()
 
-    def _render_grouped_messages(self, messages, scroll_to_bottom: bool = True):
+    def _render_grouped_messages(self, messages, scroll_to_bottom: bool = True, attachments=None):
         """
         Render messages grouped by date and sender.
         Consecutive messages from same sender on same date are shown under one header.
         """
         try:
-            attachments = get_attachments([m["id"] for m in messages if m.get("id")])
+            if attachments is None:
+                attachments = get_attachments([m["id"] for m in messages if m.get("id")])
         except Exception:
             attachments = {}
 

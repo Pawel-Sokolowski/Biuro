@@ -12,6 +12,7 @@ from PyQt6.QtGui import QPainter
 import datetime
 import logging
 from app.utils.background import TaskRunner, CommandRunner
+from app.utils.item_table import ItemTable
 
 from app.reports.reports_logic import (
     get_all_companies,
@@ -304,10 +305,10 @@ class ReportsPage(QWidget):
 
     @staticmethod
     def _aggregate_profit(rows):
-        """Sumy sprzedaży i kosztów: {(firma, miesiąc, sekcja): [sprzedaż, koszt]}."""
+        """Group by stable company identity; names are presentation only."""
         agg = {}
         for item in rows:
-            key = (item["klient"], item["miesiac"], item["sekcja"])
+            key = (item.get('firma_id', item['klient']), item["klient"], item["miesiac"], item["sekcja"])
             cur = agg.setdefault(key, [0.0, 0.0])
             cur[0] += float(item["cena"] or 0)
             cur[1] += float(item["koszt"] or 0)
@@ -316,8 +317,7 @@ class ReportsPage(QWidget):
     @staticmethod
     def _make_profit_table(sekcja):
         headers = PROFIT_HEADERS[sekcja]
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
+        table = ItemTable(headers)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
@@ -453,6 +453,7 @@ class ReportsPage(QWidget):
         tables = {"ksiegowosc": self.import_table, "kadry": self.import_table_kadry}
         totals = {}
         for sekcja, table in tables.items():
+            table.begin_batch()
             table.setRowCount(0)
             sek = cena = koszt = 0.0
             for item in rows:
@@ -471,6 +472,7 @@ class ReportsPage(QWidget):
                 cena += item["cena"]
                 koszt += item["koszt"]
             totals[sekcja] = (sek, cena, koszt)
+            table.end_batch()
             table.resizeColumnsToContents()
             fit_table_height(table)
         if not rows:
@@ -484,13 +486,13 @@ class ReportsPage(QWidget):
             [SEKCJA_LABELS[s], totals[s][1], totals[s][2]] for s in ("ksiegowosc", "kadry")
         ])
         per_company = {}
-        for (klient, _m, sekcja), (cena, koszt) in self._aggregate_profit(rows).items():
-            cur = per_company.setdefault((klient, sekcja), [0.0, 0.0])
+        for (company_id, klient, _m, sekcja), (cena, koszt) in self._aggregate_profit(rows).items():
+            cur = per_company.setdefault((company_id, klient, sekcja), [0.0, 0.0])
             cur[0] += cena
             cur[1] += koszt
         self._fill_money_table(self.company_table, [
             [klient, SEKCJA_LABELS[sekcja], v[0], v[1]]
-            for (klient, sekcja), v in per_company.items()
+            for (_company_id, klient, sekcja), v in per_company.items()
         ])
         months = sorted({item["miesiac"] for item in rows})
         self.chart_top.setChart(self._profit_chart("Kadry — zarobek vs koszt i czas", rows, "kadry", months))
@@ -936,7 +938,7 @@ class ReportsPage(QWidget):
                     def rows():
                         from app.reports.import_dao import build_profitability_report
                         agg = ReportsPage._aggregate_profit(build_profitability_report(selected, months, actor))
-                        for (company, month, section), (price, cost) in sorted(
+                        for (_company_id, company, month, section), (price, cost) in sorted(
                                 agg.items(), key=lambda kv: (round(kv[1][0] - kv[1][1], 2), kv[0])):
                             yield [company, month, SEKCJA_LABELS[section], round(price, 2), round(cost, 2), round(price-cost, 2)]
                 else:

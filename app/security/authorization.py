@@ -4,8 +4,10 @@ import psycopg
 from typing import Any, Dict, Optional, Set
 
 from app.db.dao_conn import get_conn
+from app.utils.request_cache import cached
 
 
+@cached
 def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
     if not pracownik_id:
         return {}
@@ -30,6 +32,7 @@ def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
         conn.close()
 
 
+@cached
 def is_administrator(pracownik_id: Optional[int]) -> bool:
     if not pracownik_id:
         return False
@@ -95,6 +98,7 @@ def allowed_tabs(pracownik_id: Optional[int]) -> list:
     return parse_tabs(row["zakladki"], bool(row["adm"]))
 
 
+@cached
 def assigned_company_ids(pracownik_id: Optional[int]) -> Set[int]:
     """Każdy pracownik ma dostęp do wszystkich firm; przypisanie księgowa/kadrowa służy tylko do filtrów."""
     if not pracownik_id:

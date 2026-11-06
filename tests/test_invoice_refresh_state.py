@@ -66,6 +66,8 @@ class InvoiceRefreshStateTests(DbTestCase):
 
     def finish_poll(self):
         self.page._ksef_batch_finished({'accepted': [], 'pending': [self.rows[0]['id']], 'rejected': [], 'errors': []})
+        from tests.test_review_optimizations import wait_until
+        self.assertTrue(wait_until(lambda: not self.page._invoice_reads._jobs))
 
     def test_repeated_background_checks_keep_paid_filter_scroll_selection_and_widgets(self):
         scroll = self.place_view()

@@ -415,7 +415,9 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertEqual(page.issued_table.horizontalHeaderItem(5).text(), "Podgląd")
         self.assertTrue(page.issued_table.isColumnHidden(0))
         self.assertTrue(page.draft_table.isColumnHidden(0))
-        self.assertIsNotNone(page.issued_table.cellWidget(0, 5))
+        self.assertIsNone(page.issued_table.cellWidget(0, 5))
+        from app.invoices.list_table import PreviewDelegate
+        self.assertIsInstance(page.issued_table.itemDelegateForColumn(5), PreviewDelegate)
         self.assertEqual(page.issued_table.columnWidth(3), 72)
         self.assertEqual(page.issued_table.columnWidth(6), 78)
         self.assertEqual(page.issued_table.columnWidth(7), 78)

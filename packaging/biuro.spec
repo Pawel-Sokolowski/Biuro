@@ -63,7 +63,7 @@ a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
     binaries=binaries,
-    datas=datas,
+    datas=datas + [(str(ROOT / 'app' / 'VERSION'), 'app')],
     hiddenimports=[
         *collect_submodules("app"),
         *mt940_hidden,
@@ -74,6 +74,11 @@ a = Analysis(
         *PSYCOPG_HIDDEN,
         "psycopg_pool",
         "imapclient.imap_utf7",
+        *collect_submodules('google.auth'),
+        *collect_submodules('google.oauth2'),
+        *collect_submodules('google_auth_oauthlib'),
+        *collect_submodules('docxtpl'),
+        *collect_submodules('stdnum.pl'),
         "sqlalchemy.dialects.postgresql.psycopg",
         *[m for pkg in CALDAV_PACKAGES
           for m in collect_submodules(

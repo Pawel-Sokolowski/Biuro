@@ -81,11 +81,13 @@ class CompanyUI(QWidget):
         self.btn_delete = QPushButton("Usuń firmę")
         self.btn_restore = QPushButton("Przywróć do aktywnych")
         self.btn_refresh = QPushButton("Odśwież")
+        self.btn_documents = QPushButton("Komplet dokumentów…")
 
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_edit)
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addWidget(self.btn_restore)
+        btn_layout.addWidget(self.btn_documents)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_refresh)
 
@@ -101,6 +103,7 @@ class CompanyUI(QWidget):
         self.btn_delete.clicked.connect(self._delete_company)
         self.btn_restore.clicked.connect(self._restore_company)
         self.btn_refresh.clicked.connect(self._refresh)
+        self.btn_documents.clicked.connect(self._generate_documents)
         self.status_filter.currentIndexChanged.connect(self._search)
         self.search_input.textChanged.connect(self._search)
 
@@ -202,6 +205,19 @@ class CompanyUI(QWidget):
         dlg = CompanyForm(None, self, actor_id=self.pracownik_id)
         if dlg.exec():
             self._refresh()
+
+    def _generate_documents(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, 'Komplet dokumentów', 'Wybierz klienta.')
+            return
+        company_id = int(self.table.item(row, 0).text())
+        from app.documents.contract_pack_ui import ContractPackDialog
+        try:
+            dialog = ContractPackDialog(company_id, self.pracownik_id, self)
+            dialog.exec()
+        except (PermissionError, ValueError) as error:
+            QMessageBox.warning(self, 'Komplet dokumentów', str(error))
 
     def _edit_company(self):
         row = self.table.currentRow()

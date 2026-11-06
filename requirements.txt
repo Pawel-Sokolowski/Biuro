@@ -25,3 +25,6 @@ winrt-Windows.Data.Xml.Dom; sys_platform == "win32"
 winrt-Windows.UI.Notifications.Management; sys_platform == "win32"
 winrt-Windows.Foundation; sys_platform == "win32"
 winrt-Windows.Foundation.Collections; sys_platform == "win32"
+
+python-docx>=1.2,<2
+pypdf>=6.1,<7

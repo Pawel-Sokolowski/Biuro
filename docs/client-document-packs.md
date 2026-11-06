@@ -60,6 +60,10 @@ pracownika nie używa się w formularzach.
 Uzupełnij identyfikator pełnomocnika (PESEL, NIP w UPL lub dokument tożsamości),
 rodzaj mocodawcy i daty. PEL zawsze obejmuje sprawy w ZUS i pełny dostęp
 do odpowiednich ról eZUS, zgodnie z opisem poniżej.
+Pełnomocnictwa są zawsze bezterminowe / do odwołania: data „ważne do”
+pozostaje pusta, także gdy starszy formularz przekazuje datę końcową.
+Pole „Adres elektroniczny” w UPL pozostaje puste; nie jest to pole kontaktowego
+e-maila, w którym nadal widnieje stały adres biura.
 Przesłany XSD UPL wymaga daty urodzenia pełnomocnika; można ją wyliczyć z PESEL
 albo wpisać, gdy używany jest inny identyfikator. Przy zmianie pracownika
 poprzednie identyfikatory są czyszczone. Dane identyfikacyjne wpisane w oknie

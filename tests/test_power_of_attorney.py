@@ -39,14 +39,15 @@ class PowerOfAttorneyXmlTests(unittest.TestCase):
                     self.assertIn(OFFICE_EMAIL, html)
                     self.assertNotIn('SignatureValue', xml.decode())
 
-    def test_scope_and_expiry_are_explicit_and_checked(self):
+    def test_xml_scope_is_checked_and_authorizations_are_always_indefinite(self):
         for scope in ('all', 'receive', 'correspondence', 'case'):
             xml = build_xml('PEL', dict(data(), pel_scope=scope, pel_case='Rozliczenie konta', authority_until='30.11.2026'))
-            self.assertIn(b'2026-11-30', xml)
+            self.assertNotIn(b'2026-11-30', xml)
+            self.assertEqual(etree.fromstring(xml).xpath('//*[local-name()="DoOdwolania"]/text()'), ['true'])
         with self.assertRaisesRegex(ValueError, 'zakres'):
             build_xml('PEL', dict(data(), pel_scope=''))
-        with self.assertRaisesRegex(ValueError, 'wcześniejsza'):
-            build_xml('UPL', dict(data(), authority_until='01.01.2026'))
+        upl = build_xml('UPL', dict(data(), authority_until='01.01.2026'))
+        self.assertNotIn(b'DataDo', upl)
         with self.assertRaisesRegex(ValueError, 'Opisz'):
             build_xml('PEL', dict(data(), pel_scope='case', pel_case=''))
 
@@ -106,6 +107,24 @@ class PowerOfAttorneyXmlTests(unittest.TestCase):
         with patch.object(upl_paper, 'TEMPLATE_SHA256', 'different'):
             with self.assertRaisesRegex(ValueError, 'inną wersję'):
                 upl_paper.overlay_commands(data())
+
+    def test_expiry_and_electronic_address_stay_empty_even_with_obsolete_inputs(self):
+        from app.documents import upl_paper, pel_paper
+        values = data()
+        values['authority_until'] = 'old invalid expiry'
+        values['attorney']['electronic_address'] = '/OLD/ADDRESS'
+        for kind in ('UPL', 'PEL', 'PEL-PAPER', 'PEL-Z'):
+            normalized = reviewed_data(values, kind)
+            self.assertEqual(normalized['authority_until'], '')
+            self.assertEqual(normalized['attorney']['electronic_address'], '')
+            self.assertEqual(normalized['attorney']['email'], OFFICE_EMAIL)
+        upl = upl_paper.overlay_commands(values)
+        self.assertFalse(any(y == 593.84 and x >= 429.24 for x, y, t, w in upl[1]['text']))
+        self.assertFalse(any(x == 320 and y == 135 for x, y, t, w in upl[0]['text']))
+        self.assertIn(OFFICE_EMAIL, [t for x, y, t, w in upl[1]['text']])
+        pel = pel_paper.overlay_commands(values)
+        self.assertFalse(any(y == 252.1 and x >= 363.96 for x, y, t, w in pel[2]['text']))
+        self.assertTrue(any(y == 252.1 and x < 363.96 for x, y, t, w in pel[2]['text']))
 
     def test_legal_forms_drive_upl_and_modern_pel_checkboxes(self):
         from app.documents.power_of_attorney import principal_kind_for_company
@@ -285,3 +304,5 @@ class EmployeeAuthorityTests(DbTestCase):
         self.assertFalse(dialog.attorney_fields['pesel'].text())
         self.assertNotIn('email', dialog.attorney_fields)
         self.assertNotIn('street', dialog.attorney_fields)
+        self.assertNotIn('electronic_address', dialog.attorney_fields)
+        self.assertEqual(dialog.values()['authority_until'], '')

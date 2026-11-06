@@ -112,8 +112,7 @@ class ContractPackDialog(QDialog):
         for field, label in (('pesel', 'PESEL pełnomocnika'), ('nip', 'NIP pełnomocnika (zamiast PESEL w UPL)'),
                              ('birth_date', 'Data urodzenia, gdy brak PESEL (DD.MM.RRRR)'),
                              ('identity_number', 'Dokument tożsamości, gdy brak PESEL'),
-                             ('identity_country', 'Kraj wydania dokumentu (np. PL)'),
-                             ('electronic_address', 'Adres elektroniczny pełnomocnika (jeżeli wymagany)')):
+                             ('identity_country', 'Kraj wydania dokumentu (np. PL)')):
             field_widget = QLineEdit()
             self.attorney_fields[field] = field_widget
             powers.addRow(label, field_widget)
@@ -130,12 +129,8 @@ class ContractPackDialog(QDialog):
         powers.addRow('E-mail pełnomocnika — stały', QLabel(OFFICE_EMAIL))
         powers.addRow(QLabel('Adres i dane administracyjne biura uzupełnisz w Ustawienia → Faktury i KSeF.'))
         self.authority_from = self._date(powers, 'Pełnomocnictwo ważne od')
-        self.authority_indefinite = QCheckBox('Bezterminowo / do odwołania')
-        self.authority_indefinite.setChecked(True)
-        powers.addRow(self.authority_indefinite)
-        self.authority_until = self._date(powers, 'Pełnomocnictwo ważne do')
-        self.authority_until.setEnabled(False)
-        self.authority_indefinite.toggled.connect(lambda checked: self.authority_until.setEnabled(not checked))
+        powers.addRow('Pełnomocnictwo ważne do', QLabel('Bezterminowo / do odwołania — data końcowa pusta'))
+        powers.addRow('Adres elektroniczny w UPL', QLabel('Pozostaje pusty'))
         powers.addRow('Zakres PEL', QLabel('Załatwianie spraw w ZUS oraz przez portal eZUS — bez ograniczeń'))
         roles_notice = QLabel('JDG / osoba fizyczna: Ubezpieczony i Płatnik składek. '
                               'Spółki i pozostałe podmioty: Płatnik składek w sekcji reprezentowanego podmiotu.')
@@ -283,7 +278,7 @@ class ContractPackDialog(QDialog):
                       attorney=dict(employee_id=self.employee.currentData(), identity_type=self.identity_type.currentData(),
                                     **{key: w.text().strip() for key, w in self.attorney_fields.items()}),
                       authority_from=self.authority_from.date().toString('dd.MM.yyyy'),
-                      authority_until='' if self.authority_indefinite.isChecked() else self.authority_until.date().toString('dd.MM.yyyy'),
+                      authority_until='',
                       pel_scope='all', pel_ezus='full',
                       pel_pit=self.pel_pit.isChecked())
         return values

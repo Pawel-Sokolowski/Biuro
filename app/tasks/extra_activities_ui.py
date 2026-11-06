@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from app.companies.company_names import company_display_name
 from app.db.dao_global_settings import get_extra_services
 from app.db import dao_services
 from app.db.dao_tasks import TASK_STATUSES, list_tasks, set_tasks_status
@@ -56,7 +57,7 @@ class ExtraActivityDialog(QDialog):
         layout = QVBoxLayout(self)
         self.company = QComboBox()
         for company in companies:
-            self.company.addItem(company.get("nazwa_skrocona") or company["nazwa"], company["id"])
+            self.company.addItem(company_display_name(company), company["id"])
         if company_id is not None:
             self.company.setCurrentIndex(max(0, self.company.findData(company_id)))
         self.month = MonthPicker(month)
@@ -150,7 +151,7 @@ class ExtraActivitiesPage(QWidget):
         self.company_filter = QComboBox()
         self.company_filter.addItem("Wszyscy klienci", None)
         for company in companies:
-            self.company_filter.addItem(company.get("nazwa_skrocona") or company["nazwa"], company["id"])
+            self.company_filter.addItem(company_display_name(company), company["id"])
         self.month = MonthPicker(month or date.today().strftime("%Y-%m"))
         self.state_filter = QComboBox()
         self.state_filter.addItem("Wszystkie", None)

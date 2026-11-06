@@ -11,7 +11,9 @@ TEMPLATE_SHA256 = '72457d79e0499cfa4d0d289cde1af17635a8fca445e354441effb32f9a3e6
 
 
 def overlay_commands(data):
-    data = reviewed_data(data, 'PEL-PAPER')
+    # The office's paper pack always grants full ZUS and eZUS authority.
+    # Disregard obsolete scope fields supplied by older dialogs/callers.
+    data = reviewed_data(dict(data, pel_scope='all'), 'PEL-PAPER')
     if hashlib.sha256(TEMPLATE.read_bytes()).hexdigest() != TEMPLATE_SHA256:
         raise ValueError('PEL ma inną wersję niż sprawdzony szablon.')
     reader = PdfReader(TEMPLATE)
@@ -77,31 +79,18 @@ def overlay_commands(data):
     person(0, principal, (424.5, 398.7, 364.8, 330, 304.2, 278.3, 252.4, 226.6, 200.7, 166.9))
     person(1, data['attorney'], (613.2, 586.4, 550.7, 515, 488.2, 461.8, 435.1, 408.3, 381.5, 345.8))
 
-    scope = data['pel_scope']
-    if scope == 'all':
-        check(1, 42.77, 266.5)
-    else:
-        check(1, 42.77, 113.8)
-        description = {'receive': 'Odbiór korespondencji', 'correspondence': 'Odbiór i wysyłanie korespondencji'}.get(scope, data.get('pel_case'))
-        text(1, 77, 91, description, 471)
+    check(1, 42.77, 266.5)
     if data.get('pel_pit'):
         check(1, 42.77, 187.1)
-    ezus = data.get('pel_ezus') or ''
-    if ezus not in ('', 'full', 'correspondence', 'ezla'):
-        raise ValueError('Wybierz poprawny zakres eZUS.')
-    if ezus:
-        check(2, 42.77, 729)
-        row = 443.3 if own_company else 374.7
-        check(2, 42.77, row)
-        if ezus == 'correspondence':
-            check(2, 310.64, row)
-            text(2, 47, 335, data.get('pel_ezus_requests'), 501)
-        elif ezus == 'ezla':
-            check(2, 435.65, row)
-    # The paper explicitly prohibits validity dates for a specific activity/case.
-    if scope == 'all':
-        date(2, 185.38, 252.1, data['authority_from'])
-        date(2, 363.96, 252.1, data['authority_until'])
+    check(2, 42.77, 729)
+    if own_company:
+        check(2, 42.77, 495.1)  # Ubezpieczony, acting in one's own name.
+        check(2, 42.77, 443.3)  # Płatnik składek, own business.
+    else:
+        check(2, 42.77, 374.7)  # Płatnik składek, represented entity.
+    # All restriction boxes and the restricted-request description stay empty.
+    date(2, 185.38, 252.1, data['authority_from'])
+    date(2, 363.96, 252.1, data['authority_until'])
     date(2, 78.24, 147.1, data['agreement_date'])
     return pages
 

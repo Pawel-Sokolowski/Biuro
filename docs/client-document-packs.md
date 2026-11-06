@@ -58,7 +58,8 @@ uzupełnić również województwo, powiat i gminę biura. Prywatnego adresu
 pracownika nie używa się w formularzach.
 
 Uzupełnij identyfikator pełnomocnika (PESEL, NIP w UPL lub dokument tożsamości),
-rodzaj mocodawcy, daty i zakres PEL. Zakres nie jest wybierany automatycznie.
+rodzaj mocodawcy i daty. PEL zawsze obejmuje sprawy w ZUS i pełny dostęp
+do odpowiednich ról eZUS, zgodnie z opisem poniżej.
 Przesłany XSD UPL wymaga daty urodzenia pełnomocnika; można ją wyliczyć z PESEL
 albo wpisać, gdy używany jest inny identyfikator. Przy zmianie pracownika
 poprzednie identyfikatory są czyszczone. Dane identyfikacyjne wpisane w oknie
@@ -81,11 +82,13 @@ W zakładce **Dokumenty** zaznacz potrzebne pełnomocnictwa:
   wybranego przedstawiciela, zaznacza „innego podmiotu” i dodaje nazwę, adres
   oraz REGON tego podmiotu. Przy wielu przedstawicielach trzeba wybrać PEL-Z;
   zaznaczenie załączenia wynika z rzeczywiście wybranych dokumentów.
-  Dostęp do eZUS wybiera się osobno (rola płatnika składek, pełna lub ograniczona
-  do korespondencji albo E-ZLA); zaznaczenie roli trafia do odpowiedniej sekcji
-  własnej firmy lub reprezentowanego podmiotu. PIT wymaga osobnego zaznaczenia.
-  Dla konkretnej czynności/sprawy program pozostawia daty obowiązywania puste,
-  zgodnie z instrukcją druku. Ten PEL nie ma pola e-mail.
+  Zawsze zaznacza załatwianie spraw w ZUS i przez eZUS, bez ograniczeń.
+  Dla JDG/osoby fizycznej zaznacza role Ubezpieczony i Płatnik składek;
+  dla osoby prawnej i pozostałych spółek tylko Płatnik składek w sekcji
+  reprezentowanego podmiotu. Pola ograniczeń korespondencji, E-ZLA i typów
+  wniosków pozostają puste. Stanowisko/funkcję przedstawiciela wybiera się
+  z listy lub wpisuje ręcznie. PIT wymaga osobnego zaznaczenia.
+  Ten PEL nie ma pola e-mail.
   Stary wzór XML/XSL CRD pozostaje zasobem do walidacji, ale nie jest już używany
   do generowania PEL w komplecie do druku.
 - **PEL-Z** używa przesłanego trzystronicowego PDF-u. Aplikacja odczytuje

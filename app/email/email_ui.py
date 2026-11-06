@@ -815,15 +815,7 @@ class EmailPage(QWidget):
         self.chips_layout.setSpacing(1)
         self.chips_group = QButtonGroup(self)
         self.chips_group.setExclusive(True)
-        self.labels_scroll = QScrollArea()
-        self.labels_scroll.setWidgetResizable(True)
-        self.labels_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.labels_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.labels_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.labels_scroll.setMinimumHeight(60)
-        self.labels_scroll.setMaximumHeight(180)
-        self.labels_scroll.setWidget(self.chips_frame)
-        left_layout.addWidget(self.labels_scroll)
+        left_layout.addWidget(self.chips_frame)
         self.show_hidden_button = QPushButton("Pokaż ukryte foldery")
         self.show_hidden_button.setCheckable(True)
         self.show_hidden_button.toggled.connect(self._toggle_show_hidden_folders)
@@ -2061,6 +2053,11 @@ class EmailPage(QWidget):
 
     def _fill_move_menu(self, menu: QMenu, nodes: List[Dict[str, Any]], exclude: set,
                         under_staff: bool) -> None:
+        # Qt otherwise wraps long menus into columns on Windows. Force vertical
+        # scrolling for every level of the destination-folder menu.
+        menu.setStyleSheet('QMenu { menu-scrollable: 1; }')
+        screen = self.screen()
+        menu.setMaximumHeight(min(420, max(120, screen.availableGeometry().height() - 80)) if screen else 420)
         for node in nodes:
             folder = node["folder"]
             selectable = folder is not None and "\\noselect" not in (folder.get("attributes") or "").lower()

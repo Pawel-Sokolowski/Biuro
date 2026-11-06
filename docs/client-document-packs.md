@@ -57,9 +57,27 @@ Oficjalne źródła sprawdzone 6 listopada 2026:
 - [UPL-1(6) PDF](https://podatki.gov.pl/media/nx3lnwfo/upl-1_06-08-2.pdf)
 - [ZUS: PEL, wersja interaktywna i do druku](https://www.zus.pl/wzory-formularzy/pelnomocnictwo/pel-pelnomocnictwo)
 
-UPL-1/PEL nie były częścią przesłanych załączników. Polityka sieciowa
-środowiska uniemożliwiła pobranie ich plików do implementacji; nie dodano
-niezweryfikowanego mapowania pól ani imitacji urzędowych formularzy.
+Użytkownik dostarczył później zestawy CRD: UPL z identyfikatorem
+`2018/11/02/6046` i PEL `2012/11/29/1053`, ich XSL i XSD oraz pięć
+schematów wspólnych i schemat podpisu XML. Zapisano je lokalnie w
+`app/documents/templates/crd/` z katalogiem źródłowych URL-i i sumami SHA-256.
+Ze skopiowanego schematu podpisu usunięto tylko komunikat przeglądarki
+poprzedzający XML, zachowując treść schematu i informację licencyjną.
+
+Moduł `crd_forms.py` rozwiązuje zależności wyłącznie z lokalnego katalogu,
+sprawdza wersję XML i udostępnia transformację oficjalnym XSL dopiero po
+pełnej walidacji XSD. To przygotowanie obsługi wzorów, nie gotowe
+automatyczne wypełnianie w oknie kompletu. Nadal brakuje `CountryCode.xsd`,
+importowanego przez `adres.xsd`:
+[plik źródłowy](http://crd.gov.pl/xml/schematy/zewnetrzne/2008/05/09/CountryCode.xsd).
+Walidator jawnie blokuje generowanie wizualizacji przez to API przy
+brakujących zależnościach; nie podstawia uproszczonych schematów. Po
+uzupełnieniu zależności trzeba jeszcze sprawdzić poprawne dokumenty oraz
+aktualność i przydatność dostarczonych wersji przed integracją generatora.
+
+Przesłany PEL-Z jest trzystronicowym PDF-em bez AcroForm/XFA. Nie ma jeszcze
+obsługi automatycznego wypełniania tego pliku; można dołączyć go jako PDF
+przez istniejący przycisk załączników.
 
 ## Wdrożenie i sprawdzenie
 

@@ -48,6 +48,7 @@ def _row_factory(cursor):
 
 _POOL_MAX = 8
 _pool: dict[tuple[str, str | None], ConnectionPool] = {}
+_coordination_pool: dict[tuple[str, str | None], ConnectionPool] = {}
 _pool_lock = threading.Lock()
 
 
@@ -96,34 +97,44 @@ class PooledConnection:
 def close_pool(key: str | None = None) -> None:
     """Zamyka bezczynne po??czenia z puli dla danego schematu (u?ywane m.in. w testach)."""
     with _pool_lock:
-        pools = [_pool.pop(k) for k in list(_pool) if k[1] == key]
+        pools = [mapping.pop(k) for mapping in (_pool, _coordination_pool) for k in list(mapping) if k[1] == key]
     for pool in pools:
         pool.close()
 
 
 def close_all_pools() -> None:
     with _pool_lock:
-        pools = list(_pool.values())
+        pools = [pool for mapping in (_pool, _coordination_pool) for pool in mapping.values()]
         _pool.clear()
+        _coordination_pool.clear()
     for pool in pools:
         pool.close()
 
 
 def get_conn() -> PooledConnection:
+    return _get_connection(_pool, _POOL_MAX)
+
+
+def get_coordination_conn() -> PooledConnection:
+    """Bounded account-lock connections cannot occupy the eight data slots."""
+    return _get_connection(_coordination_pool, 4)
+
+
+def _get_connection(mapping, max_size) -> PooledConnection:
     schema = get_schema()
     dsn = get_dsn()
     key = (dsn, schema)
     with _pool_lock:
-        pool = _pool.get(key)
+        pool = mapping.get(key)
         if pool is None:
             options = f"-c search_path={schema},public" if schema else None
             pool = ConnectionPool(
-                dsn, min_size=0, max_size=_POOL_MAX, timeout=10,
+                dsn, min_size=0, max_size=max_size, timeout=10,
                 max_idle=60, max_lifetime=1800,
                 kwargs={"row_factory": _row_factory, "options": options, "connect_timeout": 10},
                 check=ConnectionPool.check_connection, open=True,
             )
-            _pool[key] = pool
+            mapping[key] = pool
     started = perf_counter()
     conn = pool.getconn()
     elapsed = perf_counter() - started

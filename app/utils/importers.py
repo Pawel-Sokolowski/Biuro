@@ -336,11 +336,11 @@ def match_tax_office(value: Any) -> Optional[str]:
         return None
     try:
         from app.db.dao_companies import get_tax_offices
-        names = [
-            re.sub(r"\s+", " ", str(o.get("nazwa") or "")).strip()
-            for o in cached_value('import_tax_offices', get_tax_offices)
-        ]
-        names = [n for n in names if n]
+        def load_offices():
+            names = [re.sub(r"\s+", " ", str(o.get('nazwa') or '')).strip() for o in get_tax_offices()]
+            return [(name, _office_tokens(name)) for name in names if name]
+        offices = cached_value('import_tax_offices', load_offices)
+        names = [name for name, _ in offices]
     except Exception:
         return text
 
@@ -352,8 +352,7 @@ def match_tax_office(value: Any) -> Optional[str]:
     if not wanted:
         return text
     best, best_score, tie = None, 0.0, False
-    for name in names:
-        tokens = _office_tokens(name)
+    for name, tokens in offices:
         if not tokens:
             continue
         hits = sum(1 for w in wanted if any(_tokens_similar(w, t) for t in tokens))
@@ -1048,6 +1047,7 @@ def import_companies_fast_from_excel_file(
     filepath: str,
     db_path: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
+    prepared=None,
 ) -> Dict[str, Any]:
     """progress(tekst) dostaje opis bieżącego etapu, np. "Firma 2 z 120\\nCEIDG/KRS/GUS: zrobione"."""
     def report(text: str) -> None:
@@ -1055,7 +1055,11 @@ def import_companies_fast_from_excel_file(
             progress(text)
 
     try:
-        headers, rows = _load_rows_from_file(filepath)
+        if prepared is None:
+            headers, rows = _load_rows_from_file(filepath)
+        else:
+            prepared.validate(filepath)
+            headers, rows = prepared.headers, prepared.rows(filepath)
     except Exception as exc:
         return {"created": 0, "updated": 0, "warnings": [f"Plik nie mógł zostać wczytany: {exc}"]}
 
@@ -1222,9 +1226,11 @@ def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = N
 
 
 @scoped
-def preview_company_import(filepath: str) -> Dict[str, Any]:
+def preview_company_import(filepath: str, *, prepared=None) -> Dict[str, Any]:
     """Read-only, streaming plan. Do not enrich or write until it is accepted."""
     headers, rows = _load_rows_from_file(filepath)
+    if prepared is not None:
+        prepared.headers = list(headers)
     index = {header: pos for pos, header in enumerate(headers)}
     with get_conn() as conn:
         existing = [dict(row) for row in conn.execute('SELECT id,nip,nazwa FROM firmy')]
@@ -1237,6 +1243,8 @@ def preview_company_import(filepath: str) -> Dict[str, Any]:
     plan = dict(created=0, updated=0, invalid=0, conflicts=0, warnings=[])
     seen = set()
     for row_number, row in enumerate(rows, 2):
+        if prepared is not None:
+            prepared.append(row)
         if not any(value not in (None, '') for value in row):
             continue
         try:
@@ -1266,4 +1274,16 @@ def preview_company_import(filepath: str) -> Dict[str, Any]:
             if len(plan['warnings']) < 100:
                 plan['warnings'].append(f'Wiersz {row_number}: {warning}')
     plan['warnings'].extend(_unknown_column_warnings(headers))
+    if prepared is not None:
+        prepared.validate(filepath)
     return plan
+
+
+def prepare_company_import(filepath):
+    from app.utils.import_source import PreparedCompanyImport
+    prepared = PreparedCompanyImport(filepath)
+    try:
+        return preview_company_import(filepath, prepared=prepared), prepared
+    except Exception:
+        prepared.close()
+        raise

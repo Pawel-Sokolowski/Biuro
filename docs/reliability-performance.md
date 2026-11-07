@@ -49,8 +49,11 @@ Per-invoice transactions and validation remain in place.
 PostgreSQL advisory try-locks coordinate IMAP work between desktops. Automatic
 header checks share a 90-second cooldown; manual requests bypass the cooldown
 but respect an active lock. A database disconnect releases leadership. These
-locks do not replace UIDVALIDITY checks. They reserve one pooled connection per
-active account check; external server delays and pool waits are logged.
+locks do not replace UIDVALIDITY checks. They use a separate coordinator pool, capped at four connections per database/schema,
+so account checks cannot occupy the eight data-pool slots. This caps a process at
+12 pooled connections rather than eight; both pools expire idle connections. The
+cooldown read transaction ends before network I/O. Explicit synchronization
+reports Busy instead of claiming a skipped download completed.
 
 Mailbox substring searches retain literal `%`/`_` semantics. Optional partial
 GIN trigram indexes match the active COALESCE expressions. If the application
@@ -130,3 +133,41 @@ paths. This release does not rewrite all of MailPage/CompanyForm, replace the
 entire IMAP transport, convert every financial column, introduce an ORM, or
 replace JSON. Those larger changes should follow measured need and separate
 compatibility tests.
+
+
+## Review follow-up optimizations
+
+Timer completion now passes its existing database connection through additional
+service recording and draft creation. Time, active-session removal and billing
+commit or roll back together. A failed commit followed by retry cannot create a
+second billable service. Annual fees allocate whole grosz across months before
+employee allocation, preserving totals even with discounts and negative totals.
+
+Chat acknowledgements capture the highest displayed message ID and recheck the
+current tab visibility. A queued acknowledgement never marks later messages
+read and is sent only when its watermark advances. Legacy watermark
+initialization and unread counting share one SQL round trip. Mail badges and
+notification candidates use one consistent snapshot and at most four data
+queries across all configured accounts; candidates are bounded per account and
+respect hidden folders and notification-excluded roles.
+
+Bulk invoice generation runs through CommandRunner, reports per-company progress,
+and guards duplicate clicks, including while its confirmation dialog is open.
+Accepted writes finish even if their page is destroyed. Issued invoice and
+profitability tables store TableRecord values rather than per-cell Qt objects;
+the model emits insert/remove and changed-column signals by stable row keys.
+Legacy item adapters are created on demand for existing action code. A local
+15-column offscreen benchmark (median of four runs, fill plus first frame)
+measured 200 rows at 15.79 ms before / 11.24 ms after, and 2,000 rows at 99.88 ms
+before / 31.77 ms after. These numbers exclude database/network latency.
+
+Import employee aliases and tax-office tokens are prepared once per operation.
+Fast company import reuses its preview's native rows from a private temporary
+spool, so it does not parse XLSX twice or repeat CSV encoding detection. The
+source's identity, size and timestamps are checked before applying the approved
+snapshot; a changed source must be reviewed again. Native dates and numeric
+cells are preserved. The spool is closed on cancellation, failure or completion.
+
+Packaging excludes third-party test/example modules from explicit runtime hidden
+imports. CI type checks now include generic worker callback signatures, compact
+table records, the import spool and mailbox notification result types.

@@ -5,6 +5,9 @@ from contextvars import copy_context
 import threading
 import logging
 from time import perf_counter
+from typing import Callable, TypeVar
+
+Result = TypeVar("Result")
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 from app.config import get_schema, schema_context
 from app.utils.request_cache import request_scope
@@ -57,7 +60,7 @@ class TaskRunner(QObject):
         self._callbacks = {}
         self._jobs = {}
 
-    def submit(self, work, done, error=None):
+    def submit(self, work: Callable[[], Result], done: Callable[[Result], None], error: Callable[[Exception], None] | None = None) -> None:
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
             if _pool.tryTake(job):
@@ -131,7 +134,7 @@ class CommandRunner(QObject):
     def _owner_destroyed(self):
         self._owner_alive = False
 
-    def submit(self, work, done=lambda _: None, error=None):
+    def submit(self, work: Callable[[], Result], done: Callable[[Result], None] = lambda _: None, error: Callable[[Exception], None] | None = None) -> None:
         if len(self._queue) + len(self._jobs) >= self._capacity:
             raise RuntimeError("Kolejka operacji jest pełna. Poczekaj na zakończenie poprzednich operacji.")
         self._generation += 1

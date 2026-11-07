@@ -52,15 +52,20 @@ def run_import(work, parent=None):
 
 def confirm_company_import(path, parent=None):
     from PyQt6.QtWidgets import QMessageBox
-    from app.utils.importers import preview_company_import
-    plan = run_import(lambda _: preview_company_import(path), parent)
+    from app.utils.importers import prepare_company_import
+    plan, prepared = run_import(lambda _: prepare_company_import(path), parent)
     text = (f"Nowe firmy: {plan['created']}\nAktualizacje: {plan['updated']}\n"
             f"Nieprawidłowe wiersze: {plan['invalid']}\nKonflikty: {plan['conflicts']}")
     if plan['warnings']:
         text += '\n\n' + '\n'.join(plan['warnings'][:20])
     if plan['invalid'] or plan['conflicts']:
         QMessageBox.warning(parent, 'Sprawdź plik przed importem', text + '\n\nPopraw błędy i ponów import.')
-        return False
-    return QMessageBox.question(parent, 'Podsumowanie przed importem', text + '\n\nRozpocząć import?',
+        prepared.close()
+        return None
+    accepted = QMessageBox.question(parent, 'Podsumowanie przed importem', text + '\n\nRozpocząć import?',
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+    if not accepted:
+        prepared.close()
+        return None
+    return prepared

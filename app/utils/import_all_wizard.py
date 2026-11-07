@@ -33,9 +33,13 @@ def _import_urzedy(path, parent):
 def _import_firmy(path, parent):
     from app.utils.import_progress import run_import, confirm_company_import
     from app.utils.importers import import_companies_fast_from_excel_file
-    if not confirm_company_import(path, parent):
+    prepared = confirm_company_import(path, parent)
+    if prepared is None:
         raise InterruptedError
-    r = run_import(lambda progress: import_companies_fast_from_excel_file(path, progress=progress), parent)
+    try:
+        r = run_import(lambda progress: import_companies_fast_from_excel_file(path, progress=progress, prepared=prepared), parent)
+    finally:
+        prepared.close()
     text = f"zaimportowano firm: {r.get('created', 0) + r.get('updated', 0)} (nowych: {r.get('created', 0)}, zaktualizowanych: {r.get('updated', 0)})"
     if r.get("warnings"):
         text += f"\nOstrzeżeń: {len(r['warnings'])}\n\n" + "\n".join(r["warnings"][:15])

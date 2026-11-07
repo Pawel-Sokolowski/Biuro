@@ -73,7 +73,7 @@ class InvoiceRefreshStateTests(DbTestCase):
         scroll = self.place_view()
         selected = self.selected()
         table = self.page.issued_table
-        original = table.item(55, 4)
+        original = table.model().rows[55]
         original_widget = table.cellWidget(55, self.page.ISSUED_PREVIEW_COLUMN)
         for _ in range(4):
             self.finish_poll()
@@ -81,7 +81,7 @@ class InvoiceRefreshStateTests(DbTestCase):
         self.assertEqual(self.page._current_period(), '2026-09')
         self.assertEqual(table.verticalScrollBar().value(), scroll)
         self.assertEqual(self.selected(), selected)
-        self.assertIs(table.item(55, 4), original)
+        self.assertIs(table.model().rows[55], original)
         self.assertIs(table.cellWidget(55, self.page.ISSUED_PREVIEW_COLUMN), original_widget)
 
     def test_changed_status_updates_data_without_jumping_to_the_top(self):

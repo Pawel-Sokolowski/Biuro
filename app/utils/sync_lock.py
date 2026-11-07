@@ -4,7 +4,7 @@ from contextvars import ContextVar
 import hashlib
 
 from app.config import get_schema
-from app.db.dao_conn import get_conn
+from app.db.dao_conn import get_coordination_conn as get_conn
 
 _held = ContextVar('account_sync_locks', default=frozenset())
 
@@ -24,8 +24,10 @@ def account_sync_lock(account_id, cooldown=0):
             return
         token = _held.set(held | {key})
         try:
-            if cooldown and conn.execute('SELECT 1 FROM account_sync_state WHERE konto_id=%s '
-                                         "AND checked_at > now() - (%s * interval '1 second')", (account_id, cooldown)).fetchone():
+            recent = cooldown and conn.execute('SELECT 1 FROM account_sync_state WHERE konto_id=%s '
+                "AND checked_at > now() - (%s * interval '1 second')", (account_id, cooldown)).fetchone()
+            conn.commit()  # no idle transaction while waiting on an IMAP server
+            if recent:
                 yield False
                 return
             yield True

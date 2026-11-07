@@ -486,9 +486,13 @@ class CompaniesSettings(QWidget):
             if not path:
                 return
             from app.utils.import_progress import run_import, confirm_company_import
-            if not confirm_company_import(path, self):
+            prepared = confirm_company_import(path, self)
+            if prepared is None:
                 return
-            result = run_import(lambda progress: import_companies_fast_from_excel_file(path, progress=progress), self)
+            try:
+                result = run_import(lambda progress: import_companies_fast_from_excel_file(path, progress=progress, prepared=prepared), self)
+            finally:
+                prepared.close()
             self._on_fast_import_finished(result)
         except Exception as exc:
             self._on_import_error(str(exc))

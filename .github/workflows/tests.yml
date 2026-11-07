@@ -59,7 +59,7 @@ jobs:
         run: |
           python -m pip install --require-hashes -r requirements-build.lock
           python -m ruff check app tests
-          python -m mypy --follow-imports=skip app/utils/money.py app/reports/dto.py
+          python -m mypy --follow-imports=skip app/utils/money.py app/reports/dto.py app/utils/table_records.py app/utils/import_source.py app/utils/background.py app/email/notification_types.py
       - name: Run all test modules
         run: python run_tests.py
       - name: Retain test results

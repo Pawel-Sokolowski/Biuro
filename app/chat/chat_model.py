@@ -206,41 +206,36 @@ def count_messages_after(konwersacja_id: int, after_id: int, exclude_pracownik_i
 
 
 def get_unread_counts(pracownik_id: int) -> Dict[int, int]:
-    """Nieprzeczytane wiadomości od innych osób, per konwersacja."""
-    conn = _get_conn()
-    cur = conn.cursor()
-    # pierwszy raz: nie traktuj starej historii jako nieprzeczytanej
-    cur.execute("""
-        UPDATE uczestnicy_chat u
-        SET ostatnie_przeczytane_id = COALESCE(
-            (SELECT MAX(w.id) FROM wiadomosci_chat w WHERE w.konwersacja_id = u.konwersacja_id), 0)
-        WHERE u.pracownik_id = %s AND u.ostatnie_przeczytane_id IS NULL
-    """, (pracownik_id,))
-    conn.commit()
-    cur.execute("""
-        SELECT w.konwersacja_id AS kid, COUNT(*) AS n
-        FROM wiadomosci_chat w
-        JOIN uczestnicy_chat u ON u.konwersacja_id = w.konwersacja_id AND u.pracownik_id = %s
-        WHERE w.id > COALESCE(u.ostatnie_przeczytane_id, 0)
-          AND w.pracownik_id IS DISTINCT FROM %s
-        GROUP BY w.konwersacja_id
-    """, (pracownik_id, pracownik_id))
-    rows = cur.fetchall()
-    conn.close()
-    return {r["kid"]: int(r["n"]) for r in rows}
+    """Initialize legacy watermarks and count unread messages in one round trip."""
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            WITH initialized AS (
+                UPDATE uczestnicy_chat u SET ostatnie_przeczytane_id=COALESCE(
+                    (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id=u.konwersacja_id),0)
+                WHERE u.pracownik_id=%s AND u.ostatnie_przeczytane_id IS NULL
+                RETURNING konwersacja_id,ostatnie_przeczytane_id
+            )
+            SELECT w.konwersacja_id AS kid,COUNT(*) AS n FROM wiadomosci_chat w
+            JOIN uczestnicy_chat u ON u.konwersacja_id=w.konwersacja_id AND u.pracownik_id=%s
+            LEFT JOIN initialized i ON i.konwersacja_id=u.konwersacja_id
+            WHERE w.id>COALESCE(i.ostatnie_przeczytane_id,u.ostatnie_przeczytane_id,0)
+              AND w.pracownik_id IS DISTINCT FROM %s
+            GROUP BY w.konwersacja_id
+        """, (pracownik_id,pracownik_id,pracownik_id)).fetchall()
+    return {row['kid']:int(row['n']) for row in rows}
 
 
-def mark_conversation_read(konwersacja_id: int, pracownik_id: int) -> None:
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE uczestnicy_chat
-        SET ostatnie_przeczytane_id = COALESCE(
-            (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id = %s), 0)
-        WHERE konwersacja_id = %s AND pracownik_id = %s
-    """, (konwersacja_id, konwersacja_id, pracownik_id))
-    conn.commit()
-    conn.close()
+def mark_conversation_read(konwersacja_id: int, pracownik_id: int, through_id: Optional[int] = None) -> None:
+    """Acknowledge only rendered IDs; delayed writes never regress the watermark."""
+    with _get_conn() as conn:
+        conn.execute("""
+            UPDATE uczestnicy_chat
+            SET ostatnie_przeczytane_id = GREATEST(COALESCE(ostatnie_przeczytane_id, 0),
+                COALESCE(%s, (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id=%s), 0))
+            WHERE konwersacja_id=%s AND pracownik_id=%s
+              AND COALESCE(ostatnie_przeczytane_id, 0) < COALESCE(%s,
+                (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id=%s), 0)
+        """, (through_id, konwersacja_id, konwersacja_id, pracownik_id, through_id, konwersacja_id))
 
 
 def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None,

@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog, QStyledItemDel
 from PyQt6.QtCore import QSettings, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen
 
-from app.email.email_storage import get_visible_unread_counts
+from app.email.email_storage import get_visible_unread_counts, mail_notification_snapshot
 from app.utils.ui_imports import *
 from app.config import get_database
 
@@ -750,8 +750,8 @@ class OfficeManagerApp(QMainWindow):
         self._badge_busy = True
 
         def read():
-            total = sum(sum(get_visible_unread_counts(a['id'], hidden.get(str(a['id']), set())).values()) for a in accounts)
-            return total, MailToaster.collect(accounts, hidden, last_ids)
+            snapshot = mail_notification_snapshot(accounts, hidden, last_ids)
+            return snapshot.total, (snapshot.last_ids, snapshot.messages)
 
         def loaded(result):
             self._badge_busy = False

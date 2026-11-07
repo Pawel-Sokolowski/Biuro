@@ -396,9 +396,10 @@ def spread_annual_fees(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             fee_items = [i for i in items if i["rodzaj"] == rodzaj and i["miesiac"] in fee_months]
             if rodzaj == "ksiegowosc":
                 fee_items += [i for i in items if i["rodzaj"] == "rabat" and i["miesiac"] in fee_months]
-            total = sum(float(i.get("wartosc_netto") or 0) for i in fee_items)
-            for month in _year_months(year):
-                result.append({**fee_items[0], "rodzaj": rodzaj, "miesiac": month, "wartosc_netto": total / 12})
+            total = sum((decimal_amount(i.get("wartosc_netto") or 0) for i in fee_items), Decimal(0))
+            allocated = allocate_money(total, dict.fromkeys(_year_months(year), 1))
+            for month, amount in allocated.items():
+                result.append({**fee_items[0], "rodzaj": rodzaj, "miesiac": month, "wartosc_netto": amount})
             spread.extend(id(i) for i in fee_items)
         result.extend(i for i in items if id(i) not in spread)
     return result

@@ -83,6 +83,7 @@ class ChatPage(QWidget):
         self._poll_timer = QTimer(self)
         self._reads = TaskRunner(self)
         self._writes = CommandRunner(self)
+        self._acknowledged_ids = {}
         self._poll_busy = False
         self._poll_timer.timeout.connect(self._poll_async)
         self._poll_timer.start(3000)
@@ -97,14 +98,14 @@ class ChatPage(QWidget):
         conversation = self.current_konwersacja
         visible = self.isVisible()
         limit = self.offset + self.page_size
-        previous_ids = dict(self._seen_ids)
+        displayed = max((m["id"] for m in (getattr(self, "_rendered_messages", None) or [])), default=0) if getattr(self, "_rendered_conversation", None) == conversation else 0
         self._poll_busy = True
 
         def read():
             latest = get_latest_message_ids(ids)
             counts = get_unread_counts(actor)
             newest = latest.get(conversation, {}).get('id')
-            changed = newest and newest > previous_ids.get(conversation, newest)
+            changed = newest and newest > displayed
             messages = get_messages(conversation, limit=limit, offset=0) if conversation and visible and changed else None
             attachments = get_attachments([message['id'] for message in messages]) if messages else {}
             return latest, counts, messages, attachments
@@ -114,9 +115,7 @@ class ChatPage(QWidget):
             latest, counts, messages, attachments = result
             if conversation != self.current_konwersacja or limit != self.offset + self.page_size:
                 return
-            previous = self._seen_ids.get(conversation)
-            newest = latest.get(conversation, {}).get('id')
-            if messages is not None and previous is not None and newest and newest > previous:
+            if messages is not None and self.isVisible():
                 bar = self.scroll_area.verticalScrollBar()
                 self._render_grouped_messages(messages, scroll_to_bottom=bar.value() >= bar.maximum() - 40, attachments=attachments)
             self._seen_ids.update({key: value['id'] for key, value in latest.items()})
@@ -126,8 +125,8 @@ class ChatPage(QWidget):
                 self._refresh_unread_marks()
                 if grew:
                     QApplication.beep()
-            if conversation and visible:
-                self._writes.submit(lambda: mark_conversation_read(conversation, actor))
+            if conversation and self.isVisible():
+                self._mark_read(conversation)
 
         def failed(exc):
             self._poll_busy = False
@@ -150,7 +149,7 @@ class ChatPage(QWidget):
                     at_bottom = bar.value() >= bar.maximum() - 40
                     self.load_messages(scroll_to_bottom=at_bottom)
             if self.current_konwersacja and self.isVisible():
-                mark_conversation_read(self.current_konwersacja, self.pracownik_id)
+                self._mark_read(self.current_konwersacja)
             counts = get_unread_counts(self.pracownik_id)
         except Exception:
             return
@@ -162,13 +161,20 @@ class ChatPage(QWidget):
                 QApplication.beep()
 
     def _mark_read(self, kid):
-        try:
-            mark_conversation_read(kid, self.pracownik_id)
-        except Exception:
+        if not self.isVisible() or getattr(self, '_rendered_conversation', None) != kid:
             return
-        if kid in self._unread:
-            del self._unread[kid]
-            self._refresh_unread_marks()
+        watermark = max((m['id'] for m in (self._rendered_messages or [])), default=0)
+        previous = self._acknowledged_ids.get(kid, 0)
+        if watermark <= previous:
+            return
+        actor = self.pracownik_id
+        self._acknowledged_ids[kid] = watermark
+
+        def failed(exc):
+            if self._acknowledged_ids.get(kid) == watermark:
+                self._acknowledged_ids[kid] = previous
+
+        self._writes.submit(lambda: mark_conversation_read(kid, actor, through_id=watermark), error=failed)
 
     def _refresh_unread_marks(self):
         for i in range(self.chat_conversations.count()):
@@ -187,7 +193,7 @@ class ChatPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         if self.current_konwersacja:
-            self._mark_read(self.current_konwersacja)
+            self._poll_async()
             self._scroll_to_bottom()
 
     def _build_ui(self):
@@ -335,8 +341,6 @@ class ChatPage(QWidget):
             return
         self.current_konwersacja = item.data(Qt.ItemDataRole.UserRole)
         self.btn_delete.setEnabled(self.current_konwersacja is not None)
-        if self.current_konwersacja in self._unread:
-            self._mark_read(self.current_konwersacja)
         self.btn_manage.setEnabled(can_manage_conversation(self.current_konwersacja, self.pracownik_id))
         self.offset = 0
         self.has_more_history = True
@@ -357,6 +361,7 @@ class ChatPage(QWidget):
         self.has_more_history = len(messages) >= self.offset + self.page_size
         # messages are returned oldest-first by dao; render grouped
         self._render_grouped_messages(messages, scroll_to_bottom=scroll_to_bottom)
+        self._mark_read(self.current_konwersacja)
 
     def load_more_history(self):
         if self.loading_history or not self.has_more_history:

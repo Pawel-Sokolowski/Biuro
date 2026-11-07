@@ -25,6 +25,10 @@ except ImportError as exc:
         "python -m pip install -r requirements.txt"
     ) from exc
 
+def runtime_module(name):
+    return not any(part in {'test', 'tests', 'examples', 'benchmarks'} for part in name.split('.'))
+
+
 ROOT = Path(SPEC).resolve().parent.parent
 APP = ROOT / "app"
 
@@ -65,7 +69,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas + [(str(ROOT / 'app' / 'VERSION'), 'app')],
     hiddenimports=[
-        *collect_submodules("app"),
+        *collect_submodules("app", filter=runtime_module),
         *mt940_hidden,
         "encodings.utf_8_sig",
         "encodings.cp1250",
@@ -74,15 +78,15 @@ a = Analysis(
         *PSYCOPG_HIDDEN,
         "psycopg_pool",
         "imapclient.imap_utf7",
-        *collect_submodules('google.auth'),
-        *collect_submodules('google.oauth2'),
-        *collect_submodules('google_auth_oauthlib'),
-        *collect_submodules('docxtpl'),
+        *collect_submodules('google.auth', filter=runtime_module),
+        *collect_submodules('google.oauth2', filter=runtime_module),
+        *collect_submodules('google_auth_oauthlib', filter=runtime_module),
+        *collect_submodules('docxtpl', filter=runtime_module),
         *collect_submodules('stdnum.pl'),
         "sqlalchemy.dialects.postgresql.psycopg",
         *[m for pkg in CALDAV_PACKAGES
           for m in collect_submodules(
-              pkg, filter=lambda name: not name.startswith(("caldav.jmap", "niquests.extensions.pyodide")))],
+              pkg, filter=lambda name: runtime_module(name) and not name.startswith(("caldav.jmap", "niquests.extensions.pyodide")))],
         "PyQt6.QtCharts",
         "PyQt6.QtWebEngineCore",
         "PyQt6.QtWebEngineWidgets",

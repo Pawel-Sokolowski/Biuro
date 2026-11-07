@@ -1481,6 +1481,10 @@ def _sync_and_prefetch_impl(
     return total_headers
 
 
+class MailboxSyncBusy(RuntimeError):
+    """An explicit sync was not performed because another desktop owns it."""
+
+
 def sync_and_prefetch(
     konto_id: int,
     folders: List[str],
@@ -1502,7 +1506,7 @@ def sync_and_prefetch(
         with account_sync_lock(konto_id) as leader:
             if not leader:
                 logger.info('imap_sync account=%s skipped: another workstation is synchronizing', konto_id)
-                return 0
+                raise MailboxSyncBusy('Inny komputer synchronizuje to konto. Poczekaj na zakończenie i ponów synchronizację.')
             result = _sync_and_prefetch_impl(
                 konto_id, folders, first_run=first_run, on_headers=on_headers,
                 on_progress=on_progress, all_folders=all_folders,

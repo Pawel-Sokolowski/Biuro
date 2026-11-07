@@ -71,16 +71,20 @@ def resolve_employee_ids(cursor, raw_value):
     def load_employees():
         cursor.execute("SELECT id, email, imie, nazwisko FROM pracownicy WHERE aktywny = 1")
         return cursor.fetchall()
-    employees = cached_value('import_employee_lookup', load_employees)
-    lookup = {}
-    for employee_id, email_address, first_name, last_name in employees:
-        first = (first_name or "").strip().lower()
-        last = (last_name or "").strip().lower()
-        aliases = {str(employee_id), f"{first} {last}".strip(), f"{last} {first}".strip(), f"{first[:1]}{last[:1]}"}
-        if email_address:
-            aliases.add(email_address.strip().lower())
-        for alias in aliases - {''}:
-            lookup.setdefault(alias, set()).add(employee_id)
+    def build_lookup():
+        employees = load_employees()
+        lookup = {}
+        for employee_id, email_address, first_name, last_name in employees:
+            first = (first_name or "").strip().lower()
+            last = (last_name or "").strip().lower()
+            aliases = {str(employee_id), f"{first} {last}".strip(), f"{last} {first}".strip(), f"{first[:1]}{last[:1]}"}
+            if email_address:
+                aliases.add(email_address.strip().lower())
+            for alias in aliases - {''}:
+                lookup.setdefault(alias, set()).add(employee_id)
+
+        return lookup
+    lookup = cached_value('import_employee_lookup', build_lookup)
 
     for token in split_multi_value(raw_value):
         candidates = lookup.get(token.lower(), set())

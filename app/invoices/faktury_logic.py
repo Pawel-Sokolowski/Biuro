@@ -5,7 +5,7 @@ import logging
 import psycopg
 from app.utils.parsing import to_float
 from app.invoices.positions import decimal_value, money, normalize_position, totals
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime
 
 from app.db.dao_conn import get_conn
@@ -484,7 +484,7 @@ class FakturyLogic:
 
     # ---------------- SAVE MONTH ----------------
     @scoped
-    def generate_and_save_invoices_for_month(self, miesiac: str, only_active: bool = True) -> Dict[str, Any]:
+    def generate_and_save_invoices_for_month(self, miesiac: str, only_active: bool = True, progress: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]:
         if not miesiac:
             return {"processed": 0, "created": 0, "updated": 0, "errors": ["Brak miesiąca."]}
 
@@ -513,8 +513,10 @@ class FakturyLogic:
         skipped_details: List[str] = []
         errors: List[str] = []
 
-        for r in rows:
+        for index, r in enumerate(rows, 1):
             fid = r["id"]
+            if progress:
+                progress(index, len(rows), r.get("nazwa_skrocona") or r.get("nazwa") or str(fid))
 
             try:
                 company = self._get_company(fid)

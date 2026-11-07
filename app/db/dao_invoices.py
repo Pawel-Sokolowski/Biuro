@@ -271,9 +271,10 @@ def generate_extra_services_invoice(firma_id: int, miesiac: str, actor_id: Optio
 
 
 def _get_or_create_draft_invoice_for_company(
-    firma_id: int, miesiac: str, pracownik_id: Optional[int] = None
+    firma_id: int, miesiac: str, pracownik_id: Optional[int] = None, *, connection=None
 ) -> int:
-    conn = get_conn()
+    owns_connection = connection is None
+    conn = get_conn() if owns_connection else connection
     cur = conn.cursor()
     try:
         cur.execute(
@@ -310,10 +311,12 @@ def _get_or_create_draft_invoice_for_company(
         )
         _new_id = cur.fetchone()[0]
         invoice_id = _new_id
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         return invoice_id
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def _recalculate_invoice_totals(conn: psycopg.Connection, invoice_id: int):
@@ -347,11 +350,13 @@ def add_invoice_item_for_service(
     cena_netto: Optional[float] = None,
     jednostka: str = "godz.",
     zadanie_id: Optional[int] = None,
+    *, connection=None,
 ) -> Optional[int]:
     if ilosc_hours is None or ilosc_hours <= 0:
         return None
 
-    conn = get_conn()
+    owns_connection = connection is None
+    conn = get_conn() if owns_connection else connection
     cur = conn.cursor()
     try:
         cur.execute(
@@ -390,7 +395,8 @@ def add_invoice_item_for_service(
             (firma_id, miesiac, usluga_id, ilosc_rounded, cena_netto, jednostka, zadanie_id),
         )
         extra_service_row_id = cur.fetchone()[0]
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         if task and task["status"] != "Zakończone":
             return None
 
@@ -409,7 +415,7 @@ def add_invoice_item_for_service(
         if issued and issued[0]:
             return None
 
-        invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id)
+        invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id, connection=conn)
         wartosc_netto = round(cena_netto * ilosc_rounded, 2)
         vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
         wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
@@ -471,15 +477,18 @@ def add_invoice_item_for_service(
         )
 
         _sync_extra_service_allocations(conn, invoice_id, positions)
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         return invoice_id
 
     except Exception:
-        conn.rollback()
+        if owns_connection:
+            conn.rollback()
         raise
 
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def add_custom_invoice_item(

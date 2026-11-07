@@ -21,7 +21,8 @@ from app.db.dao_invoices import (
     validate_invoice_extra_services_ready,
 )
 from app.invoices.positions import normalize_position, totals
-from app.utils.background import TaskRunner
+from app.utils.background import TaskRunner, CommandRunner
+from app.utils.table_records import TableRecord
 from app.invoices.vat_summary import VatSummary
 from app.invoices.table_state import preserve_table_view
 from app.invoices.list_table import InvoiceListTable, PreviewDelegate
@@ -246,6 +247,8 @@ class KsefUnmatchedDialog(QDialog):
 
 
 class FakturyPage(QWidget):
+    generation_progress = pyqtSignal(int, int, str)
+
     DRAFT_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Kwota netto", "Kwota brutto",
                      "Data wystawienia", "Termin płatności"]
     ISSUED_HEADERS = ["ID", "Rodzaj", "Nabywca", "Miesiąc", "Numer", "Podgląd", "Netto", "Brutto",
@@ -274,6 +277,10 @@ class FakturyPage(QWidget):
         self._issued_kind_filter = None
         self._refresh_later = QTimer(self)
         self._invoice_reads = TaskRunner(self)
+        self._invoice_commands = CommandRunner(self)
+        self._generation_busy = False
+        self._generation_progress = None
+        self.generation_progress.connect(self._update_generation_progress)
         self._settlement_reads = TaskRunner(self)
         self._refresh_later.setSingleShot(True)
         self._refresh_later.setInterval(250)
@@ -1073,19 +1080,57 @@ class FakturyPage(QWidget):
 
     # ---------------- generowanie ----------------
     def _on_generate_clicked(self):
-        miesiac = self._current_month()
-        if QMessageBox.question(
-            self, "Generowanie faktur",
-            f"Czy na pewno chcesz wygenerować faktury dla wszystkich firm za {miesiac}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        ) != QMessageBox.StandardButton.Yes:
+        if self._generation_busy:
             return
+        month = self._current_month()
+        self._generation_busy = True  # also guards the confirmation's nested event loop
+        if QMessageBox.question(self, 'Generowanie faktur',
+            f'Czy na pewno chcesz wygenerować faktury dla wszystkich firm za {month}?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            self._generation_busy = False
+            return
+        self.btn_generate_all.setEnabled(False)
+        progress = QProgressDialog('Generowanie faktur…', None, 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setAutoClose(False)
+        progress.show()
+        self._generation_progress = progress
+        logic = self.logic
+        signal = self.generation_progress
+
+        def update(done, total, name):
+            try:
+                signal.emit(done, total, name)
+            except RuntimeError:
+                pass  # Accepted writes finish even if their page was destroyed.
+
+        def failed(exc):
+            self._finish_generation()
+            logger.error('invoice_generation_failed: %s', exc, exc_info=(type(exc), exc, exc.__traceback__))
+            QMessageBox.critical(self, 'Błąd', f'Generowanie faktur: {exc}')
+
         try:
-            result = self.logic.generate_and_save_invoices_for_month(miesiac, only_active=True)
+            self._invoice_commands.submit(lambda: logic.generate_and_save_invoices_for_month(month, only_active=True, progress=update),
+                                          self._generation_finished, failed)
         except Exception as exc:
-            logger.exception("Błąd generowania faktur")
-            QMessageBox.critical(self, "Błąd", f"Wyjątek podczas generowania: {exc}")
-            return
+            failed(exc)
+
+    def _update_generation_progress(self, done, total, name):
+        if self._generation_progress is not None:
+            self._generation_progress.setMaximum(max(1, total))
+            self._generation_progress.setValue(done)
+            self._generation_progress.setLabelText(f'Firma {done} z {total}: {name}')
+
+    def _finish_generation(self):
+        self._generation_busy = False
+        self.btn_generate_all.setEnabled(True)
+        if self._generation_progress is not None:
+            self._generation_progress.close()
+            self._generation_progress.deleteLater()
+            self._generation_progress = None
+
+    def _generation_finished(self, result):
+        self._finish_generation()
         message = (
             f"Przetworzono: {result.get('processed', 0)} firm.\n"
             f"Utworzono: {result.get('created', 0)} faktur.\n"
@@ -1211,9 +1256,7 @@ class FakturyPage(QWidget):
                    or self._issued_kind_filter != kind_filter)
         if changed:
             with preserve_table_view(self.issued_table):
-                self.issued_table.setRowCount(0)
-                self.issued_table.setRowCount(len(invoices))
-                row = 0
+                records = []
                 for inv in invoices:
                     if number_filter not in str(inv.get("numer") or "").casefold():
                         continue
@@ -1237,31 +1280,30 @@ class FakturyPage(QWidget):
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
                               inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
-                    for column, value in enumerate(values):
-                        self.issued_table.setItem(row, column, _cell(value, column in (6, 7, 8, 9)))
+                    roles = {c: {Qt.ItemDataRole.TextAlignmentRole: Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter} for c in (6,7,8,9)}
+                    def tooltip(column, text):
+                        roles.setdefault(column, {})[Qt.ItemDataRole.ToolTipRole] = text
                     if paid:
                         lines = "\n".join(f"{_fmt_date(p['data_zaplaty'])} — {p['kwota']:.2f} zł"
                                           + (' (rozliczenie korektą)' if p.get('sposob') == 'kompensata' else '') for p in paid)
-                        self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Rozliczono:\n" + lines)
-                        self.issued_table.item(row, self.ISSUED_PAID_COLUMN).setToolTip(
+                        tooltip(self.ISSUED_NUMBER_COLUMN, "Rozliczono:\n" + lines)
+                        tooltip(self.ISSUED_PAID_COLUMN,
                             f"FV {inv['numer']}\nwyst. {_fmt_date(inv.get('data_wystawienia'))}"
                         )
                     else:
-                        self.issued_table.item(row, self.ISSUED_NUMBER_COLUMN).setToolTip("Brak zapłaty")
-                    self.issued_table.item(row, self.ISSUED_PREVIEW_COLUMN).setText('Podgląd')
-                    self.issued_table.item(row, self.ISSUED_PREVIEW_COLUMN).setToolTip('Wyświetl fakturę i umożliw zapis do PDF')
-                    ksef_item = self.issued_table.item(row, self.ISSUED_KSEF_COLUMN)
+                        tooltip(self.ISSUED_NUMBER_COLUMN, "Brak zapłaty")
+                    values[self.ISSUED_PREVIEW_COLUMN] = 'Podgląd'
+                    tooltip(self.ISSUED_PREVIEW_COLUMN, 'Wyświetl fakturę i umożliw zapis do PDF')
                     if inv["ksef_numer"]:
                         font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
                         font.setUnderline(True)
-                        ksef_item.setFont(font)
-                        ksef_item.setForeground(KSEF_LINK_COLOR)
-                        ksef_item.setToolTip(
+                        roles[self.ISSUED_KSEF_COLUMN] = {Qt.ItemDataRole.FontRole: font, Qt.ItemDataRole.ForegroundRole: KSEF_LINK_COLOR}
+                        tooltip(self.ISSUED_KSEF_COLUMN,
                             "Kliknij, aby otworzyć urzędową weryfikację KSeF "
                             "(numer zostanie też skopiowany do schowka)"
                         )
-                    row += 1
-                self.issued_table.setRowCount(row)
+                    records.append(TableRecord(str(inv['id']), tuple('' if v is None else str(v) for v in values), roles))
+                self.issued_table.set_records(records)
 
             self._issued_rows = deepcopy(invoices)
             self._issued_payments = deepcopy(payments)

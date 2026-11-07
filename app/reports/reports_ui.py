@@ -13,6 +13,7 @@ import datetime
 import logging
 from app.utils.background import TaskRunner, CommandRunner
 from app.utils.item_table import ItemTable
+from app.utils.table_records import TableRecord
 
 from app.reports.reports_logic import (
     get_all_companies,
@@ -453,26 +454,24 @@ class ReportsPage(QWidget):
         tables = {"ksiegowosc": self.import_table, "kadry": self.import_table_kadry}
         totals = {}
         for sekcja, table in tables.items():
-            table.begin_batch()
-            table.setRowCount(0)
+            records = []
             sek = cena = koszt = 0.0
             for item in rows:
-                if item["sekcja"] != sekcja:
+                if item['sekcja'] != sekcja:
                     continue
-                row = table.rowCount()
-                table.insertRow(row)
-                for col, value in enumerate(self._profit_values(item)):
-                    cell = QTableWidgetItem(str(value))
-                    if col >= 3:
-                        cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    if col == 9 and item["zysk"] < 0:
-                        cell.setForeground(QColor("#c62828"))
-                    table.setItem(row, col, cell)
-                sek += item["sekundy"]
-                cena += item["cena"]
-                koszt += item["koszt"]
+                values = tuple(str(v) for v in self._profit_values(item))
+                roles = {col: {Qt.ItemDataRole.TextAlignmentRole: Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter} for col in range(3, len(values))}
+                if item['zysk'] < 0:
+                    roles[9][Qt.ItemDataRole.ForegroundRole] = QColor('#c62828')
+                company_key = item.get('firma_id') if item.get('firma_id') is not None else ('name', item['klient'])
+                employee_key = item.get('pracownik_id') if item.get('pracownik_id') is not None else ('name', item['pracownik'])
+                key = (company_key, item['miesiac'], sekcja, employee_key)
+                records.append(TableRecord(key, values, roles))
+                sek += item['sekundy']
+                cena += item['cena']
+                koszt += item['koszt']
             totals[sekcja] = (sek, cena, koszt)
-            table.end_batch()
+            table.set_records(records)
             table.resizeColumnsToContents()
             fit_table_height(table)
         if not rows:

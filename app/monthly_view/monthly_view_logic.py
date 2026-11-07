@@ -515,6 +515,7 @@ class MonthlyViewLogic:
                 self.aktualny_miesiac,
                 self.pracownik_id,
                 zadanie_id=(activity or {}).get("task_id"),
+                connection=cur.connection,
             )
 
         self._durable_timers.pop(typ, None)

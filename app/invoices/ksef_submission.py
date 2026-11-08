@@ -292,11 +292,28 @@ def refresh_invoice_submission(invoice_id: int, actor_id: int, *, client=None) -
                    ksef_numer = CASE WHEN %s THEN %s ELSE ksef_numer END,
                    ksef_data = CASE WHEN %s THEN to_char(now(), 'YYYY-MM-DD HH24:MI:SS') ELSE ksef_data END
                WHERE id = %s AND ksef_referencja_sesji = %s AND ksef_referencja_faktury = %s
-                 AND ksef_srodowisko_wysylki = %s AND ksef_nip_wysylki = %s RETURNING id""",
-            (status, accepted, result.get("ksefNumber"), accepted, invoice_id, session, ref, environment, nip),
+                 AND ksef_srodowisko_wysylki = %s AND ksef_nip_wysylki = %s
+                 AND (COALESCE(ksef_status, '') NOT IN ('przyjeta', 'odrzucona') OR ksef_status = %s)
+                 AND (NULLIF(BTRIM(COALESCE(ksef_numer, '')), '') IS NULL
+                      OR (%s AND ksef_numer = %s))
+               RETURNING id""",
+            (status, accepted, result.get("ksefNumber"), accepted, invoice_id, session, ref, environment, nip,
+             status, accepted, result.get("ksefNumber")),
         ).fetchone()
         if not updated:
-            raise KsefError("Stan wysyłki zmienił się podczas pobierania odpowiedzi. Sprawdź status ponownie.")
+            latest = conn.execute(
+                "SELECT ksef_status, ksef_numer FROM faktury WHERE id = %s "
+                "AND ksef_referencja_sesji = %s AND ksef_referencja_faktury = %s "
+                "AND ksef_srodowisko_wysylki = %s AND ksef_nip_wysylki = %s",
+                (invoice_id, session, ref, environment, nip),
+            ).fetchone()
+            if latest and latest['ksef_status'] in ('przyjeta', 'odrzucona'):
+                # A newer request already saved a final result for this attempt.
+                # Return that state instead of reporting the stale network reply.
+                result = {**result, 'status': {'code': 200 if latest['ksef_status'] == 'przyjeta' else 400},
+                          'ksefNumber': latest['ksef_numer']}
+            else:
+                raise KsefError("Stan wysyłki zmienił się podczas pobierania odpowiedzi. Sprawdź status ponownie.")
         conn.commit()
     finally:
         conn.close()
@@ -327,10 +344,14 @@ def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -
             raise KsefError("Inna wystawiona faktura ma już ten numer. Ustal prawidłowy numer przed wysyłką.")
     finally:
         conn.close()
-    country = str(get_setting("faktury_sprzedawca_kraj") or "PL").strip().casefold()
+    from app.invoices.invoice_identity import with_seller_identity
+    invoice = with_seller_identity(invoice)
+    frozen = invoice.get('_seller_frozen')
+    country = str((invoice.get('sprzedawca_kraj') if frozen else get_setting("faktury_sprzedawca_kraj")) or "PL").strip().casefold()
     if country not in ("pl", "polska", "poland"):
         raise KsefError("Automatyczna wysyłka wymaga danych krajowego sprzedawcy.")
-    if not str(get_setting("faktury_sprzedawca_adres") or "").strip():
+    seller_address = invoice.get('sprzedawca_adres') if frozen else ' '.join(str(part) for part in (get_setting("faktury_sprzedawca_adres"), get_setting("faktury_sprzedawca_kod"), get_setting("faktury_sprzedawca_miasto")) if part)
+    if not str(seller_address or "").strip():
         raise KsefError("Uzupełnij adres sprzedawcy w ustawieniach faktur.")
     invoice = _with_buyer_data(invoice)
     from app.db.dao_companies import get_company
@@ -339,13 +360,13 @@ def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -
     candidates = (invoice.get("metoda_kasowa"), company.get("metoda_kasowa"),
                   get_setting_first(("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa"), ""))
     invoice["metoda_kasowa"] = next((flag for value in candidates if (flag := _to_bool(value)) is not None), False)
-    seller_nip = _digits(get_setting("faktury_sprzedawca_nip") or get_setting(NIP_KEY))
+    seller_nip = _digits(invoice.get('sprzedawca_nip') if frozen else get_setting("faktury_sprzedawca_nip") or get_setting(NIP_KEY))
     if seller_nip != _digits(get_setting(NIP_KEY)):
         raise KsefError("NIP sprzedawcy różni się od NIP w konfiguracji KSeF.")
     seller = {
         "nip": seller_nip,
-        "name": get_setting("faktury_sprzedawca_nazwa") or invoice.get("wystawca") or get_setting_first(("wystawca_faktur", "wystawca", "faktury_wystawca")),
-        "address": " ".join(str(part) for part in (get_setting("faktury_sprzedawca_adres"), get_setting("faktury_sprzedawca_kod"), get_setting("faktury_sprzedawca_miasto")) if part),
+        "name": invoice.get('sprzedawca_nazwa') if frozen else get_setting("faktury_sprzedawca_nazwa") or invoice.get("wystawca") or get_setting_first(("wystawca_faktur", "wystawca", "faktury_wystawca")),
+        "address": seller_address,
         "account": invoice.get("konto_bankowe") or get_setting("konto_bankowe_biura"),
     }
     corrected = _authorized_invoice(invoice["korygowana_faktura_id"], actor_id) if invoice.get("korygowana_faktura_id") else None

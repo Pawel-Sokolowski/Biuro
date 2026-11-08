@@ -460,6 +460,8 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         conn.commit()
         conn.close()
         invoice = get_invoice_by_id(self.invoice_id)
+        # Model the identity captured when this fixture invoice was issued.
+        invoice['seller_snapshot'] = {'sprzedawca_nazwa': 'Biuro Pełne Dane sp. z o.o.', 'sprzedawca_nip': '1234567890', 'sprzedawca_adres': 'Testowa 1'}
         rendered = invoice_html(invoice, [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100,
                                            "vat": 23, "netto": 100, "brutto": 123}])
         self.assertIn("Biuro Pełne Dane sp. z o.o.", rendered)

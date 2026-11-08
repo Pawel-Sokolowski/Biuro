@@ -59,8 +59,18 @@ class TaskRunner(QObject):
         self._generation = 0
         self._callbacks = {}
         self._jobs = {}
+        self._request_key = None
+        self._pending_read = None
 
-    def submit(self, work: Callable[[], Result], done: Callable[[Result], None], error: Callable[[Exception], None] | None = None) -> None:
+    def submit(self, work: Callable[[], Result], done: Callable[[Result], None], error: Callable[[Exception], None] | None = None, *, key: object = None) -> None:
+        # A periodic refresh of the same context must not invalidate the useful
+        # in-flight result. Deliver it, then do at most one requested rerun.
+        if key is not None and key == self._request_key and self._generation in self._jobs:
+            self._callbacks[self._generation] = (done, error)
+            self._pending_read = (work, done, error, key)
+            return
+        self._request_key = key
+        self._pending_read = None
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
             if _pool.tryTake(job):
@@ -80,6 +90,8 @@ class TaskRunner(QObject):
             raise
 
     def invalidate(self):
+        self._request_key = None
+        self._pending_read = None
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
             if _pool.tryTake(job):
@@ -94,10 +106,15 @@ class TaskRunner(QObject):
         if callbacks is None or generation != self._generation:
             return
         done, error = callbacks
+        pending = self._pending_read
+        self._pending_read = None
         if exc is None:
             done(result)
         elif error is not None:
             error(exc)
+        if pending is not None and generation == self._generation:
+            work, done, error, key = pending
+            self.submit(work, done, error, key=key)
 
 
 class LatestRead:

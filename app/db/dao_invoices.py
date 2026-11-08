@@ -277,6 +277,9 @@ def _get_or_create_draft_invoice_for_company(
     conn = get_conn() if owns_connection else connection
     cur = conn.cursor()
     try:
+        # Serialize the no-draft-yet case as well as reads of existing drafts.
+        # NO KEY UPDATE remains compatible with service-ledger FK checks.
+        cur.execute("SELECT id FROM firmy WHERE id = %s FOR NO KEY UPDATE", (firma_id,))
         cur.execute(
             """
             SELECT id
@@ -290,6 +293,7 @@ def _get_or_create_draft_invoice_for_company(
                      updated_at DESC,
                      id DESC
             LIMIT 1
+            FOR UPDATE
             """,
             (firma_id, miesiac),
         )
@@ -400,6 +404,11 @@ def add_invoice_item_for_service(
         if task and task["status"] != "Zakończone":
             return None
 
+        # The company lock serializes draft creation with regeneration; invoice
+        # row locks serialize the merge with editing and issuance. Do not take
+        # the numbering advisory lock after these rows (issuance takes it first).
+        cur.execute("SELECT id FROM firmy WHERE id = %s FOR NO KEY UPDATE", (firma_id,))
+
         # Gdy faktura została już wystawiona, nie tworzymy drugiej faktury
         # za ten sam miesiąc: usługa poczeka w ewidencji na jej regenerację.
         cur.execute(
@@ -408,11 +417,12 @@ def add_invoice_item_for_service(
             FROM faktury
             WHERE firma_id = %s AND miesiac = %s
               AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0
+            ORDER BY id FOR UPDATE
             """,
             (firma_id, miesiac),
         )
-        issued = cur.fetchone()
-        if issued and issued[0]:
+        existing = cur.fetchall()
+        if any(row[0] for row in existing):
             return None
 
         invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id, connection=conn)
@@ -420,8 +430,10 @@ def add_invoice_item_for_service(
         vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
         wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
 
-        cur.execute("SELECT pozycje_json FROM faktury WHERE id = %s", (invoice_id,))
+        cur.execute("SELECT pozycje_json, eksportowana FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,))
         invoice_row = cur.fetchone()
+        if not invoice_row or invoice_row["eksportowana"]:
+            return None
         try:
             positions = json.loads(invoice_row["pozycje_json"] or "[]") if invoice_row else []
         except (TypeError, json.JSONDecodeError):
@@ -466,7 +478,7 @@ def add_invoice_item_for_service(
             UPDATE faktury
             SET kwota_netto = %s, kwota_brutto = %s,
                 pozycje_json = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
-            WHERE id = %s
+            WHERE id = %s AND COALESCE(eksportowana, 0) = 0
             """,
             (
                 round(sum(float(p.get("netto") or 0) for p in positions), 2),
@@ -475,6 +487,8 @@ def add_invoice_item_for_service(
                 invoice_id,
             ),
         )
+        if cur.rowcount != 1:
+            raise InvoiceLockedError("Faktura została już wystawiona. Usługa pozostaje w ewidencji.")
 
         _sync_extra_service_allocations(conn, invoice_id, positions)
         if owns_connection:
@@ -782,6 +796,8 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
         placeholders = ",".join(["%s"] * len(invoice_ids))
         # Use the same invoice -> allocation lock order as draft editing.
         cur.execute(f"SELECT id FROM faktury WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE", invoice_ids)
+        from app.invoices.invoice_identity import freeze_seller
+        freeze_seller(conn, invoice_ids)
         validate_invoice_extra_services_ready(invoice_ids, conn=conn, lock=True)
         for invoice_id in sorted(set(invoice_ids)):
             row = conn.execute("SELECT cancelled_at FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
@@ -1257,11 +1273,11 @@ def create_correction(invoice_id: int, przyczyna: str = "") -> int:
         cur = conn.execute(
             f"""
             INSERT INTO faktury (
-                firma_id, miesiac, kwota_netto, kwota_brutto, data_wystawienia, data_sprzedazy,
+                firma_id, kontrahent_id, reczna, miesiac, kwota_netto, kwota_brutto, data_wystawienia, data_sprzedazy,
                 termin_platnosci, pozycje_json, eksportowana, status, rodzaj,
                 korygowana_faktura_id, przyczyna_korekty, {', '.join(columns)}
             )
-            SELECT firma_id, miesiac, %s, %s, %s, %s, %s, %s, 0, 'robocza', 'korekta', id, %s,
+            SELECT firma_id, kontrahent_id, reczna, miesiac, %s, %s, %s, %s, %s, %s, 0, 'robocza', 'korekta', id, %s,
                    {', '.join(columns)}
             FROM faktury WHERE id = %s RETURNING id
             """,

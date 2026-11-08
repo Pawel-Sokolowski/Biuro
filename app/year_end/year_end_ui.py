@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import (
 
 from app.companies.constants import ROZLICZENIE_ROCZNE, ROZLICZENIE_ROCZNE_OPIS
 from app.db.dao_year_end import list_year_end, save_declaration, set_company_declarations
+from app.utils.background import TaskRunner
+from app.utils.view_state import preserve_view_state
 
 HEADERS = ["Klient", "NIP", "Forma opodatkowania", "Deklaracja", "Stan", "Data złożenia",
            "Kwota", "UPO", "Uwagi"]
@@ -60,6 +62,11 @@ class YearEndPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self._rows = []
+        self._companies = []
+        self._cache_year = None
+        self._requested_year = None
+        self._reads = TaskRunner(self)
+        self._columns_sized = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -78,11 +85,11 @@ class YearEndPage(QWidget):
             for widget in (self.title, self.year_label, self.year):
                 widget.setVisible(False)
         self.only_open = QCheckBox("Tylko niezłożone")
-        self.only_open.toggled.connect(self.refresh)
+        self.only_open.toggled.connect(self._apply_filters)
         top.addWidget(self.only_open)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Szukaj klienta…")
-        self.search.textChanged.connect(self.refresh)
+        self.search.textChanged.connect(self._apply_filters)
         top.addWidget(self.search)
         self.btn_mark = QPushButton("Oznacz jako złożoną")
         self.btn_mark.clicked.connect(self._mark_filed)
@@ -103,7 +110,8 @@ class YearEndPage(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.doubleClicked.connect(lambda *_: self._edit_selected())
         layout.addWidget(self.table)
-        self.refresh()
+        if not embedded:
+            self.refresh()
 
     def set_year(self, year: int):
         if self.year.value() != year:
@@ -112,10 +120,32 @@ class YearEndPage(QWidget):
             self.refresh()
 
     def refresh(self, *_):
+        year = self.year.value()
+        if self._requested_year != year:
+            self._companies = []
+            self._cache_year = None
+            self._apply_filters()
+            self.summary.setText('Wczytywanie deklaracji…')
+        self._requested_year = year
+
+        def loaded(companies):
+            if self.year.value() == year:
+                self._companies = companies
+                self._cache_year = year
+                self._apply_filters()
+
+        def failed(exc):
+            if self.year.value() == year:
+                self.summary.setText('Nie udało się odświeżyć deklaracji.')
+                self.summary.setToolTip(str(exc))
+
+        self._reads.submit(lambda: list_year_end(year), loaded, failed, key=year)
+
+    def _apply_filters(self, *_):
         needle = self.search.text().strip().lower()
         rows = []
         missing = []
-        for company in list_year_end(self.year.value()):
+        for company in self._companies:
             name = company.get("nazwa_skrocona") or company.get("nazwa") or ""
             if needle and needle not in f"{name} {company.get('nazwa', '')} {company.get('nip', '')}".lower():
                 continue
@@ -128,9 +158,12 @@ class YearEndPage(QWidget):
                     continue
                 rows.append((company, name, decl))
         self._rows = rows
+        with preserve_view_state(self.table, lambda index: index.data(Qt.ItemDataRole.UserRole)):
+            self._fill_table(rows, missing)
+
+    def _fill_table(self, rows, missing):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(rows))
         done = 0
         for r, (company, name, decl) in enumerate(rows):
@@ -139,6 +172,8 @@ class YearEndPage(QWidget):
                           "BRAK", "", "", "", "", ""]
                 for c, value in enumerate(values):
                     item = QTableWidgetItem(value)
+                    if c == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, (company['id'], None, None))
                     if c == 3:
                         item.setForeground(Qt.GlobalColor.red)
                     self.table.setItem(r, c, item)
@@ -154,17 +189,21 @@ class YearEndPage(QWidget):
             ]
             for c, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, (company['id'], decl['kod'], decl.get('owner_key', 0)))
                 if c == 4:
                     item.setForeground(Qt.GlobalColor.darkGreen if filed else Qt.GlobalColor.red)
                 self.table.setItem(r, c, item)
-        self.table.setUpdatesEnabled(True)
-        self.table.resizeColumnsToContents()
+        if rows and not self._columns_sized:
+            self.table.resizeColumnsToContents()
+            self._columns_sized = True
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
         text = f"Złożone: {done} / {len(rows) - len(missing)}"
         if missing:
             text += f"   |   Bez deklaracji (BRAK): {len(missing)} — zaznacz i kliknij „Edytuj…”"
         self.summary.setText(text)
+        self.summary.setToolTip('')
 
     def _selected(self):
         row = self.table.currentRow()

@@ -14,6 +14,7 @@ import requests
 from app.db import dao_calendar, dao_calendar_sync as outbox
 from app.db.dao_app_settings import delete_setting, get_setting, set_setting
 from app.utils.crypto import decrypt_password, encrypt_password
+from app.kalendarz.caldav_identity import WARSAW
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -223,7 +224,9 @@ def _from_google(item: Dict[str, Any]) -> Dict[str, Any]:
         start_s, end_s, all_day = start["date"], max(last_day.isoformat(), start["date"]), 1
     else:
         def local(value: str) -> str:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone().replace(
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = parsed.replace(tzinfo=WARSAW) if parsed.tzinfo is None else parsed
+            return parsed.astimezone(WARSAW).replace(
                 tzinfo=None
             ).isoformat(timespec="minutes")
 

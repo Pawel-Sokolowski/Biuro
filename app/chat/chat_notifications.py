@@ -28,7 +28,7 @@ class ChatNotifier(QObject):
         try:
             if self.pracownik_id is not None and not is_participant(self.konwersacja_id, self.pracownik_id):
                 return
-            rows = get_new_messages(self.konwersacja_id, self.last_timestamp)
+            rows = get_new_messages(self.konwersacja_id, self.last_timestamp, actor_id=self.pracownik_id)
             if rows:
                 # rows are ordered ascending; update last_timestamp to newest
                 newest = rows[-1].get("data_wysylki") or self.last_timestamp

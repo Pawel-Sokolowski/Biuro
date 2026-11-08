@@ -134,12 +134,12 @@ def update_role(rid: int, nazwa: str, **perms) -> None:
                 """,
                 (
                     nazwa,
-                    int(perms.get("can_view_invoices", 0)),
-                    int(perms.get("can_edit_companies", 0)),
-                    int(perms.get("can_manage_users", 0)),
-                    int(perms.get("can_view_finances", 0)),
-                    int(perms.get("can_export_data", 0)),
-                    int(perms.get("can_access_admin_settings", 0)),
+                    int(bool(perms["can_view_invoices"])) if "can_view_invoices" in perms else None,
+                    int(bool(perms["can_edit_companies"])) if "can_edit_companies" in perms else None,
+                    int(bool(perms["can_manage_users"])) if "can_manage_users" in perms else None,
+                    int(bool(perms["can_view_finances"])) if "can_view_finances" in perms else None,
+                    int(bool(perms["can_export_data"])) if "can_export_data" in perms else None,
+                    int(bool(perms["can_access_admin_settings"])) if "can_access_admin_settings" in perms else None,
                     rid,
                 ),
             )

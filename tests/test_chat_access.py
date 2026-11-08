@@ -38,13 +38,13 @@ class ChatAccessTests(DbTestCase):
         cm.add_message(cid, self.a, "cześć")
         with self.assertRaises(PermissionError):
             cm.add_message(cid, self.b, "hej")
-        self.assertEqual(len(cm.get_messages(cid)), 1)
+        self.assertEqual(len(cm.get_messages(cid, actor_id=self.owner)), 1)
 
     def test_attachments_roundtrip_and_access(self):
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
         mid = cm.add_message_with_attachments(
             cid, self.a, "", [{"nazwa": "zażółć.txt", "dane": b"abc\x00\xff"}])
-        atts = cm.get_attachments([mid])[mid]
+        atts = cm.get_attachments([mid], actor_id=self.owner)[mid]
         self.assertEqual((atts[0]["nazwa"], atts[0]["rozmiar"]), ("zażółć.txt", 5))
         got = cm.get_attachment_data(atts[0]["id"], self.owner)
         self.assertEqual(got["dane"], b"abc\x00\xff")
@@ -81,7 +81,7 @@ class ChatAccessTests(DbTestCase):
         with self.assertRaises(PermissionError):
             cm.delete_conversation(direct, 999999)
         self.assertEqual(cm.delete_conversation(direct, self.owner), "cleared")
-        self.assertEqual(cm.get_messages(direct), [])
+        self.assertEqual(cm.get_messages(direct, actor_id=self.owner), [])
         self.assertIsNotNone(cm.get_conversation(direct))
 
     def test_notifier_only_for_participants(self):
@@ -171,9 +171,9 @@ class ChatAccessTests(DbTestCase):
             self.assertIn("raport.pdf", page.pending_label.text())
             page.send_message()
         self.assertTrue(page.pending_label.isHidden())
-        messages = cm.get_messages(cid)
+        messages = cm.get_messages(cid, actor_id=self.owner)
         self.assertEqual(len(messages), 1)
-        atts = cm.get_attachments([messages[0]["id"]])[messages[0]["id"]]
+        atts = cm.get_attachments([messages[0]["id"]], actor_id=self.owner)[messages[0]["id"]]
         self.assertEqual(atts[0]["nazwa"], "raport.pdf")
 
     def test_ui_attach_click_again_clears_selection(self):
@@ -195,7 +195,7 @@ class ChatAccessTests(DbTestCase):
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
         page = self._chat_page(cid, self.a)
         page.send_message()
-        self.assertEqual(cm.get_messages(cid), [])
+        self.assertEqual(cm.get_messages(cid, actor_id=self.owner), [])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "duzy.bin"
             path.write_bytes(b"1")
@@ -211,7 +211,7 @@ class ChatAccessTests(DbTestCase):
         from PyQt6.QtWidgets import QFileDialog
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
         mid = cm.add_message_with_attachments(cid, self.a, "", [{"nazwa": "a.txt", "dane": b"tresc"}])
-        att = cm.get_attachments([mid])[mid][0]
+        att = cm.get_attachments([mid], actor_id=self.owner)[mid][0]
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "zapis.txt"
             page = self._chat_page(cid, self.owner)

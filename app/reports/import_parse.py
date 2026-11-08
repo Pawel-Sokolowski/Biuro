@@ -2,8 +2,10 @@
 """Parsowanie i klasyfikacja danych importowanych do raportów (bez bazy danych)."""
 import datetime
 import hashlib
+import json
 import re
 import unicodedata
+from dataclasses import dataclass
 from app.reports.dto import ProfitRow
 from typing import Any, Dict, Iterable, List, Optional
 from decimal import Decimal
@@ -34,6 +36,30 @@ def digits(text: Any) -> str:
 
 def row_hash(*values: Any) -> str:
     return hashlib.sha1("|".join(str(v) for v in values).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class InvoiceLineIdentity:
+    """Stable source identity; equal repeated lines retain their multiplicity.
+
+    Occurrence is counted only among otherwise identical lines, so reordering
+    distinct worksheet rows does not create new imports. The version prefix
+    permits conservative adoption of old SHA1 identities in the import DAO.
+    """
+    company: str
+    number: str
+    line_code: str
+    description: str
+    amount: str
+    currency: str
+    month: str
+    occurrence: int = 1
+
+    def digest(self) -> str:
+        values = (self.company, self.number, self.line_code, self.description,
+                  self.amount, self.currency, self.month, self.occurrence)
+        encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return "faktura-v2:" + hashlib.sha256(encoded).hexdigest()
 
 
 # ------------------------------------------------------------------
@@ -254,8 +280,12 @@ def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None
     cols = _header_map(header)
     i_kontr = _find(cols, "nazwa", "kontrahenta")
     i_nip = _find(cols, "nip")
-    i_nr = _find(cols, "nr", "faktury") or _find(cols, "numer", "faktury")
-    i_poz = _find(cols, "pozycja", "faktury") or _find(cols, "pozycja")
+    i_nr = _find(cols, "nr", "faktury")
+    if i_nr is None:
+        i_nr = _find(cols, "numer", "faktury")
+    i_poz = _find(cols, "pozycja", "faktury")
+    if i_poz is None:
+        i_poz = _find(cols, "pozycja")
     i_idx = _find(cols, "indeks")
     i_net = _find(cols, "wartosc", "netto")
     i_wal = _find(cols, "waluta")
@@ -263,6 +293,7 @@ def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None
     if i_poz is None or i_net is None:
         raise ValueError("Brak kolumn „Pozycja faktury” i „Wartość netto” w pliku.")
 
+    occurrences: Dict[tuple, int] = {}
     for row in iterator:
         pozycja = str(_cell(row, i_poz) or "").strip()
         if not pozycja:
@@ -275,17 +306,25 @@ def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None
             continue
         netto = parse_amount(_cell(row, i_net))
         kontrahent = str(_cell(row, i_kontr) or "").strip()
+        nip = digits(_cell(row, i_nip))
+        indeks = str(_cell(row, i_idx) or "").strip()
+        currency = str(_cell(row, i_wal) or "PLN").strip() or "PLN"
+        identity_values = ("nip:" + nip if nip else "name:" + fold(kontrahent), nr,
+                           indeks, pozycja, str(Decimal(str(netto)).normalize()), currency, miesiac)
+        occurrences[identity_values] = occurrences.get(identity_values, 0) + 1
+        identity = InvoiceLineIdentity(*identity_values, occurrences[identity_values])
         yield {
             "kontrahent": kontrahent,
-            "nip": digits(_cell(row, i_nip)),
+            "nip": nip,
             "nr_faktury": nr,
             "pozycja": pozycja,
-            "indeks": str(_cell(row, i_idx) or "").strip(),
+            "indeks": indeks,
             "wartosc_netto": netto,
-            "waluta": str(_cell(row, i_wal) or "PLN").strip() or "PLN",
+            "waluta": currency,
             "miesiac": miesiac,
             "rodzaj": classify_invoice_item(pozycja),
-            "hash": row_hash("faktura", kontrahent, nr, pozycja, netto, miesiac),
+            "hash": identity.digest(),
+            "legacy_hash": row_hash("faktura", kontrahent, nr, pozycja, netto, miesiac),
         }
 
 

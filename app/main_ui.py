@@ -163,15 +163,7 @@ class LoginWindow(QDialog):
             self._on_login
         )
 
-        btn_register = QPushButton(
-            "Zarejestruj"
-        )
-        btn_register.clicked.connect(
-            self._on_register
-        )
-
         row.addWidget(btn_login)
-        row.addWidget(btn_register)
 
         layout.addLayout(row)
 
@@ -363,56 +355,7 @@ class LoginWindow(QDialog):
         QMessageBox.information(self, "Reset hasła", "Hasło zmienione. Możesz się zalogować.")
 
     def _on_register(self):
-        from app.utils.crypto import register_user
-        database_path = self.database_combo.currentText().strip()
-        if not database_path:
-            QMessageBox.warning(self, "Błąd", "Wybierz bazę danych przed rejestracją")
-            return
-        try:
-            self._require_current_schema()
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", str(e))
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Rejestracja")
-        dlg.setFixedSize(420, 320)
-        dlg.setStyleSheet(self.styleSheet())
-
-        form = QFormLayout()
-        email = QLineEdit()
-        imie = QLineEdit()
-        nazwisko = QLineEdit()
-        haslo = QLineEdit()
-        haslo.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("E-mail:", email)
-        form.addRow("Imię:", imie)
-        form.addRow("Nazwisko:", nazwisko)
-        form.addRow("Hasło:", haslo)
-
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
-                                QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-
-        layout = QVBoxLayout(dlg)
-        layout.addLayout(form)
-        layout.addWidget(btns)
-
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            try:
-                ok = register_user(email.text(), haslo.text(),
-                                   imie=imie.text(), nazwisko=nazwisko.text(),
-                                   is_admin_flag=False)
-            except Exception as e:
-                QMessageBox.critical(self, "Błąd", str(e))
-                return
-            if isinstance(ok, tuple):
-                ok = ok[0]
-            if ok:
-                self.database_path = database_path
-                QMessageBox.information(self, "OK", "Rejestracja udana.")
-            else:
-                QMessageBox.critical(self, "Błąd", "Rejestracja nie powiodła się.")
+        QMessageBox.information(self, "Konta pracowników", "Nowe konta pracowników tworzy administrator w ustawieniach użytkowników.")
 
 
 class OfficeManagerApp(QMainWindow):

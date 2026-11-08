@@ -17,13 +17,14 @@ def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
             """
             SELECT
                 MAX(COALESCE(r.can_edit_companies, 0)) AS can_edit_companies,
+                MAX(COALESCE(r.can_manage_users, 0)) AS can_manage_users,
                 MAX(COALESCE(r.can_view_invoices, 0)) AS can_view_invoices,
                 MAX(COALESCE(r.can_view_finances, 0)) AS can_view_finances,
                 MAX(COALESCE(r.can_export_data, 0)) AS can_export_data,
                 MAX(COALESCE(r.can_access_admin_settings, 0)) AS can_access_admin_settings
             FROM pracownicy p
             JOIN role r ON r.id = p.rola_id
-            WHERE p.id = %s
+            WHERE p.id = %s AND COALESCE(p.aktywny, 1) = 1
             """,
             (pracownik_id,),
         ).fetchone()
@@ -43,7 +44,7 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
             """
             SELECT 1 FROM pracownicy p
             LEFT JOIN role r ON r.id = p.rola_id
-            WHERE p.id = %s
+            WHERE p.id = %s AND COALESCE(p.aktywny, 1) = 1
               AND (COALESCE(p.is_admin, 0) = 1 OR LOWER(COALESCE(r.nazwa, '')) = 'admin')
             """,
             (pracownik_id,),
@@ -86,15 +87,15 @@ def allowed_tabs(pracownik_id: Optional[int]) -> list:
         row = conn.execute(
             """
             SELECT r.zakladki, COALESCE(r.can_access_admin_settings, 0) AS adm
-            FROM pracownicy p JOIN role r ON r.id = p.rola_id
-            WHERE p.id = %s
+            FROM pracownicy p LEFT JOIN role r ON r.id = p.rola_id
+            WHERE p.id = %s AND COALESCE(p.aktywny, 1) = 1
             """,
             (pracownik_id,),
         ).fetchone()
     finally:
         conn.close()
     if not row:
-        return default_tabs(False)
+        return []
     return parse_tabs(row["zakladki"], bool(row["adm"]))
 
 
@@ -105,7 +106,7 @@ def assigned_company_ids(pracownik_id: Optional[int]) -> Set[int]:
         return set()
     conn = get_conn()
     try:
-        rows = conn.execute("SELECT id FROM firmy").fetchall()
+        rows = conn.execute("SELECT id FROM firmy WHERE EXISTS (SELECT 1 FROM pracownicy WHERE id=%s AND COALESCE(aktywny,1)=1)", (pracownik_id,)).fetchall()
         return {int(row[0]) for row in rows}
     finally:
         conn.close()

@@ -102,18 +102,22 @@ class ChatPage(QWidget):
         self._poll_busy = True
 
         def read():
-            latest = get_latest_message_ids(ids)
+            latest = get_latest_message_ids(ids, actor_id=actor)
             counts = get_unread_counts(actor)
             newest = latest.get(conversation, {}).get('id')
             changed = newest and newest > displayed
-            messages = get_messages(conversation, limit=limit, offset=0) if conversation and visible and changed else None
-            attachments = get_attachments([message['id'] for message in messages]) if messages else {}
-            return latest, counts, messages, attachments
+            authorized = not conversation or is_participant(conversation, actor)
+            messages = get_messages(conversation, limit=limit, offset=0, actor_id=actor) if conversation and authorized and visible and changed else None
+            attachments = get_attachments([message['id'] for message in messages], actor_id=actor) if messages else {}
+            return latest, counts, messages, attachments, authorized
 
         def loaded(result):
             self._poll_busy = False
-            latest, counts, messages, attachments = result
+            latest, counts, messages, attachments, authorized = result
             if conversation != self.current_konwersacja or limit != self.offset + self.page_size:
+                return
+            if conversation and (not authorized or not is_participant(conversation, actor)):
+                self._clear_revoked_conversation(conversation)
                 return
             if messages is not None and self.isVisible():
                 bar = self.scroll_area.verticalScrollBar()
@@ -138,7 +142,7 @@ class ChatPage(QWidget):
         try:
             ids = [self.chat_conversations.item(i).data(Qt.ItemDataRole.UserRole)
                    for i in range(self.chat_conversations.count())]
-            latest = get_latest_message_ids([i for i in ids if i is not None])
+            latest = get_latest_message_ids([i for i in ids if i is not None], actor_id=self.pracownik_id)
             for kid, info in latest.items():
                 prev = self._seen_ids.get(kid)
                 self._seen_ids[kid] = info["id"]
@@ -353,10 +357,14 @@ class ChatPage(QWidget):
         if not self.current_konwersacja:
             return
 
+        if not is_participant(self.current_konwersacja, self.pracownik_id):
+            self._clear_revoked_conversation(self.current_konwersacja)
+            return
         messages = get_messages(
             self.current_konwersacja,
             limit=self.offset + self.page_size,
             offset=0,
+            actor_id=self.pracownik_id,
         )
         self.has_more_history = len(messages) >= self.offset + self.page_size
         # messages are returned oldest-first by dao; render grouped
@@ -381,6 +389,23 @@ class ChatPage(QWidget):
         if value <= 20:
             self.load_more_history()
 
+    def _clear_revoked_conversation(self, conversation):
+        self.current_konwersacja = None
+        self.offset = 0
+        self._rendered_conversation = None
+        self._clear_messages()
+        self.btn_manage.setEnabled(False)
+        self.btn_delete.setEnabled(False)
+        self._seen_ids.pop(conversation, None)
+        self._unread.pop(conversation, None)
+        self._acknowledged_ids.pop(conversation, None)
+        blocker = QSignalBlocker(self.chat_conversations)
+        for i in reversed(range(self.chat_conversations.count())):
+            if self.chat_conversations.item(i).data(Qt.ItemDataRole.UserRole) == conversation:
+                self.chat_conversations.takeItem(i)
+        del blocker
+        self._refresh_unread_marks()
+
     def _clear_messages(self):
         self._rendered_messages = None
         while self.messages_layout.count():
@@ -396,7 +421,7 @@ class ChatPage(QWidget):
         """
         try:
             if attachments is None:
-                attachments = get_attachments([m["id"] for m in messages if m.get("id")])
+                attachments = get_attachments([m["id"] for m in messages if m.get("id")], actor_id=self.pracownik_id)
         except Exception:
             attachments = {}
 

@@ -271,7 +271,8 @@ class ChatAndDashboardRefreshTests(DbTestCase):
             scroll = bar.value()
             page._seen_ids[100] = 100
             added = {**messages[-1], 'id': 101, 'tresc': 'New message'}
-            with mock.patch.object(chat_ui, 'get_latest_message_ids', return_value={100: {'id': 101}}), \
+            with mock.patch.object(chat_ui, 'is_participant', return_value=True), \
+                    mock.patch.object(chat_ui, 'get_latest_message_ids', return_value={100: {'id': 101}}), \
                     mock.patch.object(chat_ui, 'get_messages', return_value=[*messages, added]), \
                     mock.patch.object(chat_ui, 'mark_conversation_read'), \
                     mock.patch.object(chat_ui, 'get_unread_counts', return_value={}):

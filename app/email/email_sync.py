@@ -196,6 +196,26 @@ class _Session:
         except Exception:
             logger.debug("Zamknięcie sesji IMAP", exc_info=True)
 
+    def unselect(self) -> None:
+        """Leave a selected mailbox without expunging another client's mail."""
+        if not self.selected:
+            return
+        if 'UNSELECT' in _capabilities(self.conn):
+            _check(self.conn.unselect())
+        else:
+            # CLOSE expunges every \\Deleted message in a read-write mailbox.
+            # LOGOUT does not expunge; reconnect for servers without UNSELECT.
+            self.close()
+            account = _get_account_info(self.konto_id)
+            if not account or self.fingerprint != _account_fingerprint(account):
+                raise ConnectionError("Zmieniono konfigurację konta IMAP.")
+            conn = _connect_imap(account)
+            if conn is None:
+                raise ConnectionError("Nie udało się ponownie połączyć z serwerem poczty.")
+            self.conn = conn
+        self.selected = None
+        self.selected_generation = None
+
 
 _sessions: Dict[int, _Session] = {}
 _session_locks: Dict[int, threading.Lock] = {}
@@ -1685,12 +1705,7 @@ def rename_folder(konto_id: int, old: str, new_name: str) -> str:
         return old
 
     def action(session: _Session) -> None:
-        if session.selected:
-            try:
-                session.conn.close()
-            except Exception:
-                logger.debug("CLOSE przed zmian? nazwy", exc_info=True)
-            session.selected = None
+        session.unselect()
         _check(session.conn.rename(quote_mailbox(old), quote_mailbox(new_server)))
         for method, name in (("unsubscribe", old), ("subscribe", new_server)):
             try:

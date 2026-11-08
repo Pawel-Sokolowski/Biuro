@@ -1,5 +1,8 @@
 # app/companies/company_ui.py
 import logging
+from copy import deepcopy
+from threading import Event, Lock
+from time import monotonic
 from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
@@ -18,6 +21,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 
 from app.companies.company_names import company_display_name
+from app.config import get_dsn, get_schema
 from app.utils.background import TaskRunner
 from app.db.dao_companies import (
     list_companies,
@@ -28,11 +32,54 @@ from app.db.dao_companies import (
 from app.companies.company_form import CompanyForm
 
 
+class _BackupMetadataCache:
+    """Short-lived metadata shared by searches, without caching company rows."""
+    def __init__(self, ttl=30):
+        self._ttl = ttl
+        self._lock = Lock()
+        self._revision = 0
+        self._cached = None
+        self._flights = {}
+
+    def invalidate(self):
+        with self._lock:
+            self._revision += 1
+            self._cached = None
+
+    def read(self, scope, load):
+        while True:
+            with self._lock:
+                if self._cached is not None:
+                    cached_scope, expires, value = self._cached
+                    if cached_scope == scope and monotonic() < expires:
+                        return value
+                key = (scope, self._revision)
+                ready = self._flights.get(key)
+                owner = ready is None
+                if owner:
+                    ready = self._flights[key] = Event()
+            if not owner:
+                ready.wait()
+                continue
+            try:
+                value = load()
+                with self._lock:
+                    if self._revision == key[1]:
+                        self._cached = (scope, monotonic() + self._ttl, value)
+                return value
+            finally:
+                with self._lock:
+                    self._flights.pop(key, None)
+                    ready.set()
+
+
 class CompanyUI(QWidget):
     def __init__(self, pracownik_id: int, parent=None):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self._reads = TaskRunner(self)
+        self._backup_metadata_cache = _BackupMetadataCache()
+        self._last_table_data = None
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(250)
@@ -108,7 +155,7 @@ class CompanyUI(QWidget):
         self.btn_edit.clicked.connect(self._edit_company)
         self.btn_delete.clicked.connect(self._delete_company)
         self.btn_restore.clicked.connect(self._restore_company)
-        self.btn_refresh.clicked.connect(self.refresh_async)
+        self.btn_refresh.clicked.connect(self._force_refresh)
         self.btn_documents.clicked.connect(self._generate_documents)
         self.status_filter.currentIndexChanged.connect(self.refresh_async)
         self.search_input.textChanged.connect(self._queue_search)
@@ -119,7 +166,19 @@ class CompanyUI(QWidget):
     #  LOAD TABLE
     # ============================================================
     def _refresh(self):
+        self._backup_metadata_cache.invalidate()
         self._search()
+
+    def _force_refresh(self):
+        self._backup_metadata_cache.invalidate()
+        self._reads.invalidate()
+        self.refresh_async()
+
+    def _backup_metadata(self):
+        from app.utils.backup_status import stored_backup_dates
+        return self._backup_metadata_cache.read(
+            (get_dsn(), get_schema()), lambda: (self._backup_by_company(), stored_backup_dates()),
+        )
 
     @staticmethod
     def _backup_by_company() -> Dict[str, Dict[str, Any]]:
@@ -132,8 +191,16 @@ class CompanyUI(QWidget):
 
     def _load_table(self, rows: List[Dict[str, Any]], backups=None, stored=None):
         from app.invoices.table_state import preserve_table_view
+        if backups is None or stored is None:
+            cached_backups, cached_stored = self._backup_metadata()
+            backups = cached_backups if backups is None else backups
+            stored = cached_stored if stored is None else stored
+        data = (rows, backups, stored)
+        if self._last_table_data == data and self.table.rowCount() == len(rows):
+            return
         with preserve_table_view(self.table):
             self._populate_table(rows, backups, stored)
+        self._last_table_data = deepcopy(data)
 
     def _populate_table(self, rows, backups, stored):
         self.table.setRowCount(0)
@@ -193,7 +260,7 @@ class CompanyUI(QWidget):
             return
         firma_id = int(self.table.item(row, 0).text())
         set_company_status(firma_id, 'Aktywne')
-        self.refresh_async()
+        self._force_refresh()
 
     # ============================================================
     #  FILTERS
@@ -215,9 +282,8 @@ class CompanyUI(QWidget):
         actor = self.pracownik_id
 
         def read():
-            from app.utils.backup_status import stored_backup_dates
             rows = get_companies_filtered(*request, None, actor)
-            return rows, self._backup_by_company(), stored_backup_dates()
+            return rows, *self._backup_metadata()
 
         def loaded(result):
             if request == (self.search_input.text().strip(), self.status_filter.currentText()):
@@ -236,7 +302,7 @@ class CompanyUI(QWidget):
     def _add_company(self):
         dlg = CompanyForm(None, self, actor_id=self.pracownik_id)
         if dlg.exec():
-            self.refresh_async()
+            self._force_refresh()
 
     def _generate_documents(self):
         row = self.table.currentRow()
@@ -264,7 +330,7 @@ class CompanyUI(QWidget):
 
         dlg = CompanyForm(firma_id, self, actor_id=self.pracownik_id)
         if dlg.exec():
-            self.refresh_async()
+            self._force_refresh()
 
     def _delete_company(self):
         row = self.table.currentRow()
@@ -288,7 +354,7 @@ class CompanyUI(QWidget):
 
         try:
             delete_company(firma_id, actor_id=self.pracownik_id)
-            self.refresh_async()
+            self._force_refresh()
         except PermissionError as exc:
             QMessageBox.warning(self, "Brak uprawnień", str(exc))
         except Exception as e:

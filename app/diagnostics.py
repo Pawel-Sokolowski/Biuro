@@ -7,7 +7,7 @@ import sys
 from urllib.parse import urlparse, unquote
 
 from app.version import __version__
-from app.db.reliability_schema import SCHEMA_VERSION
+from app.db.schema import SCHEMA_VERSION
 
 
 class PrivacyFilter(logging.Filter):

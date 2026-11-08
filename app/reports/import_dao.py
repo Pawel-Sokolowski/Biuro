@@ -1,6 +1,8 @@
 # app/reports/import_dao.py
 """Import czasu pracy i faktur z Excela oraz raport rentowności (czas × stawka vs cena usługi)."""
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+from dataclasses import dataclass
+from decimal import Decimal
 import re
 
 from app.db.dao_conn import get_conn
@@ -29,37 +31,51 @@ def read_sheet_rows(path: str) -> Iterator[tuple]:
         wb.close()
 
 
-def _company_index(conn) -> Tuple[Dict[str, int], Dict[str, int]]:
-    by_nip: Dict[str, int] = {}
-    by_name: Dict[str, int] = {}
+@dataclass
+class CompanyIndex:
+    by_nip: Dict[str, set[int]]
+    by_name: Dict[str, set[int]]
+    nips: Dict[int, str]
+
+
+def _company_index(conn) -> CompanyIndex:
+    by_nip: Dict[str, set[int]] = {}
+    by_name: Dict[str, set[int]] = {}
+    nips: Dict[int, str] = {}
     for r in conn.execute(
         "SELECT id, nip, nazwa, nazwa_skrocona, nazwa_saldeo FROM firmy"
     ).fetchall():
         nip = digits(r["nip"])
+        nips[r["id"]] = nip
         if nip:
-            by_nip.setdefault(nip, r["id"])
+            by_nip.setdefault(nip, set()).add(r["id"])
         for field in ("nazwa", "nazwa_skrocona", "nazwa_saldeo"):
             key = fold(r[field])
             if key:
-                by_name.setdefault(key, r["id"])
-    return by_nip, by_name
+                by_name.setdefault(key, set()).add(r["id"])
+    return CompanyIndex(by_nip, by_name, nips)
 
 
-def _match_company(index, nip: str, *names: str) -> Optional[int]:
-    by_nip, by_name = index
-    if nip and nip in by_nip:
-        return by_nip[nip]
+def _match_company(index: CompanyIndex, nip: str, *names: str) -> Optional[int]:
+    """Match unambiguous identifiers; a conflicting NIP never falls back to name."""
+    nip = digits(nip)
+    if nip and nip in index.by_nip:
+        matches = index.by_nip[nip]
+        return next(iter(matches)) if len(matches) == 1 else None
+    matches = set()
     for name in names:
         key = fold(name)
-        if key and key in by_name:
-            return by_name[key]
-    return None
+        matches.update(index.by_name.get(key, ()))
+    if nip:
+        matches = {company_id for company_id in matches if not index.nips[company_id]}
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 class _BatchWriter:
     """psycopg executemany uses pipeline mode; bound each parameter batch."""
-    def __init__(self, conn, sql):
+    def __init__(self, conn, sql, before_flush=None):
         self.conn, self.sql, self.pending, self.count = conn, sql, [], 0
+        self.before_flush = before_flush
 
     def add(self, params):
         self.pending.append(params)
@@ -68,10 +84,26 @@ class _BatchWriter:
 
     def flush(self):
         if self.pending:
+            if self.before_flush is not None:
+                self.before_flush()
             with self.conn.cursor() as cursor:
                 cursor.executemany(self.sql, self.pending)
                 self.count += cursor.rowcount
             self.pending.clear()
+
+
+def _same_legacy_invoice_line(stored, row) -> bool:
+    """Adopt an old lossy hash only when its actual persisted source agrees.
+
+    Never guess which company/duplicate line a historic collision represented.
+    A repeated equal source line adopts the old row once and creates the other
+    occurrences separately, restoring multiplicity without duplicating that row.
+    """
+    text_fields = ("kontrahent", "nr_faktury", "pozycja", "indeks", "miesiac")
+    return (all(str(stored[key] or "").strip() == str(row[key] or "").strip() for key in text_fields)
+            and digits(stored["nip"]) == row["nip"]
+            and (stored["waluta"] or "PLN") == row["waluta"]
+            and Decimal(str(stored["wartosc_netto"])) == Decimal(str(row["wartosc_netto"])))
 
 
 def import_work_file(path: str) -> Dict[str, int]:
@@ -128,6 +160,16 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
     last_month = ""
     try:
         index = _company_index(conn)
+        # Legacy adoption is lazy, transactional and preserves record IDs. Read
+        # candidates once rather than adding a database lookup to every row.
+        legacy = {row["hash"]: dict(row) for row in conn.execute(
+            "SELECT * FROM import_faktury_pozycje WHERE hash ~ '^[0-9a-f]{40}$'"
+        ).fetchall()}
+        promotions = _BatchWriter(conn, """
+            UPDATE import_faktury_pozycje SET hash = %s
+            WHERE id = %s AND hash = %s
+              AND NOT EXISTS (SELECT 1 FROM import_faktury_pozycje WHERE hash = %s)
+        """)
         batch = _BatchWriter(conn, """
                 INSERT INTO import_faktury_pozycje
                     (hash, firma_id, kontrahent, nip, nr_faktury, pozycja, indeks,
@@ -136,12 +178,16 @@ def import_invoices_file(path: str, default_month: Optional[str], overwrite: boo
                 ON CONFLICT (hash) DO UPDATE SET
                     firma_id = EXCLUDED.firma_id, miesiac = EXCLUDED.miesiac,
                     rodzaj = EXCLUDED.rodzaj
-                """)
+                """, before_flush=promotions.flush)
         for r in rows:
             total += 1
             firma_id = _match_company(index, r["nip"], r["kontrahent"])
             if firma_id is None:
                 unmatched += 1
+            old = legacy.get(r["legacy_hash"])
+            if old is not None and _same_legacy_invoice_line(old, r):
+                promotions.add((r["hash"], old["id"], r["legacy_hash"], r["hash"]))
+                del legacy[r["legacy_hash"]]
             batch.add((
                     r["hash"], firma_id, r["kontrahent"], r["nip"], r["nr_faktury"], r["pozycja"],
                     r["indeks"], r["wartosc_netto"], r["waluta"], r["miesiac"], r["rodzaj"],
@@ -198,7 +244,7 @@ def _apply_document_counts(conn, over_limit: Dict[Tuple[int, str], Tuple[float, 
             firms[firma_id] = conn.execute(
                 """
                 SELECT COALESCE(f.limit_dokumentow, 0) AS limit_dok,
-                       COALESCE(c.cena_za_dokument_ponad_limit, 0) AS cena
+                       COALESCE(NULLIF(f.cena_ponad_limit, 0), c.cena_za_dokument_ponad_limit, 0) AS cena
                 FROM firmy f LEFT JOIN cenniki c ON c.klucz = f.glowny_cennik
                 WHERE f.id = %s
                 """,

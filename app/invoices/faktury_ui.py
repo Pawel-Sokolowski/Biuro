@@ -1214,7 +1214,7 @@ class FakturyPage(QWidget):
             self._fill_issued([r for r in rows if r.get('eksportowana')], payments=payments)
             logger.info('invoice_read rows=%d duration=%.3f', len(rows), perf_counter() - started)
 
-        self._invoice_reads.submit(read, loaded, lambda exc: self.payment_filter_status.setText('Nie udało się odświeżyć faktur. ' + str(exc)))
+        self._invoice_reads.submit(read, loaded, lambda exc: self.payment_filter_status.setText('Nie udało się odświeżyć faktur. ' + str(exc)), key=(actor, request))
 
     def _fill_drafts(self, invoices):
         if self._draft_rows == invoices:

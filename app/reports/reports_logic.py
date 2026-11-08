@@ -309,10 +309,11 @@ def build_report(
                    COALESCE(ex.extra_kadry, 0) AS extra_kadry,
                    COALESCE(c.netto, c.cena_netto_ksiegowosc, 0) AS netto,
                    COALESCE(c.brutto, c.cena_brutto_ksiegowosc, 0) AS brutto,
-                   COALESCE(c.zdrowotna, 0) AS zdrowotna,
+                   CASE WHEN COALESCE(f.wliczac_zdrowotna, 0) = 1 THEN 0
+                        ELSE COALESCE(NULLIF(f.zdrowotna, 0), c.zdrowotna, 0) END AS zdrowotna,
                    COALESCE(f.limit_dokumentow, 0) AS limit_dokumentow,
                    COALESCE(f.uop_ilosc, 0) + COALESCE(f.uz_ilosc, 0) + COALESCE(f.uod_ilosc, 0) AS umowy,
-                   COALESCE(c.cena_za_dokument_ponad_limit, 0) AS cena_za_dokument
+                   COALESCE(NULLIF(f.cena_ponad_limit, 0), c.cena_za_dokument_ponad_limit, 0) AS cena_za_dokument
             FROM firmy f
             CROSS JOIN selected_months m
             LEFT JOIN statusy_miesieczne sm
@@ -358,8 +359,8 @@ def build_report(
             "koszt_kadry": round(koszt_kadry, 2),
             "godziny_ksiegowosc": godz_ksieg,
             "godziny_kadry": godz_kadry,
-            "koszt_na_godzine_ksiegowosc": koszt_ksieg / godz_ksieg if godz_ksieg else 0,
-            "koszt_na_godzine_kadry": koszt_kadry / godz_kadry if godz_kadry else 0,
+            "koszt_na_godzine_ksiegowosc": koszt_ksieg / (godz_ksieg / 3600) if godz_ksieg else 0,
+            "koszt_na_godzine_kadry": koszt_kadry / (godz_kadry / 3600) if godz_kadry else 0,
             "extra": extra,
             "dokumenty": docs,
             "umowy": contracts.get((row["firma_id"], row["miesiac"]), int(row["umowy"] or 0)),

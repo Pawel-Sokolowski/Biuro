@@ -289,7 +289,7 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
     datetime.strptime(data.get('agreement_date', ''), '%d.%m.%Y')
     form_keys = [key for key, _, _ in DOCUMENTS if key in selected and key in ('11_upl', '12_pel', '13_pel_z')]
     if form_keys:
-        from app.documents.power_of_attorney import build_xml, resolve_employee, split_street, formatted_address
+        from app.documents.power_of_attorney import reviewed_data, resolve_employee, split_street, formatted_address
         data['attorney'] = resolve_employee(data)
         if not data.get('building'):
             data.update(split_street(data.get('street')))
@@ -298,7 +298,7 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
         data['address'] = formatted_address(data)
         for key in form_keys:
             if key == '11_upl':
-                build_xml('UPL', data)
+                reviewed_data(data, 'UPL-PAPER')
         data['pel_z_attached'] = '13_pel_z' in form_keys
         if form_renderer is None:
             raise ValueError('Generowanie PDF pełnomocnictw wymaga mechanizmu wydruku aplikacji.')

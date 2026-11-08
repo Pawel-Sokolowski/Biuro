@@ -15,6 +15,7 @@ class ActiveTimer:
     started_at: datetime
     base_seconds: int = 0
     monotonic_start: float = field(default_factory=time.monotonic)
+    month: str = ''
 
     def elapsed(self):
         return self.base_seconds + max(0, int(time.monotonic() - self.monotonic_start))
@@ -24,7 +25,7 @@ class ActiveTimer:
 
 
 def start(conn, employee, company, month, kind, activity, started_at):
-    session = ActiveTimer(str(uuid4()), str(uuid4()), started_at)
+    session = ActiveTimer(str(uuid4()), str(uuid4()), started_at, month=month)
     conn.execute('''INSERT INTO active_timer_sessions
         (session_id, owner_token, pracownik_id, firma_id, miesiac, typ, activity, started_at)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''',
@@ -67,5 +68,5 @@ def claim(employee, session_id):
             raise ValueError('Stoper jest aktywny albo został już odzyskany na innym komputerze.')
     row = dict(row)
     started = row['started_at'].astimezone().replace(tzinfo=None)
-    session = ActiveTimer(str(row['session_id']), owner, started, row['elapsed_seconds'])
+    session = ActiveTimer(str(row['session_id']), owner, started, row['elapsed_seconds'], month=row['miesiac'])
     return row, session

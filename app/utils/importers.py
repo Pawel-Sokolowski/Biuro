@@ -521,14 +521,14 @@ def _build_payload_from_row(
         else kadry_zdrowotna
     )
 
-    payload["wliczac_zdrowotna"] = (1 if ksiegowosc_zdrowotna is not None else 0)
+    # A partial sheet is an update, not a replacement of omitted pricing.
+    # Keep explicit blank/zero values distinguishable from absent columns.
+    if _norm("Cenniki usług księgowych") in normalized_index:
+        payload["wliczac_zdrowotna"] = (1 if ksiegowosc_zdrowotna is not None else 0)
 
-    payload["uop_ilosc"] = ckad["uop_ilosc"]
-    payload["uop_cennik"] = ckad["uop_cennik"]
-    payload["uz_ilosc"] = ckad["uz_ilosc"]
-    payload["uz_cennik"] = ckad["uz_cennik"]
-    payload["uod_ilosc"] = ckad["uod_ilosc"]
-    payload["uod_cennik"] = ckad["uod_cennik"]
+    if _norm("Cenniki usług kadrowych") in normalized_index:
+        for field in ("uop_ilosc", "uop_cennik", "uz_ilosc", "uz_cennik", "uod_ilosc", "uod_cennik"):
+            payload[field] = ckad[field]
 
     # --------------------------------------------------
     # CZASOWE
@@ -700,12 +700,15 @@ def _accounting_cennik_spec(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     # Cena podstawowa jest częścią klucza, np. KPIR_T_10_300.
     candidates = _accounting_cennik_key_candidates(typ, vat_flag, limit, base_price)
 
+    health_price = parsed.get("zdrowotna")
+    if health_price is None:
+        health_price = payload.get("zdrowotna")
     return {
         "typ": typ,
         "candidates": candidates,
         "base_price": base_price,
         "limit_price": limit_price,
-        "zdrowotna": parsed.get("zdrowotna") or payload.get("zdrowotna") or 0,
+        "zdrowotna": health_price if health_price is not None else 0,
     }
 
 
@@ -721,19 +724,45 @@ def _ensure_accounting_cennik(cursor: psycopg.Cursor, payload: Dict[str, Any]) -
 
     candidates = spec["candidates"]
     base_price = spec["base_price"]
+    # Serialize creation by the canonical base key. Two concurrent imports must
+    # not both select a free key for different over-limit/health prices.
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("import-cennik:" + candidates[0],))
     # „netto” w cenniku to cena księgowości wraz ze zdrowotną.
     netto = round((base_price or 0) + float(spec["zdrowotna"] or 0), 2)
-    placeholders = ", ".join("%s" for _ in candidates)
-
+    qualified_key = (f"{candidates[0]}__D{_format_price_key(spec['limit_price'] or 0)}"
+                     f"_Z{_format_price_key(spec['zdrowotna'])}")
+    keys = [*candidates, qualified_key]
+    placeholders = ", ".join("%s" for _ in keys)
     cursor.execute(
-        f"SELECT klucz FROM cenniki WHERE klucz IN ({placeholders}) LIMIT 1",
-        candidates,
+        f"SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, zdrowotna "
+        f"FROM cenniki WHERE klucz IN ({placeholders})",
+        keys,
     )
-    row = cursor.fetchone()
-    if row:
-        return row[0]
+    existing = {row[0]: row for row in cursor.fetchall()}
+    expected_prices = tuple(_decimal_price(value or 0).quantize(Decimal("0.01"))
+                            for value in (base_price, spec["limit_price"], spec["zdrowotna"]))
 
-    generated_key = candidates[0]
+    def equivalent(row):
+        return tuple(_decimal_price(value or 0).quantize(Decimal("0.01")) for value in row[1:]) == expected_prices
+
+    for key in keys:
+        if key in existing and equivalent(existing[key]):
+            return key
+
+    # Retain legacy readable keys where available; qualify only collisions.
+    generated_key = next((key for key in candidates if key not in existing), qualified_key)
+    suffix = 1
+    while generated_key in existing:
+        suffix += 1
+        generated_key = f"{qualified_key}__{suffix}"
+        cursor.execute("SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, zdrowotna "
+                       "FROM cenniki WHERE klucz = %s", (generated_key,))
+        row = cursor.fetchone()
+        if row is None:
+            break
+        if equivalent(row):
+            return generated_key
+        existing[generated_key] = row
 
     cursor.execute(
         """
@@ -860,7 +889,8 @@ def _apply_payload_to_db(
     from app.db.dao_companies import FIRMA_FIELDS, _apply_aliases
 
     # Kreator przekazuje klucze formularza (dz_*, ko_*, zam_*, kont_*) – mapujemy je na kolumny.
-    payload.update({k: v for k, v in _apply_aliases(payload).items() if k not in payload})
+    payload.update({k: v for k, v in _apply_aliases(payload).items()
+                    if payload.get(k) in (None, "") and v not in (None, "")})
     if payload.get("status_vat") in ("Czynny", "Zwolniony") and payload.get("vat_czynny") in (None, ""):
         payload["vat_czynny"] = 1 if payload["status_vat"] == "Czynny" else 0
 

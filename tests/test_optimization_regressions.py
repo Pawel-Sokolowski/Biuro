@@ -304,7 +304,8 @@ class BackgroundViewTests(TestCase):
         )
         chat.ChatPage._poll_async(page)
         page.isVisible = lambda: False
-        page._reads.done(({1: {"id": 11}}, {}, [{"id": 11}], {}))
+        with mock.patch.object(chat, "is_participant", return_value=True):
+            page._reads.done(({1: {"id": 11}}, {}, [{"id": 11}], {}, True))
         page._render_grouped_messages.assert_not_called()
         page._mark_read.assert_not_called()
         items.close()

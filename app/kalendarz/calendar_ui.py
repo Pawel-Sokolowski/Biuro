@@ -19,6 +19,7 @@ from app.companies.company_names import company_display_name
 from app.db import dao_calendar
 from app.db.dao_companies import get_employees_list, list_companies
 from app.kalendarz import caldav_sync, google_sync, ics_import
+from app.kalendarz.caldav_identity import split_remote_key
 from app.utils.background import CommandRunner
 from app.utils.view_state import preserve_view_state, reconcile_list
 
@@ -105,6 +106,8 @@ class EventDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
+        if split_remote_key(self.event.get("caldav_uid") or "")[1]:
+            layout.addWidget(QLabel("Zmiany dotyczą tylko tego wystąpienia wydarzenia cyklicznego."))
         layout.addLayout(form)
         layout.addWidget(buttons)
 
@@ -708,7 +711,10 @@ class CalendarPage(QWidget):
         ev = self._current_event()
         if not ev or not self._owned(ev):
             return
-        if QMessageBox.question(self, "Usuń", f"Usunąć wydarzenie „{ev['tytul']}”?") != (
+        occurrence = split_remote_key(ev.get("caldav_uid") or "")[1]
+        question = (f"Usunąć tylko to wystąpienie wydarzenia „{ev['tytul']}”?" if occurrence
+                    else f"Usunąć wydarzenie „{ev['tytul']}”?")
+        if QMessageBox.question(self, "Usuń", question) != (
             QMessageBox.StandardButton.Yes
         ):
             return

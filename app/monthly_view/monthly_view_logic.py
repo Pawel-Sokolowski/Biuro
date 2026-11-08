@@ -476,14 +476,18 @@ class MonthlyViewLogic:
             return
 
         delta = self._timer_elapsed(typ, start, now)
-        dao_active_timers.finish(cur, self._durable_timers.get(typ))
+        session = self._durable_timers.get(typ)
+        month = getattr(session, 'month', '') or self.aktualny_miesiac
+        dao_active_timers.finish(cur, session)
+        cur.execute('INSERT INTO statusy_miesieczne (firma_id, miesiac) VALUES (%s, %s) '
+                    'ON CONFLICT (firma_id, miesiac) DO NOTHING', (firma_id, month))
         cur.execute(
             f"""
             UPDATE statusy_miesieczne
             SET {fields[3]} = {fields[3]} + %s
             WHERE firma_id = %s AND miesiac = %s
             """,
-            (delta, firma_id, self.aktualny_miesiac),
+            (delta, firma_id, month),
         )
 
         activity = getattr(self, fields[2])
@@ -497,7 +501,7 @@ class MonthlyViewLogic:
             (
                 firma_id,
                 self.pracownik_id,
-                self.aktualny_miesiac,
+                month,
                 typ,
                 (activity or {}).get("usluga_id"),
                 1 if (activity or {}).get("fakturowac") else 0,
@@ -512,7 +516,7 @@ class MonthlyViewLogic:
                 firma_id,
                 activity["usluga_id"],
                 TimerUtils.round_seconds_to_minimum_half(delta),
-                self.aktualny_miesiac,
+                month,
                 self.pracownik_id,
                 zadanie_id=(activity or {}).get("task_id"),
                 connection=cur.connection,

@@ -131,6 +131,7 @@ def _candidates(conn, kind, now, rule, target_id=None):
         rows = conn.execute("""SELECT f.id, f.nazwa AS firma, f.adres_email AS email
             FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id = f.id AND s.miesiac = %s
             WHERE COALESCE(s.dokumenty_dostarczone, 0) = 0 AND f.status = 'Aktywne'
+              AND f.ksiegowa_id IS NOT NULL
               AND (%s::integer IS NULL OR f.id = %s)
               AND (NULLIF(f.data_rozpoczecia_obslugi, '') IS NULL OR f.data_rozpoczecia_obslugi <= %s)
               AND (NULLIF(f.data_zakonczenia_obslugi, '') IS NULL OR f.data_zakonczenia_obslugi >= %s)""",

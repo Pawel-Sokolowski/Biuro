@@ -7,7 +7,9 @@ reguły są wyłączone. Najpierw skonfiguruj konto nadawcy w **Konto systemowe 
 - Dokumenty: wybierz dzień następnego miesiąca będący terminem dostarczenia
   dokumentów za poprzedni miesiąc (np. 10 listopada za październik). Domyślne
   pierwsze przypomnienie jest dzień po tym terminie, potem co 3 dni. Sprawdzane
-  są aktywne firmy, również bez utworzonego wiersza statusu miesięcznego.
+  są wyłącznie aktywne firmy z przypisaną księgową, również bez utworzonego
+  wiersza statusu miesięcznego. Firmy obsługiwane wyłącznie kadrowo lub bez
+  przypisanej księgowej są pomijane. Obsługa kadr nie jest warunkiem przypomnienia.
   Zaznaczenie „Dokumenty dostarczone” zatrzymuje wysyłkę. Dokumenty dotyczą
   poprzedniego miesiąca; po rozpoczęciu kolejnego miesiąca reguła przechodzi
   do kolejnego okresu, bez wysyłania przypomnień o starszych okresach.

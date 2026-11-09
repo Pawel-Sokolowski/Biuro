@@ -1,0 +1,20 @@
+{
+  "enabled": false,
+  "server": "ENOVA-SQL.example.local,1433",
+  "driver": "ODBC Driver 18 for SQL Server",
+  "months_back": 3,
+  "sources": [
+    {
+      "database": "Enova_Klient_KPIR",
+      "nip": "1234567890",
+      "accounting_type": "KPIR",
+      "count_query": "queries/kpir.sql"
+    },
+    {
+      "database": "Enova_Klient_KH",
+      "nip": "1234567892",
+      "accounting_type": "KH",
+      "count_query": "queries/kh.sql"
+    }
+  ]
+}

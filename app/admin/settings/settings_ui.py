@@ -24,6 +24,8 @@ from app.admin.settings.audit_settings import AuditSettings
 from app.admin.settings.companies_settings import CompaniesSettings
 from app.admin.settings.database_settings import DatabaseSettings
 from app.admin.settings.email_settings import EmailSettings
+from app.admin.settings.enova_count_settings import EnovaCountSettings
+from app.security.authorization import is_administrator
 from app.admin.settings.reminder_settings import ReminderSettings
 from app.admin.settings.import_all_settings import ImportAllSettings
 from app.admin.settings.extra_services_settings import ExtraServicesSettings
@@ -96,12 +98,12 @@ class GlobalSettingsPage(QWidget):
             ]),
             ("System", [
                 ("Import danych", ImportAllSettings, True),
+                ("Enova — liczba dokumentów", _scrollable(lambda: EnovaCountSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Baza danych i kopie", DatabaseSettings, True),
                 ("Logi", LogsSettings, True),
                 ("Audyt i importy", AuditSettings, True),
             ]),
         ]
-        from app.security.authorization import is_administrator
         if not (is_administrator(self.pracownik_id) or perms.get("can_access_admin_settings")):
             sections = []
         for section, pages in sections:

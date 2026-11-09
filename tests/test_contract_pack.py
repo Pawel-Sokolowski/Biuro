@@ -199,8 +199,11 @@ class ContractPackTests(DbTestCase):
         out = self.root / 'pack.zip'
         with patch('app.documents.contract_pack_ui.QFileDialog.getSaveFileName', return_value=(str(out), '')), \
              patch.object(dialog.runner, 'submit') as submit:
-            dialog._generate(True)
+            dialog.docx_button.click()
             self.assertTrue(dialog._busy)
+            for button in (dialog.contract_button, dialog.upl_button, dialog.pel_button,
+                           dialog.pdf_button, dialog.docx_button, dialog.close_button):
+                self.assertFalse(button.isEnabled())
             # A second click during generation cannot queue another export.
             dialog._generate(True)
             self.assertEqual(submit.call_count, 1)
@@ -208,6 +211,8 @@ class ContractPackTests(DbTestCase):
             self.assertEqual(result, str(out))
         dialog._set_busy(False)
         self.assertTrue(out.exists())
+        self.assertTrue(dialog.docx_button.isEnabled())
+        self.assertTrue(dialog.pdf_button.isEnabled())
         self.assertIsNotNone(app)
 
     def test_representative_can_be_chosen_edited_or_cleared_with_optional_pesel(self):

@@ -201,6 +201,11 @@ class ContractPackDialog(QDialog):
         self.upl_button.clicked.connect(self._generate_upl)
         self.pel_button.clicked.connect(self._generate_pel)
 
+        self.pdf_button = QPushButton('Generuj wybrane PDF')
+        self.docx_button = QPushButton('Zapisz wybrane Word (ZIP)')
+        self.pdf_button.clicked.connect(lambda: self._generate(False))
+        self.docx_button.clicked.connect(lambda: self._generate(True))
+
         self.close_button = QPushButton('Zamknij')
         self.close_button.clicked.connect(self.reject)
 
@@ -208,6 +213,8 @@ class ContractPackDialog(QDialog):
                 self.contract_button,
                 self.upl_button,
                 self.pel_button,
+                self.pdf_button,
+                self.docx_button,
                 self.close_button,
         ):
             actions.addWidget(button)
@@ -327,7 +334,12 @@ class ContractPackDialog(QDialog):
 
         self._generate_documents(selected)
 
-    def _generate_documents(self, selected):
+    def _generate(self, docx_only=False):
+        selected = [key for key, checkbox in self.documents.items() if checkbox.isChecked()]
+        self._generate_documents(selected, docx_only=docx_only,
+                                 extra_pdfs=tuple(self.extra_pdfs), duplex=self.duplex.isChecked())
+
+    def _generate_documents(self, selected, *, docx_only=False, extra_pdfs=(), duplex=False):
         if self._busy:
             return
 
@@ -397,15 +409,16 @@ class ContractPackDialog(QDialog):
         path, _ = QFileDialog.getSaveFileName(
             self,
             'Zapisz dokument',
-            default_name,
-            'PDF (*.pdf)'
+            str(Path(default_name).with_suffix('.zip')) if docx_only else default_name,
+            'ZIP (*.zip)' if docx_only else 'PDF (*.pdf)'
         )
 
         if not path:
             return
 
-        if not path.lower().endswith('.pdf'):
-            path += '.pdf'
+        extension = '.zip' if docx_only else '.pdf'
+        if not path.lower().endswith(extension):
+            path += extension
 
         self._set_busy(True)
         self.status.setText('Generowanie dokumentu…')
@@ -418,9 +431,9 @@ class ContractPackDialog(QDialog):
                     data,
                     selected,
                     path,
-                    extra_pdfs=(),
-                    duplex=False,
-                    docx_only=False,
+                    extra_pdfs=extra_pdfs,
+                    duplex=duplex,
+                    docx_only=docx_only,
                     form_renderer=self.print_renderer.render,
                 ),
                 self._done,

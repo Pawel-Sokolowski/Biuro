@@ -17,6 +17,25 @@ i relacji — nie pobiera danych klientów. Na tej podstawie można przygotować
 zapytania KPIR, ryczałtu i KH. Jeśli wersje/schematy baz są różne, potrzebny jest
 wynik dla każdej wersji. Nie udostępniaj haseł ani plików `.env`.
 
+## Sprawdzenie liczników po otrzymaniu schematu
+
+Po eksporcie metadanych użyj `profile-counts.sql`. Wybierz bazę klienta w SSMS,
+ustaw `@AccountingType` na `KPIR` lub `KH` oraz `@From` na pierwszy dzień
+miesiąca, którego liczbę możesz sprawdzić w Enova. Wykonaj skrypt osobno dla
+każdego rodzaju księgowości. Wystarczą wyniki zagregowane — skrypt nie pobiera
+kwot, treści dokumentów, kontrahentów ani transakcji pojedynczo.
+
+Schemat potwierdza powiązania `Dziennik.Ewidencja → DokEwidencja.ID`,
+`DokEwidencja.Definicja → DefDokumentow.ID` oraz połączenia operacji bankowych
+z `RaportyESP` i `Zaplaty`. Same nazwy kolumn nie określają jednak znaczenia
+liczbowych pól `Typ`, `Stan` i `KPiRStan`. Wyniki profilowania i oczekiwany
+licznik z Enova są potrzebne, aby ustalić filtry bufora, anulowania oraz
+wyłączenie nagłówków bankowych z liczby pozostałych dokumentów KH.
+
+Profilowanie nie jest zapytaniem produkcyjnym workera i nie włącza importu.
+Nie zawiera zmian w tabelach Enova ani przypisania rzeczywistych nazw baz
+klientów do repozytorium.
+
 ## Reguły
 
 - **KPIR**: liczba wpisów KPIR w miesiącu.

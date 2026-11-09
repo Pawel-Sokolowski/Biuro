@@ -274,6 +274,12 @@ class MailSnapshotTests(DbTestCase):
 
 class BackgroundViewTests(TestCase):
     def test_chat_hidden_during_read_does_not_render_or_acknowledge(self):
+        self._check_chat_becomes_unavailable_during_read(minimized=False)
+
+    def test_chat_minimized_during_read_does_not_render_or_acknowledge(self):
+        self._check_chat_becomes_unavailable_during_read(minimized=True)
+
+    def _check_chat_becomes_unavailable_during_read(self, *, minimized):
         from types import SimpleNamespace
         from PyQt6.QtWidgets import QListWidget, QListWidgetItem
         from app.chat import chat_ui as chat
@@ -286,7 +292,9 @@ class BackgroundViewTests(TestCase):
         item = QListWidgetItem("Fixture")
         item.setData(Qt.ItemDataRole.UserRole, 1)
         items.addItem(item)
+        window = SimpleNamespace(isMinimized=lambda: False)
         page = SimpleNamespace(
+            window=lambda: window,
             _poll_busy=False,
             chat_conversations=items,
             pracownik_id=1,
@@ -303,7 +311,10 @@ class BackgroundViewTests(TestCase):
             _mark_read=mock.Mock(),
         )
         chat.ChatPage._poll_async(page)
-        page.isVisible = lambda: False
+        if minimized:
+            window.isMinimized = lambda: True
+        else:
+            page.isVisible = lambda: False
         with mock.patch.object(chat, "is_participant", return_value=True):
             page._reads.done(({1: {"id": 11}}, {}, [{"id": 11}], {}, True))
         page._render_grouped_messages.assert_not_called()

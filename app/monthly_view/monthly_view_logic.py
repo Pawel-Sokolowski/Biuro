@@ -15,6 +15,7 @@ from app.db.dao_notes import get_latest_notes_for_firms
 from app.utils.timer import TimerUtils
 from app.utils.months import default_month_for_monthly_view
 from app.security.authorization import assigned_company_ids, can, is_administrator
+from app.db import dao_active_timers
 
 
 class MonthlyViewLogic:
@@ -48,6 +49,7 @@ class MonthlyViewLogic:
         self.czas_start_general: Optional[datetime.datetime] = None
         self.general_activity: Optional[Dict[str, Any]] = None
         self._timer_label_cache = {}
+        self._durable_timers = {}
 
         self._auto_check_suspension()
 
@@ -63,6 +65,8 @@ class MonthlyViewLogic:
             if firma_id is None or getattr(self, fields[1]) is None:
                 continue
             conn = get_conn()
+            saved_state = {field: getattr(self, field) for field in fields[:3]}
+            saved_session = self._durable_timers.get(typ)
             try:
                 self._ensure_month_status(firma_id)
                 cur = conn.cursor()
@@ -70,6 +74,10 @@ class MonthlyViewLogic:
                 conn.commit()
             except Exception:
                 conn.rollback()
+                for field, value in saved_state.items():
+                    setattr(self, field, value)
+                if saved_session:
+                    self._durable_timers[typ] = saved_session
                 raise
             finally:
                 conn.close()
@@ -92,23 +100,29 @@ class MonthlyViewLogic:
                 conn.commit()
             finally:
                 conn.close()
+        started = datetime.datetime.now()
+        with get_conn() as conn:
+            session = dao_active_timers.start(conn, self.pracownik_id, None,
+                started.strftime('%Y-%m'), 'ogolne', activity, started)
         self.general_activity = activity
-        self.czas_start_general = datetime.datetime.now()
+        self.czas_start_general = started
+        self._durable_timers['ogolne'] = session
 
     def stop_general_timer(self) -> int:
         if self.czas_start_general is None:
             return 0
         now = datetime.datetime.now()
         start = self.czas_start_general
-        delta = max(0, int((now - start).total_seconds()))
+        delta = self._timer_elapsed('ogolne', start, now)
         activity = self.general_activity or {}
         conn = get_conn()
         try:
+            dao_active_timers.finish(conn, self._durable_timers.get('ogolne'))
             conn.execute(
                 "INSERT INTO czasomierze (firma_id, pracownik_id, miesiac, typ, usluga_id, fakturowac, "
                 "task_id, rozpoczecie, zakonczenie, sekundy, opis) "
                 "VALUES (NULL, %s, %s, 'ogolne', NULL, 0, %s, %s, %s, %s, %s)",
-                (self.pracownik_id, now.strftime("%Y-%m"), activity.get("task_id"),
+                (self.pracownik_id, start.strftime("%Y-%m"), activity.get("task_id"),
                  start.isoformat(timespec="seconds"), now.isoformat(timespec="seconds"), delta,
                  activity.get("task_title") or None),
             )
@@ -117,7 +131,33 @@ class MonthlyViewLogic:
             conn.close()
         self.czas_start_general = None
         self.general_activity = None
+        self._durable_timers.pop('ogolne', None)
         return delta
+
+    def _timer_elapsed(self, kind, started, now):
+        session = self._durable_timers.get(kind)
+        if session is not None and session.started_at == started:
+            return session.elapsed()
+        return max(0, int((now - started).total_seconds()))
+
+    def timer_checkpoints(self):
+        return [timer.checkpoint() for timer in self._durable_timers.values()]
+
+    def resume_timer(self, session_id):
+        self.stop_all_timers()
+        row, session = dao_active_timers.claim(self.pracownik_id, session_id)
+        self.aktualny_miesiac = row['miesiac']
+        kind = row['typ']
+        if kind == 'ogolne':
+            self.general_activity = row['activity']
+            self.czas_start_general = session.started_at
+        else:
+            fields = self._TIMER_FIELDS[kind]
+            setattr(self, fields[0], row['firma_id'])
+            setattr(self, fields[1], session.started_at)
+            setattr(self, fields[2], row['activity'])
+        self._durable_timers[kind] = session
+        return row['miesiac']
 
     def stop_all_timers(self) -> None:
         """Zapisuje wszystkie działające stopery (np. przy zamykaniu programu)."""
@@ -129,6 +169,8 @@ class MonthlyViewLogic:
             if firma_id is None or getattr(self, fields[1]) is None:
                 continue
             conn = get_conn()
+            saved_state = {field: getattr(self, field) for field in fields[:3]}
+            saved_session = self._durable_timers.get(typ)
             try:
                 self._ensure_month_status(firma_id)
                 cur = conn.cursor()
@@ -136,6 +178,10 @@ class MonthlyViewLogic:
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
+                for field, value in saved_state.items():
+                    setattr(self, field, value)
+                if saved_session:
+                    self._durable_timers[typ] = saved_session
                 errors.append(exc)
             finally:
                 conn.close()
@@ -149,7 +195,7 @@ class MonthlyViewLogic:
     def get_general_timer_detail(self) -> Optional[Dict[str, str]]:
         if self.czas_start_general is None:
             return None
-        elapsed = max(0, int((datetime.datetime.now() - self.czas_start_general).total_seconds()))
+        elapsed = self._timer_elapsed('ogolne', self.czas_start_general, datetime.datetime.now())
         return {
             "task": (self.general_activity or {}).get("task_title") or "Zadania ogólne",
             "company": "Ogólne",
@@ -308,7 +354,7 @@ class MonthlyViewLogic:
         start = getattr(self, fields[1])
         if not start:
             return 0
-        return max(0, int((datetime.datetime.now() - start).total_seconds()))
+        return self._timer_elapsed(typ, start, datetime.datetime.now())
 
     def get_timer_total_seconds(self, firma_id: int, typ: str, saved_seconds: int) -> int:
         fields = self._TIMER_FIELDS.get(typ)
@@ -429,14 +475,19 @@ class MonthlyViewLogic:
         if firma_id is None or start is None:
             return
 
-        delta = max(0, int((now - start).total_seconds()))
+        delta = self._timer_elapsed(typ, start, now)
+        session = self._durable_timers.get(typ)
+        month = getattr(session, 'month', '') or self.aktualny_miesiac
+        dao_active_timers.finish(cur, session)
+        cur.execute('INSERT INTO statusy_miesieczne (firma_id, miesiac) VALUES (%s, %s) '
+                    'ON CONFLICT (firma_id, miesiac) DO NOTHING', (firma_id, month))
         cur.execute(
             f"""
             UPDATE statusy_miesieczne
             SET {fields[3]} = {fields[3]} + %s
             WHERE firma_id = %s AND miesiac = %s
             """,
-            (delta, firma_id, self.aktualny_miesiac),
+            (delta, firma_id, month),
         )
 
         activity = getattr(self, fields[2])
@@ -450,7 +501,7 @@ class MonthlyViewLogic:
             (
                 firma_id,
                 self.pracownik_id,
-                self.aktualny_miesiac,
+                month,
                 typ,
                 (activity or {}).get("usluga_id"),
                 1 if (activity or {}).get("fakturowac") else 0,
@@ -465,11 +516,13 @@ class MonthlyViewLogic:
                 firma_id,
                 activity["usluga_id"],
                 TimerUtils.round_seconds_to_minimum_half(delta),
-                self.aktualny_miesiac,
+                month,
                 self.pracownik_id,
                 zadanie_id=(activity or {}).get("task_id"),
+                connection=cur.connection,
             )
 
+        self._durable_timers.pop(typ, None)
         setattr(self, fields[0], None)
         setattr(self, fields[1], None)
         setattr(self, fields[2], None)
@@ -487,6 +540,8 @@ class MonthlyViewLogic:
         now = datetime.datetime.now()
         self._ensure_month_status(firma_id)
         self.stop_general_timer()
+        saved_state = {field: getattr(self, field) for fields in self._TIMER_FIELDS.values() for field in fields[:3]}
+        saved_sessions = dict(self._durable_timers)
 
         conn = get_conn()
         cur = conn.cursor()
@@ -528,9 +583,17 @@ class MonthlyViewLogic:
             setattr(self, fields[0], firma_id)
             setattr(self, fields[1], now)
             setattr(self, fields[2], activity_payload)
+            self._durable_timers[typ] = dao_active_timers.start(cur, self.pracownik_id, firma_id,
+                self.aktualny_miesiac, typ, activity_payload, now)
 
             conn.commit()
 
+        except Exception:
+            conn.rollback()
+            for field, value in saved_state.items():
+                setattr(self, field, value)
+            self._durable_timers = saved_sessions
+            raise
         finally:
             conn.close()
 

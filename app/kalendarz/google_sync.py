@@ -1,23 +1,20 @@
-"""Dwukierunkowa synchronizacja kalendarza z Google Calendar (REST + OAuth2, bez dodatkowych bibliotek)."""
+"""Dwukierunkowa synchronizacja kalendarza z Google Calendar (REST + google-auth OAuth2)."""
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-import secrets
 import threading
 import time
-import webbrowser
 from datetime import date, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import quote
 
 import requests
 
 from app.db import dao_calendar, dao_calendar_sync as outbox
 from app.db.dao_app_settings import delete_setting, get_setting, set_setting
 from app.utils.crypto import decrypt_password, encrypt_password
+from app.kalendarz.caldav_identity import WARSAW
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -140,108 +137,58 @@ def disconnect() -> None:
 
 
 def connect(wait_seconds: int = 180) -> None:
-    """Loguje firmowe konto Google (OAuth2: przeglądarka + lokalny callback) i zapisuje refresh token."""
+    """Installed-app OAuth with PKCE and a bounded loopback callback."""
+    from google_auth_oauthlib.flow import InstalledAppFlow
     client_id, client_secret = get_client_credentials()
     if not client_id or not client_secret:
-        raise GoogleCalendarError(
-            "Brak danych klienta Google. Administrator musi je podać w Ustawieniach → Kalendarz."
-        )
-
-    state = secrets.token_urlsafe(16)
-    verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()
-    ).rstrip(b"=").decode()
-    result: Dict[str, str] = {}
-    done = threading.Event()
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            params = parse_qs(urlparse(self.path).query)
-            if params.get("state", [""])[0] == state:
-                result["code"] = params.get("code", [""])[0]
-                result["error"] = params.get("error", [""])[0]
-                done.set()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(
-                "<html><body>Połączono. Możesz zamknąć to okno.</body></html>".encode("utf-8")
-            )
-
-        def log_message(self, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    redirect_uri = f"http://127.0.0.1:{server.server_port}"
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+        raise GoogleCalendarError('Uzupełnij dane klienta Google w ustawieniach kalendarza.')
+    config = {'installed': {'client_id': client_id, 'client_secret': client_secret,
+                            'auth_uri': AUTH_URL, 'token_uri': TOKEN_URL,
+                            'redirect_uris': ['http://localhost']}}
     try:
-        webbrowser.open(
-            AUTH_URL + "?" + urlencode({
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "response_type": "code",
-                "scope": SCOPE,
-                "access_type": "offline",
-                "prompt": "consent",
-                "state": state,
-                "code_challenge": challenge,
-                "code_challenge_method": "S256",
-            })
-        )
-        if not done.wait(wait_seconds):
-            raise GoogleCalendarError("Przekroczono czas oczekiwania na logowanie Google.")
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    if result.get("error") or not result.get("code"):
-        raise GoogleCalendarError(f"Google odrzucił logowanie: {result.get('error') or 'brak kodu'}")
-
-    resp = requests.post(
-        TOKEN_URL,
-        data={
-            "code": result["code"],
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri,
-            "grant_type": "authorization_code",
-            "code_verifier": verifier,
-        },
-        timeout=TIMEOUT,
-    )
-    data = resp.json()
-    if resp.status_code != 200 or not data.get("refresh_token"):
-        raise GoogleCalendarError(data.get("error_description") or "Nie otrzymano tokenu od Google.")
-    set_setting(TOKEN_KEY, encrypt_password(data["refresh_token"]))
+        flow = InstalledAppFlow.from_client_config(config, scopes=SCOPE.split(), autogenerate_code_verifier=True)
+        credentials = flow.run_local_server(host='127.0.0.1', port=0, timeout_seconds=wait_seconds,
+            authorization_prompt_message='', success_message='Połączono. Możesz zamknąć to okno.',
+            access_type='offline', prompt='consent')
+        if not credentials.refresh_token:
+            raise GoogleCalendarError('Google nie zwrócił tokenu odświeżania. Połącz konto ponownie.')
+    except GoogleCalendarError:
+        raise
+    except Exception as exc:
+        raise GoogleCalendarError('Nie udało się połączyć konta Google.') from exc
+    set_setting(TOKEN_KEY, encrypt_password(credentials.refresh_token))
     _token_cache.update(value=None, expires=0.0)
 
 
+_token_lock = threading.Lock()
+
+
 def _access_token() -> str:
-    if _token_cache["value"] and _token_cache["expires"] > time.time() + 60:
-        return _token_cache["value"]
-    stored = get_setting(TOKEN_KEY)
-    if not stored:
-        raise GoogleCalendarError("Konto Google nie jest połączone.")
-    client_id, client_secret = get_client_credentials()
-    resp = requests.post(
-        TOKEN_URL,
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": decrypt_password(stored),
-            "grant_type": "refresh_token",
-        },
-        timeout=TIMEOUT,
-    )
-    data = resp.json()
-    if resp.status_code != 200 or "access_token" not in data:
-        raise GoogleCalendarError(data.get("error_description") or "Nie udało się odświeżyć tokenu Google.")
-    _token_cache.update(
-        value=data["access_token"], expires=time.time() + int(data.get("expires_in", 3000))
-    )
-    return data["access_token"]
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from datetime import timezone
+    from app.config import get_dsn, get_schema
+    with _token_lock:
+        stored = get_setting(TOKEN_KEY)
+        if not stored:
+            raise GoogleCalendarError('Konto Google nie jest połączone.')
+        client_id, client_secret = get_client_credentials()
+        key = hashlib.sha256(repr((get_dsn(), get_schema(), client_id, client_secret, stored)).encode()).hexdigest()
+        if _token_cache.get('key') == key and _token_cache['value'] and _token_cache['expires'] > time.time() + 60:
+            return _token_cache['value']
+        credentials = Credentials(token=None, refresh_token=decrypt_password(stored), token_uri=TOKEN_URL,
+                                  client_id=client_id, client_secret=client_secret, scopes=SCOPE.split())
+        transport = Request()
+        def request(*args, **kwargs):
+            kwargs['timeout'] = TIMEOUT
+            return transport(*args, **kwargs)
+        try:
+            credentials.refresh(request)
+        except Exception as exc:
+            raise GoogleCalendarError('Nie udało się odświeżyć dostępu do Google. Połącz konto ponownie.') from exc
+        expiry = credentials.expiry.replace(tzinfo=timezone.utc).timestamp() if credentials.expiry else time.time() + 300
+        _token_cache.update(key=key, value=credentials.token, expires=expiry)
+        return credentials.token
 
 
 def _headers() -> Dict[str, str]:
@@ -277,7 +224,9 @@ def _from_google(item: Dict[str, Any]) -> Dict[str, Any]:
         start_s, end_s, all_day = start["date"], max(last_day.isoformat(), start["date"]), 1
     else:
         def local(value: str) -> str:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone().replace(
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = parsed.replace(tzinfo=WARSAW) if parsed.tzinfo is None else parsed
+            return parsed.astimezone(WARSAW).replace(
                 tzinfo=None
             ).isoformat(timespec="minutes")
 

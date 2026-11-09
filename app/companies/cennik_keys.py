@@ -22,7 +22,9 @@ def normalize_typ(prefix: str) -> str:
 
 
 def parse_cennik_key(klucz: str) -> Dict[str, Any]:
-    parts = str(klucz or "").replace("-", "_").split("_")
+    # Import collision qualifiers describe additional rates, not base-price
+    # decimal places. Existing filters/sorting still use the readable base.
+    parts = str(klucz or "").split("__", 1)[0].replace("-", "_").split("_")
     typ = normalize_typ(parts[0]) if parts and parts[0] else ""
     vat = parts[1].upper() if len(parts) > 1 and parts[1].upper() in ("T", "N") else None
     rest = parts[2:] if vat else parts[1:]

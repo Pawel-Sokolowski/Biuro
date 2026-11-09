@@ -3,14 +3,17 @@ import hashlib
 import io
 import os
 import re
+import codecs
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import openpyxl
 import psycopg
 
 from app.db.dao_audit import record_import
 from app.db.dao_conn import get_conn
+from app.utils.identifiers import identifier_warnings
+from app.utils.request_cache import scoped, cached_value, own_resource
 from app.utils.import_enrichment import check_ceidg_status_for_company, check_vat_for_company, enrich_payload
 from app.utils.parsing import (
     to_float,
@@ -192,39 +195,62 @@ def parse_cennik_czasowy(text: str) -> Dict[str, Any]:
 # ============================================================
 # WCZYTANIE PLIKU CSV/XLSX
 # ============================================================
-def _load_rows_from_file(filepath: str) -> Tuple[List[str], List[Any]]:
+def _load_rows_from_file(filepath: str) -> Tuple[List[str], Iterable[Any]]:
     ext = os.path.splitext(filepath)[1].lower()
 
     if ext == ".csv":
-        with open(filepath, "rb") as handle:
-            raw = handle.read()
-        try:
-            content = raw.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            content = raw.decode("cp1250")
-        # Separator ustalamy po nagłówku; w danych przecinki są też w cenach (230,00).
-        first_line = content.split("\n", 1)[0]
+        encoding = 'utf-8-sig'
+        decoder = codecs.getincrementaldecoder(encoding)()
+        with open(filepath, 'rb') as probe:
+            try:
+                while chunk := probe.read(65536):
+                    decoder.decode(chunk)
+                decoder.decode(b'', final=True)
+            except UnicodeDecodeError:
+                encoding = 'cp1250'
+        handle = own_resource(open(filepath, encoding=encoding, newline=''))
+        first_line = handle.readline()
+        handle.seek(0)
         delimiter = max((";", "\t", ","), key=first_line.count)
-        reader = csv.reader(io.StringIO(content, newline=""), delimiter=delimiter)
+        reader = csv.reader(handle, delimiter=delimiter)
         header = next(reader, None)
-        rows = list(reader)
+        def stream():
+            try:
+                yield from reader
+            finally:
+                handle.close()
+        rows = own_resource(stream())
     else:
-        workbook = openpyxl.load_workbook(filepath, data_only=True, read_only=True)
+        if ext == '.xls':
+            raise ValueError('Format XLS nie jest obsługiwany. Zapisz arkusz jako XLSX lub CSV.')
+        workbook = own_resource(openpyxl.load_workbook(filepath, data_only=True, read_only=True))
         try:
             worksheet = workbook.active
             iterator = worksheet.iter_rows(values_only=True)
             header = next(iterator, None)
-            rows = list(iterator)
-        finally:
+        except Exception:
             workbook.close()
+            raise
+        def stream():
+            try:
+                yield from iterator
+            finally:
+                workbook.close()
+        rows = own_resource(stream())
 
     if not header:
+        rows.close()
+        if ext == ".csv":
+            handle.close()
+        else:
+            workbook.close()
         raise ValueError("Brak nagłówków w pliku.")
 
     headers = [str(value).strip() if value is not None else "" for value in header]
     return headers, rows
 
 
+@scoped
 def import_tax_offices_from_excel(filepath: str) -> int:
     """Importuje lub aktualizuje katalog urzędów skarbowych z XLSX/CSV."""
     headers, rows = _load_rows_from_file(filepath)
@@ -310,11 +336,11 @@ def match_tax_office(value: Any) -> Optional[str]:
         return None
     try:
         from app.db.dao_companies import get_tax_offices
-        names = [
-            re.sub(r"\s+", " ", str(o.get("nazwa") or "")).strip()
-            for o in get_tax_offices()
-        ]
-        names = [n for n in names if n]
+        def load_offices():
+            names = [re.sub(r"\s+", " ", str(o.get('nazwa') or '')).strip() for o in get_tax_offices()]
+            return [(name, _office_tokens(name)) for name in names if name]
+        offices = cached_value('import_tax_offices', load_offices)
+        names = [name for name, _ in offices]
     except Exception:
         return text
 
@@ -326,8 +352,7 @@ def match_tax_office(value: Any) -> Optional[str]:
     if not wanted:
         return text
     best, best_score, tie = None, 0.0, False
-    for name in names:
-        tokens = _office_tokens(name)
+    for name, tokens in offices:
         if not tokens:
             continue
         hits = sum(1 for w in wanted if any(_tokens_similar(w, t) for t in tokens))
@@ -356,12 +381,16 @@ def _build_payload_from_row(
     def _norm(name: str) -> str:
         return re.sub(r"\s+", " ", str(name)).strip().casefold()
 
-    normalized_index = {_norm(k): v for k, v in header_index.items()}
+    normalized_index = cached_value(('normalized_headers', tuple(header_index.items())),
+                                    lambda: {_norm(k): v for k, v in header_index.items()})
 
     def get(col: str) -> Any:
         _CONSUMED_HEADERS.add(_norm(col))
         idx = normalized_index.get(_norm(col))
         value = row[idx] if idx is not None and idx < len(row) else None
+        if col in ('Rachunek bankowy', 'Numer konta') and isinstance(value, (int, float)) and abs(value) >= 10**15:
+            raise ValueError('Rachunek bankowy zapisany jako liczba w Excelu może mieć utracone cyfry. '
+                             'Wpisz pełny rachunek w komórce tekstowej i ponów import.')
         if isinstance(value, str):
             value = value.strip()
         elif isinstance(value, float) and value.is_integer():
@@ -492,14 +521,14 @@ def _build_payload_from_row(
         else kadry_zdrowotna
     )
 
-    payload["wliczac_zdrowotna"] = (1 if ksiegowosc_zdrowotna is not None else 0)
+    # A partial sheet is an update, not a replacement of omitted pricing.
+    # Keep explicit blank/zero values distinguishable from absent columns.
+    if _norm("Cenniki usług księgowych") in normalized_index:
+        payload["wliczac_zdrowotna"] = (1 if ksiegowosc_zdrowotna is not None else 0)
 
-    payload["uop_ilosc"] = ckad["uop_ilosc"]
-    payload["uop_cennik"] = ckad["uop_cennik"]
-    payload["uz_ilosc"] = ckad["uz_ilosc"]
-    payload["uz_cennik"] = ckad["uz_cennik"]
-    payload["uod_ilosc"] = ckad["uod_ilosc"]
-    payload["uod_cennik"] = ckad["uod_cennik"]
+    if _norm("Cenniki usług kadrowych") in normalized_index:
+        for field in ("uop_ilosc", "uop_cennik", "uz_ilosc", "uz_cennik", "uod_ilosc", "uod_cennik"):
+            payload[field] = ckad[field]
 
     # --------------------------------------------------
     # CZASOWE
@@ -518,6 +547,7 @@ def _build_payload_from_row(
 # ============================================================
 # IMPORT DO PAYLOADÓW (DLA WIZARDU)
 # ============================================================
+@scoped
 def import_companies_from_excel_file_payloads(filepath: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     try:
         headers, rows = _load_rows_from_file(filepath)
@@ -533,6 +563,7 @@ def import_companies_from_excel_file_payloads(filepath: str) -> Tuple[List[Dict[
             continue
 
         payload = _build_payload_from_row(headers, header_index, row)
+        warnings.extend(f"Wiersz {row_number}: {warning}" for warning in identifier_warnings(payload))
         assigned_raw = payload.get("assigned_raw")
         if assigned_raw:
             unresolved = [
@@ -669,12 +700,15 @@ def _accounting_cennik_spec(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     # Cena podstawowa jest częścią klucza, np. KPIR_T_10_300.
     candidates = _accounting_cennik_key_candidates(typ, vat_flag, limit, base_price)
 
+    health_price = parsed.get("zdrowotna")
+    if health_price is None:
+        health_price = payload.get("zdrowotna")
     return {
         "typ": typ,
         "candidates": candidates,
         "base_price": base_price,
         "limit_price": limit_price,
-        "zdrowotna": parsed.get("zdrowotna") or payload.get("zdrowotna") or 0,
+        "zdrowotna": health_price if health_price is not None else 0,
     }
 
 
@@ -690,19 +724,45 @@ def _ensure_accounting_cennik(cursor: psycopg.Cursor, payload: Dict[str, Any]) -
 
     candidates = spec["candidates"]
     base_price = spec["base_price"]
+    # Serialize creation by the canonical base key. Two concurrent imports must
+    # not both select a free key for different over-limit/health prices.
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("import-cennik:" + candidates[0],))
     # „netto” w cenniku to cena księgowości wraz ze zdrowotną.
     netto = round((base_price or 0) + float(spec["zdrowotna"] or 0), 2)
-    placeholders = ", ".join("%s" for _ in candidates)
-
+    qualified_key = (f"{candidates[0]}__D{_format_price_key(spec['limit_price'] or 0)}"
+                     f"_Z{_format_price_key(spec['zdrowotna'])}")
+    keys = [*candidates, qualified_key]
+    placeholders = ", ".join("%s" for _ in keys)
     cursor.execute(
-        f"SELECT klucz FROM cenniki WHERE klucz IN ({placeholders}) LIMIT 1",
-        candidates,
+        f"SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, zdrowotna "
+        f"FROM cenniki WHERE klucz IN ({placeholders})",
+        keys,
     )
-    row = cursor.fetchone()
-    if row:
-        return row[0]
+    existing = {row[0]: row for row in cursor.fetchall()}
+    expected_prices = tuple(_decimal_price(value or 0).quantize(Decimal("0.01"))
+                            for value in (base_price, spec["limit_price"], spec["zdrowotna"]))
 
-    generated_key = candidates[0]
+    def equivalent(row):
+        return tuple(_decimal_price(value or 0).quantize(Decimal("0.01")) for value in row[1:]) == expected_prices
+
+    for key in keys:
+        if key in existing and equivalent(existing[key]):
+            return key
+
+    # Retain legacy readable keys where available; qualify only collisions.
+    generated_key = next((key for key in candidates if key not in existing), qualified_key)
+    suffix = 1
+    while generated_key in existing:
+        suffix += 1
+        generated_key = f"{qualified_key}__{suffix}"
+        cursor.execute("SELECT klucz, cena_netto_ksiegowosc, cena_za_dokument_ponad_limit, zdrowotna "
+                       "FROM cenniki WHERE klucz = %s", (generated_key,))
+        row = cursor.fetchone()
+        if row is None:
+            break
+        if equivalent(row):
+            return generated_key
+        existing[generated_key] = row
 
     cursor.execute(
         """
@@ -829,7 +889,8 @@ def _apply_payload_to_db(
     from app.db.dao_companies import FIRMA_FIELDS, _apply_aliases
 
     # Kreator przekazuje klucze formularza (dz_*, ko_*, zam_*, kont_*) – mapujemy je na kolumny.
-    payload.update({k: v for k, v in _apply_aliases(payload).items() if k not in payload})
+    payload.update({k: v for k, v in _apply_aliases(payload).items()
+                    if payload.get(k) in (None, "") and v not in (None, "")})
     if payload.get("status_vat") in ("Czynny", "Zwolniony") and payload.get("vat_czynny") in (None, ""):
         payload["vat_czynny"] = 1 if payload["status_vat"] == "Czynny" else 0
 
@@ -878,11 +939,11 @@ def _apply_payload_to_db(
         "uz_cennik", "uod_ilosc", "uod_cennik", "wliczac_zdrowotna",
     ]
 
-    cursor.execute(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = current_schema() AND table_name = 'firmy'"
-    )
-    existing_columns = {row[0] for row in cursor.fetchall()}
+    def load_columns():
+        cursor.execute("SELECT column_name FROM information_schema.columns "
+                       "WHERE table_schema = current_schema() AND table_name = 'firmy'")
+        return {row[0] for row in cursor.fetchall()}
+    existing_columns = cached_value('company_columns', load_columns)
     for field in FIRMA_FIELDS:
         if field in existing_columns and field not in company_fields and field not in (
             "glowny_cennik", "glowny_cennik_manualny",
@@ -953,6 +1014,7 @@ def _ensure_contact(cursor: psycopg.Cursor, firma_id: int, payload: Dict[str, An
 # ============================================================
 # IMPORTERY FIRM
 # ============================================================
+@scoped
 def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = None) -> Dict[str, Any]:
     try:
         headers, rows = _load_rows_from_file(filepath)
@@ -971,6 +1033,7 @@ def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = Non
             if not any(value not in (None, "") for value in row):
                 continue
             payload = _build_payload_from_row(headers, header_index, row)
+            warnings.extend(f"Wiersz {row_number}: {warning}" for warning in identifier_warnings(payload))
             if not str(payload.get('nazwa') or '').strip():
                 warnings.append(f'Wiersz {row_number}: pominięto pustą nazwę firmy.')
                 continue
@@ -991,6 +1054,7 @@ def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = Non
         conn.close()
 
 
+@scoped
 def save_imported_payload(
     payload: Dict[str, Any],
     db_path: Optional[str] = None,
@@ -1008,10 +1072,12 @@ def save_imported_payload(
         conn.close()
 
 
+@scoped
 def import_companies_fast_from_excel_file(
     filepath: str,
     db_path: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
+    prepared=None,
 ) -> Dict[str, Any]:
     """progress(tekst) dostaje opis bieżącego etapu, np. "Firma 2 z 120\\nCEIDG/KRS/GUS: zrobione"."""
     def report(text: str) -> None:
@@ -1019,7 +1085,11 @@ def import_companies_fast_from_excel_file(
             progress(text)
 
     try:
-        headers, rows = _load_rows_from_file(filepath)
+        if prepared is None:
+            headers, rows = _load_rows_from_file(filepath)
+        else:
+            prepared.validate(filepath)
+            headers, rows = prepared.headers, prepared.rows(filepath)
     except Exception as exc:
         return {"created": 0, "updated": 0, "warnings": [f"Plik nie mógł zostać wczytany: {exc}"]}
 
@@ -1030,17 +1100,17 @@ def import_companies_fast_from_excel_file(
     warnings: List[str] = []
 
     try:
-        data_rows = [
+        data_rows = (
             (n, r) for n, r in enumerate(rows, start=2)
             if any(value not in (None, "") for value in r)
-        ]
-        total = len(data_rows)
+        )
         for index, (row_number, row) in enumerate(data_rows, start=1):
             payload = _build_payload_from_row(headers, header_index, row)
+            warnings.extend(f"Wiersz {row_number}: {warning}" for warning in identifier_warnings(payload))
             if not str(payload.get('nazwa') or '').strip():
                 warnings.append(f'Wiersz {row_number}: pominięto pustą nazwę firmy.')
                 continue
-            head = f"Firma {index} z {total}: {payload.get('nazwa') or ''}".rstrip(": ")
+            head = f"Firma {index}: {payload.get('nazwa') or ''}".rstrip(": ")
             report(f"{head}\nCEIDG/KRS/GUS: pobieranie...")
             problem = enrich_payload(payload)
             if problem:
@@ -1098,6 +1168,7 @@ def build_pricing_key(base_key: str, price: Any) -> str:
     return f"{key}_{price_key}"
 
 
+@scoped
 def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     del db_path
     try:
@@ -1151,6 +1222,7 @@ def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> Li
 
     return payloads
 
+@scoped
 def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     del db_path
     try:
@@ -1181,3 +1253,67 @@ def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = N
 
         payloads.append({"typ": typ, "vat": vat, "cena": cena})
     return payloads
+
+
+@scoped
+def preview_company_import(filepath: str, *, prepared=None) -> Dict[str, Any]:
+    """Read-only, streaming plan. Do not enrich or write until it is accepted."""
+    headers, rows = _load_rows_from_file(filepath)
+    if prepared is not None:
+        prepared.headers = list(headers)
+    index = {header: pos for pos, header in enumerate(headers)}
+    with get_conn() as conn:
+        existing = [dict(row) for row in conn.execute('SELECT id,nip,nazwa FROM firmy')]
+    by_nip, by_name = {}, {}
+    for company in existing:
+        nip = str(company.get('nip') or '').strip()
+        if nip:
+            by_nip.setdefault(nip, []).append(company['id'])
+        by_name.setdefault(company['nazwa'], []).append(company)
+    plan = dict(created=0, updated=0, invalid=0, conflicts=0, warnings=[])
+    seen = set()
+    for row_number, row in enumerate(rows, 2):
+        if prepared is not None:
+            prepared.append(row)
+        if not any(value not in (None, '') for value in row):
+            continue
+        try:
+            payload = _build_payload_from_row(headers, index, row)
+        except ValueError as exc:
+            plan['invalid'] += 1
+            if len(plan['warnings']) < 100:
+                plan['warnings'].append(f'Wiersz {row_number}: {exc}')
+            continue
+        name = str(payload.get('nazwa') or '').strip()
+        nip = payload.get('nip') or ''
+        if not name:
+            plan['invalid'] += 1
+            continue
+        candidates = by_nip.get(nip, []) if nip else []
+        if not candidates:
+            candidates = [company['id'] for company in by_name.get(name, []) if not nip or not company.get('nip')]
+        key = ('nip', nip) if nip else ('name', name)
+        if len(candidates) > 1 or key in seen:
+            plan['conflicts'] += 1
+            if len(plan['warnings']) < 100:
+                plan['warnings'].append(f'Wiersz {row_number}: powtarzająca się lub niejednoznaczna firma {name}.')
+        else:
+            plan['updated' if candidates else 'created'] += 1
+        seen.add(key)
+        for warning in identifier_warnings(payload):
+            if len(plan['warnings']) < 100:
+                plan['warnings'].append(f'Wiersz {row_number}: {warning}')
+    plan['warnings'].extend(_unknown_column_warnings(headers))
+    if prepared is not None:
+        prepared.validate(filepath)
+    return plan
+
+
+def prepare_company_import(filepath):
+    from app.utils.import_source import PreparedCompanyImport
+    prepared = PreparedCompanyImport(filepath)
+    try:
+        return preview_company_import(filepath, prepared=prepared), prepared
+    except Exception:
+        prepared.close()
+        raise

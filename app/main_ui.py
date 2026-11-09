@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import QApplication, QCheckBox, QFileDialog, QStyledItemDel
 from PyQt6.QtCore import QSettings, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen
 
-from app.email.email_storage import get_visible_unread_counts
+from app.email.email_storage import get_visible_unread_counts, mail_notification_snapshot
 from app.utils.ui_imports import *
 from app.config import get_database
 
@@ -163,15 +163,7 @@ class LoginWindow(QDialog):
             self._on_login
         )
 
-        btn_register = QPushButton(
-            "Zarejestruj"
-        )
-        btn_register.clicked.connect(
-            self._on_register
-        )
-
         row.addWidget(btn_login)
-        row.addWidget(btn_register)
 
         layout.addLayout(row)
 
@@ -363,56 +355,7 @@ class LoginWindow(QDialog):
         QMessageBox.information(self, "Reset hasła", "Hasło zmienione. Możesz się zalogować.")
 
     def _on_register(self):
-        from app.utils.crypto import register_user
-        database_path = self.database_combo.currentText().strip()
-        if not database_path:
-            QMessageBox.warning(self, "Błąd", "Wybierz bazę danych przed rejestracją")
-            return
-        try:
-            self._require_current_schema()
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", str(e))
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Rejestracja")
-        dlg.setFixedSize(420, 320)
-        dlg.setStyleSheet(self.styleSheet())
-
-        form = QFormLayout()
-        email = QLineEdit()
-        imie = QLineEdit()
-        nazwisko = QLineEdit()
-        haslo = QLineEdit()
-        haslo.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("E-mail:", email)
-        form.addRow("Imię:", imie)
-        form.addRow("Nazwisko:", nazwisko)
-        form.addRow("Hasło:", haslo)
-
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
-                                QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-
-        layout = QVBoxLayout(dlg)
-        layout.addLayout(form)
-        layout.addWidget(btns)
-
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            try:
-                ok = register_user(email.text(), haslo.text(),
-                                   imie=imie.text(), nazwisko=nazwisko.text(),
-                                   is_admin_flag=False)
-            except Exception as e:
-                QMessageBox.critical(self, "Błąd", str(e))
-                return
-            if isinstance(ok, tuple):
-                ok = ok[0]
-            if ok:
-                self.database_path = database_path
-                QMessageBox.information(self, "OK", "Rejestracja udana.")
-            else:
-                QMessageBox.critical(self, "Błąd", "Rejestracja nie powiodła się.")
+        QMessageBox.information(self, "Konta pracowników", "Nowe konta pracowników tworzy administrator w ustawieniach użytkowników.")
 
 
 class OfficeManagerApp(QMainWindow):
@@ -539,7 +482,7 @@ class OfficeManagerApp(QMainWindow):
         self.page_dashboard = DashboardPage(self.pracownik_id)
         # These pages own background monitoring and must start before tab visits.
         self.page_email = EmailPage(self.pracownik_id)
-        self.page_email.folder_visibility_changed.connect(self._update_email_badge)
+        self.page_email.folder_visibility_changed.connect(self.refresh_email_badge_async)
         self.page_chat = ChatPage(self.pracownik_id)
         self.page_chat.unread_changed.connect(self._set_chat_badge)
         self.page_chat._refresh_unread_marks()
@@ -570,11 +513,14 @@ class OfficeManagerApp(QMainWindow):
 
         self._email_badge_timer = QTimer(self)
         self._email_badge_timer.setInterval(10000)
-        self._email_badge_timer.timeout.connect(self._update_email_badge)
+        self._email_badge_timer.timeout.connect(self.refresh_email_badge_async)
         self._email_badge_timer.start()
         from app.mail_toasts import MailToaster
         self._mail_toaster = MailToaster(self, self._show_email_tab)
-        self._update_email_badge()
+        from app.utils.background import TaskRunner
+        self._badge_reads = TaskRunner(self)
+        self._badge_busy = False
+        self.refresh_email_badge_async()
         self._start_saldeo_push_watcher()
 
     def _ensure_page(self, name):
@@ -735,6 +681,34 @@ class OfficeManagerApp(QMainWindow):
                 "Nie udało się odczytać liczby nieprzeczytanych maili",
                 exc_info=True,
             )
+
+    def refresh_email_badge_async(self):
+        if self._badge_busy:
+            return
+        from copy import deepcopy
+        from app.mail_toasts import MailToaster
+        accounts = deepcopy(self.page_email.accounts)
+        hidden = deepcopy(self.page_email.hidden_folders)
+        last_ids = dict(self._mail_toaster._last_ids)
+        self._badge_busy = True
+
+        def read():
+            snapshot = mail_notification_snapshot(accounts, hidden, last_ids)
+            return snapshot.total, (snapshot.last_ids, snapshot.messages)
+
+        def loaded(result):
+            self._badge_busy = False
+            if accounts != self.page_email.accounts or hidden != self.page_email.hidden_folders:
+                self.refresh_email_badge_async()
+                return
+            self._set_badge('E-mail', result[0])
+            self._mail_toaster.apply_check(*result[1])
+
+        def failed(exc):
+            self._badge_busy = False
+            logger.warning('email_badge_read failed: %s', exc)
+
+        self._badge_reads.submit(read, loaded, failed)
 
     def _toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed

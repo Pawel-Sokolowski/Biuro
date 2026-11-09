@@ -174,7 +174,7 @@ def _choose_password_column(cols: _t.List[str]) -> _t.Optional[str]:
 
 
 # --- Funkcje autoryzacyjne i zarządzania użytkownikami ---
-def register_user(email: str, password: str, imie: str = "", nazwisko: str = "", is_admin_flag: bool = False) -> _t.Tuple[bool, _t.Optional[int], str]:
+def register_user(email: str, password: str, imie: str = "", nazwisko: str = "", is_admin_flag: bool = False, *, actor_id: int | None = None) -> _t.Tuple[bool, _t.Optional[int], str]:
     """
     Rejestruje nowego pracownika.
     Zwraca (success, user_id_or_None, message).
@@ -190,6 +190,13 @@ def register_user(email: str, password: str, imie: str = "", nazwisko: str = "",
     Returns:
         Tuple of (success, user_id, message)
     """
+    # Registration is an administrator action; the login screen cannot create
+    # active employees or promote a caller by supplying is_admin_flag.
+    from app.security.authorization import can, is_administrator
+    if not actor_id or not can(actor_id, "can_manage_users"):
+        return False, None, "Nowe konta pracowników tworzy administrator."
+    if is_admin_flag and not is_administrator(actor_id):
+        return False, None, "Tylko administrator może nadać uprawnienia administratora."
     if not email or not password:
         return False, None, "Email i hasło są wymagane."
     

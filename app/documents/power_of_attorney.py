@@ -129,6 +129,8 @@ def reviewed_data(data, kind):
     attorney['birth_date'] = _date(attorney['birth_date']) if attorney.get('birth_date') else pesel_birth_date(pesel)
     if kind == 'UPL' and not attorney['birth_date']:
         raise ValueError('Przesłany schemat UPL wymaga daty urodzenia pełnomocnika. Wpisz ją lub uzupełnij PESEL.')
+    if kind == 'UPL-PAPER' and not (pesel or nip) and not (attorney['birth_date'] and identity and attorney.get('identity_country')):
+        raise ValueError('Bez NIP lub PESEL podaj datę urodzenia, dokument tożsamości i kraj wydania dokumentu pełnomocnika.')
     principal_kind = data.get('principal_kind')
     if principal_kind not in ('person', 'legal', 'other'):
         raise ValueError('Wybierz rodzaj podmiotu udzielającego pełnomocnictwa.')
@@ -152,7 +154,7 @@ def reviewed_data(data, kind):
         raise ValueError('Nazwa skrócona do PEL może mieć maksymalnie 31 znaków. Popraw ją w zakładce UPL / PEL.')
     if kind in ('PEL', 'PEL-PAPER') and data.get('pel_scope') == 'case' and not str(data.get('pel_case') or '').strip():
         raise ValueError('Opisz sprawę objętą pełnomocnictwem PEL.')
-    if kind == 'UPL' and not str(data.get('tax_office') or '').strip():
+    if kind in ('UPL', 'UPL-PAPER') and not str(data.get('tax_office') or '').strip():
         raise ValueError('Uzupełnij Urząd Skarbowy dla UPL.')
     return dict(data, attorney=attorney, nip=principal_nip, pesel=principal_pesel,
                 authority_from=start, authority_until=end)

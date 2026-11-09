@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.db.dao_conn import get_conn
 from app.config import EMAIL_LOCAL_LIMIT
 from app.email.email_helpers import folder_role
+from app.email.notification_types import MailNotificationSnapshot
 
 
 _UNSPECIFIED_GENERATION = object()
@@ -1592,3 +1593,47 @@ def resolve_assigned_message(actor_id: int, target: dict, *, require_assignment=
 def resolve_notification_message(actor_id: int, target: dict):
     """Resolve a new-mail toast by row/message identity, rechecking account access."""
     return resolve_assigned_message(actor_id, target, require_assignment=False)
+
+
+def mail_notification_snapshot(accounts, hidden_folders, last_ids, limit=20) -> MailNotificationSnapshot:
+    """At most four SQL reads and limit candidates per account, in one snapshot."""
+    account_map = {int(account['id']): dict(account) for account in accounts}
+    if not account_map:
+        return MailNotificationSnapshot(0, dict(last_ids), [])
+    ids = list(account_map)
+    visible, eligible = set(), []
+    with mail_read_snapshot() as conn:
+        folders = [dict(row) for row in conn.execute(
+            'SELECT id,konto_id,server_name,attributes,delimiter FROM foldery_email WHERE konto_id=ANY(%s)', (ids,))]
+        for folder in folders:
+            hidden = hidden_folders.get(str(folder['konto_id']), set())
+            path, delimiter = folder['server_name'] or '', folder['delimiter'] or '.'
+            if any(path == item or path.startswith(item + delimiter) for item in hidden):
+                continue
+            visible.add(folder['id'])
+            if folder_role(path, folder['attributes'], folder['delimiter']) not in _NO_TOAST_ROLES:
+                eligible.append(folder['id'])
+        counts = conn.execute('''SELECT konto_id,folder_id,COUNT(*) AS n FROM wiadomosci_email
+            WHERE konto_id=ANY(%s) AND COALESCE(usunieta,0)=0 AND COALESCE(przeczytana,0)=0
+            GROUP BY konto_id,folder_id''', (ids,)).fetchall()
+        maxima = {int(row[0]): int(row[1]) for row in conn.execute(
+            'SELECT konto_id,MAX(id) FROM wiadomosci_email WHERE konto_id=ANY(%s) GROUP BY konto_id', (ids,))}
+        bounds = [(account_id, last_ids[account_id]) for account_id in ids
+                  if last_ids.get(account_id) is not None and maxima.get(account_id, 0) > last_ids[account_id]]
+        candidates = []
+        if bounds and eligible:
+            candidates = [dict(row) for row in conn.execute('''
+                SELECT w.* FROM unnest(%s::integer[],%s::bigint[]) AS requested(account_id,after_id)
+                CROSS JOIN LATERAL (
+                    SELECT konto_id,folder_id,id,message_id,nadawca,temat FROM wiadomosci_email
+                    WHERE konto_id=requested.account_id AND id>requested.after_id AND folder_id=ANY(%s)
+                      AND COALESCE(usunieta,0)=0 AND COALESCE(przeczytana,0)=0
+                    ORDER BY id DESC LIMIT %s
+                ) w ORDER BY w.id
+            ''', ([a for a, _ in bounds], [b for _, b in bounds], eligible, limit))]
+    total = sum(int(row['n']) for row in counts if row['folder_id'] in visible)
+    for row in candidates:
+        row['_account'] = account_map[row.pop('konto_id')]
+    updated = dict(last_ids)
+    updated.update({account_id: maxima.get(account_id, 0) for account_id in ids})
+    return MailNotificationSnapshot(total, updated, candidates)

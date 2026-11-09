@@ -1,6 +1,7 @@
 """Automatic mailbox scheduling, live assignment badges and notification links."""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
+from contextlib import nullcontext
 from pathlib import Path
 import tempfile
 import threading
@@ -16,6 +17,8 @@ from app.tasks.tasks_ui import TasksPage
 
 class AutomaticSyncTests(unittest.TestCase):
     def setUp(self):
+        patcher=patch.object(email_sync,'account_sync_lock',side_effect=lambda *a, **kw: nullcontext(True))
+        patcher.start();self.addCleanup(patcher.stop)
         patcher=patch.object(email_sync,'needs_initial_sync',return_value=False)
         patcher.start();self.addCleanup(patcher.stop)
         patcher=patch.object(email_sync,'_shared_session',side_effect=ConnectionError('no network in tests'))

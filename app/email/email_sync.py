@@ -57,6 +57,7 @@ from app.email.email_storage import (
     record_mailbox_generation,
 )
 from app.utils.crypto import decrypt_password
+from app.utils.sync_lock import account_sync_lock
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,21 @@ def _select_folder(
 
 
 def _supports_move(imap_conn: imaplib.IMAP4) -> bool:
-    return "MOVE" in getattr(imap_conn, "capabilities", ())
+    return 'MOVE' in _capabilities(imap_conn)
+
+
+def _capabilities(conn):
+    return {value.decode('ascii', 'replace').upper() if isinstance(value, bytes) else str(value).upper()
+            for value in getattr(conn, 'capabilities', ())}
+
+
+def _expunge_selected(conn, uids):
+    # Without UIDPLUS, leave the selected messages flagged Deleted. A plain
+    # EXPUNGE would also remove mail marked by another client in this folder.
+    if 'UIDPLUS' in _capabilities(conn):
+        typ, _ = conn.uid('EXPUNGE', uids)
+        if typ != 'OK':
+            raise RuntimeError('Nie udało się zatwierdzić usunięcia wybranych wiadomości.')
 
 
 class _Session:
@@ -180,6 +195,26 @@ class _Session:
             self.conn.logout()
         except Exception:
             logger.debug("Zamknięcie sesji IMAP", exc_info=True)
+
+    def unselect(self) -> None:
+        """Leave a selected mailbox without expunging another client's mail."""
+        if not self.selected:
+            return
+        if 'UNSELECT' in _capabilities(self.conn):
+            _check(self.conn.unselect())
+        else:
+            # CLOSE expunges every \\Deleted message in a read-write mailbox.
+            # LOGOUT does not expunge; reconnect for servers without UNSELECT.
+            self.close()
+            account = _get_account_info(self.konto_id)
+            if not account or self.fingerprint != _account_fingerprint(account):
+                raise ConnectionError("Zmieniono konfigurację konta IMAP.")
+            conn = _connect_imap(account)
+            if conn is None:
+                raise ConnectionError("Nie udało się ponownie połączyć z serwerem poczty.")
+            self.conn = conn
+        self.selected = None
+        self.selected_generation = None
 
 
 _sessions: Dict[int, _Session] = {}
@@ -1004,13 +1039,14 @@ def move_message(
         conn = session.conn
         if _supports_move(conn):
             typ, _ = conn.uid("MOVE", uid, quote_mailbox(dest_folder))
-            if typ == "OK":
-                return True
+            return typ == 'OK'
         typ, _ = conn.uid("COPY", uid, quote_mailbox(dest_folder))
         if typ != "OK":
             return False
-        conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
-        conn.expunge()
+        typ, _ = conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
+        if typ != 'OK':
+            raise RuntimeError('Wiadomość została skopiowana, ale nie usunięto jej z folderu źródłowego. Odśwież widok przed kolejną operacją.')
+        _expunge_selected(conn, uid)
         return True
 
 
@@ -1028,7 +1064,7 @@ def delete_message(
         typ, _ = session.conn.uid("STORE", uid, "+FLAGS.SILENT", r"(\Deleted)")
         if typ != "OK":
             return False
-        session.conn.expunge()
+        _expunge_selected(session.conn, uid)
         return True
 
 def _store_folders(
@@ -1465,6 +1501,10 @@ def _sync_and_prefetch_impl(
     return total_headers
 
 
+class MailboxSyncBusy(RuntimeError):
+    """An explicit sync was not performed because another desktop owns it."""
+
+
 def sync_and_prefetch(
     konto_id: int,
     folders: List[str],
@@ -1483,11 +1523,15 @@ def sync_and_prefetch(
     try:
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError("Synchronizacja przerwana.")
-        result = _sync_and_prefetch_impl(
-            konto_id, folders, first_run=first_run, on_headers=on_headers,
-            on_progress=on_progress, all_folders=all_folders,
-            full_mailbox=full_mailbox, headers_only=headers_only, cancel_event=cancel_event,
-        )
+        with account_sync_lock(konto_id) as leader:
+            if not leader:
+                logger.info('imap_sync account=%s skipped: another workstation is synchronizing', konto_id)
+                raise MailboxSyncBusy('Inny komputer synchronizuje to konto. Poczekaj na zakończenie i ponów synchronizację.')
+            result = _sync_and_prefetch_impl(
+                konto_id, folders, first_run=first_run, on_headers=on_headers,
+                on_progress=on_progress, all_folders=all_folders,
+                full_mailbox=full_mailbox, headers_only=headers_only, cancel_event=cancel_event,
+            )
         if full_mailbox or (first_run and not headers_only):
             set_setting(f"email_initial_sync_complete_{konto_id}", "1")
             set_setting(f"email_initial_sync_pending_{konto_id}", "0")
@@ -1661,12 +1705,7 @@ def rename_folder(konto_id: int, old: str, new_name: str) -> str:
         return old
 
     def action(session: _Session) -> None:
-        if session.selected:
-            try:
-                session.conn.close()
-            except Exception:
-                logger.debug("CLOSE przed zmian? nazwy", exc_info=True)
-            session.selected = None
+        session.unselect()
         _check(session.conn.rename(quote_mailbox(old), quote_mailbox(new_server)))
         for method, name in (("unsubscribe", old), ("subscribe", new_server)):
             try:
@@ -1740,7 +1779,7 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
     if not ordered:
         return []
 
-    def headers(account):
+    def headers_impl(account):
         konto_id = account["id"]
         folders = []
         lock = _account_sync_lock(konto_id)
@@ -1785,6 +1824,15 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         finally:
             lock.release()
 
+    def headers(account):
+        try:
+            with account_sync_lock(account['id'], cooldown=90) as leader:
+                if not leader:
+                    return account['id'], [], None
+                return headers_impl(account)
+        except Exception as exc:
+            return account['id'], [], f"Konto #{account['id']}: {exc}"
+
     with ThreadPoolExecutor(max_workers=min(4, len(ordered))) as pool:
         futures = [pool.submit(copy_context().run, headers, account) for account in ordered]
         jobs = [future.result() for future in futures]
@@ -1802,7 +1850,9 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
                 if not lock.acquire(blocking=False):
                     continue
                 try:
-                    prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
+                    with account_sync_lock(konto_id) as leader:
+                        if leader:
+                            prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
                 finally:
                     lock.release()
             except Exception as exc:

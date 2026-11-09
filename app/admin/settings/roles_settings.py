@@ -146,6 +146,7 @@ class RolesSettings(QWidget):
         cb_usr = QCheckBox("Użytkownicy")
         cb_fin = QCheckBox("Finanse")
         cb_exp = QCheckBox("Eksport danych")
+        cb_admin = QCheckBox("Ustawienia administracyjne")
 
         form.addRow("Nazwa roli:", e_name)
         form.addRow(cb_inv)
@@ -153,6 +154,7 @@ class RolesSettings(QWidget):
         form.addRow(cb_usr)
         form.addRow(cb_fin)
         form.addRow(cb_exp)
+        form.addRow(cb_admin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dlg.accept)
@@ -167,7 +169,8 @@ class RolesSettings(QWidget):
                     can_edit_companies=cb_cmp.isChecked(),
                     can_manage_users=cb_usr.isChecked(),
                     can_view_finances=cb_fin.isChecked(),
-                    can_export_data=cb_exp.isChecked()
+                    can_export_data=cb_exp.isChecked(),
+                    can_access_admin_settings=cb_admin.isChecked()
                 )
                 self._refresh()
                 QMessageBox.information(self, "OK", "Dodano rolę.")
@@ -238,12 +241,16 @@ class RolesSettings(QWidget):
         cb_exp = QCheckBox("Eksport danych")
         cb_exp.setChecked(bool(rget("can_export_data", 0)))
 
+        cb_admin = QCheckBox("Ustawienia administracyjne")
+        cb_admin.setChecked(bool(rget("can_access_admin_settings", 0)))
+
         form.addRow("Nazwa roli:", e_name)
         form.addRow(cb_inv)
         form.addRow(cb_cmp)
         form.addRow(cb_usr)
         form.addRow(cb_fin)
         form.addRow(cb_exp)
+        form.addRow(cb_admin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dlg.accept)
@@ -259,7 +266,8 @@ class RolesSettings(QWidget):
                     can_edit_companies=cb_cmp.isChecked(),
                     can_manage_users=cb_usr.isChecked(),
                     can_view_finances=cb_fin.isChecked(),
-                    can_export_data=cb_exp.isChecked()
+                    can_export_data=cb_exp.isChecked(),
+                    can_access_admin_settings=cb_admin.isChecked()
                 )
                 self._refresh()
                 QMessageBox.information(self, "OK", "Zapisano zmiany.")

@@ -43,6 +43,7 @@ from app.db.dao_services import add_company_extra_service
 from app.db.dao_tasks import list_tasks_for_timer
 from app.utils.timer import TimerUtils
 from app.utils.view_state import preserve_view_state
+from app.utils.background import TaskRunner
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.month_picker import MonthPicker
 from app.monthly_view.notes_window import NotesWindow
@@ -581,6 +582,9 @@ class MonthlyViewPage(QWidget):
         }
 
         self._rows: List[Dict[str, Any]] = []
+        self._monthly_reads = TaskRunner(self)
+        self._loaded_context = None
+        self._requested_context = None
 
         self.model_ks = MonthlyViewModel([], "ksiegowosc", self)
         self.model_kadry = MonthlyViewModel([], "kadry", self)
@@ -616,6 +620,9 @@ class MonthlyViewPage(QWidget):
 
         self.btn_refresh = QPushButton("Odśwież")
         filters_layout.addWidget(self.btn_refresh)
+        recover = QPushButton('Odzyskaj stoper…')
+        recover.clicked.connect(self._recover_timer)
+        filters_layout.addWidget(recover)
 
         main_layout.addLayout(filters_layout)
 
@@ -685,7 +692,7 @@ class MonthlyViewPage(QWidget):
         self.tabs.currentChanged.connect(self._on_month_tab_changed)
         self.employee_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.status_combo.currentIndexChanged.connect(self._on_filters_changed)
-        self.stage_combo.currentIndexChanged.connect(self._reload_rows)
+        self.stage_combo.currentIndexChanged.connect(lambda *_: self._render_tables())
         self.btn_refresh.clicked.connect(self._reload_rows)
 
     def eventFilter(self, obj, event):
@@ -764,18 +771,53 @@ class MonthlyViewPage(QWidget):
         self._reload_rows()
 
     def _setup_timer(self):
+        from app.utils.background import CommandRunner
+        self._checkpoint_jobs = CommandRunner(self)
+        self._checkpoint_timer = QTimer(self)
+        self._checkpoint_timer.setInterval(15000)
+        self._checkpoint_timer.timeout.connect(self._checkpoint_timers)
+        self._checkpoint_timer.start()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_running_timer)
         self._timer.start(1000)
 
+    def _checkpoint_timers(self):
+        from app.db.dao_active_timers import checkpoint
+        snapshots = self.logic.timer_checkpoints()
+        if snapshots:
+            self._checkpoint_jobs.submit(lambda: checkpoint(snapshots), error=lambda exc: self.setToolTip('Nie zapisano punktu kontrolnego stopera: ' + str(exc)))
+
+    def _recover_timer(self):
+        from app.db.dao_active_timers import recoverable
+        from PyQt6.QtWidgets import QInputDialog
+        rows = recoverable(self.logic.pracownik_id)
+        if not rows:
+            QMessageBox.information(self, 'Odzyskiwanie stopera', 'Brak przerwanych stoperów. Po awarii odczekaj 90 sekund; stopery aktywne na innym komputerze nie podlegają odzyskaniu.')
+            return
+        labels = [f"{row['company']} · {row['miesiac']} · {row['typ']} · {self.logic.format_seconds(row['elapsed_seconds'])}" for row in rows]
+        label, accepted = QInputDialog.getItem(self, 'Odzyskaj stoper', 'Wybierz przerwany stoper. Czas wyłączenia aplikacji nie zostanie doliczony.', labels, 0, False)
+        if not accepted:
+            return
+        try:
+            row = rows[labels.index(label)]
+            self.month_combo.setCurrentText(row['miesiac'])
+            self.logic.resume_timer(str(row['session_id']))
+            self._reload_rows()
+        except Exception as exc:
+            QMessageBox.warning(self, 'Odzyskiwanie stopera', str(exc))
+
     def _load_employee_filter(self):
-        self.employee_combo.clear()
-        employees = self.logic.get_employee_filter_list()
-        for emp_id, label in employees:
-            self.employee_combo.addItem(label, emp_id)
-        own = self.employee_combo.findData(self.logic.pracownik_id)
-        if own >= 0:
-            self.employee_combo.setCurrentIndex(own)
+        blocked = self.employee_combo.blockSignals(True)
+        try:
+            self.employee_combo.clear()
+            employees = self.logic.get_employee_filter_list()
+            for emp_id, label in employees:
+                self.employee_combo.addItem(label, emp_id)
+            own = self.employee_combo.findData(self.logic.pracownik_id)
+            if own >= 0:
+                self.employee_combo.setCurrentIndex(own)
+        finally:
+            self.employee_combo.blockSignals(blocked)
 
     def _current_month(self) -> str:
         return self.month_combo.monthText()
@@ -787,6 +829,8 @@ class MonthlyViewPage(QWidget):
         self.activity_label.setVisible(not whole)
         self.year_end_page.setVisible(whole)
         if whole:
+            self._monthly_reads.invalidate()
+            self._requested_context = None
             self.year_end_page.set_year(int(self.month_combo.currentText()))
         return whole
 
@@ -834,13 +878,44 @@ class MonthlyViewPage(QWidget):
 
     def _reload_rows(self):
         if self.month_combo.isWholeYear():
+            self._monthly_reads.invalidate()
+            self._requested_context = None
             self.year_end_page.refresh()
             return
-        month = self._current_month()
-        emp_id = self._current_employee_id()
-        status = self._current_status_filter()
-        self._rows = self.logic.get_monthly_rows(month, emp_id, status)
-        self._render_tables()
+        request = (self._current_month(), self._current_employee_id(), self._current_status_filter())
+        if request != self._requested_context:
+            # A new scope must not leave rows from the old month/employee
+            # actionable while the background query is pending or fails.
+            self._rows = []
+            self._render_tables()
+        self._requested_context = request
+        if any(table.state() == QAbstractItemView.State.EditingState for table in (self.table_ks, self.table_kadry)):
+            self.refresh_background()
+            return
+        logic = self.logic
+
+        def current():
+            return not self.month_combo.isWholeYear() and request == (
+                self._current_month(), self._current_employee_id(), self._current_status_filter(),
+            )
+
+        def loaded(rows):
+            if not current():
+                return
+            if any(table.state() == QAbstractItemView.State.EditingState for table in (self.table_ks, self.table_kadry)):
+                self.refresh_background()
+                return
+            self._rows = rows
+            self._loaded_context = request
+            self.activity_label.setToolTip('')
+            self._render_tables()
+
+        def failed(exc):
+            if current():
+                self.activity_label.setText('Nie udało się odświeżyć widoku miesięcznego.')
+                self.activity_label.setToolTip(str(exc))
+
+        self._monthly_reads.submit(lambda: logic.get_monthly_rows(*request), loaded, failed, key=request)
 
     def _render_tables(self):
         rows_prepared: List[Dict[str, Any]] = []

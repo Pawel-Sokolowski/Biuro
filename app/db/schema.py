@@ -7,7 +7,7 @@ from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
 
-SCHEMA_VERSION = "2026-11-05.2"
+SCHEMA_VERSION = "2026-11-08.2"
 
 
 def init_db():
@@ -20,6 +20,12 @@ def init_db():
         apply_address_book(conn)
         from app.db.payment_reconciliation_schema import apply as apply_payment_reconciliation
         apply_payment_reconciliation(conn)
+        from app.db.reliability_schema import apply as apply_reliability
+        apply_reliability(conn)
+        from app.db.chat_integrity_schema import apply as apply_chat_integrity
+        apply_chat_integrity(conn)
+        from app.db.invoice_identity_schema import apply as apply_invoice_identity
+        apply_invoice_identity(conn)
 
 
 def schema_is_current():

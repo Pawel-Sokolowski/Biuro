@@ -17,6 +17,10 @@ class InvoiceLockedError(ValueError):
     """Próba zmiany faktury, która została już wystawiona (wyeksportowana)."""
 
 
+class InvoiceConflictError(ValueError):
+    """The caller edited a revision that has since been replaced."""
+
+
 def _now_date() -> str:
     return datetime.now().strftime(DATE_FMT)
 
@@ -36,7 +40,12 @@ def _safe_commit(conn: psycopg.Connection):
 def _row_to_dict(row: Optional[Row]) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
-    return dict(row)
+    result = dict(row)
+    # Keep the public/UI DTO compatible; stored amounts and calculations are exact.
+    for field in ('kwota_netto', 'kwota_brutto'):
+        if result.get(field) is not None:
+            result[field] = float(result[field])
+    return result
 
 
 def get_invoice_by_id(invoice_id: int) -> Optional[Dict[str, Any]]:
@@ -74,7 +83,7 @@ def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
             (firma_id,),
         )
         rows = cur.fetchall()
-        return [dict(r) for r in rows]
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -102,7 +111,7 @@ def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, 
             params.extend(sorted(ids))
         cur.execute(sql + " ORDER BY f.updated_at DESC, f.created_at DESC", params)
         rows = cur.fetchall()
-        return [dict(r) for r in rows]
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -262,11 +271,15 @@ def generate_extra_services_invoice(firma_id: int, miesiac: str, actor_id: Optio
 
 
 def _get_or_create_draft_invoice_for_company(
-    firma_id: int, miesiac: str, pracownik_id: Optional[int] = None
+    firma_id: int, miesiac: str, pracownik_id: Optional[int] = None, *, connection=None
 ) -> int:
-    conn = get_conn()
+    owns_connection = connection is None
+    conn = get_conn() if owns_connection else connection
     cur = conn.cursor()
     try:
+        # Serialize the no-draft-yet case as well as reads of existing drafts.
+        # NO KEY UPDATE remains compatible with service-ledger FK checks.
+        cur.execute("SELECT id FROM firmy WHERE id = %s FOR NO KEY UPDATE", (firma_id,))
         cur.execute(
             """
             SELECT id
@@ -280,6 +293,7 @@ def _get_or_create_draft_invoice_for_company(
                      updated_at DESC,
                      id DESC
             LIMIT 1
+            FOR UPDATE
             """,
             (firma_id, miesiac),
         )
@@ -301,10 +315,12 @@ def _get_or_create_draft_invoice_for_company(
         )
         _new_id = cur.fetchone()[0]
         invoice_id = _new_id
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         return invoice_id
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def _recalculate_invoice_totals(conn: psycopg.Connection, invoice_id: int):
@@ -338,11 +354,13 @@ def add_invoice_item_for_service(
     cena_netto: Optional[float] = None,
     jednostka: str = "godz.",
     zadanie_id: Optional[int] = None,
+    *, connection=None,
 ) -> Optional[int]:
     if ilosc_hours is None or ilosc_hours <= 0:
         return None
 
-    conn = get_conn()
+    owns_connection = connection is None
+    conn = get_conn() if owns_connection else connection
     cur = conn.cursor()
     try:
         cur.execute(
@@ -381,9 +399,15 @@ def add_invoice_item_for_service(
             (firma_id, miesiac, usluga_id, ilosc_rounded, cena_netto, jednostka, zadanie_id),
         )
         extra_service_row_id = cur.fetchone()[0]
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         if task and task["status"] != "Zakończone":
             return None
+
+        # The company lock serializes draft creation with regeneration; invoice
+        # row locks serialize the merge with editing and issuance. Do not take
+        # the numbering advisory lock after these rows (issuance takes it first).
+        cur.execute("SELECT id FROM firmy WHERE id = %s FOR NO KEY UPDATE", (firma_id,))
 
         # Gdy faktura została już wystawiona, nie tworzymy drugiej faktury
         # za ten sam miesiąc: usługa poczeka w ewidencji na jej regenerację.
@@ -393,20 +417,23 @@ def add_invoice_item_for_service(
             FROM faktury
             WHERE firma_id = %s AND miesiac = %s
               AND rodzaj = 'faktura' AND COALESCE(reczna, 0) = 0
+            ORDER BY id FOR UPDATE
             """,
             (firma_id, miesiac),
         )
-        issued = cur.fetchone()
-        if issued and issued[0]:
+        existing = cur.fetchall()
+        if any(row[0] for row in existing):
             return None
 
-        invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id)
+        invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id, connection=conn)
         wartosc_netto = round(cena_netto * ilosc_rounded, 2)
         vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
         wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
 
-        cur.execute("SELECT pozycje_json FROM faktury WHERE id = %s", (invoice_id,))
+        cur.execute("SELECT pozycje_json, eksportowana FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,))
         invoice_row = cur.fetchone()
+        if not invoice_row or invoice_row["eksportowana"]:
+            return None
         try:
             positions = json.loads(invoice_row["pozycje_json"] or "[]") if invoice_row else []
         except (TypeError, json.JSONDecodeError):
@@ -451,7 +478,7 @@ def add_invoice_item_for_service(
             UPDATE faktury
             SET kwota_netto = %s, kwota_brutto = %s,
                 pozycje_json = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
-            WHERE id = %s
+            WHERE id = %s AND COALESCE(eksportowana, 0) = 0
             """,
             (
                 round(sum(float(p.get("netto") or 0) for p in positions), 2),
@@ -460,17 +487,22 @@ def add_invoice_item_for_service(
                 invoice_id,
             ),
         )
+        if cur.rowcount != 1:
+            raise InvoiceLockedError("Faktura została już wystawiona. Usługa pozostaje w ewidencji.")
 
         _sync_extra_service_allocations(conn, invoice_id, positions)
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         return invoice_id
 
     except Exception:
-        conn.rollback()
+        if owns_connection:
+            conn.rollback()
         raise
 
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def add_custom_invoice_item(
@@ -616,6 +648,7 @@ def create_or_update_invoice(
     kwota_netto: float,
     kwota_brutto: float,
     existing_invoice_id: Optional[int] = None,
+    expected_revision: Optional[int] = None,
 ) -> int:
     if not isinstance(miesiac, str) or len(miesiac) < 7:
         raise ValueError("Nieprawidłowy miesiąc. Oczekiwany format 'YYYY-MM'.")
@@ -636,12 +669,14 @@ def create_or_update_invoice(
         cur.execute("SELECT id FROM firmy WHERE id = %s FOR UPDATE", (firma_id,))
         if existing_invoice_id:
             locked = cur.execute(
-                "SELECT COALESCE(eksportowana, 0) FROM faktury WHERE id = %s", (existing_invoice_id,)
+                "SELECT COALESCE(eksportowana, 0), revision FROM faktury WHERE id = %s FOR UPDATE", (existing_invoice_id,)
             ).fetchone()
             if locked and locked[0]:
                 raise InvoiceLockedError(
                     "Faktura została już wystawiona. Zmiany wprowadź przez korektę."
                 )
+            if locked and expected_revision is not None and locked[1] != expected_revision:
+                raise InvoiceConflictError('Faktura została zmieniona przez innego pracownika. Odśwież ją przed ponowieniem.')
             cur.execute(
                 """
                 UPDATE faktury
@@ -761,6 +796,8 @@ def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
         placeholders = ",".join(["%s"] * len(invoice_ids))
         # Use the same invoice -> allocation lock order as draft editing.
         cur.execute(f"SELECT id FROM faktury WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE", invoice_ids)
+        from app.invoices.invoice_identity import freeze_seller
+        freeze_seller(conn, invoice_ids)
         validate_invoice_extra_services_ready(invoice_ids, conn=conn, lock=True)
         for invoice_id in sorted(set(invoice_ids)):
             row = conn.execute("SELECT cancelled_at FROM faktury WHERE id = %s", (invoice_id,)).fetchone()
@@ -1023,7 +1060,7 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 # Lista, edycja, korekty i KSeF
 # ---------------------------------------------------------------------------
 INVOICE_LIST_SQL = """
-    SELECT f.id, f.firma_id, f.kontrahent_id, f.reczna,
+    SELECT f.id, f.firma_id, f.kontrahent_id, f.reczna, f.revision,
            COALESCE(NULLIF(f.nabywca_pelna, ''), c.nazwa, k.nazwa, '?') AS firma_nazwa,
            COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?') AS nazwa_skrocona,
            f.miesiac, f.rodzaj, f.numer, f.status,
@@ -1085,7 +1122,7 @@ def list_invoices(
     conn = get_conn()
     try:
         rows = conn.execute(f"{INVOICE_LIST_SQL} WHERE {' AND '.join(where)} ORDER BY {order}", params).fetchall()
-        return [dict(r) for r in rows]
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -1110,6 +1147,7 @@ def update_invoice_draft(
     termin_platnosci: Optional[str] = None,
     przyczyna_korekty: Optional[str] = None,
     podstawa_zwolnienia: Optional[str] = None,
+    expected_revision: Optional[int] = None,
 ) -> Tuple[float, float]:
     """Zapisuje pozycje i nagłówek roboczej faktury; zwraca (netto, brutto)."""
     invoice = get_invoice_by_id(invoice_id)
@@ -1117,6 +1155,8 @@ def update_invoice_draft(
         raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
     if invoice.get("eksportowana"):
         raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
+    if expected_revision is None:
+        expected_revision = invoice['revision']
     normalized = [normalize_position(p) for p in pozycje]
     if not normalized:
         raise ValueError("Faktura musi zawierać co najmniej jedną pozycję.")
@@ -1129,6 +1169,8 @@ def update_invoice_draft(
         locked = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not locked or locked["eksportowana"]:
             raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
+        if locked['revision'] != expected_revision:
+            raise InvoiceConflictError('Faktura została zmieniona przez innego pracownika. Twoje zmiany pozostają w edytorze. Porównaj je z aktualną fakturą przed ponownym zapisem.')
         invoice = dict(locked)
         updated = conn.execute(
             """
@@ -1231,11 +1273,11 @@ def create_correction(invoice_id: int, przyczyna: str = "") -> int:
         cur = conn.execute(
             f"""
             INSERT INTO faktury (
-                firma_id, miesiac, kwota_netto, kwota_brutto, data_wystawienia, data_sprzedazy,
+                firma_id, kontrahent_id, reczna, miesiac, kwota_netto, kwota_brutto, data_wystawienia, data_sprzedazy,
                 termin_platnosci, pozycje_json, eksportowana, status, rodzaj,
                 korygowana_faktura_id, przyczyna_korekty, {', '.join(columns)}
             )
-            SELECT firma_id, miesiac, %s, %s, %s, %s, %s, %s, 0, 'robocza', 'korekta', id, %s,
+            SELECT firma_id, kontrahent_id, reczna, miesiac, %s, %s, %s, %s, %s, %s, 0, 'robocza', 'korekta', id, %s,
                    {', '.join(columns)}
             FROM faktury WHERE id = %s RETURNING id
             """,
@@ -1274,7 +1316,7 @@ def list_issued_without_ksef() -> List[Dict[str, Any]]:
             "WHERE COALESCE(f.eksportowana, 0) = 1 AND COALESCE(f.ksef_numer, '') = '' AND f.rodzaj <> 'proforma' "
             "ORDER BY f.miesiac, f.id"
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 

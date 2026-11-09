@@ -82,7 +82,7 @@ class ReviewInvoiceIntegrityTests(unittest.TestCase):
         cases = [('', None, 'tak', '1'), ('', 'X', 'false', '1'), ('', '0', 'true', '2'), ('nie', '1', 'true', '2'), ('true', '0', 'false', '1'), (None, None, '', '2')]
         for invoice_flag, company_flag, global_flag, expected in cases:
             with self.subTest(flags=(invoice_flag,company_flag,global_flag)):
-                invoice = {**INVOICE, 'firma_id':1, 'metoda_kasowa':invoice_flag}
+                invoice = {**INVOICE, 'firma_id':1, 'metoda_kasowa':invoice_flag, 'seller_snapshot': {'sprzedawca_nip': SELLER['nip'], 'sprzedawca_nazwa': SELLER['name'], 'sprzedawca_adres': SELLER['address'], 'sprzedawca_kraj': 'PL'}}
                 conn = Mock()
                 conn.execute.return_value.fetchone.return_value = None
                 with patch.object(ksef_submission, '_authorized_invoice', return_value=invoice), patch.object(ksef_submission, 'get_conn', return_value=conn), patch.object(ksef_submission, 'get_setting', side_effect=lambda key:settings.get(key)), patch('app.db.dao_app_settings.get_setting_first', return_value=global_flag), patch('app.db.dao_companies.get_company', return_value={'metoda_kasowa':company_flag}), patch('app.db.dao_invoices.get_invoice_positions', return_value=[POSITION]), patch('app.invoices.invoice_preview._with_buyer_data', side_effect=lambda value:value):

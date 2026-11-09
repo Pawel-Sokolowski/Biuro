@@ -2,9 +2,14 @@
 """Parsowanie i klasyfikacja danych importowanych do raportów (bez bazy danych)."""
 import datetime
 import hashlib
+import json
 import re
 import unicodedata
+from dataclasses import dataclass
+from app.reports.dto import ProfitRow
 from typing import Any, Dict, Iterable, List, Optional
+from decimal import Decimal
+from app.utils.money import allocate_money, decimal_amount, money
 
 MIN_YEAR = 2026
 KADRY_EMPLOYEE_MARKER = "czajkowska"
@@ -31,6 +36,30 @@ def digits(text: Any) -> str:
 
 def row_hash(*values: Any) -> str:
     return hashlib.sha1("|".join(str(v) for v in values).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class InvoiceLineIdentity:
+    """Stable source identity; equal repeated lines retain their multiplicity.
+
+    Occurrence is counted only among otherwise identical lines, so reordering
+    distinct worksheet rows does not create new imports. The version prefix
+    permits conservative adoption of old SHA1 identities in the import DAO.
+    """
+    company: str
+    number: str
+    line_code: str
+    description: str
+    amount: str
+    currency: str
+    month: str
+    occurrence: int = 1
+
+    def digest(self) -> str:
+        values = (self.company, self.number, self.line_code, self.description,
+                  self.amount, self.currency, self.month, self.occurrence)
+        encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return "faktura-v2:" + hashlib.sha256(encoded).hexdigest()
 
 
 # ------------------------------------------------------------------
@@ -251,8 +280,12 @@ def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None
     cols = _header_map(header)
     i_kontr = _find(cols, "nazwa", "kontrahenta")
     i_nip = _find(cols, "nip")
-    i_nr = _find(cols, "nr", "faktury") or _find(cols, "numer", "faktury")
-    i_poz = _find(cols, "pozycja", "faktury") or _find(cols, "pozycja")
+    i_nr = _find(cols, "nr", "faktury")
+    if i_nr is None:
+        i_nr = _find(cols, "numer", "faktury")
+    i_poz = _find(cols, "pozycja", "faktury")
+    if i_poz is None:
+        i_poz = _find(cols, "pozycja")
     i_idx = _find(cols, "indeks")
     i_net = _find(cols, "wartosc", "netto")
     i_wal = _find(cols, "waluta")
@@ -260,6 +293,7 @@ def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None
     if i_poz is None or i_net is None:
         raise ValueError("Brak kolumn „Pozycja faktury” i „Wartość netto” w pliku.")
 
+    occurrences: Dict[tuple, int] = {}
     for row in iterator:
         pozycja = str(_cell(row, i_poz) or "").strip()
         if not pozycja:
@@ -272,17 +306,25 @@ def iter_invoice_rows(rows: Iterable[tuple], default_month: Optional[str] = None
             continue
         netto = parse_amount(_cell(row, i_net))
         kontrahent = str(_cell(row, i_kontr) or "").strip()
+        nip = digits(_cell(row, i_nip))
+        indeks = str(_cell(row, i_idx) or "").strip()
+        currency = str(_cell(row, i_wal) or "PLN").strip() or "PLN"
+        identity_values = ("nip:" + nip if nip else "name:" + fold(kontrahent), nr,
+                           indeks, pozycja, str(Decimal(str(netto)).normalize()), currency, miesiac)
+        occurrences[identity_values] = occurrences.get(identity_values, 0) + 1
+        identity = InvoiceLineIdentity(*identity_values, occurrences[identity_values])
         yield {
             "kontrahent": kontrahent,
-            "nip": digits(_cell(row, i_nip)),
+            "nip": nip,
             "nr_faktury": nr,
             "pozycja": pozycja,
-            "indeks": str(_cell(row, i_idx) or "").strip(),
+            "indeks": indeks,
             "wartosc_netto": netto,
-            "waluta": str(_cell(row, i_wal) or "PLN").strip() or "PLN",
+            "waluta": currency,
             "miesiac": miesiac,
             "rodzaj": classify_invoice_item(pozycja),
-            "hash": row_hash("faktura", kontrahent, nr, pozycja, netto, miesiac),
+            "hash": identity.digest(),
+            "legacy_hash": row_hash("faktura", kontrahent, nr, pozycja, netto, miesiac),
         }
 
 
@@ -393,9 +435,10 @@ def spread_annual_fees(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             fee_items = [i for i in items if i["rodzaj"] == rodzaj and i["miesiac"] in fee_months]
             if rodzaj == "ksiegowosc":
                 fee_items += [i for i in items if i["rodzaj"] == "rabat" and i["miesiac"] in fee_months]
-            total = sum(float(i.get("wartosc_netto") or 0) for i in fee_items)
-            for month in _year_months(year):
-                result.append({**fee_items[0], "rodzaj": rodzaj, "miesiac": month, "wartosc_netto": total / 12})
+            total = sum((decimal_amount(i.get("wartosc_netto") or 0) for i in fee_items), Decimal(0))
+            allocated = allocate_money(total, dict.fromkeys(_year_months(year), 1))
+            for month, amount in allocated.items():
+                result.append({**fee_items[0], "rodzaj": rodzaj, "miesiac": month, "wartosc_netto": amount})
             spread.extend(id(i) for i in fee_items)
         result.extend(i for i in items if id(i) not in spread)
     return result
@@ -416,10 +459,10 @@ def _shares(per_emp: Dict[str, Dict[str, int]], kind: str) -> Dict[str, float]:
 def compute_employee_report(
     work: List[Dict[str, Any]],
     invoices: List[Dict[str, Any]],
-    rates: Dict[str, float],
+    rates: Dict[Any, float],
     counts: Optional[Dict[tuple, int]] = None,
     months: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+) -> List[ProfitRow]:
     """Wiersze (sekcja, firma, miesiąc, pracownik).
 
     Każda sekcja (księgowość/kadry) ma: czas główny + cena główna oraz czas i cenę usług
@@ -431,6 +474,7 @@ def compute_employee_report(
     counts = counts or {}
     names: Dict[Any, str] = {}
     hours: Dict[tuple, Dict[str, Dict[str, int]]] = {}
+    employees = {}
     price: Dict[tuple, Dict[str, float]] = {}
 
     for w in work:
@@ -438,7 +482,10 @@ def compute_employee_report(
             continue
         names.setdefault(w["firma_id"], w.get("firma_nazwa"))
         key = (dzial_sekcja(w["dzial"]), w["firma_id"], w["miesiac"])
-        emp = (w.get("pracownik_nazwa") or "").strip() or NO_EMPLOYEE
+        label = (w.get("pracownik_nazwa") or "").strip() or NO_EMPLOYEE
+        employee_id = w.get('pracownik_id')
+        emp = f'id:{employee_id}' if employee_id is not None else 'name:' + fold(label)
+        employees[emp] = (employee_id, label)
         slot = hours.setdefault(key, {}).setdefault(emp, {"glowny": 0, "dodatkowy": 0})
         kind = "dodatkowy" if w["dzial"] in ("inne_ksiegowosc", "inne_kadry") else "glowny"
         slot[kind] += int(w.get("sekundy") or 0)
@@ -454,38 +501,41 @@ def compute_employee_report(
         if rodzaj == "zdrowotna" and not has_time("kadry", inv["firma_id"], inv["miesiac"]):
             sekcja, dzial = "ksiegowosc", "ksiegowosc"
         kind = "dodatkowy" if dzial in ("inne_ksiegowosc", "inne_kadry") else "glowny"
-        slot = price.setdefault((sekcja, inv["firma_id"], inv["miesiac"]), {"glowny": 0.0, "dodatkowy": 0.0})
-        slot[kind] += float(inv.get("wartosc_netto") or 0)
+        slot = price.setdefault((sekcja, inv["firma_id"], inv["miesiac"]), {"glowny": Decimal(0), "dodatkowy": Decimal(0)})
+        slot[kind] += decimal_amount(inv.get("wartosc_netto") or 0)
 
-    result = []
+    result: List[ProfitRow] = []
     for key in set(hours) | set(price):
         sekcja, firma_id, miesiac = key
         if months is not None and miesiac not in months:
             continue
         per_emp = hours.get(key) or {NO_EMPLOYEE: {"glowny": 0, "dodatkowy": 0}}
         cena = price.get(key, {"glowny": 0.0, "dodatkowy": 0.0})
-        share_main = _shares(per_emp, "glowny")
-        share_extra = _shares(per_emp, "dodatkowy")
+        share_main = allocate_money(cena['glowny'], _shares(per_emp, "glowny"))
+        share_extra = allocate_money(cena['dodatkowy'], _shares(per_emp, "dodatkowy"))
         for emp, sek in per_emp.items():
+            employee_id, employee_name = employees.get(emp, (None, NO_EMPLOYEE))
             total_sek = sek["glowny"] + sek["dodatkowy"]
-            koszt = total_sek / 3600 * float(rates.get(fold(emp), 0) or 0)
-            cena_glowna = cena["glowny"] * share_main[emp]
-            cena_dod = cena["dodatkowy"] * share_extra[emp]
+            rate = rates.get(employee_id, rates.get(fold(employee_name), 0))
+            koszt = money(Decimal(total_sek) / 3600 * decimal_amount(rate or 0))
+            cena_glowna = share_main[emp]
+            cena_dod = share_extra[emp]
             result.append({
                 "sekcja": sekcja,
                 "firma_id": firma_id,
                 "klient": names.get(firma_id) or "",
                 "miesiac": miesiac,
                 "ilosc": int(counts.get(key, 0)),
-                "pracownik": emp,
+                "pracownik": employee_name,
+                "pracownik_id": employee_id,
                 "sek_glowny": sek["glowny"],
-                "cena_glowna": round(cena_glowna, 2),
+                "cena_glowna": float(cena_glowna),
                 "sek_dodatkowy": sek["dodatkowy"],
-                "cena_dodatkowa": round(cena_dod, 2),
+                "cena_dodatkowa": float(cena_dod),
                 "sekundy": total_sek,
-                "cena": round(cena_glowna + cena_dod, 2),
-                "koszt": round(koszt, 2),
-                "zysk": round(cena_glowna + cena_dod - koszt, 2),
+                "cena": float(cena_glowna + cena_dod),
+                "koszt": float(koszt),
+                "zysk": float(cena_glowna + cena_dod - koszt),
             })
     result.sort(key=lambda r: (r["sekcja"], fold(r["klient"]), r["miesiac"], fold(r["pracownik"])))
     return result

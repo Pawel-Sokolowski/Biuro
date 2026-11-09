@@ -6,7 +6,10 @@ import html
 import base64
 import io
 import logging
+import os
 import re
+import tempfile
+from pathlib import Path
 from decimal import Decimal, InvalidOperation
 
 from PyQt6.QtCore import QMarginsF, QSizeF, QTimer
@@ -89,11 +92,14 @@ def _qr_data_url(invoice: dict) -> str:
 
 
 def invoice_html(invoice: dict, positions: list[dict]) -> str:
-    seller = invoice.get("sprzedawca_nazwa") or get_setting("faktury_sprzedawca_nazwa") or invoice.get("wystawca") or get_setting_first(
+    from app.invoices.invoice_identity import with_seller_identity
+    invoice = with_seller_identity(invoice)
+    frozen = invoice.get('_seller_frozen')
+    seller = invoice.get('sprzedawca_nazwa', '') if frozen else invoice.get("sprzedawca_nazwa") or get_setting("faktury_sprzedawca_nazwa") or invoice.get("wystawca") or get_setting_first(
         ("wystawca_faktur", "wystawca", "faktury_wystawca"), "Biuro rachunkowe",
     )
-    seller_nip = invoice.get("sprzedawca_nip") or get_setting("faktury_sprzedawca_nip") or invoice.get("ksef_nip_wysylki") or ""
-    seller_address = invoice.get("sprzedawca_adres") or " ".join(filter(None, (
+    seller_nip = invoice.get('sprzedawca_nip', '') if frozen else invoice.get("sprzedawca_nip") or get_setting("faktury_sprzedawca_nip") or invoice.get("ksef_nip_wysylki") or ""
+    seller_address = invoice.get('sprzedawca_adres', '') if frozen else invoice.get("sprzedawca_adres") or " ".join(filter(None, (
         get_setting("faktury_sprzedawca_adres"), get_setting("faktury_sprzedawca_kod"),
         get_setting("faktury_sprzedawca_miasto"),
     )))
@@ -101,7 +107,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
     matching_seller = bool(configured_nip and configured_nip == re.sub(r"\D", "", seller_nip))
     def seller_detail(field):
         value = invoice.get("sprzedawca_" + field)
-        if value is None and (not invoice.get("_official") or matching_seller):
+        if value is None and not frozen and (not invoice.get("_official") or matching_seller):
             value = get_setting("faktury_sprzedawca_" + field)
         return value or ""
     seller_regon, seller_country, seller_email = (seller_detail(field) for field in ("regon", "kraj", "email"))
@@ -212,6 +218,27 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
 
 
 def write_invoice_pdf(path, rendered_html, *, title="Faktura"):
+    """Validate a complete PDF before replacing an existing destination."""
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+    path = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, suffix='.pdf', delete=False) as handle:
+            temporary = Path(handle.name)
+        _write_invoice_pdf(temporary, rendered_html, title=title)
+        try:
+            if not temporary.read_bytes().startswith(b'%PDF') or not PdfReader(temporary).pages:
+                raise OSError('Nie udało się wygenerować pliku PDF.')
+        except (PdfReadError, ValueError, IndexError) as exc:
+            raise OSError('Nie udało się wygenerować poprawnego pliku PDF.') from exc
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _write_invoice_pdf(path, rendered_html, *, title="Faktura"):
     """Qt's reentrant document/PDF classes also support background delivery jobs."""
     writer = QPdfWriter(str(path))
     writer.setResolution(600)

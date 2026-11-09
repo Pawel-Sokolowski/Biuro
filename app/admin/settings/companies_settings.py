@@ -338,7 +338,7 @@ class CompaniesSettings(QWidget):
             self,
             "Wybierz plik do importu",
             "",
-            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)"
+            "Excel (*.xlsx);;CSV (*.csv);;Wszystkie pliki (*)"
         )
         if not path:
             return
@@ -443,7 +443,7 @@ class CompaniesSettings(QWidget):
             self,
             "Wybierz plik z przypisaniami pracowników",
             "",
-            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)",
+            "Excel (*.xlsx);;CSV (*.csv);;Wszystkie pliki (*)",
         )
         if not path:
             return
@@ -462,7 +462,7 @@ class CompaniesSettings(QWidget):
             self,
             "Wybierz plik urzędów skarbowych",
             "",
-            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)",
+            "Excel (*.xlsx);;CSV (*.csv);;Wszystkie pliki (*)",
         )
         if not path:
             return
@@ -477,31 +477,27 @@ class CompaniesSettings(QWidget):
             QMessageBox.critical(self, "Błąd importu urzędów", str(exc))
 
     def _import_without_verification(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Wybierz plik do szybkiego importu",
-            "",
-            "Excel (*.xlsx *.xls);;CSV (*.csv);;Wszystkie pliki (*)",
-        )
-        if not path:
+        if getattr(self, '_company_import_active', False) or (self._current_worker and self._current_worker.isRunning()):
             return
-        worker = FastImportWorker(path)
-        dialog = QProgressDialog("Przygotowanie importu...", None, 0, 0, self)
-        dialog.setWindowTitle("Import firm")
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        dialog.setMinimumWidth(420)
-        dialog.setMinimumDuration(0)
-        dialog.setAutoClose(False)
-        dialog.setAutoReset(False)
-        worker.progress.connect(dialog.setLabelText)
-        worker.finished_with_result.connect(lambda *_: dialog.close())
-        worker.error.connect(lambda *_: dialog.close())
-        worker.finished_with_result.connect(self._on_fast_import_finished)
-        worker.error.connect(self._on_import_error)
-        self._progress_dialog = dialog
-        worker.start()
-        dialog.show()
-        self._current_worker = worker
+        self._company_import_active = True
+        try:
+            path, _ = QFileDialog.getOpenFileName(self, 'Wybierz plik do szybkiego importu', '',
+                'Excel (*.xlsx);;CSV (*.csv);;Wszystkie pliki (*)')
+            if not path:
+                return
+            from app.utils.import_progress import run_import, confirm_company_import
+            prepared = confirm_company_import(path, self)
+            if prepared is None:
+                return
+            try:
+                result = run_import(lambda progress: import_companies_fast_from_excel_file(path, progress=progress, prepared=prepared), self)
+            finally:
+                prepared.close()
+            self._on_fast_import_finished(result)
+        except Exception as exc:
+            self._on_import_error(str(exc))
+        finally:
+            self._company_import_active = False
 
     def _on_fast_import_finished(self, result):
         if result.get("warnings"):

@@ -1,10 +1,11 @@
 # app/invoices/faktury_logic.py
 import json
+from app.utils.request_cache import scoped, cached, prime_cached
 import logging
 import psycopg
 from app.utils.parsing import to_float
 from app.invoices.positions import decimal_value, money, normalize_position, totals
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime
 
 from app.db.dao_conn import get_conn
@@ -70,6 +71,7 @@ class FakturyLogic:
         return [dict(r) for r in rows] if rows else []
 
     # ---------------- FIRMA ----------------
+    @cached
     def _get_company(self, firma_id: int) -> Optional[dict]:
         conn = get_conn()
         cur = conn.cursor()
@@ -102,6 +104,7 @@ class FakturyLogic:
         return company
 
     # ---------------- CENNIK ----------------
+    @cached
     def _get_main_pricing(self, klucz: str) -> Optional[dict]:
         if not klucz:
             return None
@@ -147,6 +150,18 @@ class FakturyLogic:
         except ValueError:
             return 23
 
+    @cached
+    def _get_payroll_pricing(self, key):
+        conn = get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COALESCE(cena_netto_kadry,cena) AS cena_netto_kadry, opis "
+                           "FROM cenniki_kadry WHERE klucz=%s", (key,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def _kadry_positions(self, company: dict, stala_kwota: float) -> List[Dict[str, Any]]:
         vat = self._kadry_vat()
         mult = 1 + vat / 100
@@ -167,26 +182,16 @@ class FakturyLogic:
 
         result: List[Dict[str, Any]] = []
         contract_types = ("uop", "uz", "uod")
-        conn = get_conn()
-        try:
-            cur = conn.cursor()
-            for prefix in contract_types:
-                ilosc = int(company.get(f"{prefix}_ilosc") or 0)
-                klucz = company.get(f"{prefix}_cennik")
-                if ilosc <= 0 or not klucz:
-                    continue
-                cur.execute(
-                    "SELECT COALESCE(cena_netto_kadry, cena) AS cena_netto_kadry, opis "
-                    "FROM cenniki_kadry WHERE klucz = %s",
-                    (klucz,),
-                )
-                row = cur.fetchone()
-                cena = self._to_float(row["cena_netto_kadry"]) if row else 0.0
-                if cena > 0:
-                    nazwa = payroll_invoice_service_name(prefix, klucz, row.get("opis"))
-                    result.append(pos(nazwa, ilosc, cena))
-        finally:
-            conn.close()
+        for prefix in contract_types:
+            ilosc = int(company.get(f"{prefix}_ilosc") or 0)
+            klucz = company.get(f"{prefix}_cennik")
+            if ilosc <= 0 or not klucz:
+                continue
+            row = self._get_payroll_pricing(klucz)
+            cena = self._to_float(row["cena_netto_kadry"]) if row else 0.0
+            if cena > 0:
+                nazwa = payroll_invoice_service_name(prefix, klucz, row.get("opis"))
+                result.append(pos(nazwa, ilosc, cena))
         return result
 
     def generate_invoice_positions(self, firma_id: int, miesiac: str) -> List[Dict[str, Any]]:
@@ -440,7 +445,7 @@ class FakturyLogic:
                 pozycje=merged,
                 kwota_netto=kwota_netto,
                 kwota_brutto=kwota_brutto,
-                existing_invoice_id=existing["id"]
+                existing_invoice_id=existing["id"], expected_revision=existing.get("revision")
             )
 
             return {
@@ -478,18 +483,28 @@ class FakturyLogic:
             }
 
     # ---------------- SAVE MONTH ----------------
-    def generate_and_save_invoices_for_month(self, miesiac: str, only_active: bool = True) -> Dict[str, Any]:
+    @scoped
+    def generate_and_save_invoices_for_month(self, miesiac: str, only_active: bool = True, progress: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]:
         if not miesiac:
             return {"processed": 0, "created": 0, "updated": 0, "errors": ["Brak miesiąca."]}
 
         conn = get_conn()
         cur = conn.cursor()
         if only_active:
-            cur.execute("SELECT id FROM firmy WHERE status = 'Aktywne' OR status IS NULL")
+            cur.execute("SELECT * FROM firmy WHERE status = 'Aktywne' OR status IS NULL")
         else:
-            cur.execute("SELECT id FROM firmy")
+            cur.execute("SELECT * FROM firmy")
         rows = cur.fetchall()
+        # Read shared pricing once for this batch, with no cache across jobs.
+        pricing = conn.execute('SELECT * FROM cenniki').fetchall()
+        payroll = conn.execute('SELECT klucz, COALESCE(cena_netto_kadry,cena) AS cena_netto_kadry, opis FROM cenniki_kadry').fetchall()
         conn.close()
+        for company in rows:
+            prime_cached(self._get_company, dict(company), company['id'])
+        for entry in pricing:
+            prime_cached(self._get_main_pricing, dict(entry), entry['klucz'])
+        for entry in payroll:
+            prime_cached(self._get_payroll_pricing, dict(entry), entry['klucz'])
 
         processed = 0
         created = 0
@@ -498,8 +513,10 @@ class FakturyLogic:
         skipped_details: List[str] = []
         errors: List[str] = []
 
-        for r in rows:
+        for index, r in enumerate(rows, 1):
             fid = r["id"]
+            if progress:
+                progress(index, len(rows), r.get("nazwa_skrocona") or r.get("nazwa") or str(fid))
 
             try:
                 company = self._get_company(fid)
@@ -574,7 +591,7 @@ class FakturyLogic:
                             pozycje=merged,
                             kwota_netto=kw_net,
                             kwota_brutto=kw_br,
-                            existing_invoice_id=existing["id"]
+                            existing_invoice_id=existing["id"], expected_revision=existing.get("revision")
                         )
 
                         processed += 1
@@ -653,4 +670,4 @@ class FakturyLogic:
                 pozycje=merged,
                 kwota_netto=kw_net,
                 kwota_brutto=kw_br,
-                existing_invoice_id=existing["id"])
+                existing_invoice_id=existing["id"], expected_revision=existing.get("revision"))

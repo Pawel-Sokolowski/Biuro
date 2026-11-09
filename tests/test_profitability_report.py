@@ -17,7 +17,7 @@ _app = QApplication.instance() or QApplication(["biuro-tests"])
 
 def row(klient, miesiac, sekcja, cena, koszt, sekundy=3600):
     return {
-        "klient": klient, "miesiac": miesiac, "sekcja": sekcja, "pracownik": "Jan Kowalski", "ilosc": 1,
+        "firma_id": 1 if klient == "Alfa" else 2, "klient": klient, "miesiac": miesiac, "sekcja": sekcja, "pracownik": "Jan Kowalski", "ilosc": 1,
         "sek_glowny": sekundy, "cena_glowna": cena, "sek_dodatkowy": 0, "cena_dodatkowa": 0.0,
         "sekundy": sekundy, "cena": cena, "koszt": koszt, "zysk": (cena or 0) - (koszt or 0),
     }
@@ -50,15 +50,15 @@ class ProfitabilityReportTests(DbTestCase):
 
     def test_aggregate_profit_sums_each_company_month_and_section(self):
         agg = ReportsPage._aggregate_profit(ROWS)
-        self.assertEqual(agg[("Alfa", "2026-01", "ksiegowosc")], [150.0, 50.0])
-        self.assertEqual(agg[("Alfa", "2026-02", "ksiegowosc")], [200.0, 250.0])
-        self.assertEqual(agg[("Alfa", "2026-01", "kadry")], [30.0, 10.0])
-        self.assertEqual(agg[("Beta", "2026-01", "kadry")], [80.0, 20.0])
+        self.assertEqual(agg[(1, "Alfa", "2026-01", "ksiegowosc")], [150.0, 50.0])
+        self.assertEqual(agg[(1, "Alfa", "2026-02", "ksiegowosc")], [200.0, 250.0])
+        self.assertEqual(agg[(1, "Alfa", "2026-01", "kadry")], [30.0, 10.0])
+        self.assertEqual(agg[(2, "Beta", "2026-01", "kadry")], [80.0, 20.0])
         self.assertEqual(len(agg), 4)
 
     def test_aggregate_profit_treats_missing_values_as_zero(self):
         agg = ReportsPage._aggregate_profit([row("Alfa", "2026-01", "kadry", None, None)])
-        self.assertEqual(agg[("Alfa", "2026-01", "kadry")], [0.0, 0.0])
+        self.assertEqual(agg[(1, "Alfa", "2026-01", "kadry")], [0.0, 0.0])
 
     def test_common_table_has_section_totals_with_profit(self):
         self.page._render_import_report(ROWS)

@@ -151,7 +151,7 @@ ODBC dodatkowo otrzymuje żądanie trybu tylko do odczytu; nie zastępuje ono pr
 
 ## Instalacja na Windows Server
 
-1. Zainstaluj Python 3.11+ i Microsoft ODBC Driver 18 for SQL Server. Skopiuj
+1. Zainstaluj Python 3.14+ i Microsoft ODBC Driver 18 for SQL Server. Skopiuj
    źródła projektu do np. `C:\BiuroSync`; ustaw środowisko `.venv` i zainstaluj
    `requirements-enova.lock` (sam worker nie wymaga Qt). Można też użyć
    istniejącego środowiska serwerowego aplikacji i doinstalować `requirements-enova.txt`. Worker nie jest funkcją samego pliku EXE.

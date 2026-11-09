@@ -561,6 +561,9 @@ class ChatPage(QWidget):
     def _scroll_to_bottom(self):
         # layout is recalculated lazily, so scroll now and again after it settles
         def go():
+            from PyQt6 import sip
+            if sip.isdeleted(self) or sip.isdeleted(self.scroll_area):
+                return
             bar = self.scroll_area.verticalScrollBar()
             blocked = bar.blockSignals(True)
             bar.setValue(bar.maximum())

@@ -229,7 +229,7 @@ class ReportsPage(QWidget):
 
         self.common_label = QLabel("<b>Wspólny</b>")
         layout.addWidget(self.common_label)
-        self.common_table = self._make_table(["Dział", "Fv suma", "Koszty suma", "Zysk suma"])
+        self.common_table = self._make_table(["Dział", "Fv suma", "Koszty suma", "Zysk suma"], stretch_last=False)
         layout.addWidget(self.common_table)
         self.chart_top = QChartView()
         self.chart_top.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -246,7 +246,7 @@ class ReportsPage(QWidget):
 
         self.company_label = QLabel("<b>Każda firma osobno</b>")
         layout.addWidget(self.company_label)
-        self.company_table = self._make_table(["Firma", "Dział", "Fv suma", "Koszty suma", "Zysk suma"])
+        self.company_table = self._make_table(["Firma", "Dział", "Fv suma", "Koszty suma", "Zysk suma"], stretch_last=False)
         layout.addWidget(self.company_table)
 
         self.import_label = QLabel("<b>Księgowość — szczegóły</b>")
@@ -294,12 +294,12 @@ class ReportsPage(QWidget):
             table.setMinimumHeight(80)
 
     @staticmethod
-    def _make_table(headers):
+    def _make_table(headers, *, stretch_last=True):
         table = QTableWidget(0, len(headers))
         table.setHorizontalHeaderLabels(headers)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(stretch_last)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         return table
@@ -321,7 +321,7 @@ class ReportsPage(QWidget):
         table = ItemTable(headers)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         return table

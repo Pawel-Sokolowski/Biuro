@@ -31,8 +31,8 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       QT_OPENGL: software
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -64,7 +64,7 @@ jobs:
         run: python run_tests.py
       - name: Retain test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results
           path: logs/tests/
@@ -77,8 +77,8 @@ jobs:
       DB_URL: postgresql://biuro@127.0.0.1:55432/biuro_release_test
       QT_OPENGL: software
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -144,7 +144,7 @@ jobs:
           }
       - name: Retain release diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-release-diagnostics
           path: release-diagnostics/

@@ -7,7 +7,7 @@ from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
 
-SCHEMA_VERSION = "2026-11-09.1"
+SCHEMA_VERSION = "2026-11-09.2"
 
 
 def init_db():
@@ -28,6 +28,8 @@ def init_db():
         apply_invoice_identity(conn)
         from app.db.reminder_schema import apply as apply_reminders
         apply_reminders(conn)
+        from app.db.monthly_counts_schema import apply as apply_monthly_counts
+        apply_monthly_counts(conn)
 
 
 def schema_is_current():

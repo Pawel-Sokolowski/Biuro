@@ -237,9 +237,14 @@ def _apply_document_counts(conn, over_limit: Dict[Tuple[int, str], Tuple[float, 
     """
     if not overwrite:
         sql += " WHERE COALESCE(statusy_miesieczne.ilosc_dok, 0) = 0"
+    # Explicit count exports have priority over estimates inferred from invoice prices.
+    direct = {(r['firma_id'], r['miesiac']) for r in conn.execute(
+        'SELECT firma_id,miesiac FROM monthly_document_imports').fetchall()}
     firms: Dict[int, Dict[str, Any]] = {}
     done = 0
     for firma_id, month in sorted(set(firms_months) | set(over_limit)):
+        if (firma_id, month) in direct:
+            continue
         if firma_id not in firms:
             firms[firma_id] = conn.execute(
                 """
@@ -560,6 +565,9 @@ def build_profitability_report(
                 ("ksiegowosc", r["firma_id"], r["miesiac"]),
                 int(r["ilosc_dok"]),
             )
+        from app.reports.document_counts_xlsx import imported_document_counts
+        for (fid, month), value in imported_document_counts(conn, firma_ids, months).items():
+            counts[("ksiegowosc", fid, month)] = value
         all_months = sorted({m for y in years for m in (f"{y}-{n:02d}" for n in range(1, 13))} | set(months))
         for (fid, month), total in contracts_by_month(conn, firma_ids, all_months).items():
             counts[("kadry", fid, month)] = total

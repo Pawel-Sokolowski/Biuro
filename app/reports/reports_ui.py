@@ -11,6 +11,7 @@ from PyQt6.QtCharts import (
 from PyQt6.QtGui import QPainter
 import datetime
 import logging
+from app.widgets.flow_layout import FlowLayout
 from app.utils.background import TaskRunner, CommandRunner
 from app.utils.item_table import ItemTable
 from app.utils.table_records import TableRecord
@@ -202,16 +203,18 @@ class ReportsPage(QWidget):
         btn_export.clicked.connect(lambda: self._export_to_excel(background=True))
         layout.addWidget(btn_export)
 
-        import_box = QHBoxLayout()
+        import_box = FlowLayout()
         btn_import_work = QPushButton("Importuj czas pracy (Excel)")
         btn_import_work.clicked.connect(self._import_work)
         btn_import_inv = QPushButton("Importuj faktury (Excel)")
         btn_import_inv.clicked.connect(self._import_invoices)
+        btn_import_counts = QPushButton("Importuj liczbę dokumentów (Excel)")
+        btn_import_counts.clicked.connect(lambda: self._run_import("liczba dokumentów"))
         btn_rates = QPushButton("Stawki pracowników")
         btn_rates.clicked.connect(self._edit_rates)
         btn_delete = QPushButton("Usuń zaimportowane dane")
         btn_delete.clicked.connect(self._delete_imported)
-        for b in (btn_import_work, btn_import_inv, btn_rates, btn_delete):
+        for b in (btn_import_work, btn_import_inv, btn_import_counts, btn_rates, btn_delete):
             import_box.addWidget(b)
         layout.addLayout(import_box)
 
@@ -666,7 +669,12 @@ class ReportsPage(QWidget):
             )
             if not path:
                 return
-            if kind == "faktury":
+            if kind == "liczba dokumentów":
+                from app.reports.document_counts_xlsx import import_document_counts_file
+                overwrite = self.chk_overwrite.isChecked()
+                actor = self.pracownik_id
+                work = lambda: import_document_counts_file(path, actor_id=actor, overwrite=overwrite)
+            elif kind == "faktury":
                 options = [self.month_start.itemText(i) for i in range(self.month_start.count())]
                 month, ok = QInputDialog.getItem(self, "Miesiąc faktur", "Miesiąc dla faktur bez miesiąca w numerze:", options, 0, False)
                 if not ok:
@@ -675,13 +683,29 @@ class ReportsPage(QWidget):
                 work = lambda: import_dao.import_invoices_file(path, month, overwrite)
             else:
                 work = lambda: import_dao.import_work_file(path)
-            self._import_jobs.submit(work, self._import_finished, self._import_failed)
+            finished = self._document_counts_finished if kind == "liczba dokumentów" else self._import_finished
+            self._import_jobs.submit(work, finished, self._import_failed)
             submitted = True
         except Exception as exc:
             self._import_failed(exc)
         finally:
             if not submitted:
                 self._import_busy = False
+
+    def _document_counts_finished(self, result):
+        try:
+            text = (f"Zaktualizowano miesięcy: {result['updated']}\n"
+                    f"Bez zmiany liczby: {result['unchanged']}\n"
+                    f"Zachowano istniejące liczby: {result['skipped']}\n"
+                    f"Miesiące bez jednoznacznej firmy: {result['unmatched']}")
+            if result['skipped']:
+                text += "\nAby zastąpić istniejące liczby, zaznacz „Nadpisz istniejące dane” i ponów import."
+            if result['warnings']:
+                text += "\n\nUwagi:\n" + "\n".join(result['warnings'][:20])
+            self.report_status.setText('Zaimportowano miesięczne liczby dokumentów. Wygeneruj raport, aby odświeżyć wyniki.')
+            QMessageBox.information(self, 'Liczba dokumentów — import', text)
+        finally:
+            self._import_busy = False
 
     def _import_failed(self, exc):
         try:

@@ -4,18 +4,40 @@ Importer jest przeznaczony dla Windows Server z dostępem do PostgreSQL aplikacj
 oraz do SQL Server Enova w innej maszynie Hyper-V. Działa bez otwartej aplikacji.
 Każda firma ma osobną bazę Enova; mapowanie do Biuro odbywa się po NIP.
 
-## Stan integracji — wymagane zapytania Enova
+## Stan integracji
 
-Gotowy jest mechanizm importu, obliczenia, podgląd, historia i uruchamianie na
-serwerze. **Zapytania odczytujące rzeczywiste tabele Enova wymagają dopasowania
-do schematu instalacji. Nie dołączono fikcyjnych zapytań ani zapytań zwracających
-zera. Bez prawidłowych plików SQL import nie zmienia liczników.**
+Dostępne są gotowe zapytania odczytowe workera:
 
-W SSMS wykonaj `inspect-schema.sql` na reprezentatywnej bazie klienta. Zapisz oba
-zestawy wyników do CSV. Zapytanie odczytuje tylko metadane tabel, widoków, kolumn
-i relacji — nie pobiera danych klientów. Na tej podstawie można przygotować
-zapytania KPIR, ryczałtu i KH. Jeśli wersje/schematy baz są różne, potrzebny jest
-wynik dla każdej wersji. Nie udostępniaj haseł ani plików `.env`.
+- `queries/kpir.sql`: miesięczna liczba wierszy `Dziennik` z nadanym `KPiRLp > 0`,
+  według `Dziennik.Data`. Nie odrzuca wpisów na podstawie niezweryfikowanych
+  kodów `Bufor`/`KPiRStan` — w otrzymanym wyniku licznik zawierał również `Bufor=1`.
+- `queries/kh.sql`: wszystkie dokumenty `DokEwidencja` według `DataEwidencji`,
+  z zastąpieniem nagłówków definicji `WBEW` pozycjami `Zaplaty`, których
+  `RaportType='RaportyESP'` i `Raport` wskazuje ten sam wyciąg. Pozycje importu
+  `OperacjeBankowe` nie są sumowane z płatnościami. DR, LPEW, RKVE i pozostałe
+  definicje są wliczane normalnie. Bez dodatkowego filtrowania stanów.
+
+Dzielenie pozycji bankowych przez 3 i jednorazowe zaokrąglenie sumy wykonuje
+worker. Przykład: 95 dokumentów, w tym 3 nagłówki WBEW i 190 pozycji płatności,
+daje `round(92 + 190/3) = 155`. Nie dobiera się wykluczeń do wcześniejszej,
+ręcznie obliczonej wartości.
+
+Zapytania zwracają pełny zakres miesięcy, także zera, oraz NIP z
+`OddzialyFirmy.DeklaracjeNIP`. Brak NIP, kilka różnych NIP-ów lub uszkodzone
+powiązanie nagłówka WBEW powodują błąd walidacji zamiast zapisu zera.
+Jeżeli inna baza używa innych definicji bankowych niż WBEW, trzeba je najpierw
+zidentyfikować i dostosować plik zapytania dla tego klienta.
+
+**Ryczałt: mechanizm przyjmuje własny plik SQL w tym samym formacie, ale gotowe
+zapytanie do faktur wymaga jeszcze potwierdzenia źródła/definicji.** Nie jest
+włączony w przykładowej konfiguracji. Nie dołączono zapytania zastępczego
+zwracającego sztuczne zera.
+
+Zapytania oparto na przekazanych metadanych i wynikach diagnostycznych. Nadal
+wymagany jest podgląd uruchomiony na rzeczywistym serwerze, zwłaszcza sprawdzenie
+źródła NIP. Integracja pozostaje wyłączona do czasu lokalnej konfiguracji.
+Do sprawdzenia kolejnych schematów służy `inspect-schema.sql`; nie udostępniaj
+haseł ani plików `.env`.
 
 ## Sprawdzenie liczników po otrzymaniu schematu
 
@@ -77,6 +99,7 @@ Codzienne uruchomienie **zastępuje** pole `Ilość dokumentów` pełną liczbą
 miesiąc; nigdy nie dodaje jej do wczorajszej wartości. Pozostałe statusy, czas,
 notatki i komplet dokumentów są zachowane. W tym zakresie Enova staje się
 źródłem licznika: ręczne zmiany licznika w aplikacji zostaną zastąpione.
+Wpis pochodzenia danych nadaje Enova pierwszeństwo w raportach, także dla zera.
 Błąd jednej bazy zachowuje jej dotychczasowe wartości; inne firmy są importowane.
 Nakładające się zadania zapisujące są blokowane w PostgreSQL.
 
@@ -110,8 +133,10 @@ ODBC dodatkowo otrzymuje żądanie trybu tylko do odczytu; nie zastępuje ono pr
 3. Zapewnij połączenie TCP z VM SQL Server i poprawny zaufany certyfikat TLS.
    Worker używa `Encrypt=yes;TrustServerCertificate=no`. W `server` podaj nazwę
    zgodną z certyfikatem i port, np. `enova-sql.firma.local,1433`.
-4. Skopiuj `config.example.json` poza repozytorium. Wpisz rzeczywiste bazy, NIP-y,
-   typy księgowości i pliki zapytań SQL. Ścieżki SQL są liczone względem JSON.
+4. Zaktualizuj bazę Biuro poleceniem `python migrate_db.py`, jeśli nie zrobiła
+   tego aplikacja po aktualizacji. Skopiuj `config.example.json` poza repozytorium. Wpisz rzeczywiste bazy, NIP-y,
+   typy księgowości i pliki zapytań SQL. Skopiuj katalog `queries` obok JSON
+   lub wpisz bezwzględne ścieżki do plików. Ścieżki względne są liczone względem JSON.
    NIP musi wskazywać dokładnie jedną firmę w Biuro. Pozostaw `enabled=false`.
 5. Uruchom podgląd z katalogu projektu:
 

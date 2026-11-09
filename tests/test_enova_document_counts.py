@@ -23,6 +23,7 @@ class EnovaRulesTests(TestCase):
     def test_kpir_ryczalt_and_kh_rules(self):
         self.assertEqual(calculate_total('KPIR', 45, 0), 45)
         self.assertEqual(calculate_total('RYCZALT', 27, 0), 27)
+        self.assertEqual(calculate_total('KH', 92, 190), 155)
         for bank, expected in [(0, 10), (1, 10), (2, 11), (3, 11), (4, 11), (5, 12), (8, 13)]:
             self.assertEqual(calculate_total('KH', 10, bank), expected)
 
@@ -146,3 +147,12 @@ class EnovaImportTests(DbTestCase):
             with self.assertRaisesRegex(ValueError, 'już uruchomiony'):
                 self.run_job()
         self.assertEqual(self.state()[0], 99)
+
+    def test_enova_zero_has_priority_over_physical_documents_in_reports(self):
+        from app.reports.reports_logic import build_report
+        with get_conn() as conn:
+            conn.execute("INSERT INTO dokumenty(firma_id,data_wyst) VALUES (%s,'2026-11-09')", (self.company,))
+        self.assertTrue(self.run_job(rows=[row(documents=0, bank=0)])[0]['ok'])
+        self.assertEqual(build_report([self.company], ['2026-11'])[self.company]['2026-11']['dokumenty'], 0)
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT source_name FROM monthly_document_imports WHERE firma_id=%s', (self.company,)).fetchone()[0], 'Enova: ClientA')

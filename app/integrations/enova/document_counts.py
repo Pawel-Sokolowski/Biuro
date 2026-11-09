@@ -168,6 +168,10 @@ def apply_counts(conn, company, source, counts):
         conn.execute('INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok) VALUES (%s,%s,%s) '
                      'ON CONFLICT(firma_id,miesiac) DO UPDATE SET ilosc_dok=EXCLUDED.ilosc_dok',
                      (company['id'], count.month, count.total))
+        conn.execute('INSERT INTO monthly_document_imports(firma_id,miesiac,source_name) VALUES (%s,%s,%s) '
+                     'ON CONFLICT(firma_id,miesiac) DO UPDATE SET source_name=EXCLUDED.source_name, '
+                     'imported_by=NULL, imported_at=now()',
+                     (company['id'], count.month, 'Enova: ' + source['database']))
         changes.append({'month': count.month, 'before': previous[0] if previous else None,
                         'after': count.total, 'documents': count.documents, 'bank_transactions': count.bank_transactions})
     details = {'company_id': company['id'], 'database': source['database'],

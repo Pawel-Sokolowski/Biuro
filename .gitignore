@@ -42,4 +42,5 @@ inspect_export.log
 /tmp_pay.log
 /tmp_pay_out.log
 
-/.hypothesis/
+.hypothesis/
+app/documents

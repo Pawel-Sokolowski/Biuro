@@ -60,7 +60,7 @@ class BulkMailTests(unittest.TestCase):
                 mock.patch.object(bulk_mail, 'send_email_smtp', return_value=(True, 'OK')) as smtp:
             self.assertTrue(send_bulk_batch(value, value.recipients)['ok'])
             smtp.assert_called_once_with(10, [value.sender], value.subject, value.body,
-                                         bcc=list(value.recipients), save_copy=True)
+                                         bcc=list(value.recipients), save_copy=True, attachments=[])
             rows[0]['adres_email'] = 'changed@example.com'
             self.assertTrue(send_bulk_batch(value, value.recipients)['blocked'])
             self.assertEqual(smtp.call_count, 1)

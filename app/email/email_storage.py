@@ -1191,6 +1191,23 @@ _SAME_MESSAGE = (
 )
 
 
+def apply_server_flags(
+    konto_id: int, folder_id: int, all_uids: set, unseen_uids: set,
+    *, expected_generation=_UNSPECIFIED_GENERATION, expected_account_revision=None,
+) -> int:
+    """Reconcile cached read flags at every age without changing deletion state."""
+    with get_conn() as conn:
+        if expected_generation is not _UNSPECIFIED_GENERATION:
+            _lock_mailbox_generation(conn, konto_id, folder_id, expected_generation, expected_account_revision)
+        result = conn.execute(
+            "UPDATE wiadomosci_email SET przeczytana = CASE WHEN uid = ANY(%s) THEN 0 ELSE 1 END "
+            "WHERE konto_id = %s AND folder_id = %s AND usunieta = 0 AND uid = ANY(%s) "
+            "AND COALESCE(przeczytana, 0) <> CASE WHEN uid = ANY(%s) THEN 0 ELSE 1 END",
+            (list(unseen_uids), konto_id, folder_id, list(all_uids), list(unseen_uids)),
+        )
+        return result.rowcount
+
+
 def apply_server_state(
     konto_id: int,
     folder_id: int,

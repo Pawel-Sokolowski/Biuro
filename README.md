@@ -108,6 +108,21 @@ poczty. Obok pełnego nazwiska pracownika jest liczba przypisanych mu
 nieprzeczytanych wiadomości na wybranym koncie. Liczniki przypisań są odświeżane
 co 15 sekund oraz po odczytaniu/przypisaniu wiadomości.
 
+Status przeczytania jest pobierany z IMAP przy każdym automatycznym sprawdzeniu,
+również dla starszych zapisanych wiadomości i folderów bez zmiany liczników.
+Zmiany w Thunderbirdzie lub poczcie WWW pojawiają się po następnej synchronizacji.
+
+Nowe wiadomości czatu są sprawdzane co 3 sekundy i wyświetlane jako powiadomienia
+Windows z nadawcą i podglądem — także przy zminimalizowanym oknie, pełnym ekranie
+lub otwartym innym module. Kliknięcie przywraca okno i otwiera właściwą rozmowę.
+Dotyczy kanałów i rozmów prywatnych, również wiadomości z samym załącznikiem.
+Własne wiadomości oraz stara historia po uruchomieniu aplikacji nie wywołują
+powiadomień. Aplikacja musi działać; banery podlegają ustawieniom powiadomień Windows.
+
+Administrator może skonfigurować szablony i harmonogramy przypomnień o dokumentach
+i płatnościach w **Ustawienia → Automatyczne e-maile**. Szczegóły:
+[automatyczne przypomnienia](docs/automatic-email-reminders.md).
+
 Przycisk **Powiadomienia** w nagłówku pokazuje przypisane e-maile i otwarte
 zadania. Kliknięcie przenosi do wiadomości lub zaznacza zadanie na liście.
 Stan odczytania powiadomień jest zapisywany dla użytkownika na tym komputerze;

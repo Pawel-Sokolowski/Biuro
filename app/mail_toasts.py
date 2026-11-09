@@ -69,20 +69,28 @@ class MailToaster:
             self._tray.show()
 
     def check(self, accounts, hidden_folders):
-        if self._tray is None and getattr(self, '_native', None) is None:
-            return
+        self.apply_check(*self.collect(accounts, hidden_folders, dict(self._last_ids)))
+
+    @staticmethod
+    def collect(accounts, hidden_folders, last_ids):
+        """Database-only phase, safe to run in the bounded read pool."""
         new = []
         for account in accounts:
-            konto_id = account["id"]
+            account_id = account['id']
             try:
-                max_id, found = get_new_unread_messages(
-                    konto_id, self._last_ids.get(konto_id),
-                    hidden_folders.get(str(konto_id), set()))
+                max_id, found = get_new_unread_messages(account_id, last_ids.get(account_id),
+                                                      hidden_folders.get(str(account_id), set()))
             except Exception:
-                logger.debug("Powiadomienia o mailach: błąd odczytu", exc_info=True)
+                logger.debug('mail_toast_read failed', exc_info=True)
                 continue
-            self._last_ids[konto_id] = max_id
-            new.extend({**message, "_account": dict(account)} for message in found)
+            last_ids[account_id] = max_id
+            new.extend({**message, '_account': dict(account)} for message in found)
+        return last_ids, new
+
+    def apply_check(self, last_ids, new):
+        self._last_ids = last_ids
+        if self._tray is None and getattr(self, '_native', None) is None:
+            return
         if not new:
             return
         if len(new) > MAX_SEPARATE:

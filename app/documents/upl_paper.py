@@ -16,7 +16,7 @@ TEMPLATE_SHA256 = '22abb8e3e254343d38abcf0eb8389f0847150c831f62bb2bb9cf604edfe35
 
 
 def overlay_commands(data):
-    data = reviewed_data(data, 'UPL')
+    data = reviewed_data(data, 'UPL-PAPER')
     if hashlib.sha256(TEMPLATE.read_bytes()).hexdigest() != TEMPLATE_SHA256:
         raise ValueError('Wzór PDF UPL ma inną wersję niż sprawdzony szablon.')
     pages = [dict(size=(float(p.mediabox.width), float(p.mediabox.height)), text=[]) for p in PdfReader(TEMPLATE).pages]

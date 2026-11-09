@@ -229,6 +229,8 @@ class UiSmokeTests(DbTestCase):
         idx = page.employee_combo.findData(kadrowa)
         page.employee_combo.setCurrentIndex(idx)
         page._reload_rows()
+        from tests.test_review_optimizations import wait_until
+        self.assertTrue(wait_until(lambda: page.model_kadry.rowCount() == 1 and page.model_ks.rowCount() == 1))
         self.assertEqual([page.model_kadry.get_row(i)["nazwa"] for i in range(page.model_kadry.rowCount())],
                          ["Tylko Kadry"])
         self.assertEqual([page.model_ks.get_row(i)["nazwa"] for i in range(page.model_ks.rowCount())],

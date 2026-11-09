@@ -99,7 +99,8 @@ class GlobalSettingsPage(QWidget):
                 ("Audyt i importy", AuditSettings, True),
             ]),
         ]
-        if not perms.get("can_access_admin_settings"):
+        from app.security.authorization import is_administrator
+        if not (is_administrator(self.pracownik_id) or perms.get("can_access_admin_settings")):
             sections = []
         for section, pages in sections:
             visible = [page for page in pages if page[2]]

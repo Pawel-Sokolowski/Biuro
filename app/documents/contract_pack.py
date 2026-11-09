@@ -141,75 +141,45 @@ def _check(element, selected):
 def fill_template(key, data, destination):
     if key not in {key for key, _, _ in DOCUMENTS if key not in ('11_upl', '12_pel', '13_pel_z')}:
         raise ValueError('Nieznany dokument.')
-    document = Document(TEMPLATES / (key + '.docx'))
-    if key in ('00_framework', '03_processing'):
-        table = document.tables[0]
-        for row, col, field in ((0, 1, 'name'), (1, 1, 'address'), (2, 1, 'phone'), (2, 3, 'email'),
-                                (3, 1, 'nip'), (4, 1, 'krs'), (5, 1, 'pesel')):
-            _cell(table.cell(row, col), data.get(field))
-        for index, representative in enumerate(data.get('representatives', ())[:2]):
-            for row, col, field in ((7, 1, 'imie_pierwsze'), (7, 3, 'nazwisko'), (8, 1, 'pesel'), (8, 3, 'nr_telefonu')):
-                _cell(table.cell(row + index * 2, col), representative.get(field))
-        roles = []
-        for person in data.get('representatives', ())[:2]:
-            name = ' '.join(str(person.get(key) or '').strip() for key in ('imie_pierwsze', 'nazwisko')).strip()
-            role = str(person.get('stanowisko') or '').strip()
-            if name and role:
-                roles.append(name + ' — ' + role)
-        if roles:
-            _cell(table.cell(6, 0), 'zwanym dalej Zleceniodawcą, reprezentowanym przez:\n' + '; '.join(roles))
+    from io import BytesIO
+    from docxtpl import DocxTemplate
+    context = {name: '' for name in ('name', 'address', 'phone', 'email', 'nip', 'krs', 'pesel', 'monthly_fee',
+        'agreement_date', 'main_agreement_date', 'document_limit', 'extra_document_price', 'insured_limit',
+        'first_period', 'tax_office', 'pep_person', 'authorized_person', 'termination_date', 'last_period')}
+    context.update(data)
+    representatives = list(data.get('representatives') or ())
+    for index in range(2):
+        context[f'representative_{index+1}'] = representatives[index] if index < len(representatives) else {}
+    roles = []
+    for person in representatives[:2]:
+        name = ' '.join(str(person.get(k) or '').strip() for k in ('imie_pierwsze','nazwisko')).strip()
+        if name and person.get('stanowisko'):
+            roles.append(name + ' — ' + person['stanowisko'])
+    context['representative_roles'] = '; '.join(roles)
+    partners = list(data.get('partners') or ())
+    for index in range(4):
+        partner = dict(partners[index]) if index < len(partners) else {}
+        partner['name'] = ' '.join(str(partner.get(k) or '') for k in ('imie_pierwsze','nazwisko')).strip()
+        context[f'partner_{index+1}'] = partner
+    template = DocxTemplate(TEMPLATES / (key + '.docx'))
+    template.render(context, autoescape=True)
+    rendered = BytesIO()
+    template.save(rendered)
+    rendered.seek(0)
+    document = Document(rendered)
+    if key == '00_framework':
+        accounting = data.get('accounting', '')
+        choices = {'Usług księgowych': bool(accounting),
+                   'Ewidencji do celów ryczałtu': accounting == 'ryczalt',
+                   'Podatkowej Księgi': accounting == 'kpir', 'Ksiąg Rachunkowych': accounting == 'ksiegi',
+                   'Obsługi kadrowo-płacowej': bool(data.get('payroll')),
+                   'Usług płacowych': data.get('payroll') == 'place',
+                   'Pełnych usług kadrowo-płacowych': data.get('payroll') == 'kadry',
+                   'Wystawiania faktur': bool(data.get('invoicing')), 'Generowania przelewów': bool(data.get('transfers'))}
         for paragraph in document.paragraphs:
-            if paragraph.text.startswith('Zawarta dnia'):
-                _replace(paragraph, '_____________________' if key == '00_framework' else '09.06.2026', data['agreement_date'])
-            if key == '03_processing' and 'Umową główną' in paragraph.text:
-                _replace(paragraph, '09.02.2026', data.get('main_agreement_date') or data['agreement_date'])
-        if key == '00_framework':
-            accounting = data.get('accounting', '')
-            choices = {'Usług księgowych': bool(accounting),
-                       'Ewidencji do celów ryczałtu': accounting == 'ryczalt',
-                       'Podatkowej Księgi': accounting == 'kpir', 'Ksiąg Rachunkowych': accounting == 'ksiegi',
-                       'Obsługi kadrowo-płacowej': bool(data.get('payroll')),
-                       'Usług płacowych': data.get('payroll') == 'place',
-                       'Pełnych usług kadrowo-płacowych': data.get('payroll') == 'kadry',
-                       'Wystawiania faktur': bool(data.get('invoicing')), 'Generowania przelewów': bool(data.get('transfers'))}
-            for paragraph in document.paragraphs:
-                for prefix, selected in choices.items():
-                    if paragraph.text.strip().startswith(prefix):
-                        _check(paragraph._p, selected)
-    elif key == '04_checklist':
-        for index, field in enumerate(('document_limit', 'extra_document_price', 'insured_limit', 'first_period')):
-            _cell(document.tables[0].cell(index, 1), data.get(field))
-        _cell(document.tables[1].cell(19, 1), data.get('tax_office'))
-        for i, partner in enumerate(data.get('partners', ())[:4]):
-            table = document.tables[i + 2]
-            _cell(table.cell(0, 1), ' '.join(str(partner.get(k) or '') for k in ('imie_pierwsze', 'nazwisko')).strip())
-            for row, field in ((1, 'adres_zamieszkania'), (2, 'nip'), (3, 'pesel')):
-                _cell(table.cell(row, 2), partner.get(field))
-    elif key == '02_prices':
-        # The only client-specific price is the empty basic-fee value cell.
-        if data.get('monthly_fee'):
-            _cell(document.tables[0].cell(1, 1), data['monthly_fee'])
-    elif key == '05_pep':
-        for paragraph in document.paragraphs:
-            if paragraph.text.startswith('Ja, niżej podpisany'):
-                _replace(paragraph, '______________', data.get('pep_person') or '______________')
-    elif key == '09_authorization':
-        paragraphs = document.paragraphs
-        _replace(paragraphs[1], '________________', data['agreement_date'])
-        _replace(paragraphs[2], '___________________', data['name'])
-        _replace(paragraphs[3], '___________________', data['address'])
-        if data.get('authorized_person'):
-            _replace(paragraphs[8], '_' * 82, data['authorized_person'])
-    elif key == '10_termination':
-        _cell(document.tables[0].cell(0, 1), data['name'])
-        _cell(document.tables[0].cell(1, 1), data['address'])
-        for paragraph in document.paragraphs:
-            if paragraph.text.startswith('Umowy ramowej'):
-                _replace(paragraph, '______________________', data.get('main_agreement_date') or data['agreement_date'])
-            elif paragraph.text.startswith('Rozwiązanie umowy nastąpi') and data.get('termination_date'):
-                _replace(paragraph, '_________________________', data['termination_date'])
-            elif paragraph.text.startswith('Ostatni miesiąc') and data.get('last_period'):
-                _replace(paragraph, '____________________________', data['last_period'])
+            for prefix, selected in choices.items():
+                if paragraph.text.strip().startswith(prefix):
+                    _check(paragraph._p, selected)
     document.save(destination)
 
 
@@ -319,7 +289,7 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
     datetime.strptime(data.get('agreement_date', ''), '%d.%m.%Y')
     form_keys = [key for key, _, _ in DOCUMENTS if key in selected and key in ('11_upl', '12_pel', '13_pel_z')]
     if form_keys:
-        from app.documents.power_of_attorney import build_xml, resolve_employee, split_street, formatted_address
+        from app.documents.power_of_attorney import reviewed_data, resolve_employee, split_street, formatted_address
         data['attorney'] = resolve_employee(data)
         if not data.get('building'):
             data.update(split_street(data.get('street')))
@@ -328,7 +298,7 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
         data['address'] = formatted_address(data)
         for key in form_keys:
             if key == '11_upl':
-                build_xml('UPL', data)
+                reviewed_data(data, 'UPL-PAPER')
         data['pel_z_attached'] = '13_pel_z' in form_keys
         if form_renderer is None:
             raise ValueError('Generowanie PDF pełnomocnictw wymaga mechanizmu wydruku aplikacji.')

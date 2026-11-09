@@ -246,7 +246,7 @@ def apply_rules_to_folder(konto_id: int, folder: str) -> int:
     try:
         rows = conn.execute(
             """
-            SELECT w.uid, w.nadawca, w.odbiorca, w.temat, w.przeczytana
+            SELECT w.id, w.uid, w.nadawca, w.odbiorca, w.temat, w.przeczytana
             FROM wiadomosci_email w JOIN foldery_email f ON f.id = w.folder_id
             WHERE w.konto_id = %s AND f.server_name = %s AND COALESCE(w.usunieta, 0) = 0
             """,
@@ -259,4 +259,4 @@ def apply_rules_to_folder(konto_id: int, folder: str) -> int:
          "subject": r["temat"], "is_seen": bool(r["przeczytana"])}
         for r in rows
     ]
-    return apply_rules(konto_id, folder, headers)
+    return apply_rules(konto_id, folder, headers, expected_rows={str(r["uid"]): r["id"] for r in rows})

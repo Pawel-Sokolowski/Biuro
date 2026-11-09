@@ -29,7 +29,7 @@ def get_conversations(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]
     return [{k: row[k] for k in row.keys()} for row in rows]
 
 
-def get_messages(konwersacja_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+def get_messages(konwersacja_id: int, limit: int = 100, offset: int = 0, *, actor_id: int) -> List[Dict[str, Any]]:
     """
     Zwraca najnowsze wiadomości w kolejności naturalnej (najstarsze pierwsze).
     Offset jest liczony od końca rozmowy, aby przewijanie do góry mogło
@@ -42,37 +42,32 @@ def get_messages(konwersacja_id: int, limit: int = 100, offset: int = 0) -> List
                p.imie AS imie, p.nazwisko AS nazwisko
         FROM wiadomosci_chat wc
         LEFT JOIN pracownicy p ON wc.pracownik_id = p.id
-        WHERE wc.konwersacja_id = %s
+        WHERE wc.konwersacja_id = %s AND EXISTS (
+            SELECT 1 FROM uczestnicy_chat u JOIN pracownicy actor ON actor.id=u.pracownik_id
+            WHERE u.konwersacja_id=wc.konwersacja_id AND u.pracownik_id=%s
+              AND COALESCE(actor.aktywny,1)=1)
         ORDER BY wc.data_wysylki DESC, wc.id DESC
         LIMIT %s OFFSET %s
-    """, (konwersacja_id, limit, offset))
+    """, (konwersacja_id, actor_id, limit, offset))
     rows = cur.fetchall()
     conn.close()
     return [{k: row[k] for k in row.keys()} for row in reversed(rows)]
 
 
-def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
-    """
-    Dodaje wiadomość do konwersacji. Zwraca id nowo dodanej wiadomości.
-    Zakłada, że konwersacja_id jest poprawne (jeśli None, wywołujący powinien utworzyć konwersację).
-    """
-    if not is_participant(konwersacja_id, pracownik_id):
+def _lock_authorized_conversation(conn, conversation_id: int, actor_id: int) -> None:
+    # IDs must be allocated only after this lock: unread watermarks rely on
+    # increasing IDs being committed in the same order within a conversation.
+    if not conn.execute("SELECT id FROM konwersacje WHERE id=%s FOR UPDATE", (conversation_id,)).fetchone():
         raise PermissionError("Nie masz dostępu do tego kanału.")
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO wiadomosci_chat (konwersacja_id, pracownik_id, tresc, data_wysylki)
-        VALUES (%s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
-    """, (konwersacja_id, pracownik_id, tresc))
-    _new_id = cur.fetchone()[0]
-    cur.execute(
-        "UPDATE konwersacje SET ostatnia_aktualizacja = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
-        (konwersacja_id,),
-    )
-    conn.commit()
-    last_id = _new_id
-    conn.close()
-    return last_id
+    if not conn.execute("""SELECT 1 FROM uczestnicy_chat u
+        JOIN pracownicy p ON p.id=u.pracownik_id
+        WHERE u.konwersacja_id=%s AND u.pracownik_id=%s AND COALESCE(p.aktywny,1)=1""",
+        (conversation_id, actor_id)).fetchone():
+        raise PermissionError("Nie masz dostępu do tego kanału.")
+
+
+def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
+    return add_message_with_attachments(konwersacja_id, pracownik_id, tresc, [])
 
 
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -85,30 +80,25 @@ def add_message_with_attachments(konwersacja_id: int, pracownik_id: int, tresc: 
         if len(f["dane"]) > MAX_ATTACHMENT_BYTES:
             raise ValueError(
                 f"Plik „{f['nazwa']}” jest większy niż {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB.")
-    if not is_participant(konwersacja_id, pracownik_id):
-        raise PermissionError("Nie masz dostępu do tego kanału.")
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO wiadomosci_chat (konwersacja_id, pracownik_id, tresc, data_wysylki)
-        VALUES (%s, %s, %s, to_char(now(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
-    """, (konwersacja_id, pracownik_id, tresc))
-    message_id = cur.fetchone()[0]
-    for f in files:
-        cur.execute(
-            "INSERT INTO zalaczniki_chat (wiadomosc_id, nazwa, rozmiar, dane) VALUES (%s, %s, %s, %s)",
-            (message_id, f["nazwa"], len(f["dane"]), f["dane"]),
+    with _get_conn() as conn:
+        _lock_authorized_conversation(conn, konwersacja_id, pracownik_id)
+        message_id = conn.execute("""
+            INSERT INTO wiadomosci_chat (konwersacja_id, pracownik_id, tresc, data_wysylki)
+            VALUES (%s, %s, %s, to_char(clock_timestamp(), 'YYYY-MM-DD HH24:MI:SS')) RETURNING id
+        """, (konwersacja_id, pracownik_id, tresc)).fetchone()[0]
+        for f in files:
+            conn.execute(
+                "INSERT INTO zalaczniki_chat (wiadomosc_id, nazwa, rozmiar, dane) VALUES (%s, %s, %s, %s)",
+                (message_id, f["nazwa"], len(f["dane"]), f["dane"]),
+            )
+        conn.execute(
+            "UPDATE konwersacje SET ostatnia_aktualizacja = to_char(clock_timestamp(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
+            (konwersacja_id,),
         )
-    cur.execute(
-        "UPDATE konwersacje SET ostatnia_aktualizacja = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = %s",
-        (konwersacja_id,),
-    )
-    conn.commit()
-    conn.close()
     return message_id
 
 
-def get_attachments(message_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+def get_attachments(message_ids: List[int], *, actor_id: int) -> Dict[int, List[Dict[str, Any]]]:
     """Metadane załączników (bez zawartości) pogrupowane po id wiadomości."""
     if not message_ids:
         return {}
@@ -116,7 +106,11 @@ def get_attachments(message_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
     cur = conn.cursor()
     cur.execute(
         "SELECT id, wiadomosc_id, nazwa, rozmiar FROM zalaczniki_chat "
-        "WHERE wiadomosc_id = ANY(%s) ORDER BY id", (list(message_ids),))
+        "WHERE wiadomosc_id = ANY(%s) AND EXISTS (SELECT 1 FROM wiadomosci_chat w "
+        "JOIN uczestnicy_chat u ON u.konwersacja_id=w.konwersacja_id "
+        "JOIN pracownicy p ON p.id=u.pracownik_id "
+        "WHERE w.id=zalaczniki_chat.wiadomosc_id AND u.pracownik_id=%s AND COALESCE(p.aktywny,1)=1) ORDER BY id",
+        (list(message_ids), actor_id))
     rows = cur.fetchall()
     conn.close()
     result: Dict[int, List[Dict[str, Any]]] = {}
@@ -153,7 +147,7 @@ def edit_message(message_id: int, new_text: str) -> None:
     conn.close()
 
 
-def get_new_messages(konwersacja_id: int, last_timestamp: str) -> List[Dict[str, Any]]:
+def get_new_messages(konwersacja_id: int, last_timestamp: str, *, actor_id: int) -> List[Dict[str, Any]]:
     """
     Pobiera wiadomości nowsze niż last_timestamp (format zgodny z zapisem w DB).
     Zwraca listę posortowaną rosnąco.
@@ -167,14 +161,16 @@ def get_new_messages(konwersacja_id: int, last_timestamp: str) -> List[Dict[str,
         LEFT JOIN pracownicy p ON wc.pracownik_id = p.id
         WHERE wc.konwersacja_id = %s
           AND wc.data_wysylki > %s
+          AND EXISTS (SELECT 1 FROM uczestnicy_chat u JOIN pracownicy p ON p.id=u.pracownik_id
+              WHERE u.konwersacja_id=wc.konwersacja_id AND u.pracownik_id=%s AND COALESCE(p.aktywny,1)=1)
         ORDER BY wc.data_wysylki ASC, wc.id ASC
-    """, (konwersacja_id, last_timestamp))
+    """, (konwersacja_id, last_timestamp, actor_id))
     rows = cur.fetchall()
     conn.close()
     return [{k: row[k] for k in row.keys()} for row in rows]
 
 
-def get_latest_message_ids(konwersacja_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+def get_latest_message_ids(konwersacja_ids: List[int], *, actor_id: int) -> Dict[int, Dict[str, Any]]:
     """Zwraca {konwersacja_id: {"id": najnowsze id, "pracownik_id": autor}}."""
     ids = [int(i) for i in konwersacja_ids if i is not None]
     if not ids:
@@ -184,63 +180,62 @@ def get_latest_message_ids(konwersacja_ids: List[int]) -> Dict[int, Dict[str, An
     cur.execute("""
         SELECT DISTINCT ON (konwersacja_id) konwersacja_id, id, pracownik_id
         FROM wiadomosci_chat
-        WHERE konwersacja_id = ANY(%s)
+        WHERE konwersacja_id = ANY(%s) AND EXISTS (SELECT 1 FROM uczestnicy_chat u
+            JOIN pracownicy p ON p.id=u.pracownik_id
+            WHERE u.konwersacja_id=wiadomosci_chat.konwersacja_id AND u.pracownik_id=%s AND COALESCE(p.aktywny,1)=1)
         ORDER BY konwersacja_id, id DESC
-    """, (ids,))
+    """, (ids, actor_id))
     rows = cur.fetchall()
     conn.close()
     return {r["konwersacja_id"]: {"id": r["id"], "pracownik_id": r["pracownik_id"]} for r in rows}
 
 
-def count_messages_after(konwersacja_id: int, after_id: int, exclude_pracownik_id: Optional[int] = None) -> int:
+def count_messages_after(konwersacja_id: int, after_id: int, exclude_pracownik_id: Optional[int] = None, *, actor_id: int) -> int:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT COUNT(*) AS n FROM wiadomosci_chat
         WHERE konwersacja_id = %s AND id > %s
           AND (%s::int IS NULL OR pracownik_id IS DISTINCT FROM %s::int)
-    """, (konwersacja_id, after_id, exclude_pracownik_id, exclude_pracownik_id))
+          AND EXISTS (SELECT 1 FROM uczestnicy_chat u JOIN pracownicy p ON p.id=u.pracownik_id
+              WHERE u.konwersacja_id=wiadomosci_chat.konwersacja_id AND u.pracownik_id=%s AND COALESCE(p.aktywny,1)=1)
+    """, (konwersacja_id, after_id, exclude_pracownik_id, exclude_pracownik_id, actor_id))
     row = cur.fetchone()
     conn.close()
     return int(row["n"] if row else 0)
 
 
 def get_unread_counts(pracownik_id: int) -> Dict[int, int]:
-    """Nieprzeczytane wiadomości od innych osób, per konwersacja."""
-    conn = _get_conn()
-    cur = conn.cursor()
-    # pierwszy raz: nie traktuj starej historii jako nieprzeczytanej
-    cur.execute("""
-        UPDATE uczestnicy_chat u
-        SET ostatnie_przeczytane_id = COALESCE(
-            (SELECT MAX(w.id) FROM wiadomosci_chat w WHERE w.konwersacja_id = u.konwersacja_id), 0)
-        WHERE u.pracownik_id = %s AND u.ostatnie_przeczytane_id IS NULL
-    """, (pracownik_id,))
-    conn.commit()
-    cur.execute("""
-        SELECT w.konwersacja_id AS kid, COUNT(*) AS n
-        FROM wiadomosci_chat w
-        JOIN uczestnicy_chat u ON u.konwersacja_id = w.konwersacja_id AND u.pracownik_id = %s
-        WHERE w.id > COALESCE(u.ostatnie_przeczytane_id, 0)
-          AND w.pracownik_id IS DISTINCT FROM %s
-        GROUP BY w.konwersacja_id
-    """, (pracownik_id, pracownik_id))
-    rows = cur.fetchall()
-    conn.close()
-    return {r["kid"]: int(r["n"]) for r in rows}
+    """Initialize legacy watermarks and count unread messages in one round trip."""
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            WITH initialized AS (
+                UPDATE uczestnicy_chat u SET ostatnie_przeczytane_id=COALESCE(
+                    (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id=u.konwersacja_id),0)
+                WHERE u.pracownik_id=%s AND u.ostatnie_przeczytane_id IS NULL
+                RETURNING konwersacja_id,ostatnie_przeczytane_id
+            )
+            SELECT w.konwersacja_id AS kid,COUNT(*) AS n FROM wiadomosci_chat w
+            JOIN uczestnicy_chat u ON u.konwersacja_id=w.konwersacja_id AND u.pracownik_id=%s
+            LEFT JOIN initialized i ON i.konwersacja_id=u.konwersacja_id
+            WHERE w.id>COALESCE(i.ostatnie_przeczytane_id,u.ostatnie_przeczytane_id,0)
+              AND w.pracownik_id IS DISTINCT FROM %s
+            GROUP BY w.konwersacja_id
+        """, (pracownik_id,pracownik_id,pracownik_id)).fetchall()
+    return {row['kid']:int(row['n']) for row in rows}
 
 
-def mark_conversation_read(konwersacja_id: int, pracownik_id: int) -> None:
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE uczestnicy_chat
-        SET ostatnie_przeczytane_id = COALESCE(
-            (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id = %s), 0)
-        WHERE konwersacja_id = %s AND pracownik_id = %s
-    """, (konwersacja_id, konwersacja_id, pracownik_id))
-    conn.commit()
-    conn.close()
+def mark_conversation_read(konwersacja_id: int, pracownik_id: int, through_id: Optional[int] = None) -> None:
+    """Acknowledge only rendered IDs; delayed writes never regress the watermark."""
+    with _get_conn() as conn:
+        conn.execute("""
+            UPDATE uczestnicy_chat
+            SET ostatnie_przeczytane_id = GREATEST(COALESCE(ostatnie_przeczytane_id, 0),
+                COALESCE(%s, (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id=%s), 0))
+            WHERE konwersacja_id=%s AND pracownik_id=%s
+              AND COALESCE(ostatnie_przeczytane_id, 0) < COALESCE(%s,
+                (SELECT MAX(id) FROM wiadomosci_chat WHERE konwersacja_id=%s), 0)
+        """, (through_id, konwersacja_id, konwersacja_id, pracownik_id, through_id, konwersacja_id))
 
 
 def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None,
@@ -296,11 +291,12 @@ def is_participant(konwersacja_id: int, pracownik_id: Optional[int]) -> bool:
     row = conn.execute(
         """
         SELECT 1 FROM konwersacje k
+        JOIN pracownicy p ON p.id=%s AND COALESCE(p.aktywny,1)=1
         LEFT JOIN uczestnicy_chat uc
                ON uc.konwersacja_id = k.id AND uc.pracownik_id = %s
         WHERE k.id = %s AND (uc.id IS NOT NULL OR k.pracownik_creator_id = %s)
         """,
-        (pracownik_id, konwersacja_id, pracownik_id),
+        (pracownik_id, pracownik_id, konwersacja_id, pracownik_id),
     ).fetchone()
     conn.close()
     return row is not None
@@ -397,8 +393,8 @@ def ensure_direct_conversations(pracownik_id: int) -> None:
     conn = _get_conn()
     cur = conn.cursor()
     existing = {r["nazwa"] for r in cur.execute(
-        "SELECT nazwa FROM konwersacje WHERE typ = 'prywatna'").fetchall()}
-    for emp in get_active_employees():
+        "SELECT nazwa FROM konwersacje WHERE typ='prywatna'").fetchall()}
+    for emp in sorted(get_active_employees(), key=lambda item: _direct_name(pracownik_id, item["id"])):
         other = emp["id"]
         if other == pracownik_id:
             continue
@@ -406,11 +402,12 @@ def ensure_direct_conversations(pracownik_id: int) -> None:
         if name in existing:
             continue
         cur.execute(
-            "INSERT INTO konwersacje (nazwa, typ, pracownik_creator_id) VALUES (%s, 'prywatna', %s) RETURNING id",
+            "INSERT INTO konwersacje (nazwa, typ, pracownik_creator_id) VALUES (%s, 'prywatna', %s) "
+            "ON CONFLICT (nazwa) WHERE typ='prywatna' DO NOTHING RETURNING id",
             (name, pracownik_id),
         )
-        _new_id = cur.fetchone()[0]
-        kid = _new_id
+        created = cur.fetchone()
+        kid = created[0] if created else cur.execute("SELECT id FROM konwersacje WHERE typ='prywatna' AND nazwa=%s", (name,)).fetchone()[0]
         for pid in (pracownik_id, other):
             cur.execute(
                 "INSERT INTO uczestnicy_chat (konwersacja_id, pracownik_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",

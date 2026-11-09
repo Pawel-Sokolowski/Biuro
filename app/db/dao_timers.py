@@ -100,7 +100,7 @@ def update_company_timer(firma_id: int, source: str, record_id: int, dzial: str,
             ).rowcount
         elif source == SOURCE_TIMER:
             old = conn.execute(
-                "SELECT miesiac, typ, sekundy FROM czasomierze WHERE id = %s AND firma_id = %s",
+                "SELECT miesiac, typ, sekundy FROM czasomierze WHERE id = %s AND firma_id = %s FOR UPDATE",
                 (record_id, firma_id),
             ).fetchone()
             if not old:

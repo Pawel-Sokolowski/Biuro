@@ -1,5 +1,7 @@
 ﻿#define MyAppName "Biuro"
-#define MyAppVersion "1.4.0"
+#define VersionHandle FileOpen(SourcePath + "..\app\VERSION")
+#define MyAppVersion Trim(FileRead(VersionHandle))
+#expr FileClose(VersionHandle)
 #define MyAppPublisher "Biuro"
 #define MyAppExeName "Biuro.exe"
 #define MyBuildDir SourcePath + "..\dist\Biuro"

@@ -2219,6 +2219,17 @@ class EmailPage(QWidget):
 
         self._load_token += 1
         token = self._load_token
+        request = self._mail_request()
+
+        def is_current() -> bool:
+            return (token == self._load_token
+                    and self.current_account is not None
+                    and self.current_account["id"] == konto_id
+                    and self.current_folder_local == local_folder
+                    and str(self.current_uid) == str(uid)
+                    and self._current_message_row_id == row_id
+                    and self._current_message_account_id == konto_id
+                    and self._mail_request() == request)
 
         self._loading_message_key = load_key
 
@@ -2231,12 +2242,12 @@ class EmailPage(QWidget):
         QTimer.singleShot(
             400,
             lambda: self._loading_message_key == load_key
-            and token == self._load_token
+            and is_current()
             and self.mail_view.setPlainText("Pobieranie wiadomości…"),
         )
 
         def show(msg) -> None:
-            if token != self._load_token:
+            if not is_current():
                 return
 
             if not msg:
@@ -2257,7 +2268,7 @@ class EmailPage(QWidget):
             )
 
         def done(msg, err) -> None:
-            if token != self._load_token:
+            if not is_current():
                 return
 
             self._loading_message_key = None
@@ -2389,6 +2400,15 @@ class EmailPage(QWidget):
         self.show_attachments(shown)
 
     def _clear_view(self) -> None:
+        # Clearing the preview is also a context/selection reset. A body read
+        # accepted before this reset must never repopulate it afterward.
+        self._load_token += 1
+        self._message_jobs.invalidate()
+        self._loading_message_key = None
+        self.current_uid = None
+        self._current_message_row_id = None
+        self._current_message_account_id = None
+        self.cached_message = None
         self.mail_view.contact_links = {}
         self.mail_view.clear()
         self.mail_view.resources = {}
@@ -2786,8 +2806,14 @@ class EmailPage(QWidget):
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
-            name = os.path.basename(part.get_filename() or f"zalacznik_{index}")
-            path = os.path.join(tmp, name)
+            name = os.path.basename(part.get_filename() or "")
+            if name in ("", ".", ".."):
+                name = f"zalacznik_{index}"
+            # Separate directories preserve each MIME part's original filename
+            # in outgoing mail while keeping equal names from overwriting.
+            directory = os.path.join(tmp, str(index))
+            os.mkdir(directory)
+            path = os.path.join(directory, name)
             with open(path, "wb") as fh:
                 fh.write(payload)
             paths.append(path)

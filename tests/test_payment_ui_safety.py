@@ -415,7 +415,9 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertEqual(page.issued_table.horizontalHeaderItem(5).text(), "Podgląd")
         self.assertTrue(page.issued_table.isColumnHidden(0))
         self.assertTrue(page.draft_table.isColumnHidden(0))
-        self.assertIsNotNone(page.issued_table.cellWidget(0, 5))
+        self.assertIsNone(page.issued_table.cellWidget(0, 5))
+        from app.invoices.list_table import PreviewDelegate
+        self.assertIsInstance(page.issued_table.itemDelegateForColumn(5), PreviewDelegate)
         self.assertEqual(page.issued_table.columnWidth(3), 72)
         self.assertEqual(page.issued_table.columnWidth(6), 78)
         self.assertEqual(page.issued_table.columnWidth(7), 78)
@@ -458,6 +460,8 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         conn.commit()
         conn.close()
         invoice = get_invoice_by_id(self.invoice_id)
+        # Model the identity captured when this fixture invoice was issued.
+        invoice['seller_snapshot'] = {'sprzedawca_nazwa': 'Biuro Pełne Dane sp. z o.o.', 'sprzedawca_nip': '1234567890', 'sprzedawca_adres': 'Testowa 1'}
         rendered = invoice_html(invoice, [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100,
                                            "vat": 23, "netto": 100, "brutto": 123}])
         self.assertIn("Biuro Pełne Dane sp. z o.o.", rendered)

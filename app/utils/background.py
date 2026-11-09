@@ -3,8 +3,14 @@ from __future__ import annotations
 
 from contextvars import copy_context
 import threading
+import logging
+from time import perf_counter
+from typing import Callable, TypeVar
+
+Result = TypeVar("Result")
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 from app.config import get_schema, schema_context
+from app.utils.request_cache import request_scope
 
 
 _pool = QThreadPool()
@@ -25,6 +31,7 @@ class _Job(QRunnable):
         self.cancelled = threading.Event()
 
     def run(self):
+        started = perf_counter()
         if self.cancelled.is_set():
             try:
                 self.signals.finished.emit((self.generation, None, None))
@@ -32,7 +39,7 @@ class _Job(QRunnable):
                 pass
             return
         def execute():
-            with schema_context(self.schema):
+            with schema_context(self.schema), request_scope():
                 return self.work()
         try:
             result = (self.generation, self.context.run(execute), None)
@@ -42,6 +49,7 @@ class _Job(QRunnable):
             self.signals.finished.emit(result)
         except RuntimeError:
             pass  # The owning page/application has been destroyed.
+        logging.getLogger(__name__).info('background_job work=%s generation=%s duration=%.3f failed=%s', getattr(self.work, '__qualname__', type(self.work).__name__), self.generation, perf_counter() - started, result[2] is not None)
 
 
 class TaskRunner(QObject):
@@ -51,8 +59,18 @@ class TaskRunner(QObject):
         self._generation = 0
         self._callbacks = {}
         self._jobs = {}
+        self._request_key = None
+        self._pending_read = None
 
-    def submit(self, work, done, error=None):
+    def submit(self, work: Callable[[], Result], done: Callable[[Result], None], error: Callable[[Exception], None] | None = None, *, key: object = None) -> None:
+        # A periodic refresh of the same context must not invalidate the useful
+        # in-flight result. Deliver it, then do at most one requested rerun.
+        if key is not None and key == self._request_key and self._generation in self._jobs:
+            self._callbacks[self._generation] = (done, error)
+            self._pending_read = (work, done, error, key)
+            return
+        self._request_key = key
+        self._pending_read = None
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
             if _pool.tryTake(job):
@@ -72,6 +90,8 @@ class TaskRunner(QObject):
             raise
 
     def invalidate(self):
+        self._request_key = None
+        self._pending_read = None
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
             if _pool.tryTake(job):
@@ -86,10 +106,15 @@ class TaskRunner(QObject):
         if callbacks is None or generation != self._generation:
             return
         done, error = callbacks
+        pending = self._pending_read
+        self._pending_read = None
         if exc is None:
             done(result)
         elif error is not None:
             error(exc)
+        if pending is not None and generation == self._generation:
+            work, done, error, key = pending
+            self.submit(work, done, error, key=key)
 
 
 class LatestRead:
@@ -126,7 +151,7 @@ class CommandRunner(QObject):
     def _owner_destroyed(self):
         self._owner_alive = False
 
-    def submit(self, work, done=lambda _: None, error=None):
+    def submit(self, work: Callable[[], Result], done: Callable[[Result], None] = lambda _: None, error: Callable[[Exception], None] | None = None) -> None:
         if len(self._queue) + len(self._jobs) >= self._capacity:
             raise RuntimeError("Kolejka operacji jest pełna. Poczekaj na zakończenie poprzednich operacji.")
         self._generation += 1

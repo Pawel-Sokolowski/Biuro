@@ -51,7 +51,7 @@ Program czyta logi kopii (Cobian Backup, mail „Backup 11 (ENOVA)”) z pliku a
 
 ## Wymagania
 
-- Python 3.11
+- Python 3.14
 - PostgreSQL
 - Zależności: `pip install --require-hashes -r requirements.lock`
 
@@ -69,10 +69,15 @@ Skopiuj `.env.example` jako `.env` (katalog projektu albo `%LOCALAPPDATA%\Biuro\
 ## Uruchomienie
 
 ```powershell
-pip install --require-hashes -r requirements.lock
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --require-hashes -r requirements.lock
 python migrate_db.py   # tworzy/aktualizuje schemat bazy
 python main.py
 ```
+
+Przy aktualizacji z Python 3.11 utwórz nowe środowisko Python 3.14 zamiast
+używać starego `.venv`; zachowaj dotychczasową konfigurację `.env`.
 
 `migrate_db.py` uruchamia wersjonowane migracje Alembic i sprawdza aktualność schematu.
 Pierwszy przebieg zachowuje dane i aktualizuje starszą bazę przez zamrożony bootstrap;

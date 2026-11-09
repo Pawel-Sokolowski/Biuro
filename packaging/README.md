@@ -7,11 +7,14 @@ For this PyQt6 desktop application, the recommended release format is:
 2. **Inno Setup** for a normal Windows installer, shortcuts, uninstall support,
    and per-user installation.
 
-From the repository root in a Windows Python environment:
+From the repository root, create a fresh Windows Python 3.14 environment
+(do not reuse a virtual environment created with an older Python):
 
 ```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install --require-hashes -r requirements.lock
-python -m pip install pyinstaller
+python -m pip install --require-hashes -r requirements-build.lock
 python -m pip check
 python -c "import mt940; from importlib.metadata import version; print('mt-940', version('mt-940')); assert callable(mt940.parse)"
 python -m PyInstaller --clean --noconfirm packaging\biuro.spec
@@ -37,9 +40,9 @@ the **Biuro - aktualizacja bazy** shortcut to migrate the database before
 logging in. An import failure dialog provides expandable exception details;
 copy those details when reporting a failure that persists after rebuilding.
 
-Runtime dependencies are resolved for Python 3.11 across platforms in
+Runtime dependencies are resolved for Python 3.14 across platforms in
 `requirements.lock`. Update them deliberately with
-`uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes -o requirements.lock`,
+`uv pip compile requirements.txt --universal --python-version 3.14 --generate-hashes -o requirements.lock`,
 then rerun the full suite before building. The spec includes the Alembic scripts,
 psycopg pool, and IMAP UTF-7 codec. Exercise `Biuro.exe --migrate` twice: the second
 run must be a no-op. The first Alembic upgrade of an older installation reuses the

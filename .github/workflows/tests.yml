@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           cache: pip
       - name: Install Qt runtime libraries
         run: |
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           cache: pip
       - name: Start isolated PostgreSQL
         shell: pwsh

@@ -54,6 +54,51 @@ class ServerStateTests(DbTestCase):
         self.assertEqual(rows["2"]["przeczytana"], 1)
         self.assertNotIn("3", rows)  # usuniÄ™ta/przeniesiona poza programem
 
+    def test_thunderbird_flag_changes_update_old_messages_without_touching_other_folders(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from app.db.dao_conn import get_conn
+        from app.email import email_sync
+        from app.email.email_storage import save_message_header, get_cached_messages
+        with get_conn() as conn:
+            conn.execute("UPDATE wiadomosci_email SET data='2018-01-01 10:00' WHERE konto_id=1")
+        save_message_header(1, self.arch, '1', '<arch@x>', 'x@y.pl', 'a@b.pl', 'Archive', '2018-01-01 10:00', False, False)
+        remote = {'unseen': b'1 3'}  # UID 1 unread, UID 2 read, same total unread count.
+        def search(command, charset, criterion):
+            self.assertEqual(command, 'SEARCH')
+            self.assertIsNone(charset)
+            return 'OK', [b'1 2 3' if criterion == 'ALL' else remote['unseen']]
+        session = SimpleNamespace(conn=SimpleNamespace(uid=search), select=mock.Mock(return_value=True),
+                                  selected_generation=None, account_revision=None)
+        @contextmanager
+        def shared(*args):
+            yield session
+        with mock.patch.object(email_sync, '_shared_session', side_effect=shared):
+            self.assertEqual(email_sync.sync_folder_flags(1, 'INBOX'), 2)
+            rows = self.rows()
+            self.assertEqual(rows['1']['przeczytana'], 0)
+            self.assertEqual(rows['2']['przeczytana'], 1)
+            remote['unseen'] = b''  # Thunderbird: mark all read.
+            self.assertEqual(email_sync.sync_folder_flags(1, 'INBOX'), 2)
+            self.assertTrue(all(row['przeczytana'] for row in self.rows().values()))
+        self.assertFalse(get_cached_messages(1, self.arch)[0]['przeczytana'])
+        session.select.assert_called_with('INBOX', readonly=True)
+
+    def test_failed_remote_flag_search_preserves_cached_read_state(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from app.email import email_sync
+        session = SimpleNamespace(conn=SimpleNamespace(uid=mock.Mock(side_effect=[('OK', [b'1 2 3']), ('NO', [b'error'])])),
+                                  select=mock.Mock(return_value=True), selected_generation=None, account_revision=None)
+        @contextmanager
+        def shared(*args):
+            yield session
+        before = {uid: row['przeczytana'] for uid, row in self.rows().items()}
+        with mock.patch.object(email_sync, '_shared_session', side_effect=shared):
+            with self.assertRaises(RuntimeError):
+                email_sync.sync_folder_flags(1, 'INBOX')
+        self.assertEqual(before, {uid: row['przeczytana'] for uid, row in self.rows().items()})
+
     def test_assignments_follow_message_id_after_move(self):
         from app.db.dao_conn import get_conn
         from app.email.email_storage import (

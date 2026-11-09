@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.widgets.flow_layout import FlowLayout
 from app.companies.company_names import company_display_name
 from app.db.dao_companies import list_companies
 from app.db.dao_employees import list_employees
@@ -70,17 +72,24 @@ class TasksPage(QWidget):
         filters.addStretch()
         layout.addLayout(filters)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["Tytuł", "Firma", "Pracownik", "Status", "Termin", "Opis", "ID"]
+            ["Tytuł", "Firma", "Pracownik", "Status", "Termin", "Opis"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header = self.table.horizontalHeader()
+        header.setMinimumSectionSize(100)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for column, width in enumerate((320, 180, 160, 120, 120, 520)):
+            self.table.setColumnWidth(column, width)
+        header.setStretchLastSection(True)
+        self.table.setWordWrap(True)
+        self.table.verticalHeader().setMinimumSectionSize(44)
         layout.addWidget(self.table)
 
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         btn_add = QPushButton("Nowe zadanie")
         btn_edit = QPushButton("Edytuj")
         btn_delete = QPushButton("Usuń")
@@ -90,7 +99,6 @@ class TasksPage(QWidget):
         actions.addWidget(btn_add)
         actions.addWidget(btn_edit)
         actions.addWidget(btn_delete)
-        actions.addSpacing(20)
         actions.addWidget(QLabel("Zaznaczone:"))
         self.bulk_status = QComboBox()
         self.bulk_status.addItems(TASK_STATUSES)
@@ -101,7 +109,6 @@ class TasksPage(QWidget):
         actions.addWidget(self.bulk_status)
         actions.addWidget(btn_bulk_status)
         actions.addWidget(btn_select_all)
-        actions.addStretch()
         layout.addLayout(actions)
 
     def _load_reference_data(self):
@@ -135,10 +142,14 @@ class TasksPage(QWidget):
                 task.get("status", ""),
                 task.get("termin") or "—",
                 task.get("opis", ""),
-                str(task.get("id", "")),
             ]
             for col, value in enumerate(values):
-                self.table.setItem(row, col, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                item.setToolTip(str(value))
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, task["id"])
+                self.table.setItem(row, col, item)
+        self.table.resizeRowsToContents()
         if hasattr(self, "extra_activities"):
             self.extra_activities.refresh()
 
@@ -152,8 +163,8 @@ class TasksPage(QWidget):
         self.assignee_filter.blockSignals(False)
         self._refresh()
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 6)
-            if item and item.text() == str(task_id):
+            item = self.table.item(row, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) == task_id:
                 self.table.setCurrentCell(row, 0)
                 self.table.selectRow(row)
                 self.table.scrollToItem(self.table.item(row, 0))
@@ -166,16 +177,16 @@ class TasksPage(QWidget):
         row = self.table.currentRow()
         if row < 0:
             return None
-        item = self.table.item(row, 6)
-        return int(item.text()) if item else None
+        item = self.table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
 
     def _selected_ids(self) -> list:
         rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
         ids = []
         for row in rows:
-            item = self.table.item(row, 6)
-            if item and item.text().isdigit():
-                ids.append(int(item.text()))
+            item = self.table.item(row, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) is not None:
+                ids.append(item.data(Qt.ItemDataRole.UserRole))
         return ids
 
     def _bulk_set_status(self):

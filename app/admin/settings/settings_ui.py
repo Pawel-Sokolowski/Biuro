@@ -24,6 +24,7 @@ from app.admin.settings.audit_settings import AuditSettings
 from app.admin.settings.companies_settings import CompaniesSettings
 from app.admin.settings.database_settings import DatabaseSettings
 from app.admin.settings.email_settings import EmailSettings
+from app.admin.settings.reminder_settings import ReminderSettings
 from app.admin.settings.import_all_settings import ImportAllSettings
 from app.admin.settings.extra_services_settings import ExtraServicesSettings
 from app.admin.settings.invoice_settings import InvoiceSettings
@@ -80,6 +81,7 @@ class GlobalSettingsPage(QWidget):
             ]),
             ("Poczta i powiadomienia", [
                 ("Konta e-mail", EmailSettings, True),
+                ("Automatyczne e-maile", _scrollable(ReminderSettings), True),
                 ("Konto systemowe i kalendarz", _scrollable(CalendarAndResetSettings), True),
             ]),
             ("Cenniki i usługi", [

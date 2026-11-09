@@ -439,3 +439,30 @@ def get_direct_conversations(pracownik_id: int) -> List[Dict[str, Any]]:
          "nazwa": f"{r['imie']} {r['nazwisko']}".strip()}
         for r in rows
     ]
+
+
+def get_chat_notification_messages(pracownik_id: int, after_id: Optional[int]):
+    """New incoming messages in accessible conversations, independent of read state.
+
+    The initial call establishes a baseline, so opening the app does not replay
+    old history. IDs also distinguish messages sent within the same second.
+    """
+    from app.security.authorization import allowed_tabs
+    if 'Czat' not in allowed_tabs(pracownik_id):
+        return None, []
+    with _get_conn() as conn:
+        if after_id is None:
+            return int(conn.execute('SELECT COALESCE(MAX(id), 0) FROM wiadomosci_chat').fetchone()[0]), []
+        rows = conn.execute("""
+            SELECT w.id, w.konwersacja_id, w.tresc, k.nazwa, k.typ,
+                   p.imie, p.nazwisko
+            FROM wiadomosci_chat w
+            JOIN konwersacje k ON k.id = w.konwersacja_id
+            LEFT JOIN pracownicy p ON p.id = w.pracownik_id
+            WHERE w.id > %s AND w.pracownik_id IS DISTINCT FROM %s
+              AND (k.pracownik_creator_id = %s OR EXISTS (
+                SELECT 1 FROM uczestnicy_chat u
+                WHERE u.konwersacja_id = k.id AND u.pracownik_id = %s))
+            ORDER BY w.id LIMIT 100
+        """, (after_id, pracownik_id, pracownik_id, pracownik_id)).fetchall()
+        return (int(rows[-1]['id']) if rows else after_id), [dict(row) for row in rows]

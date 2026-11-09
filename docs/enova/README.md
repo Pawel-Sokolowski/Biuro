@@ -1,0 +1,111 @@
+# Codzienna liczba dokumentów z Enova365
+
+Importer jest przeznaczony dla Windows Server z dostępem do PostgreSQL aplikacji
+oraz do SQL Server Enova w innej maszynie Hyper-V. Działa bez otwartej aplikacji.
+Każda firma ma osobną bazę Enova; mapowanie do Biuro odbywa się po NIP.
+
+## Stan integracji — wymagane zapytania Enova
+
+Gotowy jest mechanizm importu, obliczenia, podgląd, historia i uruchamianie na
+serwerze. **Zapytania odczytujące rzeczywiste tabele Enova wymagają dopasowania
+do schematu instalacji. Nie dołączono fikcyjnych zapytań ani zapytań zwracających
+zera. Bez prawidłowych plików SQL import nie zmienia liczników.**
+
+W SSMS wykonaj `inspect-schema.sql` na reprezentatywnej bazie klienta. Zapisz oba
+zestawy wyników do CSV. Zapytanie odczytuje tylko metadane tabel, widoków, kolumn
+i relacji — nie pobiera danych klientów. Na tej podstawie można przygotować
+zapytania KPIR, ryczałtu i KH. Jeśli wersje/schematy baz są różne, potrzebny jest
+wynik dla każdej wersji. Nie udostępniaj haseł ani plików `.env`.
+
+## Reguły
+
+- **KPIR**: liczba wpisów KPIR w miesiącu.
+- **RYCZALT**: liczba faktur w miesiącu, bez podwójnego liczenia faktury obecnej
+  w kilku ewidencjach.
+- **KH**: `inne dokumenty + liczba pojedynczych pozycji bankowych / 3`,
+  zaokrąglone do najbliższej liczby całkowitej. Inne dokumenty nie obejmują banku.
+- Okres powinien odpowiadać miesiącowi księgowemu w Enova, a nie dacie importu.
+  Trzeba ustalić z księgowym, które statusy (np. bufor/anulowanie) wchodzą do
+  jego licznika, oraz zweryfikować wynik z ekranem Enova przed włączeniem zapisów.
+
+Domyślnie aktualizowany jest miesiąc bieżący i dwa poprzednie, aby uwzględnić
+późniejsze księgowania. `months_back` można zmienić w zakresie 1–24. Miesiące
+obliczane są według daty w strefie Europe/Warsaw.
+
+Codzienne uruchomienie **zastępuje** pole `Ilość dokumentów` pełną liczbą za
+miesiąc; nigdy nie dodaje jej do wczorajszej wartości. Pozostałe statusy, czas,
+notatki i komplet dokumentów są zachowane. W tym zakresie Enova staje się
+źródłem licznika: ręczne zmiany licznika w aplikacji zostaną zastąpione.
+Błąd jednej bazy zachowuje jej dotychczasowe wartości; inne firmy są importowane.
+Nakładające się zadania zapisujące są blokowane w PostgreSQL.
+
+## Kontrakt zapytań SQL
+
+Każdy plik `count_query` wykonuje wyłącznie odczyt i przyjmuje dwa parametry
+ODBC `?`: początek zakresu włącznie, koniec wyłącznie. Ma zwrócić dokładnie jeden
+wiersz dla każdego żądanego miesiąca, także gdy prawdziwy wynik wynosi zero:
+
+| Kolumna | Wartość |
+| --- | --- |
+| `nip` | NIP firmy odczytany z bazy Enova, zgodny z mapowaniem |
+| `miesiac` | Tekst `YYYY-MM` |
+| `dokumenty` | Nieujemna liczba całkowita: KPIR / faktury / pozostałe dokumenty KH |
+| `pozycje_bankowe` | Nieujemna liczba pojedynczych pozycji bankowych KH; 0 dla innych typów |
+
+Brak miesiąca, NULL, duplikat miesiąca lub inny NIP to błąd, a nie zero.
+Zapytania muszą zwracać spójne dane, bez `NOLOCK` i brudnych odczytów. Konto SQL
+musi mieć tylko prawa SELECT do wymaganych tabel/widoków, bez DDL i zapisu.
+ODBC dodatkowo otrzymuje żądanie trybu tylko do odczytu; nie zastępuje ono praw SQL.
+
+## Instalacja na Windows Server
+
+1. Zainstaluj Python 3.11+ i Microsoft ODBC Driver 18 for SQL Server. Skopiuj
+   źródła projektu do np. `C:\BiuroSync`; ustaw środowisko `.venv` i zainstaluj
+   `requirements-enova.lock` (sam worker nie wymaga Qt). Można też użyć
+   istniejącego środowiska serwerowego aplikacji i doinstalować `requirements-enova.txt`. Worker nie jest funkcją samego pliku EXE.
+2. Skonfiguruj `DB_URL` do istniejącej bazy Biuro oraz `ENOVA_SQL_USER` i
+   `ENOVA_SQL_PASSWORD` w środowisku konta zadania lub lokalnym `.env` projektu.
+   Ogranicz dostęp do pliku i konta zadania. Nie dodawaj haseł do JSON ani argumentów.
+3. Zapewnij połączenie TCP z VM SQL Server i poprawny zaufany certyfikat TLS.
+   Worker używa `Encrypt=yes;TrustServerCertificate=no`. W `server` podaj nazwę
+   zgodną z certyfikatem i port, np. `enova-sql.firma.local,1433`.
+4. Skopiuj `config.example.json` poza repozytorium. Wpisz rzeczywiste bazy, NIP-y,
+   typy księgowości i pliki zapytań SQL. Ścieżki SQL są liczone względem JSON.
+   NIP musi wskazywać dokładnie jedną firmę w Biuro. Pozostaw `enabled=false`.
+5. Uruchom podgląd z katalogu projektu:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m app.integrations.enova.document_counts --config C:\BiuroConfig\enova.json
+   ```
+
+6. Porównaj liczby z Enova (przynajmniej po jednym kliencie KPIR, ryczałt i KH).
+   Ustaw `enabled=true`, a następnie wykonaj zapis przez dodanie `--apply`.
+   Bez tego argumentu komenda nigdy nie zapisuje wartości.
+
+## Harmonogram raz dziennie
+
+W Harmonogramie zadań utwórz zadanie pod kontem mającym dostęp do konfiguracji,
+PostgreSQL i loginu SQL. Zaznacz **Uruchom niezależnie od tego, czy użytkownik
+jest zalogowany**. Wybierz godzinę codziennego uruchomienia w lokalnym czasie
+serwera, np. 02:00 po zakończeniu księgowania. Włącz uruchomienie po pominiętym
+terminie; dla istniejącej instancji wybierz **Nie uruchamiaj nowego wystąpienia**.
+
+Program: `powershell.exe`
+
+Argumenty:
+
+```text
+-NoProfile -File "C:\BiuroSync\scripts\run_enova_import.ps1" -ConfigFile "C:\BiuroConfig\enova.json" -Apply
+```
+
+Katalog startowy: `C:\BiuroSync`. Stosuj obowiązującą na serwerze politykę
+uruchamiania/skryptów podpisanych. Skrypt nie zmienia ExecutionPolicy.
+Najpierw sprawdź ręczne **Uruchom** pod docelowym kontem zadania.
+
+Logi trafiają do `logs\enova`. Kod zakończenia 0 oznacza sukces wszystkich
+źródeł, 1 — błąd konfiguracji lub co najmniej jednej firmy. Historia zapisanych
+liczb (poprzednia/nowa, miesiąc, źródłowe składniki) oraz błędów jest dostępna
+w tabeli `import_history` jako `enova_document_counts`, w ustawieniach audytu
+aplikacji. Podgląd nie zapisuje historii ani liczników. Harmonogram i połączenie
+z rzeczywistą Enova trzeba skonfigurować na serwerze — nie są instalowane
+przez samo dodanie tych plików do repozytorium.

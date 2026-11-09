@@ -32,3 +32,6 @@ google-auth>=2.35,<3
 google-auth-oauthlib>=1.2,<2
 docxtpl>=0.20,<1
 python-stdnum>=2,<3
+
+# Warsaw scheduling also needs IANA timezone data on Windows.
+tzdata

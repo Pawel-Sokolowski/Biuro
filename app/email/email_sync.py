@@ -1762,6 +1762,33 @@ def _changed_folders(konto_id: int, folders: List[str], force_full: bool) -> Tup
     return changed, current
 
 
+def sync_folder_flags(konto_id: int, folder: str) -> int:
+    """Refresh remote read/unread flags even when STATUS counters are unchanged.
+
+    SEARCH is intentionally unrestricted by message date: an older cached mail
+    changed in Thunderbird must receive the same update as a recent message.
+    No headers, bodies or deletion state are changed by this pass.
+    """
+    from app.email.email_storage import apply_server_flags
+    folder_id = get_folder_id(konto_id, folder)
+    if folder_id is None:
+        return 0
+    with _shared_session(konto_id) as session:
+        if session is None:
+            raise ConnectionError("Nie można połączyć się z serwerem IMAP.")
+        if not session.select(folder, readonly=True):
+            raise RuntimeError(f"Nie można odczytać flag folderu IMAP: {folder}")
+        snapshots = []
+        for criterion in ('ALL', 'UNSEEN'):
+            typ, data = session.conn.uid('SEARCH', None, criterion)
+            if typ != 'OK' or not data or data[0] is None or not isinstance(data[0], (bytes, str)):
+                raise RuntimeError(f"Nie można odczytać stanu {criterion} folderu {folder}.")
+            snapshots.append({uid.decode() if isinstance(uid, bytes) else uid for uid in data[0].split()})
+        return apply_server_flags(konto_id, folder_id, snapshots[0], snapshots[1],
+                                  expected_generation=session.selected_generation,
+                                  **_revision_args(session.account_revision))
+
+
 def sync_automatic_accounts(accounts, current_account_id=None, current_folder=None, *, on_headers=None, on_progress=None, cancel_event=None):
     """Check new mail only. Full history is never initiated by app startup.
 
@@ -1771,7 +1798,8 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
 
     Foldery są najpierw porównywane przez IMAP STATUS (UIDNEXT/MESSAGES/UNSEEN);
     nagłówki pobierane są tylko ze zmienionych. Co FULL_SWEEP_EVERY-ty przebieg
-    (i pierwszy po starcie) sprawdza wszystkie foldery, by wychwycić zmiany flag.
+    (i pierwszy po starcie) sprawdza wszystkie foldery. Flagi przeczytania wszystkich
+    zapisanych wiadomości są sprawdzane w każdym przebiegu, niezależnie od STATUS.
     """
     from concurrent.futures import ThreadPoolExecutor
     from contextvars import copy_context
@@ -1803,6 +1831,13 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
             full_sweep = get_setting(sweep_key) != today or run_number % FULL_SWEEP_EVERY == 0
             changed, snapshot = _changed_folders(konto_id, folders, force_full=full_sweep)
             logger.info("Konto %s: zmienione foldery %s z %s", konto_id, len(changed), len(folders))
+            # STATUS is only a header-discovery optimization. Flag changes from
+            # another IMAP client may leave its aggregate counts unchanged.
+            for folder in folders:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("Synchronizacja przerwana.")
+                if sync_folder_flags(konto_id, folder) and on_headers:
+                    on_headers()
             if not changed:
                 _auto_runs[konto_id] = run_number + 1
                 if full_sweep:

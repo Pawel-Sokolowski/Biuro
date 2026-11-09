@@ -38,7 +38,7 @@ datas = [
     (str(APP / "db" / "migrations"), "app/db/migrations"),
     (str(APP / "invoices" / "schemas"), "app/invoices/schemas"),
 ]
-CALDAV_PACKAGES = ["caldav", "icalendar", "icalendar_searcher", "recurring_ical_events", "niquests", "lxml"]
+CALDAV_PACKAGES = ["caldav", "icalendar", "icalendar_searcher", "recurring_ical_events", "niquests", "lxml", "tzdata"]
 for pkg in CALDAV_PACKAGES:
     datas += collect_data_files(pkg)
 # psycopg 3 + wbudowana libpq (psycopg_binary) - bez tego aplikacja nie polaczy sie z PostgreSQL

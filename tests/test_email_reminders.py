@@ -49,7 +49,7 @@ class ReminderDeliveryTests(DbTestCase):
     def setUp(self):
         super().setUp()
         self.settings = deepcopy(DEFAULTS)
-        self.company = self.make_company(adres_email='company@example.com', email_faktury='billing@example.com')
+        self.company = self.make_company(adres_email='company@example.com', email_faktury='billing@example.com', ksiegowa_id=1)
         self.sender_patch = patch('app.email.email_actions.send_email_smtp', return_value=(True, 'OK'))
         self.sender = self.sender_patch.start()
         self.addCleanup(self.sender_patch.stop)
@@ -184,3 +184,35 @@ class ReminderDeliveryTests(DbTestCase):
         upgrade_database()
         upgrade_database()
         self.assertTrue(schema_is_current())
+
+    def test_document_reminders_skip_payroll_only_and_unassigned_companies(self):
+        self.make_company('Kadry only', adres_email='payroll@example.com', kadrowa_id=1)
+        self.make_company('Unassigned', adres_email='unassigned@example.com')
+        self.enable('documents')
+        self.assertEqual(run_reminders(at('2026-11-12')), 1)
+        self.assertEqual(self.sender.call_args.args[1], ['company@example.com'])
+
+    def test_accounting_and_payroll_client_still_receives_accounting_reminder(self):
+        with get_conn() as conn:
+            conn.execute('UPDATE firmy SET kadrowa_id=1 WHERE id=%s', (self.company,))
+        self.enable('documents')
+        self.assertEqual(run_reminders(at('2026-11-12')), 1)
+        self.assertEqual(self.sender.call_args.args[1], ['company@example.com'])
+
+    def test_payment_reminders_still_include_payroll_only_client_invoices(self):
+        with get_conn() as conn:
+            conn.execute('UPDATE firmy SET ksiegowa_id=NULL,kadrowa_id=1 WHERE id=%s', (self.company,))
+        self.invoice()
+        self.enable('payments')
+        self.assertEqual(run_reminders(at('2026-11-09')), 1)
+
+    def test_accounting_assignment_removed_mid_batch_is_rechecked_before_sending(self):
+        self.make_company('Second accounting', adres_email='second@example.com', ksiegowa_id=1)
+        self.enable('documents')
+        def send(*args):
+            with get_conn() as conn:
+                conn.execute('UPDATE firmy SET ksiegowa_id=NULL WHERE adres_email<>%s', (args[1][0],))
+            return True, 'OK'
+        self.sender.side_effect = send
+        self.assertEqual(run_reminders(at('2026-11-12')), 1)
+        self.assertEqual(self.sender.call_count, 1)

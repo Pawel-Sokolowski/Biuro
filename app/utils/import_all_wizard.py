@@ -82,6 +82,20 @@ def _import_faktury(path, parent):
             f"uzupełniono ilość dokumentów: {r.get('ilosc_dok', 0)}")
 
 
+def _import_document_counts(path, parent):
+    from app.reports.document_counts_xlsx import import_document_counts_file
+    from app.utils.import_progress import run_import
+    actor = getattr(parent, 'pracownik_id', None)
+    overwrite = QMessageBox.question(parent, 'Liczba dokumentów',
+        'Zastąpić istniejące miesięczne liczby dokumentów wartościami z XLSX?') == QMessageBox.StandardButton.Yes
+    result = run_import(lambda _: import_document_counts_file(path, actor_id=actor, overwrite=overwrite), parent)
+    text = (f"zaktualizowano miesięcy: {result['updated']}, bez zmian: {result['unchanged']}, "
+            f"zachowano istniejące: {result['skipped']}, bez firmy: {result['unmatched']}")
+    if result['warnings']:
+        text += '\n' + '\n'.join(result['warnings'][:15])
+    return text
+
+
 STEPS = [
     ("cennikiem", "cennik", FILTER, _import_cennik),
     ("urzędami skarbowymi", "urzędy", FILTER, _import_urzedy),
@@ -89,6 +103,7 @@ STEPS = [
     ("cechami firm (przypisania pracowników)", "cechy firm", FILTER, _import_cechy),
     ("czasomierzem", "czasomierz", FILTER_XLSX, _import_czas),
     ("fakturami", "faktury", FILTER_XLSX, _import_faktury),
+    ("miesięcznymi liczbami dokumentów księgowości", "liczba dokumentów", FILTER_XLSX, _import_document_counts),
 ]
 
 
@@ -113,7 +128,7 @@ def _run_import_wizard(parent=None) -> list:
             results.append("Przerwano.")
             break
         try:
-            if handler in (_import_firmy, _import_faktury):
+            if handler in (_import_firmy, _import_faktury, _import_document_counts):
                 message = handler(path, parent)
             else:
                 from app.utils.import_progress import run_import

@@ -136,6 +136,14 @@ z kolumnami `Firma`, `NIP`, `Razem`, `styczeń 2026r.`, `luty 2026r.` itd.
 Firmy są dopasowywane po NIP, sumy roczne są pomijane, puste miesiące pozostają
 bez zmian, a zero jest importowane jako zero. Kadry nadal są pobierane z faktur
 z podziałem UoP/UZ/UoD. [Instrukcja i zasady nadpisywania](docs/historical-document-counts.md).
+## Import miesięcznej liczby dokumentów z Enova365
+
+Worker dla Windows Server obsługuje odczyt osobnych baz Enova i codzienne
+zastępowanie liczników w widoku miesięcznym: KPIR, faktury ryczałtu oraz KH
+z przeliczeniem pojedynczych pozycji bankowych przez 3 i zaokrągleniem.
+Domyślnie działa w podglądzie. Zapytania do tabel Enova wymagają dopasowania
+do rzeczywistego schematu instalacji, a zadanie codzienne — konfiguracji
+na serwerze. [Konfiguracja, reguły i eksport metadanych](docs/enova/README.md).
 
 ## Rozliczenia i KSeF
 

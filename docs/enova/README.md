@@ -32,6 +32,14 @@ liczbowych pól `Typ`, `Stan` i `KPiRStan`. Wyniki profilowania i oczekiwany
 licznik z Enova są potrzebne, aby ustalić filtry bufora, anulowania oraz
 wyłączenie nagłówków bankowych z liczby pozostałych dokumentów KH.
 
+Jeśli zewnętrzny analizator SQL zgłasza błąd przy `THROW 50001, ...`, nie jest
+to komunikat wykonania z SQL Server. Pełny skrypt używa składni T-SQL dla SSMS.
+Dostępne są również prostsze warianty bez `DECLARE`, `IF` i `THROW`:
+`profile-kpir-select.sql` (jeden zestaw wyników) oraz `profile-kh-select.sql`
+(trzy zestawy wyników). Ustawione są na czerwiec 2026. Wybierz właściwą bazę
+klienta w SSMS i wykonaj wariant odpowiadający jej rodzajowi księgowości.
+Sprawdzenie składni online nie uruchamia zapytania na serwerze Enova.
+
 Profilowanie nie jest zapytaniem produkcyjnym workera i nie włącza importu.
 Nie zawiera zmian w tabelach Enova ani przypisania rzeczywistych nazw baz
 klientów do repozytorium.

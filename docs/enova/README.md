@@ -28,10 +28,10 @@ powiązanie nagłówka WBEW powodują błąd walidacji zamiast zapisu zera.
 Jeżeli inna baza używa innych definicji bankowych niż WBEW, trzeba je najpierw
 zidentyfikować i dostosować plik zapytania dla tego klienta.
 
-**Ryczałt: mechanizm przyjmuje własny plik SQL w tym samym formacie, ale gotowe
-zapytanie do faktur wymaga jeszcze potwierdzenia źródła/definicji.** Nie jest
-włączony w przykładowej konfiguracji. Nie dołączono zapytania zastępczego
-zwracającego sztuczne zera.
+`queries/ryczalt.sql` liczy nagłówki ZR, SPU i RKVE (faktury metodą kasową)
+według `DataEwidencji`. Potwierdzony przykład: czerwiec 2026, 18 + 2 + 1 = 21.
+Nie dolicza DR, LPEW ani STE. Worker wybiera ten plik automatycznie dla firmy
+z formą opodatkowania Ryczałt. Przy innych definicjach faktur trzeba dostosować zapytanie.
 
 Zapytania oparto na przekazanych metadanych i wynikach diagnostycznych. Nadal
 wymagany jest podgląd uruchomiony na rzeczywistym serwerze, zwłaszcza sprawdzenie
@@ -83,8 +83,8 @@ klientów do repozytorium.
 ## Reguły
 
 - **KPIR**: liczba wpisów KPIR w miesiącu.
-- **RYCZALT**: liczba faktur w miesiącu, bez podwójnego liczenia faktury obecnej
-  w kilku ewidencjach.
+- **RYCZALT**: liczba nagłówków faktur ZR, SPU i RKVE w miesiącu; nie łączy
+  kilku ewidencji ani pozycji faktur.
 - **KH**: `inne dokumenty + liczba pojedynczych pozycji bankowych / dzielnik`,
   zaokrąglone do najbliższej liczby całkowitej. Inne dokumenty nie obejmują banku.
 - Okres powinien odpowiadać miesiącowi księgowemu w Enova, a nie dacie importu.
@@ -211,10 +211,11 @@ przez samo dodanie tych plików do repozytorium.
 Skopiuj `config.example.json`; nie trzeba tworzyć konfiguracji od zera. Uzupełnij
 adres `server` i listę `sources`, podając dla każdej firmy tylko `database` oraz
 `nip`. Rodzaj księgowości jest pobierany z pola „Forma opodatkowania” firmy w Biuro.
-Dla KPiR i ksiąg rachunkowych importer sam wybiera dołączone zapytanie SQL.
+Dla KPiR, ryczałtu i ksiąg rachunkowych importer sam wybiera dołączone zapytanie SQL.
 Zmiana rodzaju w Biuro pozwala na ponowne przeliczenie tego samego dnia.
 
 Stare konfiguracje nadal działają. Gdy zawierają własny `count_query` i jawny
 `accounting_type`, niezgodność z rodzajem zapisanym w Biuro zatrzymuje import firmy;
-usuń oba pola, aby używać automatycznego wyboru. Ryczałt nie ma jeszcze
-zweryfikowanego zapytania domyślnego i wymaga własnego `count_query`.
+usuń oba pola, aby używać automatycznego wyboru. Ryczałt liczy definicje ZR (zakupy), SPU (sprzedaż usług) i RKVE (faktury metodą kasową),
+według DataEwidencji. Nie dodaje deklaracji, list płac ani dokumentów środków trwałych.
+Potwierdzony przykład czerwca 2026: 18 ZR + 2 SPU + 1 RKVE = 21.

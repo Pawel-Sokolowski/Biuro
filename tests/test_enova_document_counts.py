@@ -175,7 +175,7 @@ class EnovaImportTests(DbTestCase):
 class AutomaticAccountingTypeTests(TestCase):
     def test_saved_type_selects_bundled_query_without_repeating_configuration(self):
         from app.integrations.enova.document_counts import resolve_source
-        for label, kind in [('KPiR', 'KPIR'), ('Księgi rachunkowe', 'KH')]:
+        for label, kind in [('KPiR', 'KPIR'), ('Księgi rachunkowe', 'KH'), ('Ryczałt', 'RYCZALT')]:
             with self.subTest(label=label):
                 result = resolve_source({'database': 'client', 'nip': '1234567890'},
                                         {'forma_opodatkowania': label})
@@ -184,7 +184,7 @@ class AutomaticAccountingTypeTests(TestCase):
 
     def test_unsupported_type_and_mismatched_custom_query_do_not_guess(self):
         from app.integrations.enova.document_counts import resolve_source
-        for source, label in [({}, 'Ryczałt'), ({}, 'Karta podatkowa'),
+        for source, label in [({}, 'Karta podatkowa'),
                                ({'accounting_type': 'KPIR', 'count_query': 'custom.sql'}, 'Księgi rachunkowe')]:
             with self.subTest(label=label), self.assertRaises(ValueError):
                 resolve_source(source, {'forma_opodatkowania': label})

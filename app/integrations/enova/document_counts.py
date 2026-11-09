@@ -182,8 +182,8 @@ def resolve_source(source, company):
         raise ValueError('Uzupełnij formę opodatkowania firmy w Biuro.')
     resolved['accounting_type'] = kind
     if not source.get('count_query'):
-        if kind not in ('KPIR', 'KH'):
-            raise ValueError('Ryczałt wymaga zweryfikowanego pliku count_query; brak gotowego zapytania.')
+        if kind not in ('KPIR', 'KH', 'RYCZALT'):
+            raise ValueError('Brak gotowego zapytania dla rodzaju księgowości.')
         resolved['count_query'] = str(Path(__file__).resolve().parents[3] / 'docs' / 'enova' / 'queries' / (kind.lower() + '.sql'))
     elif source.get('accounting_type') and source['accounting_type'] != kind:
         raise ValueError('Typ starego count_query jest niezgodny z formą opodatkowania w Biuro. Usuń stare accounting_type/count_query lub popraw mapowanie.')

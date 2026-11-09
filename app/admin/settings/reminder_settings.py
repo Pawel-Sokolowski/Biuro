@@ -22,7 +22,8 @@ class RuleEditor(QGroupBox):
         self.day.setValue(rule.get('day', 10))
         if documents:
             form.addRow('Termin: dzień następnego miesiąca', self.day)
-            note = QLabel('Dotyczy dokumentów za poprzedni miesiąc. Np. 10 listopada dla października. '
+            note = QLabel('Tylko firmy z przypisaną księgową; firmy obsługiwane wyłącznie kadrowo są pomijane. '
+                          'Dotyczy dokumentów za poprzedni miesiąc. Np. 10 listopada dla października. '
                           'Dzień 31 w krótszym miesiącu oznacza jego ostatni dzień. '
                           'Wysyłka ustaje po zaznaczeniu „Dokumenty dostarczone / komplet dokumentów”.')
             note.setWordWrap(True)

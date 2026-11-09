@@ -129,6 +129,14 @@ Stan odczytania powiadomień jest zapisywany dla użytkownika na tym komputerze;
 oznaczenie powiadomienia jako odczytane nie kończy zadania ani nie oznacza
 wiadomości e-mail jako przeczytanej.
 
+## Historyczne liczby dokumentów z Excela
+
+W **Raporty → Importuj liczbę dokumentów (Excel)** można wczytać roczny XLSX
+z kolumnami `Firma`, `NIP`, `Razem`, `styczeń 2026r.`, `luty 2026r.` itd.
+Firmy są dopasowywane po NIP, sumy roczne są pomijane, puste miesiące pozostają
+bez zmian, a zero jest importowane jako zero. Kadry nadal są pobierane z faktur
+z podziałem UoP/UZ/UoD. [Instrukcja i zasady nadpisywania](docs/historical-document-counts.md).
+
 ## Rozliczenia i KSeF
 
 ### Wygląd i katalog usług

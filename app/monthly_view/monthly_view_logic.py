@@ -244,7 +244,8 @@ class MonthlyViewLogic:
                    COALESCE(sm.etap_kadry, 'Brak') AS etap_kadry,
                    COALESCE(sm.dokumenty_dostarczone, 0) AS dokumenty_dostarczone,
                    sm.data_dostarczenia AS data_dostarczenia,
-                   COALESCE(NULLIF(sm.ilosc_dok, 0), doc.ilosc_dok, 0) AS ilosc_dok,
+                   CASE WHEN di.firma_id IS NOT NULL THEN COALESCE(sm.ilosc_dok, 0)
+                        ELSE COALESCE(NULLIF(sm.ilosc_dok, 0), doc.ilosc_dok, 0) END AS ilosc_dok,
                    COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
                    COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
                    COALESCE(k.uop_ilosc, f.uop_ilosc, 0) AS uop,
@@ -253,6 +254,7 @@ class MonthlyViewLogic:
             FROM firmy f
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = %s
+            LEFT JOIN monthly_document_imports di ON di.firma_id=f.id AND di.miesiac=sm.miesiac
             LEFT JOIN LATERAL (
                 SELECT uop_ilosc, uz_ilosc, uod_ilosc
                 FROM kadry_umowy_miesieczne

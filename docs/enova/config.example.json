@@ -11,12 +11,6 @@
       "count_query": "queries/kpir.sql"
     },
     {
-      "database": "Enova_Klient_Ryczalt",
-      "nip": "1234567891",
-      "accounting_type": "RYCZALT",
-      "count_query": "queries/ryczalt.sql"
-    },
-    {
       "database": "Enova_Klient_KH",
       "nip": "1234567892",
       "accounting_type": "KH",

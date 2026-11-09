@@ -101,6 +101,20 @@ class EnovaStageRuleTests(DbTestCase):
         self.assertEqual([call.args[2] for call in self.fetch.call_args_list], [['2026-09'], ['2026-11']])
         self.assertEqual(self.count('2026-10'), 99)
 
+    def test_month_reopened_while_previous_month_is_read_is_never_queried(self):
+        self.config['months_back'] = 3
+        self.set_stage('2026-09', 'Wysłane wyniki')
+        self.set_stage('2026-10', 'Zaksięgowane')
+        original = self.fetch.side_effect
+        def fetch(*args):
+            self.set_stage('2026-11', 'Zaksięgowane')
+            return original(*args)
+        self.fetch.side_effect = fetch
+        result = self.run_job()[0]
+        self.assertEqual(list(result['counts']), ['2026-09'])
+        self.assertEqual([call.args[2] for call in self.fetch.call_args_list], [['2026-09']])
+        self.assertEqual(self.count('2026-11'), 99)
+
     def test_reopened_stage_during_source_read_prevents_write(self):
         original = self.fetch.side_effect
         def fetch(*args):

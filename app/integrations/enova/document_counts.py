@@ -235,6 +235,11 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                     counts = []
                     # Query each eligible month separately: do not query uncompleted gaps.
                     for month in eligible:
+                        # A previous month's remote read may have taken time; recheck before each contact.
+                        if not conn.execute("SELECT 1 FROM statusy_miesieczne WHERE firma_id=%s "
+                                            "AND miesiac=%s AND etap='Wysłane wyniki'",
+                                            (company['id'], month)).fetchone():
+                            continue
                         counts.extend(validate_rows(fetch(config, source, [month]), source, [month], divisor))
                     if apply:
                         ready = []

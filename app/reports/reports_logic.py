@@ -8,6 +8,7 @@ from app.db.dao_monthly import contracts_by_month
 from app.utils.months import month_bounds
 from app.security.authorization import assigned_company_ids, can, is_administrator
 from app.reports.import_parse import timer_department
+from app.reports.document_counts_xlsx import imported_document_counts
 
 
 def _extra_timer_seconds(conn, firma_ids, months):
@@ -108,6 +109,7 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
                 "SELECT firma_id, miesiac, ilosc_dok FROM statusy_miesieczne "
                 "WHERE firma_id = ANY(%s) AND miesiac <= %s", (company_ids, months[-1]),
             ).fetchall()}
+            documents.update(imported_document_counts(conn, company_ids))
             contracts = contracts_by_month(conn, company_ids, months)
             history = {**monthly_documents, **documents}
             # One prefix scan per company; each requested month is a binary
@@ -304,7 +306,8 @@ def build_report(
                    -- Te same dane co w widoku miesięcznym: rzeczywiste dokumenty
                    -- z tabeli dokumenty albo ręczna/importowana liczba miesięczna.
                    -- Limit firmy wpływa wyłącznie na cenę, nigdy na tę liczbę.
-                   COALESCE(NULLIF(dc.dokumenty, 0), sm.ilosc_dok, 0) AS dokumenty,
+                   CASE WHEN di.firma_id IS NOT NULL THEN COALESCE(sm.ilosc_dok, 0)
+                        ELSE COALESCE(NULLIF(dc.dokumenty, 0), sm.ilosc_dok, 0) END AS dokumenty,
                    COALESCE(ex.extra, 0) AS extra,
                    COALESCE(ex.extra_kadry, 0) AS extra_kadry,
                    COALESCE(c.netto, c.cena_netto_ksiegowosc, 0) AS netto,
@@ -318,6 +321,7 @@ def build_report(
             CROSS JOIN selected_months m
             LEFT JOIN statusy_miesieczne sm
               ON sm.firma_id = f.id AND sm.miesiac = m.miesiac
+            LEFT JOIN monthly_document_imports di ON di.firma_id=f.id AND di.miesiac=m.miesiac
             LEFT JOIN doc_counts dc ON dc.firma_id = f.id AND dc.miesiac = m.miesiac
             LEFT JOIN extras ex ON ex.firma_id = f.id AND ex.miesiac = m.miesiac
             LEFT JOIN cenniki c ON c.klucz = f.glowny_cennik

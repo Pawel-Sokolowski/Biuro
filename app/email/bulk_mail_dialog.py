@@ -1,6 +1,7 @@
 """Company selection and review for paced office announcements."""
 import csv
 from math import ceil
+from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -31,6 +32,7 @@ class BulkMailDialog(QDialog):
         self._addresses = {}
         self._errors = {}
         self._result = None
+        self.attachments = []
         for company in self.companies:
             try:
                 self._addresses[company['id']] = client_addresses(company.get('adres_email'))
@@ -47,12 +49,19 @@ class BulkMailDialog(QDialog):
         self.subject = QLineEdit()
         self.subject.setPlaceholderText('Np. Biuro zamknięte 10 listopada')
         self.body = QTextEdit()
+        self.attach_button = QPushButton('Załączniki...')
+        self.attach_button.clicked.connect(self._pick_attachments)
+
+        self.attachments_label = QLabel('Brak załączników')
+        self.attachments_label.setWordWrap(True)
         self.body.setAcceptRichText(False)
         self.body.setMinimumHeight(110)
         self.body.setMaximumHeight(180)
         form.addRow('Konto nadawcze:', self.account)
         form.addRow('Temat:', self.subject)
         form.addRow('Treść:', self.body)
+        form.addRow('Załączniki:', self.attach_button)
+        form.addRow('', self.attachments_label)
         layout.addLayout(form)
 
         filters = QHBoxLayout()
@@ -197,32 +206,82 @@ class BulkMailDialog(QDialog):
     def _review_send(self):
         if self.sender.running or self._result is not None:
             return
+
         account = self.account.currentData() or {}
+
         try:
-            plan = BulkMailPlan(self.actor_id, account.get('id'), account.get('email', ''),
-                                self.subject.text().strip(), self.body.toPlainText(),
-                                tuple((company_id, self._addresses[company_id]) for company_id in sorted(self._selected)),
-                                self.batch_size.value(), self.pause.value())
+            plan = BulkMailPlan(
+                self.actor_id,
+                account.get('id'),
+                account.get('email', ''),
+                self.subject.text().strip(),
+                self.body.toPlainText(),
+                tuple(
+                    (company_id, self._addresses[company_id])
+                    for company_id in sorted(self._selected)
+                ),
+                self.batch_size.value(),
+                self.pause.value(),
+                tuple(self.attachments)
+            )
+
         except ValueError as exc:
             QMessageBox.warning(self, 'Mail masowy', str(exc))
             return
+
         review = QMessageBox(self)
         review.setWindowTitle('Sprawdź wysyłkę do klientów')
-        review.setText(f'Wysłać „{plan.subject}” z {plan.sender}?\nFirmy: {len(plan.companies)}, '
-                       f'unikalne adresy: {len(plan.recipients)}.\n'
-                       f'Partie: {ceil(len(plan.recipients) / plan.batch_size)}, przerwy: {plan.pause_seconds} s.\n'
-                       'Rozwiń szczegóły, aby sprawdzić pełną listę firm i adresów.')
-        names = {row['id']: row.get('nazwa_skrocona') or row['nazwa'] for row in self.companies}
-        review.setDetailedText('\n'.join(f'{names[company_id]} — {", ".join(addresses)}' for company_id, addresses in plan.companies)
-                                + '\n\nTreść:\n' + plan.body)
-        review.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
-        review.setDefaultButton(QMessageBox.StandardButton.Cancel)
+
+        review.setText(
+            f'Wysłać „{plan.subject}” z {plan.sender}?\n'
+            f'Firmy: {len(plan.companies)}, '
+            f'unikalne adresy: {len(plan.recipients)}.\n'
+            f'Partie: {ceil(len(plan.recipients) / plan.batch_size)}, '
+            f'przerwy: {plan.pause_seconds} s.\n'
+            f'Załączniki: {len(plan.attachments)}.\n'
+            'Rozwiń szczegóły, aby sprawdzić pełną listę firm i adresów.'
+        )
+
+        names = {
+            row['id']: row.get('nazwa_skrocona') or row['nazwa']
+            for row in self.companies
+        }
+
+        attachments_text = (
+            '\n'.join(Path(f).name for f in plan.attachments)
+            if plan.attachments
+            else 'Brak'
+        )
+
+        review.setDetailedText(
+            '\n'.join(
+                f'{names[company_id]} — {", ".join(addresses)}'
+                for company_id, addresses in plan.companies
+            )
+            + '\n\nZałączniki:\n'
+            + attachments_text
+            + '\n\nTreść:\n'
+            + plan.body
+        )
+
+        review.setStandardButtons(
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Cancel
+        )
+
+        review.setDefaultButton(
+            QMessageBox.StandardButton.Cancel
+        )
+
         if review.exec() != QMessageBox.StandardButton.Yes:
             return
+
         for control in self._controls:
             control.setEnabled(False)
+
         self.send_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+
         self.sender.start(plan)
 
     def _progress(self, progress):
@@ -248,6 +307,30 @@ class BulkMailDialog(QDialog):
         self.details.setPlainText('\n'.join(f'{STATUS_LABELS[entry["status"]]}: {", ".join(entry["recipients"])}\n{entry["info"]}'
                                             for entry in result['entries']))
         self.details.show()
+
+    def _pick_attachments(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            'Wybierz załączniki',
+            '',
+            'Wszystkie pliki (*.*)'
+        )
+
+        if not files:
+            return
+
+        self.attachments = files
+
+        names = [Path(f).name for f in files]
+
+        if len(names) <= 3:
+            self.attachments_label.setText(', '.join(names))
+        else:
+            self.attachments_label.setText(
+                f'{len(names)} plików: ' +
+                ', '.join(names[:3]) +
+                ' ...'
+            )
 
     def _export_report(self):
         path, _ = QFileDialog.getSaveFileName(self, 'Zapisz raport', 'mail-masowy.csv', 'CSV (*.csv)')

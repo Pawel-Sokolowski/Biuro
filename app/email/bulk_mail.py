@@ -39,6 +39,8 @@ def filter_companies(rows, *, query='', activity=None, settlement=None, tax=None
     return [row for row in rows if match(row)]
 
 
+from dataclasses import dataclass, field
+
 @dataclass(frozen=True)
 class BulkMailPlan:
     actor_id: int
@@ -46,52 +48,90 @@ class BulkMailPlan:
     sender: str
     subject: str
     body: str
-    companies: tuple  # (company ID, confirmed contact addresses)
+    companies: tuple
     batch_size: int = 25
     pause_seconds: int = 60
+    attachments: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self):
         if not self.subject.strip() or '\r' in self.subject or '\n' in self.subject or not self.body.strip():
             raise ValueError('Uzupełnij temat i treść wiadomości.')
+
         if not 1 <= self.batch_size <= 50 or not 10 <= self.pause_seconds <= 3600:
             raise ValueError('Partia: 1–50 adresów; przerwa: 10–3600 sekund.')
+
         if len(client_addresses(self.sender)) != 1:
             raise ValueError('Niepoprawny adres nadawcy.')
+
         for _company_id, addresses in self.companies:
             if not addresses or client_addresses(','.join(addresses)) != addresses:
                 raise ValueError('Niepoprawna lista odbiorców.')
+
         if not self.recipients:
             raise ValueError('Zaznacz co najmniej jedną firmę z poprawnym adresem e-mail.')
 
     @property
     def recipients(self):
         found = {}
+
         for _company_id, addresses in self.companies:
             for address in addresses:
                 if address.casefold() != self.sender.casefold():
                     found.setdefault(address.casefold(), address)
+
         return tuple(found.values())
 
 
 def send_bulk_batch(plan, recipients):
-    # Validate the confirmed identities again on the worker before each batch.
     try:
         if 'E-mail' not in allowed_tabs(plan.actor_id):
             raise PermissionError('Utracono dostęp do modułu E-mail.')
+
         accounts = get_email_accounts_for_employee(plan.actor_id)
-        account = next((a for a in accounts if a['id'] == plan.account_id), None)
+
+        account = next(
+            (a for a in accounts if a['id'] == plan.account_id),
+            None
+        )
+
         if not account or str(account.get('email') or '').casefold() != plan.sender.casefold():
             raise PermissionError('Konto nadawcze zmieniło się lub nie jest już dostępne.')
-        companies = {row['id']: row for row in list_mailing_companies(plan.actor_id)}
+
+        companies = {
+            row['id']: row
+            for row in list_mailing_companies(plan.actor_id)
+        }
+
         for company_id, confirmed in plan.companies:
             current = companies.get(company_id)
+
             if current is None or client_addresses(current.get('adres_email')) != confirmed:
-                raise PermissionError('Dane odbiorców zmieniły się. Zatrzymano wysyłkę; sprawdź listę firm.')
+                raise PermissionError(
+                    'Dane odbiorców zmieniły się. Zatrzymano wysyłkę; sprawdź listę firm.'
+                )
+
     except Exception as exc:
-        return {'ok': False, 'blocked': True, 'info': str(exc)}
-    ok, info = send_email_smtp(plan.account_id, [plan.sender], plan.subject, plan.body,
-                               bcc=list(recipients), save_copy=True)
-    return {'ok': ok, 'blocked': False, 'info': str(info).splitlines()[0] if info else ''}
+        return {
+            'ok': False,
+            'blocked': True,
+            'info': str(exc)
+        }
+
+    ok, info = send_email_smtp(
+        plan.account_id,
+        [plan.sender],
+        plan.subject,
+        plan.body,
+        bcc=list(recipients),
+        save_copy=True,
+        attachments=list(plan.attachments)
+    )
+
+    return {
+        'ok': ok,
+        'blocked': False,
+        'info': str(info).splitlines()[0] if info else ''
+    }
 
 
 class BulkMailSender(QObject):

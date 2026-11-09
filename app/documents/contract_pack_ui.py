@@ -9,10 +9,13 @@ from PyQt6.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget,
 )
 
-from app.documents.contract_pack import DOCUMENTS, generate_pack, load_context
 from app.documents.power_of_attorney import OFFICE_EMAIL, office_address
 from app.utils.background import CommandRunner
-
+from app.documents.contract_pack import (
+    DOCUMENTS,
+    generate_pack,
+    load_context,
+)
 
 class ContractPackDialog(QDialog):
     def __init__(self, company_id, actor_id, parent=None):
@@ -190,13 +193,23 @@ class ContractPackDialog(QDialog):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         actions = QHBoxLayout()
-        self.pdf_button = QPushButton('Generuj komplet PDF…')
-        self.docx_button = QPushButton('Zapisz komplet DOCX + PDF (ZIP)…')
-        self.pdf_button.clicked.connect(lambda: self._generate(False))
-        self.docx_button.clicked.connect(lambda: self._generate(True))
+
+        self.contract_button = QPushButton('Generuj umowę')
+        self.upl_button = QPushButton('Generuj UPL-1')
+        self.pel_button = QPushButton('Generuj PEL')
+        self.contract_button.clicked.connect(self._generate_contract)
+        self.upl_button.clicked.connect(self._generate_upl)
+        self.pel_button.clicked.connect(self._generate_pel)
+
         self.close_button = QPushButton('Zamknij')
         self.close_button.clicked.connect(self.reject)
-        for button in (self.pdf_button, self.docx_button, self.close_button):
+
+        for button in (
+                self.contract_button,
+                self.upl_button,
+                self.pel_button,
+                self.close_button,
+        ):
             actions.addWidget(button)
         layout.addLayout(actions)
 
@@ -283,45 +296,149 @@ class ContractPackDialog(QDialog):
                       pel_pit=self.pel_pit.isChecked())
         return values
 
-    def _generate(self, docx_only):
+    def _generate_contract(self):
+        self._generate_documents([
+            '00_framework',
+            '01_terms',
+            '02_prices',
+            '03_processing',
+            '04_checklist',
+            '05_pep',
+            '06_ksef',
+            '07_gdpr',
+            '09_authorization',
+        ])
+
+    def _generate_upl(self):
+        self._generate_documents([
+            '11_upl',
+        ])
+
+    def _generate_pel(self):
+        selected = ['12_pel']
+
+        reps = [
+            r for r in self.values()['representatives']
+            if r.get('imie_pierwsze') or r.get('nazwisko')
+        ]
+
+        if len(reps) > 1:
+            selected.append('13_pel_z')
+
+        self._generate_documents(selected)
+
+    def _generate_documents(self, selected):
         if self._busy:
             return
+
         data = self.values()
-        selected = [key for key, checkbox in self.documents.items() if checkbox.isChecked()]
-        if not data['name'] or not data['address'] or not selected:
-            QMessageBox.warning(self, 'Komplet dokumentów', 'Uzupełnij nazwę i adres oraz wybierz dokumenty.')
+
+        if not data['name'] or not data['address']:
+            QMessageBox.warning(
+                self,
+                'Dokumenty',
+                'Uzupełnij nazwę i adres.'
+            )
             return
-        if any(key in ('11_upl', '12_pel', '13_pel_z') for key in selected) and not self.employee.currentData():
-            QMessageBox.warning(self, 'Pełnomocnictwa', 'Wybierz pracownika jako pełnomocnika w zakładce UPL / PEL.')
-            return
-        suffix = '.zip' if docx_only else '.pdf'
-        # Snapshot input before a native file dialog can re-enter the event loop.
-        extra_pdfs, duplex = tuple(self.extra_pdfs), self.duplex.isChecked()
-        self._set_busy(True)
-        path, _ = QFileDialog.getSaveFileName(self, 'Zapisz komplet dokumentów', 'Komplet_dokumentow' + suffix,
-                                            'ZIP (*.zip)' if docx_only else 'PDF (*.pdf)')
-        if not path:
-            self._set_busy(False)
-            return
-        if Path(path).suffix.lower() != suffix:
-            path += suffix
-            if Path(path).exists() and QMessageBox.question(
-                    self, 'Zastąpienie pliku', 'Plik już istnieje. Zastąpić go?',
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
-                self._set_busy(False)
+
+        if any(x in ('11_upl', '12_pel', '13_pel_z') for x in selected):
+            if not self.employee.currentData():
+                QMessageBox.warning(
+                    self,
+                    'Pełnomocnictwa',
+                    'Wybierz pracownika jako pełnomocnika.'
+                )
                 return
-        self.status.setText('Generowanie kompletu…')
+
+        company_name = data.get('name', '').strip()
+
+        employee_initials = ''
+        employee_id = self.employee.currentData()
+
+        if employee_id and employee_id in self._employees:
+            employee = self._employees[employee_id]
+
+            first_name = str(employee.get('imie') or '').strip()
+            last_name = str(employee.get('nazwisko') or '').strip()
+
+            employee_initials = (
+                    (first_name[:1] if first_name else '') +
+                    (last_name[:1] if last_name else '')
+            ).upper()
+
+        if selected == ['11_upl']:
+            default_name = f'UPL {company_name} {employee_initials}.pdf'
+
+        elif selected == ['12_pel']:
+            default_name = f'PEL {company_name} {employee_initials}.pdf'
+
+        elif selected == ['13_pel_z']:
+            default_name = f'PEL-Z {company_name} {employee_initials}.pdf'
+
+        elif '12_pel' in selected and '13_pel_z' in selected:
+            default_name = f'PEL {company_name} {employee_initials}.pdf'
+
+        elif selected == [
+            '00_framework',
+            '01_terms',
+            '02_prices',
+            '03_processing',
+            '04_checklist',
+            '05_pep',
+            '06_ksef',
+            '07_gdpr',
+            '09_authorization',
+        ]:
+            default_name = f'Umowa {company_name}.pdf'
+
+        else:
+            default_name = f'{company_name}.pdf'
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            'Zapisz dokument',
+            default_name,
+            'PDF (*.pdf)'
+        )
+
+        if not path:
+            return
+
+        if not path.lower().endswith('.pdf'):
+            path += '.pdf'
+
+        self._set_busy(True)
+        self.status.setText('Generowanie dokumentu…')
+
         try:
-            self.runner.submit(lambda: generate_pack(self.company_id, self.actor_id, data, selected, path,
-                                extra_pdfs=extra_pdfs, duplex=duplex, docx_only=docx_only,
-                                form_renderer=self.print_renderer.render), self._done, self._error)
+            self.runner.submit(
+                lambda: generate_pack(
+                    self.company_id,
+                    self.actor_id,
+                    data,
+                    selected,
+                    path,
+                    extra_pdfs=(),
+                    duplex=False,
+                    docx_only=False,
+                    form_renderer=self.print_renderer.render,
+                ),
+                self._done,
+                self._error,
+            )
         except Exception as error:
             self._error(error)
 
     def _set_busy(self, busy):
         self._busy = busy
-        for button in (self.pdf_button, self.docx_button, self.close_button):
+        for button in (
+                self.contract_button,
+                self.upl_button,
+                self.pel_button,
+                self.pdf_button,
+                self.docx_button,
+                self.close_button,
+        ):
             button.setEnabled(not busy)
 
     def _done(self, path):

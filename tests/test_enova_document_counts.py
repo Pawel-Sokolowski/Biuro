@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from app.integrations.enova.document_counts import (calculate_total, requested_months,
-    validate_rows, run_import, fetch_counts, normalize_nip)
+    validate_rows, run_import, fetch_counts, normalize_nip, sql_credentials)
 from app.db.dao_conn import get_conn
 from tests.base import DbTestCase
 
@@ -85,8 +85,8 @@ class EnovaImportTests(DbTestCase):
         self.company = self.make_company(nip=SOURCE['nip'])
         self.config = {'enabled': True, 'months_back': 1, 'sources': [deepcopy(SOURCE)]}
         with get_conn() as conn:
-            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,dokumenty_dostarczone,sekundy_ksiegowosc) "
-                         "VALUES (%s,'2026-11',99,1,3600)", (self.company,))
+            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,dokumenty_dostarczone,sekundy_ksiegowosc,etap) "
+                         "VALUES (%s,'2026-11',99,1,3600,'Wysłane wyniki')", (self.company,))
 
     def run_job(self, rows=None, apply=True):
         return run_import(self.config, apply=apply, today=date(2026, 11, 9),
@@ -103,6 +103,8 @@ class EnovaImportTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM import_history').fetchone()[0], 0)
         for _ in range(2):
+            with get_conn() as conn:
+                conn.execute("DELETE FROM app_settings WHERE klucz LIKE 'enova_document_count_checked_%%'")
             self.assertTrue(self.run_job()[0]['ok'])
             self.assertEqual(tuple(self.state()), (12, 1, 3600))
         with get_conn() as conn:
@@ -127,6 +129,8 @@ class EnovaImportTests(DbTestCase):
     def test_one_failed_database_does_not_prevent_other_client_import(self):
         other = self.make_company('Other', nip='1234567891')
         self.config['sources'].append({**SOURCE, 'database': 'ClientB', 'nip': '1234567891'})
+        with get_conn() as conn:
+            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,etap) VALUES (%s,'2026-11','Wysłane wyniki')", (other,))
         def fetch(config, source, months):
             return [] if source['database'] == 'ClientA' else [row(nip=source['nip'])]
         results = run_import(self.config, apply=True, today=date(2026, 11, 9), fetch=fetch)

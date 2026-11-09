@@ -17,8 +17,8 @@ Dostępne są gotowe zapytania odczytowe workera:
   `OperacjeBankowe` nie są sumowane z płatnościami. DR, LPEW, RKVE i pozostałe
   definicje są wliczane normalnie. Bez dodatkowego filtrowania stanów.
 
-Dzielenie pozycji bankowych przez 3 i jednorazowe zaokrąglenie sumy wykonuje
-worker. Przykład: 95 dokumentów, w tym 3 nagłówki WBEW i 190 pozycji płatności,
+Dzielenie pozycji bankowych przez wybrany dzielnik (domyślnie 3) i jednorazowe
+zaokrąglenie sumy wykonuje worker. Przykład: 95 dokumentów, w tym 3 nagłówki WBEW i 190 pozycji płatności,
 daje `round(92 + 190/3) = 155`. Nie dobiera się wykluczeń do wcześniejszej,
 ręcznie obliczonej wartości.
 
@@ -85,11 +85,39 @@ klientów do repozytorium.
 - **KPIR**: liczba wpisów KPIR w miesiącu.
 - **RYCZALT**: liczba faktur w miesiącu, bez podwójnego liczenia faktury obecnej
   w kilku ewidencjach.
-- **KH**: `inne dokumenty + liczba pojedynczych pozycji bankowych / 3`,
+- **KH**: `inne dokumenty + liczba pojedynczych pozycji bankowych / dzielnik`,
   zaokrąglone do najbliższej liczby całkowitej. Inne dokumenty nie obejmują banku.
 - Okres powinien odpowiadać miesiącowi księgowemu w Enova, a nie dacie importu.
   Trzeba ustalić z księgowym, które statusy (np. bufor/anulowanie) wchodzą do
   jego licznika, oraz zweryfikować wynik z ekranem Enova przed włączeniem zapisów.
+
+### Globalny dzielnik WBEW i wyjątki dla firm
+
+Administrator ustawia regułę w **Ustawienia → System → Enova — liczba dokumentów**.
+Globalnie obowiązuje dzielnik **3**. W tabeli firm „Globalny” oznacza dziedziczenie;
+dla wybranej firmy można wskazać np. **10**. Dzielnik 1 liczy pozycje w całości.
+Zaokrąglenie następuje raz, po obliczeniu miesięcznej sumy (połówki w górę).
+Przykład: 92 inne dokumenty i 190 pozycji dają 155 przy /3 lub 111 przy /10.
+Ustawienia są przechowywane we wspólnej bazie PostgreSQL, więc worker serwerowy
+odczytuje te same reguły co aplikacja. Nie trzeba przepisywać dzielnika do JSON.
+Reguła dotyczy KH; KPIR i ryczałt nie otrzymują udziału pozycji bankowych.
+
+### Tylko księgowość z etapem „Wysłane wyniki”
+
+Worker najpierw sprawdza `statusy_miesieczne.etap` dla każdej firmy i miesiąca.
+**Tylko „Wysłane wyniki” kwalifikuje miesiąc do odczytu Enova.** `etap_kadry`
+nie kwalifikuje miesiąca. Brak statusu lub inny etap oznacza pominięcie bez
+zapytania do SQL Server i bez zmiany liczby dokumentów. Przy nieciągłych miesiącach
+zapytania wykonywane są osobno, aby nie odczytywać niezakwalifikowanych przerw.
+Etap jest ponownie sprawdzany po odczycie Enova, przed zapisem; cofnięcie etapu
+w trakcie operacji chroni dotychczasową liczbę.
+
+Udany zapis oznacza miesiąc jako sprawdzony tego dnia w strefie Europe/Warsaw.
+Kolejne uruchomienie tego samego dnia nie odpytuje ponownie tego źródła/miesiąca.
+Zmiana dzielnika lub bazy źródłowej pozwala na ponowne przeliczenie tego dnia.
+Błędy nie zapisują znacznika sukcesu, więc można ponowić import po ich naprawieniu.
+Podgląd respektuje etap, ale może ponownie odczytać zakończony miesiąc i nie
+zużywa dziennego sprawdzenia. Reguła działa w skonfigurowanym zakresie `months_back`.
 
 Domyślnie aktualizowany jest miesiąc bieżący i dwa poprzednie, aby uwzględnić
 późniejsze księgowania. `months_back` można zmienić w zakresie 1–24. Miesiące
@@ -127,8 +155,10 @@ ODBC dodatkowo otrzymuje żądanie trybu tylko do odczytu; nie zastępuje ono pr
    źródła projektu do np. `C:\BiuroSync`; ustaw środowisko `.venv` i zainstaluj
    `requirements-enova.lock` (sam worker nie wymaga Qt). Można też użyć
    istniejącego środowiska serwerowego aplikacji i doinstalować `requirements-enova.txt`. Worker nie jest funkcją samego pliku EXE.
-2. Skonfiguruj `DB_URL` do istniejącej bazy Biuro oraz `ENOVA_SQL_USER` i
-   `ENOVA_SQL_PASSWORD` w środowisku konta zadania lub lokalnym `.env` projektu.
+2. Skonfiguruj `DB_URL` do istniejącej bazy Biuro oraz `sql_user` i `sql_password`
+   w środowisku konta zadania lub lokalnym `.env` projektu. Obsługiwane są też
+   `SQL_USER` / `SQL_PASSWORD` oraz `ENOVA_SQL_USER` / `ENOVA_SQL_PASSWORD`.
+   Pełna para `ENOVA_SQL_*` ma pierwszeństwo; niepełne pary nie są ze sobą mieszane.
    Ogranicz dostęp do pliku i konta zadania. Nie dodawaj haseł do JSON ani argumentów.
 3. Zapewnij połączenie TCP z VM SQL Server i poprawny zaufany certyfikat TLS.
    Worker używa `Encrypt=yes;TrustServerCertificate=no`. W `server` podaj nazwę

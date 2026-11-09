@@ -145,6 +145,12 @@ Domyślnie działa w podglądzie. Zapytania do tabel Enova wymagają dopasowania
 do rzeczywistego schematu instalacji, a zadanie codzienne — konfiguracji
 na serwerze. [Konfiguracja, reguły i eksport metadanych](docs/enova/README.md).
 
+Reguły Enova administrator ustawia w **Ustawienia → System → Enova — liczba
+dokumentów**: globalny dzielnik pozycji WBEW wynosi domyślnie 3, z możliwością
+wyjątków dla firm (np. 10). Codzienny worker odczytuje tylko miesiące, których
+etap księgowości to **Wysłane wyniki**; pozostałe pomija bez połączenia ze źródłem.
+Szczegóły: [konfiguracja Enova](docs/enova/README.md).
+
 ## Rozliczenia i KSeF
 
 ### Wygląd i katalog usług

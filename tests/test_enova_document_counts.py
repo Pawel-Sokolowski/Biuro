@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from app.integrations.enova.document_counts import (calculate_total, requested_months,
-    validate_rows, run_import, fetch_counts, normalize_nip)
+    validate_rows, run_import, fetch_counts, normalize_nip, sql_credentials)
 from app.db.dao_conn import get_conn
 from tests.base import DbTestCase
 
@@ -85,8 +85,18 @@ class EnovaImportTests(DbTestCase):
         self.company = self.make_company(nip=SOURCE['nip'])
         self.config = {'enabled': True, 'months_back': 1, 'sources': [deepcopy(SOURCE)]}
         with get_conn() as conn:
-            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,dokumenty_dostarczone,sekundy_ksiegowosc) "
-                         "VALUES (%s,'2026-11',99,1,3600)", (self.company,))
+            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,dokumenty_dostarczone,sekundy_ksiegowosc,etap) "
+                         "VALUES (%s,'2026-11',99,1,3600,'Wysłane wyniki')", (self.company,))
+
+    def test_import_uses_saved_company_type_instead_of_legacy_type(self):
+        with get_conn() as conn:
+            conn.execute("UPDATE firmy SET forma_opodatkowania='KPiR' WHERE id=%s", (self.company,))
+        fetched = Mock(return_value=[row(documents=55, bank=0)])
+        result = run_import(self.config, apply=True, today=date(2026, 11, 9), fetch=fetched)
+        self.assertTrue(result[0]['ok'])
+        self.assertEqual(result[0]['counts'], {'2026-11': 55})
+        self.assertEqual(fetched.call_args.args[1]['accounting_type'], 'KPIR')
+        self.assertTrue(fetched.call_args.args[1]['count_query'].endswith('kpir.sql'))
 
     def run_job(self, rows=None, apply=True):
         return run_import(self.config, apply=apply, today=date(2026, 11, 9),
@@ -103,6 +113,8 @@ class EnovaImportTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM import_history').fetchone()[0], 0)
         for _ in range(2):
+            with get_conn() as conn:
+                conn.execute("DELETE FROM app_settings WHERE klucz LIKE 'enova_document_count_checked_%%'")
             self.assertTrue(self.run_job()[0]['ok'])
             self.assertEqual(tuple(self.state()), (12, 1, 3600))
         with get_conn() as conn:
@@ -127,6 +139,8 @@ class EnovaImportTests(DbTestCase):
     def test_one_failed_database_does_not_prevent_other_client_import(self):
         other = self.make_company('Other', nip='1234567891')
         self.config['sources'].append({**SOURCE, 'database': 'ClientB', 'nip': '1234567891'})
+        with get_conn() as conn:
+            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,etap) VALUES (%s,'2026-11','Wysłane wyniki')", (other,))
         def fetch(config, source, months):
             return [] if source['database'] == 'ClientA' else [row(nip=source['nip'])]
         results = run_import(self.config, apply=True, today=date(2026, 11, 9), fetch=fetch)
@@ -156,3 +170,21 @@ class EnovaImportTests(DbTestCase):
         self.assertEqual(build_report([self.company], ['2026-11'])[self.company]['2026-11']['dokumenty'], 0)
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT source_name FROM monthly_document_imports WHERE firma_id=%s', (self.company,)).fetchone()[0], 'Enova: ClientA')
+
+
+class AutomaticAccountingTypeTests(TestCase):
+    def test_saved_type_selects_bundled_query_without_repeating_configuration(self):
+        from app.integrations.enova.document_counts import resolve_source
+        for label, kind in [('KPiR', 'KPIR'), ('Księgi rachunkowe', 'KH'), ('Ryczałt', 'RYCZALT')]:
+            with self.subTest(label=label):
+                result = resolve_source({'database': 'client', 'nip': '1234567890'},
+                                        {'forma_opodatkowania': label})
+                self.assertEqual(result['accounting_type'], kind)
+                self.assertTrue(Path(result['count_query']).is_file())
+
+    def test_unsupported_type_and_mismatched_custom_query_do_not_guess(self):
+        from app.integrations.enova.document_counts import resolve_source
+        for source, label in [({}, 'Karta podatkowa'),
+                               ({'accounting_type': 'KPIR', 'count_query': 'custom.sql'}, 'Księgi rachunkowe')]:
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                resolve_source(source, {'forma_opodatkowania': label})

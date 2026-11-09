@@ -119,7 +119,7 @@ class ChatPage(QWidget):
             if conversation and (not authorized or not is_participant(conversation, actor)):
                 self._clear_revoked_conversation(conversation)
                 return
-            if messages is not None and self.isVisible():
+            if messages is not None and self.isVisible() and not self.window().isMinimized():
                 bar = self.scroll_area.verticalScrollBar()
                 self._render_grouped_messages(messages, scroll_to_bottom=bar.value() >= bar.maximum() - 40, attachments=attachments)
             self._seen_ids.update({key: value['id'] for key, value in latest.items()})
@@ -129,7 +129,7 @@ class ChatPage(QWidget):
                 self._refresh_unread_marks()
                 if grew:
                     QApplication.beep()
-            if conversation and self.isVisible():
+            if conversation and self.isVisible() and not self.window().isMinimized():
                 self._mark_read(conversation)
 
         def failed(exc):

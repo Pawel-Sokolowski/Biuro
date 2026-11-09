@@ -106,3 +106,19 @@ class EnovaSourceQueryTests(DbTestCase):
         rows = self.query('kpir.sql')
         with self.assertRaises(ValueError):
             validate_rows(rows, {'nip': NIP, 'accounting_type': 'KPIR'}, ['2026-06'])
+
+    def test_ryczalt_counts_purchases_sales_and_cash_method_invoices_only(self):
+        definitions = [('DR', 3), ('LPEW', 1), ('RKVE', 1), ('SPU', 2), ('STE', 1), ('ZR', 18)]
+        with get_conn() as conn:
+            offset = 0
+            for definition, (symbol, count) in enumerate(definitions, 1):
+                conn.execute('INSERT INTO DefDokumentow VALUES (%s,%s)', (definition, symbol))
+                conn.execute("INSERT INTO DokEwidencja SELECT n,'2026-06-15',%s,NULL,NULL "
+                             'FROM generate_series(%s::int,%s::int) n', (definition, offset + 1, offset + count))
+                offset += count
+            conn.execute("INSERT INTO DokEwidencja VALUES (999,'2026-05-31',6,NULL,NULL)")
+        rows = self.query('ryczalt.sql', end=date(2026, 8, 1))
+        self.assertEqual(rows, [{'nip': NIP, 'miesiac': '2026-06', 'dokumenty': 21, 'pozycje_bankowe': 0},
+                                {'nip': NIP, 'miesiac': '2026-07', 'dokumenty': 0, 'pozycje_bankowe': 0}])
+        self.assertEqual(validate_rows(rows, {'nip': NIP, 'accounting_type': 'RYCZALT'},
+                                       ['2026-06', '2026-07'])[0].total, 21)

@@ -12,6 +12,7 @@ import re
 from zoneinfo import ZoneInfo
 
 from app.db.dao_conn import get_conn
+from app.integrations.enova.counting_rules import load_rules, effective_divisor, validate_divisor
 from app.utils.months import month_bounds, previous_month
 
 
@@ -44,15 +45,16 @@ def whole_count(value):
     return int(number)
 
 
-def calculate_total(kind, documents, bank_transactions):
+def calculate_total(kind, documents, bank_transactions, bank_divisor=3):
     documents, bank_transactions = whole_count(documents), whole_count(bank_transactions)
     if kind not in {'KPIR', 'RYCZALT', 'KH'}:
         raise ValueError('Typ księgowości: KPIR, RYCZALT lub KH.')
     if kind != 'KH' and bank_transactions:
         raise ValueError('Pozycje bankowe są uwzględniane wyłącznie dla KH.')
+    validate_divisor(bank_divisor)
     total = Decimal(documents)
     if kind == 'KH':
-        total += Decimal(bank_transactions) / 3
+        total += Decimal(bank_transactions) / bank_divisor
     return whole_count(total.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
 
 
@@ -65,7 +67,7 @@ def requested_months(today, months_back):
     return sorted(months)
 
 
-def validate_rows(rows, source, months):
+def validate_rows(rows, source, months, bank_divisor=3):
     found = {}
     expected_nip = normalize_nip(source['nip'])
     for row in rows:
@@ -77,7 +79,7 @@ def validate_rows(rows, source, months):
         documents = whole_count(row['dokumenty'])
         bank = whole_count(row['pozycje_bankowe'])
         found[month] = MonthlyCount(month, documents, bank,
-                                   calculate_total(source['accounting_type'], documents, bank))
+                                   calculate_total(source['accounting_type'], documents, bank, bank_divisor))
     if set(found) != set(months):
         raise ValueError('Zapytanie nie zwróciło wszystkich miesięcy. Brak wiersza nie oznacza zera.')
     return [found[month] for month in months]
@@ -102,14 +104,25 @@ def load_config(path):
             raise ValueError('Każda firma i baza mogą wystąpić w konfiguracji tylko raz.')
         seen_nips.add(nip)
         seen_databases.add(database.casefold())
-        calculate_total(source['accounting_type'], 0, 0)
-        if not source.get('count_query'):
-            raise ValueError('Każde mapowanie wymaga pliku count_query.')
+        if source.get('accounting_type'):
+            calculate_total(source['accounting_type'], 0, 0)
     return config
 
 
 def _odbc_quote(value):
     return '{' + str(value).replace('}', '}}') + '}'
+
+
+def sql_credentials():
+    # Keep credentials as a pair; never mix a partial prefixed pair with aliases.
+    for user_key, password_key in (('ENOVA_SQL_USER', 'ENOVA_SQL_PASSWORD'),
+                                   ('sql_user', 'sql_password'), ('SQL_USER', 'SQL_PASSWORD')):
+        user, password = os.environ.get(user_key), os.environ.get(password_key)
+        if user or password:
+            if not user or not password:
+                raise ValueError(f'Uzupełnij parę {user_key} i {password_key} w środowisku konta zadania.')
+            return user, password
+    raise ValueError('Ustaw sql_user i sql_password lub ENOVA_SQL_USER i ENOVA_SQL_PASSWORD w pliku .env.')
 
 
 def fetch_counts(config, source, months):
@@ -118,10 +131,7 @@ def fetch_counts(config, source, months):
         import pyodbc
     except ImportError:
         raise ValueError('Zainstaluj requirements-enova.txt oraz Microsoft ODBC Driver 18 for SQL Server.') from None
-    user = os.environ.get('ENOVA_SQL_USER')
-    password = os.environ.get('ENOVA_SQL_PASSWORD')
-    if not user or not password:
-        raise ValueError('Ustaw ENOVA_SQL_USER i ENOVA_SQL_PASSWORD dla konta zadania Windows.')
+    user, password = sql_credentials()
     query_path = Path(source['count_query'])
     if not query_path.is_absolute():
         query_path = config['_directory'] / query_path
@@ -153,14 +163,34 @@ def fetch_counts(config, source, months):
 
 
 def find_company(conn, nip):
-    rows = conn.execute("SELECT id, nazwa FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
+    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
                         "IN (%s, %s)", (nip, 'PL' + nip)).fetchall()
     if len(rows) != 1:
         raise ValueError('NIP musi wskazywać dokładnie jedną firmę w Biuro.')
     return dict(rows[0])
 
 
-def apply_counts(conn, company, source, counts):
+def resolve_source(source, company):
+    """Use Biuro's accounting classification; legacy explicit types remain a fallback."""
+    from app.companies.cennik_keys import typ_from_forma
+    resolved = dict(source)
+    kind = typ_from_forma(company.get('forma_opodatkowania'))
+    if company.get('forma_opodatkowania') and not kind:
+        raise ValueError('Nieobsługiwana forma opodatkowania firmy w Biuro.')
+    kind = kind or source.get('accounting_type')
+    if not kind:
+        raise ValueError('Uzupełnij formę opodatkowania firmy w Biuro.')
+    resolved['accounting_type'] = kind
+    if not source.get('count_query'):
+        if kind not in ('KPIR', 'KH', 'RYCZALT'):
+            raise ValueError('Brak gotowego zapytania dla rodzaju księgowości.')
+        resolved['count_query'] = str(Path(__file__).resolve().parents[3] / 'docs' / 'enova' / 'queries' / (kind.lower() + '.sql'))
+    elif source.get('accounting_type') and source['accounting_type'] != kind:
+        raise ValueError('Typ starego count_query jest niezgodny z formą opodatkowania w Biuro. Usuń stare accounting_type/count_query lub popraw mapowanie.')
+    return resolved
+
+
+def apply_counts(conn, company, source, counts, *, bank_divisor=3):
     changes = []
     for count in counts:
         previous = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s',
@@ -175,37 +205,88 @@ def apply_counts(conn, company, source, counts):
         changes.append({'month': count.month, 'before': previous[0] if previous else None,
                         'after': count.total, 'documents': count.documents, 'bank_transactions': count.bank_transactions})
     details = {'company_id': company['id'], 'database': source['database'],
-               'accounting_type': source['accounting_type'], 'changes': changes}
+               'accounting_type': source['accounting_type'], 'bank_divisor': bank_divisor, 'changes': changes}
     conn.execute("INSERT INTO import_history(import_type,source_path,updated_count,completed_at,status,details) "
                  "VALUES ('enova_document_counts',%s,%s,to_char(now(),'YYYY-MM-DD HH24:MI:SS'),'completed',%s)",
                  (source['database'], len(counts), json.dumps(details, ensure_ascii=False)))
     return changes
 
 
+def _daily_key(company_id, month):
+    return f'enova_document_count_checked_{company_id}_{month}'
+
+
+def _eligible_months(conn, company_id, months, signature, *, apply):
+    rows = conn.execute(
+        "SELECT s.miesiac, a.wartosc FROM statusy_miesieczne s LEFT JOIN app_settings a "
+        "ON a.klucz = 'enova_document_count_checked_' || s.firma_id::text || '_' || s.miesiac "
+        "WHERE s.firma_id=%s AND s.miesiac=ANY(%s) AND s.etap='Wysłane wyniki' ORDER BY s.miesiac",
+        (company_id, months)).fetchall()
+    eligible = []
+    for row in rows:
+        try:
+            checked = json.loads(row['wartosc']) if row['wartosc'] else None
+        except (ValueError, TypeError):
+            checked = None
+        # Preview respects etap but never consumes the daily successful-check marker.
+        if not apply or checked != signature:
+            eligible.append(row['miesiac'])
+    return eligible
+
+
 def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
     if apply and not config.get('enabled', False):
         raise ValueError('Import wyłączony. Najpierw sprawdź podgląd, następnie ustaw enabled=true.')
-    months = requested_months(today or datetime.now(ZoneInfo('Europe/Warsaw')).date(), config.get('months_back', 3))
+    run_day = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
+    months = requested_months(run_day, config.get('months_back', 3))
+    rules = load_rules()
     results = []
     with get_conn() as conn:
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748209)').fetchone()[0]:
             raise ValueError('Inny import Enova jest już uruchomiony.')
         for source in config['sources']:
             try:
-                # Per-company savepoint: failed sources preserve their existing counts.
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
-                    counts = validate_rows(fetch(config, source, months), source, months)
+                    source = resolve_source(source, company)
+                    divisor = effective_divisor(rules, company['id']) if source['accounting_type'] == 'KH' else 1
+                    signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor,
+                                 'accounting_type': source['accounting_type']}
+                    eligible = _eligible_months(conn, company['id'], months, signature, apply=apply)
+                    counts = []
+                    # Query each eligible month separately: do not query uncompleted gaps.
+                    for month in eligible:
+                        # A previous month's remote read may have taken time; recheck before each contact.
+                        if not conn.execute("SELECT 1 FROM statusy_miesieczne WHERE firma_id=%s "
+                                            "AND miesiac=%s AND etap='Wysłane wyniki'",
+                                            (company['id'], month)).fetchone():
+                            continue
+                        counts.extend(validate_rows(fetch(config, source, [month]), source, [month], divisor))
                     if apply:
-                        apply_counts(conn, company, source, counts)
+                        ready = []
+                        for count in counts:
+                            # Recheck after SQL Server reads and keep the row locked through the write.
+                            status = conn.execute("SELECT etap FROM statusy_miesieczne WHERE firma_id=%s "
+                                                  "AND miesiac=%s AND etap='Wysłane wyniki' FOR UPDATE",
+                                                  (company['id'], count.month)).fetchone()
+                            if status:
+                                ready.append(count)
+                        counts = ready
+                        if counts:
+                            apply_counts(conn, company, source, counts, bank_divisor=divisor)
+                            for count in counts:
+                                conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                                             'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                                             (_daily_key(company['id'], count.month), json.dumps(signature)))
                     results.append({'database': source['database'], 'company_id': company['id'],
-                                    'mode': 'applied' if apply else 'preview',
+                                    'mode': ('applied' if apply else 'preview') if counts else 'skipped',
+                                    'skipped_months': [month for month in months if month not in {c.month for c in counts}],
+                                    'bank_divisor': divisor,
                                     'counts': {count.month: count.total for count in counts},
                                     'components': {count.month: {'documents': count.documents,
                                                                'bank_transactions': count.bank_transactions}
                                                    for count in counts}, 'ok': True})
             except Exception as exc:
-                # Driver errors may contain connection details. Do not log credentials.
                 error = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else type(exc).__name__
                 results.append({'database': source['database'], 'ok': False, 'error': error})
                 if apply:

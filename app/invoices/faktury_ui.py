@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from app.widgets.flow_layout import FlowLayout
+
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     InvoiceLockedError, InvoiceConflictError, can_access_invoice, create_correction, delete_draft_invoice,
@@ -461,7 +463,7 @@ class FakturyPage(QWidget):
 
     def _build_tab_wystawione(self):
         layout = QVBoxLayout(self.tab_wystawione)
-        buttons = QHBoxLayout()
+        buttons = FlowLayout()
         self.btn_view = QPushButton("Podgląd faktury / PDF")
         self.btn_view.clicked.connect(self._view_selected_issued)
         self.btn_reexport = QPushButton("Eksportuj XLSX (Saldeo)")
@@ -507,7 +509,6 @@ class FakturyPage(QWidget):
             buttons.addWidget(button)
         for button in (self.btn_reexport, self.btn_ksef):
             button.setVisible(False)
-        buttons.addStretch()
         layout.addLayout(buttons)
 
         self.send_pdf_after_ksef = QCheckBox("Po przyjęciu w KSeF wyślij PDF do klienta")

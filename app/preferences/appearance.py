@@ -49,7 +49,7 @@ def apply_appearance(actor_id):
         QWidget {{ color: {text}; font-family: 'Segoe UI', Arial; font-size: 10pt; }}
         QMainWindow, QDialog, QScrollArea, QStackedWidget {{ background: {bg}; }}
         QLabel {{ background: transparent; }}
-        QPushButton {{ background: {accent}; color: white; padding: 8px 14px;
+        QPushButton {{ background: {accent}; color: white; padding: 9px 16px; min-height: 22px; font-size: 11pt;
             border: 1px solid transparent; border-radius: 6px; font-weight: 600; }}
         QPushButton:hover {{ background: {QColor(accent).darker(115).name()}; }}
         QPushButton:pressed {{ background: {QColor(accent).darker(130).name()}; }}

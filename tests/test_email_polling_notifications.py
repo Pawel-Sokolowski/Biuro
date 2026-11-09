@@ -19,6 +19,8 @@ class AutomaticSyncTests(unittest.TestCase):
     def setUp(self):
         patcher=patch.object(email_sync,'account_sync_lock',side_effect=lambda *a, **kw: nullcontext(True))
         patcher.start();self.addCleanup(patcher.stop)
+        patcher=patch.object(email_sync,'sync_folder_flags',return_value=0)
+        patcher.start();self.addCleanup(patcher.stop)
         patcher=patch.object(email_sync,'needs_initial_sync',return_value=False)
         patcher.start();self.addCleanup(patcher.stop)
         patcher=patch.object(email_sync,'_shared_session',side_effect=ConnectionError('no network in tests'))
@@ -104,16 +106,18 @@ class AutomaticSyncTests(unittest.TestCase):
                  patch.object(email_sync, '_folder_status', side_effect=lambda s, f: status[f]), \
                  patch.object(email_sync, 'get_setting', side_effect=lambda k: saved.get(k)), \
                  patch.object(email_sync, 'set_setting', side_effect=lambda k, v: saved.__setitem__(k, v)), \
+                 patch.object(email_sync, 'sync_folder_flags', return_value=0) as flags, \
                  patch.object(email_sync, 'sync_and_prefetch') as sync, \
                  patch.object(email_sync, 'prefetch_recent', return_value=0):
                 self.assertEqual(email_sync.sync_automatic_accounts([{'id': 77}]), [])
+                self.assertEqual([call.args[1] for call in flags.call_args_list], list(status))
                 return [call.args[1] for call in sync.call_args_list]
         self.assertEqual(run(), [['INBOX', 'Clients', 'Archive']])
         self.assertEqual(run(), [])
         status['Clients'] = 'MESSAGES=3,UIDNEXT=4'
         self.assertEqual(run(), [['Clients']])
-        # Stable aggregate counters cannot identify swapped read/unread flags.
-        # Reconciliation must run after ten passes even without a STATUS change.
+        # Read flags were checked on every pass above. The periodic header
+        # sweep still runs after ten passes even without a STATUS change.
         for _ in range(7):
             self.assertEqual(run(), [])
         self.assertEqual(run(), [['INBOX', 'Clients', 'Archive']])
@@ -240,8 +244,9 @@ class BadgeAndNotificationTests(unittest.TestCase):
         page.tabs=QTabWidget();page.tabs.addTab(QWidget(),'Zadania')
         page.status_filter=QComboBox();page.status_filter.addItem('Wszystkie',None)
         page.assignee_filter=QComboBox();page.assignee_filter.addItem('Wszyscy',None);page.assignee_filter.addItem('Jan Kowalski',7)
-        page.table=QTableWidget(1,7)
-        for column in range(7):page.table.setItem(0,column,QTableWidgetItem('8' if column==6 else 'Zadanie'))
+        page.table=QTableWidget(1,6)
+        for column in range(6):page.table.setItem(0,column,QTableWidgetItem('Zadanie'))
+        page.table.item(0,0).setData(Qt.ItemDataRole.UserRole,8)
         page._refresh=Mock()
         self.assertTrue(page.show_assignment_notification(8))
         self.assertEqual(page.table.currentRow(),0)

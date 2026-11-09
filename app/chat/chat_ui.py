@@ -96,7 +96,7 @@ class ChatPage(QWidget):
         ids = [i for i in ids if i is not None]
         actor = self.pracownik_id
         conversation = self.current_konwersacja
-        visible = self.isVisible()
+        visible = self.isVisible() and not self.window().isMinimized()
         limit = self.offset + self.page_size
         displayed = max((m["id"] for m in (getattr(self, "_rendered_messages", None) or [])), default=0) if getattr(self, "_rendered_conversation", None) == conversation else 0
         self._poll_busy = True
@@ -148,11 +148,11 @@ class ChatPage(QWidget):
                 self._seen_ids[kid] = info["id"]
                 if prev is None or info["id"] <= prev:
                     continue
-                if kid == self.current_konwersacja and self.isVisible():
+                if kid == self.current_konwersacja and self.isVisible() and not self.window().isMinimized():
                     bar = self.scroll_area.verticalScrollBar()
                     at_bottom = bar.value() >= bar.maximum() - 40
                     self.load_messages(scroll_to_bottom=at_bottom)
-            if self.current_konwersacja and self.isVisible():
+            if self.current_konwersacja and self.isVisible() and not self.window().isMinimized():
                 self._mark_read(self.current_konwersacja)
             counts = get_unread_counts(self.pracownik_id)
         except Exception:
@@ -164,8 +164,17 @@ class ChatPage(QWidget):
             if grew:
                 QApplication.beep()
 
+    def open_message_notification(self, target):
+        kid = target.get('conversation_id')
+        if not kid or not is_participant(kid, self.pracownik_id):
+            QMessageBox.information(self, "Czat", "Nie masz już dostępu do tej rozmowy lub została usunięta.")
+            return False
+        self.refresh_chat_conversations(select_id=kid)
+        self.chat_input.setFocus()
+        return self.current_konwersacja == kid
+
     def _mark_read(self, kid):
-        if not self.isVisible() or getattr(self, '_rendered_conversation', None) != kid:
+        if not self.isVisible() or self.window().isMinimized() or getattr(self, '_rendered_conversation', None) != kid:
             return
         watermark = max((m['id'] for m in (self._rendered_messages or [])), default=0)
         previous = self._acknowledged_ids.get(kid, 0)
@@ -196,7 +205,7 @@ class ChatPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self.current_konwersacja:
+        if self.current_konwersacja and not self.window().isMinimized():
             self._poll_async()
             self._scroll_to_bottom()
 

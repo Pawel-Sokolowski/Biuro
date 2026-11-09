@@ -521,7 +521,10 @@ class OfficeManagerApp(QMainWindow):
         self._badge_reads = TaskRunner(self)
         self._badge_busy = False
         self.refresh_email_badge_async()
+        from app.chat.chat_toasts import ChatToaster
+        self._chat_toaster = ChatToaster(self, self.pracownik_id, self._show_chat_tab)
         self._start_saldeo_push_watcher()
+        self._start_email_reminders()
 
     def _ensure_page(self, name):
         if name in self._loaded_pages:
@@ -558,6 +561,30 @@ class OfficeManagerApp(QMainWindow):
     @property
     def page_settings(self):
         return self._ensure_page("page_settings")
+
+    def _start_email_reminders(self):
+        from app.services.email_reminders import run_reminders
+        from app.utils.background import TaskRunner
+        self._reminder_runner = TaskRunner(self)
+        self._reminder_busy = False
+        self._reminder_timer = QTimer(self)
+        self._reminder_timer.setInterval(60000)
+
+        def finished(*_):
+            self._reminder_busy = False
+
+        def failed(exc):
+            logging.getLogger(__name__).error("Automatyczne przypomnienia: %s", exc)
+            finished()
+
+        def tick():
+            if not self._reminder_busy:
+                self._reminder_busy = True
+                self._reminder_runner.submit(run_reminders, finished, failed)
+
+        self._reminder_timer.timeout.connect(tick)
+        self._reminder_timer.start()
+        QTimer.singleShot(5000, tick)
 
     def _start_saldeo_push_watcher(self):
         import threading
@@ -598,6 +625,22 @@ class OfficeManagerApp(QMainWindow):
                 self._mail_toaster.show_notice("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}")
         if done and self.pages.currentWidget() is self.page_monthly:
             self.page_monthly.refresh_background()
+
+    def _show_chat_tab(self, target):
+        from app.security.authorization import allowed_tabs
+        if not target or "Czat" not in allowed_tabs(self.pracownik_id):
+            return False
+        row = next((i for i in range(self.sidebar.count())
+                    if self.sidebar.item(i).data(Qt.ItemDataRole.UserRole) == "Czat"
+                    and not self.sidebar.item(i).isHidden()), -1)
+        if row < 0:
+            return False
+        self.showNormal() if self.isMinimized() else self.show()
+        self.raise_()
+        self.activateWindow()
+        self.sidebar.setCurrentRow(row)
+        self.pages.setCurrentIndex(row)
+        return self.page_chat.open_message_notification(target)
 
     def _show_email_tab(self, target=None):
         self.showNormal() if self.isMinimized() else self.show()
@@ -813,6 +856,8 @@ class OfficeManagerApp(QMainWindow):
             self.show()
 
     def closeEvent(self, event):
+        if hasattr(self, "_reminder_timer"):
+            self._reminder_timer.stop()
         from app.preferences.mail_sync import MailSyncSettings
         for sync_page in self.findChildren(MailSyncSettings):
             sync_page.stop()
@@ -822,6 +867,10 @@ class OfficeManagerApp(QMainWindow):
             self.notification_center.timer.stop()
         if hasattr(self, "_mail_toaster"):
             self._mail_toaster.hide()
+        if hasattr(self, "_chat_toaster"):
+            self._chat_toaster.hide()
+        if hasattr(self, "page_chat"):
+            self.page_chat._poll_timer.stop()
         settings = QSettings("Biuro", "OfficeManager")
         settings.setValue("window/maximized", self.isMaximized())
         if not self.isMaximized():

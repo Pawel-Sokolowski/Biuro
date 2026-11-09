@@ -276,6 +276,97 @@ def merge_pdfs(paths, destination, duplex=False):
     finally:
         writer.close()
 
+def generate_document(
+    company_id,
+    actor_id,
+    overrides,
+    document_key,
+    destination,
+    *,
+    form_renderer=None,
+):
+    return generate_pack(
+        company_id=company_id,
+        actor_id=actor_id,
+        overrides=overrides,
+        selected=[document_key],
+        destination=destination,
+        extra_pdfs=(),
+        duplex=False,
+        docx_only=False,
+        form_renderer=form_renderer,
+    )
+
+def generate_framework_agreement(
+    company_id,
+    actor_id,
+    overrides,
+    destination,
+    *,
+    form_renderer=None,
+):
+    return generate_document(
+        company_id,
+        actor_id,
+        overrides,
+        '00_framework',
+        destination,
+        form_renderer=form_renderer,
+    )
+
+
+def generate_upl(
+    company_id,
+    actor_id,
+    overrides,
+    destination,
+    *,
+    form_renderer=None,
+):
+    return generate_document(
+        company_id,
+        actor_id,
+        overrides,
+        '11_upl',
+        destination,
+        form_renderer=form_renderer,
+    )
+
+
+def generate_pel(
+    company_id,
+    actor_id,
+    overrides,
+    destination,
+    *,
+    form_renderer=None,
+):
+    return generate_document(
+        company_id,
+        actor_id,
+        overrides,
+        '12_pel',
+        destination,
+        form_renderer=form_renderer,
+    )
+
+
+def generate_pel_z(
+    company_id,
+    actor_id,
+    overrides,
+    destination,
+    *,
+    form_renderer=None,
+):
+    return generate_document(
+        company_id,
+        actor_id,
+        overrides,
+        '13_pel_z',
+        destination,
+        form_renderer=form_renderer,
+    )
 
 def generate_pack(company_id, actor_id, overrides, selected, destination, *, extra_pdfs=(), duplex=False, docx_only=False, form_renderer=None):
     data = load_context(company_id, actor_id)  # Recheck access at execution time.

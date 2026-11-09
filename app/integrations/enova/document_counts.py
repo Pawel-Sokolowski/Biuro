@@ -104,9 +104,8 @@ def load_config(path):
             raise ValueError('Każda firma i baza mogą wystąpić w konfiguracji tylko raz.')
         seen_nips.add(nip)
         seen_databases.add(database.casefold())
-        calculate_total(source['accounting_type'], 0, 0)
-        if not source.get('count_query'):
-            raise ValueError('Każde mapowanie wymaga pliku count_query.')
+        if source.get('accounting_type'):
+            calculate_total(source['accounting_type'], 0, 0)
     return config
 
 
@@ -164,11 +163,31 @@ def fetch_counts(config, source, months):
 
 
 def find_company(conn, nip):
-    rows = conn.execute("SELECT id, nazwa FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
+    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
                         "IN (%s, %s)", (nip, 'PL' + nip)).fetchall()
     if len(rows) != 1:
         raise ValueError('NIP musi wskazywać dokładnie jedną firmę w Biuro.')
     return dict(rows[0])
+
+
+def resolve_source(source, company):
+    """Use Biuro's accounting classification; legacy explicit types remain a fallback."""
+    from app.companies.cennik_keys import typ_from_forma
+    resolved = dict(source)
+    kind = typ_from_forma(company.get('forma_opodatkowania'))
+    if company.get('forma_opodatkowania') and not kind:
+        raise ValueError('Nieobsługiwana forma opodatkowania firmy w Biuro.')
+    kind = kind or source.get('accounting_type')
+    if not kind:
+        raise ValueError('Uzupełnij formę opodatkowania firmy w Biuro.')
+    resolved['accounting_type'] = kind
+    if not source.get('count_query'):
+        if kind not in ('KPIR', 'KH'):
+            raise ValueError('Ryczałt wymaga zweryfikowanego pliku count_query; brak gotowego zapytania.')
+        resolved['count_query'] = str(Path(__file__).resolve().parents[3] / 'docs' / 'enova' / 'queries' / (kind.lower() + '.sql'))
+    elif source.get('accounting_type') and source['accounting_type'] != kind:
+        raise ValueError('Typ starego count_query jest niezgodny z formą opodatkowania w Biuro. Usuń stare accounting_type/count_query lub popraw mapowanie.')
+    return resolved
 
 
 def apply_counts(conn, company, source, counts, *, bank_divisor=3):
@@ -229,8 +248,10 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
             try:
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
+                    source = resolve_source(source, company)
                     divisor = effective_divisor(rules, company['id']) if source['accounting_type'] == 'KH' else 1
-                    signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor}
+                    signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor,
+                                 'accounting_type': source['accounting_type']}
                     eligible = _eligible_months(conn, company['id'], months, signature, apply=apply)
                     counts = []
                     # Query each eligible month separately: do not query uncompleted gaps.

@@ -205,3 +205,16 @@ w tabeli `import_history` jako `enova_document_counts`, w ustawieniach audytu
 aplikacji. Podgląd nie zapisuje historii ani liczników. Harmonogram i połączenie
 z rzeczywistą Enova trzeba skonfigurować na serwerze — nie są instalowane
 przez samo dodanie tych plików do repozytorium.
+
+### Automatyczny wybór rodzaju księgowości
+
+Skopiuj `config.example.json`; nie trzeba tworzyć konfiguracji od zera. Uzupełnij
+adres `server` i listę `sources`, podając dla każdej firmy tylko `database` oraz
+`nip`. Rodzaj księgowości jest pobierany z pola „Forma opodatkowania” firmy w Biuro.
+Dla KPiR i ksiąg rachunkowych importer sam wybiera dołączone zapytanie SQL.
+Zmiana rodzaju w Biuro pozwala na ponowne przeliczenie tego samego dnia.
+
+Stare konfiguracje nadal działają. Gdy zawierają własny `count_query` i jawny
+`accounting_type`, niezgodność z rodzajem zapisanym w Biuro zatrzymuje import firmy;
+usuń oba pola, aby używać automatycznego wyboru. Ryczałt nie ma jeszcze
+zweryfikowanego zapytania domyślnego i wymaga własnego `count_query`.

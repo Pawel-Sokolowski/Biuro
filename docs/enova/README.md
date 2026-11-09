@@ -40,6 +40,20 @@ Dostępne są również prostsze warianty bez `DECLARE`, `IF` i `THROW`:
 klienta w SSMS i wykonaj wariant odpowiadający jej rodzajowi księgowości.
 Sprawdzenie składni online nie uruchamia zapytania na serwerze Enova.
 
+Jeśli w zestawieniu widoczna jest wyłącznie liczba WBEW, jest to liczba nagłówków
+wyciągów, nie ich pozycji. `profile-kh-statement-positions.sql` pokazuje w jednym
+zestawie: wszystkie dokumenty, nagłówki, dokumenty pozostałe, pozycje bankowe,
+udział pozycji / 3 oraz przykładową sumę po zaokrągleniu. Pozycje są przypisane
+do tych samych wyciągów co dokumenty danego miesiąca, a nie wybierane niezależnie
+według daty operacji. Ujawniane są również nagłówki bez powiązanego raportu.
+
+Skrypt porównuje `OperacjeBankowe` (wiersze importu bankowego) i `Zaplaty`
+(pozycje płatności). Nie wolno ich dodawać: mogą reprezentować te same operacje,
+a płatności wpisane ręcznie mogą nie występować w tabeli importu. `Zaplaty.Raport`
+jest odwołaniem polimorficznym; wyniki są rozdzielone przez `RaportType`, aby
+nie uznać pasującego numeru innego rodzaju raportu za pozycję bankową.
+Źródło i stany trzeba potwierdzić przed przygotowaniem zapytania produkcyjnego.
+
 Profilowanie nie jest zapytaniem produkcyjnym workera i nie włącza importu.
 Nie zawiera zmian w tabelach Enova ani przypisania rzeczywistych nazw baz
 klientów do repozytorium.

@@ -404,7 +404,10 @@ wymaga przyczyny i zachowuje cały dokument, numer, autora i czas operacji.
 Dotyczy wyłącznie dokumentów niewprowadzonych do obrotu, bez historii płatności
 ani trwającej/przyjętej wysyłki KSeF; pozostałe dokumenty wymagają korekty.
 Anulowane dokumenty mają oznaczenie w tabeli i PDF, nie są rozliczane ani eksportowane.
-Raz zarezerwowany numer nie wraca do puli po usunięciu szkicu.
+Usunięcie szkicu zwalnia jego rezerwację numeru. Usunięcie wystawionej faktury
+do kosza również zwalnia numer, jeśli dokument nie ma numeru KSeF ani wysyłki
+w toku lub o nierozstrzygniętym wyniku. Dokument pozostaje w koszu i audycie;
+przywrócenie jest blokowane, jeśli numer zajął już inny dokument.
 Obliczenia pozycji korzystają z Decimal i zaokrąglania HALF_UP do groszy;
 nowe zapisy sum faktur są przechowywane jako NUMERIC(18,2).
 
@@ -441,9 +444,14 @@ Pełna lista i sprawdzone źródła urzędowe: [docs/annual-declarations.md](doc
 
 W **Ustawienia → Faktury** ustaw wzór numeracji, np.
 `{prefix}/{number:04d}/{month:02d}/{year}` → `FV/0001/11/2026`.
-`prefix` wynosi FV, KFV, FZ albo PRO zależnie od rodzaju dokumentu.
+`prefix` wynosi FV (zwykłe), FZAL (zaliczkowe), FKOR (korekty) albo PRO (proforma).
+Każdy rodzaj ma osobny licznik. Starszy wzór z wpisanym na stałe `FV/` jest
+automatycznie dostosowywany dla pozostałych rodzajów; wzory bez pola `prefix`
+otrzymują dla nich osobny prefiks.
 Bez pola `month` numeracja jest roczna. Numer nadawany jest przy wystawianiu;
-zmiana wzoru nie zmienia numerów już nadanych i nie zwalnia numerów historycznych.
+zmiana wzoru nie zmienia numerów już nadanych. Po zwolnieniu ostatniego numeru
+przez usunięcie dokumentu kolejna faktura może użyć tego numeru. Usunięcie dokumentu
+ze środka serii nie zmienia numerów późniejszych faktur ani nie cofa licznika.
 W podglądzie wysyłki roboczy dokument nie jest oznaczany numerem technicznym `#ID`.
 
 **Faktury → Rozlicz MT940** pokazuje wspólne importy wszystkim pracownikom

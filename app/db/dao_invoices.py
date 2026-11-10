@@ -924,7 +924,8 @@ def delete_invoice_keep_positions(invoice_id: int) -> bool:
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM faktury WHERE id = %s", (invoice_id,))
+        cur.execute("SELECT pg_advisory_xact_lock(748202)")
+        cur.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,))
         row = cur.fetchone()
         if not row:
             return False
@@ -935,6 +936,8 @@ def delete_invoice_keep_positions(invoice_id: int) -> bool:
 
         cur.execute("DELETE FROM faktury_pozycje WHERE invoice_id = %s", (invoice_id,))
         cur.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
+        if not invoice.get('eksportowana'):
+            cur.execute("DELETE FROM invoice_number_ledger WHERE invoice_id=%s", (invoice_id,))
         conn.commit()
         return True
 
@@ -1203,6 +1206,7 @@ def update_invoice_draft(
 def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) -> None:
     conn = get_conn()
     try:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
         row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not row:
             return
@@ -1219,6 +1223,8 @@ def _delete_invoice_preserving_services(invoice_id: int, *, draft_only: bool) ->
         _preserve_legacy_extra_services(conn, invoice)
         # Usunięcie nagłówka kasuje powiązane faktury_pozycje przez ON DELETE
         # CASCADE, ale nie dotyka odrębnej ewidencji uslugi_dodatkowe_firma.
+        if not invoice.get('eksportowana'):
+            conn.execute("DELETE FROM invoice_number_ledger WHERE invoice_id=%s", (invoice_id,))
         conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
         conn.commit()
     except Exception:
@@ -1329,11 +1335,13 @@ def _assign_invoice_number(conn, invoice_id: int) -> str:
     numer = (row["numer"] or "").strip()
     if not numer:
         issued = datetime.strptime(str(row["data_wystawienia"] or _now_date())[:10], DATE_FMT)
-        prefix = {"korekta": "KFV", "zaliczkowa": "FZ", "proforma": "PRO"}.get(row["rodzaj"], "FV")
-        from app.invoices.numbering import KEY, DEFAULT, compile_pattern, render
+        prefix = {"korekta": "FKOR", "zaliczkowa": "FZAL", "proforma": "PRO"}.get(row["rodzaj"], "FV")
+        from app.invoices.numbering import KEY, DEFAULT, compile_pattern, render, series_template
         setting = conn.execute("SELECT wartosc FROM app_settings WHERE klucz=%s", (KEY,)).fetchone()
         template = setting[0] if setting and setting[0] else DEFAULT
+        template = series_template(template, row["rodzaj"])
         pattern = compile_pattern(template, prefix, issued)
+        _release_trashed_numbers(conn)
         existing = conn.execute(
             "SELECT numer FROM invoice_number_ledger UNION "
             "SELECT numer FROM faktury WHERE cancelled_at IS NULL"
@@ -1376,11 +1384,31 @@ def set_invoice_number(invoice_id: int, numer: str) -> None:
         conn.execute("UPDATE faktury SET numer = %s WHERE id = %s", (numer.strip() or None, invoice_id))
 
 
+def _release_trashed_numbers(conn):
+    # Only archived deletions explicitly known to have no submitted/accepted KSeF identity.
+    conn.execute("""
+        DELETE FROM invoice_number_ledger AS ledger
+        USING faktury_kosz AS trash
+        WHERE ledger.invoice_id=trash.faktura_id AND ledger.numer=trash.numer
+          AND trash.restored_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM faktury WHERE id=ledger.invoice_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM faktury_kosz AS history
+              WHERE history.faktura_id=ledger.invoice_id
+                AND (COALESCE(history.ksef_numer, '')<>''
+                     OR COALESCE(history.faktura_json->>'ksef_numer', '')<>''
+                     OR history.faktura_json->>'ksef_status'
+                        IN ('wysylanie', 'oczekuje', 'do_sprawdzenia', 'przyjeta'))
+          )
+    """)
+
+
 def trash_invoice(invoice_id: int, actor_id: int) -> None:
     """Przenosi fakturę (także wystawioną lub z KSeF) do kosza; tylko administrator."""
     if not is_administrator(actor_id):
         raise PermissionError("Tylko administrator może usuwać faktury do kosza.")
     with get_conn() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
         row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not row:
             raise ValueError("Nie znaleziono faktury.")
@@ -1393,8 +1421,12 @@ def trash_invoice(invoice_id: int, actor_id: int) -> None:
             " WHERE p.faktura_id = f.id OR p.invoice_id = f.id), %s FROM faktury f WHERE f.id = %s",
             (actor_id, invoice_id),
         )
+        # Keep even legacy/directly imported KSeF document numbers reserved.
+        if row['ksef_numer'] or row['ksef_status'] in ('wysylanie', 'oczekuje', 'do_sprawdzenia', 'przyjeta'):
+            _reserve_number(conn, invoice_id, row['numer'])
         conn.execute("SELECT set_config('biuro.trash_delete', '1', true)")
         conn.execute("DELETE FROM faktury WHERE id = %s", (invoice_id,))
+        _release_trashed_numbers(conn)
         conn.execute(
             "INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) "
             "VALUES ('faktury', %s, 'kosz', %s, %s)",
@@ -1418,12 +1450,17 @@ def restore_trashed_invoice(trash_id: int, actor_id: int) -> int:
     if not is_administrator(actor_id):
         raise PermissionError("Tylko administrator może przywracać faktury.")
     with get_conn() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
         entry = conn.execute(
             "SELECT * FROM faktury_kosz WHERE id = %s AND restored_at IS NULL FOR UPDATE", (trash_id,)).fetchone()
         if not entry:
             raise ValueError("Pozycji nie ma w koszu.")
         try:
             with conn.transaction():
+                try:
+                    _reserve_number(conn, entry['faktura_id'], entry['numer'])
+                except ValueError as exc:
+                    raise InvoiceLockedError('Nie można przywrócić: numer został już wykorzystany przez inny dokument.') from exc
                 conn.execute(
                     "INSERT INTO faktury SELECT * FROM jsonb_populate_record(NULL::faktury, %s::jsonb)",
                     (json.dumps(entry["faktura_json"]),))
@@ -1447,6 +1484,7 @@ def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
     if not reason.strip():
         raise ValueError("Podaj przyczynę anulowania.")
     with get_conn() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
         row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
         if not row or not row["eksportowana"]:
             raise InvoiceLockedError("Wybierz wystawioną fakturę.")

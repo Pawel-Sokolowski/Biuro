@@ -34,3 +34,12 @@ def compile_pattern(template, prefix, issued):
 def render(template, prefix, issued, number=1):
     compile_pattern(template, prefix, issued)
     return template.format(prefix=prefix, number=number, month=issued.month, year=issued.year)
+
+
+def series_template(template, kind):
+    """Keep each document kind separate even in legacy templates with a literal FV."""
+    if kind in (None, 'faktura') or any(name == 'prefix' for _, name, _, _ in Formatter().parse(template)):
+        return template
+    if template.upper().startswith('FV/'):
+        return '{prefix}/' + template[3:]
+    return '{prefix}/' + template

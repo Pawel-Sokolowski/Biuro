@@ -143,12 +143,11 @@ class ProformaAndAdvanceTests(DbTestCase):
         with self.assertRaises(PaymentError):
             record_cash_payment(proforma, "2026-09-05", "123.00", 1)
 
-    def test_proforma_and_advance_are_not_sent_to_ksef(self):
+    def test_proforma_is_not_sent_to_ksef(self):
         from app.invoices.fa3_builder import KsefError, build_fa3_xml
-        for kind in ("proforma", "zaliczkowa"):
-            invoice = self._row(self._document(kind))
-            with self.assertRaises(KsefError):
-                build_fa3_xml(invoice, [], {})
+        invoice = self._row(self._document("proforma"))
+        with self.assertRaisesRegex(KsefError, 'Nieobsługiwany rodzaj'):
+            build_fa3_xml(invoice, [], {})
 
     def test_manual_dialog_offers_document_kinds(self):
         from app.invoices.manual_invoice_dialog import ManualInvoiceDialog

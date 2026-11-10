@@ -64,7 +64,7 @@ def build_fa3_xml(invoice, positions, seller, *, corrected=None):
     """
     if (invoice.get('waluta') or 'PLN') != 'PLN':
         raise KsefError('Automatyczna wysyłka obsługuje obecnie faktury w PLN.')
-    if invoice.get('rodzaj', 'faktura') not in ('faktura', 'korekta'):
+    if invoice.get('rodzaj', 'faktura') not in ('faktura', 'korekta', 'zaliczkowa'):
         raise KsefError('Nieobsługiwany rodzaj dokumentu do automatycznej wysyłki.')
     for field in ('procedura_marzy', 'odwrotne_obciazenie', 'samofakturowanie'):
         if invoice.get(field):
@@ -149,7 +149,8 @@ def build_fa3_xml(invoice, positions, seller, *, corrected=None):
     _element(_element(notes, 'NoweSrodkiTransportu'), 'P_22N', '1')
     _element(notes, 'P_23', '2')
     _element(_element(notes, 'PMarzy'), 'P_PMarzyN', '1')
-    _element(fa, 'RodzajFaktury', 'KOR' if is_correction else 'VAT')
+    _element(fa, 'RodzajFaktury', 'KOR' if is_correction else
+             'ZAL' if invoice.get('rodzaj') == 'zaliczkowa' else 'VAT')
     if is_correction:
         if not corrected:
             raise KsefError('Brak oryginału faktury korygowanej.')

@@ -51,6 +51,20 @@ class VatAndFa3Tests(unittest.TestCase):
             self.assertEqual(root.xpath('string(//*[local-name()="P_13_6_1"])'), '100.00')
             self.assertEqual(submission.inspect_fa3_xml(xml)['buyer_name'], INVOICE['nabywca_pelna'])
 
+    def test_advance_has_zal_marker_and_schema_valid_mixed_vat_totals(self):
+        positions = [POSITION, {**POSITION, 'vat': 8}, {**POSITION, 'vat': 5}, {**POSITION, 'vat': 0}]
+        for nip in ('1234567890', None):
+            with self.subTest(nip=nip):
+                invoice = {**INVOICE, 'rodzaj': 'zaliczkowa', 'numer': 'FZ/1/2026',
+                           'kwota_netto': 400, 'kwota_brutto': 436, 'nabywca_nip': nip}
+                xml = build_fa3_xml(invoice, positions, SELLER)
+                validate_fa3(xml)
+                self.assertEqual(submission.inspect_fa3_xml(xml)['kind'], 'ZAL')
+                self.assertEqual(submission.inspect_fa3_xml(xml)['gross'], '436.00')
+                with patch.object(submission, 'get_setting', return_value=SELLER['nip']):
+                    self.assertEqual(submission._validate_invoice_xml(
+                        invoice, submission.inspect_fa3_xml(xml)), SELLER['nip'])
+
     def test_correction_and_exemption_have_required_annotations(self):
         correction = {**INVOICE,'rodzaj':'korekta','kwota_netto':-100,'kwota_brutto':-123,'przyczyna_korekty':'Zwrot usługi'}
         xml = build_fa3_xml(correction,[{**POSITION,'ilosc':-1}],SELLER,corrected=INVOICE)

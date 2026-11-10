@@ -78,6 +78,20 @@ class SubmissionSafetyTests(DbTestCase):
         self.path.write_bytes(document(**changes))
         return submission.send_invoice_xml(self.invoice_id, str(self.path), 1)
 
+    def test_advance_xml_with_zal_type_reaches_transport(self):
+        self.update(rodzaj='zaliczkowa')
+        self.send(kind='ZAL')
+        self.client.send_fa3_xml.assert_called_once()
+        metadata = submission.inspect_fa3_xml(self.client.send_fa3_xml.call_args.args[0])
+        self.assertEqual(metadata['kind'], 'ZAL')
+        self.assertEqual(self.invoice()['rodzaj'], 'zaliczkowa')
+
+    def test_advance_rejects_vat_marker_before_contacting_ksef(self):
+        self.update(rodzaj='zaliczkowa')
+        with self.assertRaisesRegex(KsefError, 'Rodzaj faktury'):
+            self.send(kind='VAT')
+        self.client.send_fa3_xml.assert_not_called()
+
     def test_mismatched_amount_currency_date_kind_and_buyer_never_reach_client(self):
         for change in ({'gross': '124.00'}, {'gross': 'NaN'}, {'gross': ''}, {'currency': 'EUR'},
                        {'issue_date': '2026-09-02'}, {'issue_date': '2026-02-30'}, {'kind': 'KOR'},

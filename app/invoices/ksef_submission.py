@@ -93,7 +93,7 @@ def _validate_invoice_xml(invoice: dict, metadata: dict) -> str:
         raise KsefError("Nieprawidłowa data wystawienia w XML lub wybranej fakturze.") from exc
     if xml_date != invoice_date:
         raise KsefError("Data wystawienia w XML nie zgadza się z wybraną fakturą.")
-    expected_kind = {"faktura": "VAT", "korekta": "KOR"}.get(invoice.get("rodzaj") or "faktura")
+    expected_kind = {"faktura": "VAT", "korekta": "KOR", "zaliczkowa": "ZAL"}.get(invoice.get("rodzaj") or "faktura")
     if metadata["kind"] != expected_kind:
         raise KsefError("Rodzaj faktury w XML nie zgadza się z wybranym dokumentem.")
     nip = _digits(get_setting(NIP_KEY))

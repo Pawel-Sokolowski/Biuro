@@ -7,7 +7,11 @@ from lxml import etree
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_DOCUMENTS = 20000
-STATUSES = {'wystawione': 'Wystawione', 'anulowane': 'Anulowane', 'skorygowane': 'Skorygowane'}
+STATUSES = {'wystawione': 'Wystawione', 'anulowane': 'Anulowane', 'skorygowane': 'Skorygowane',
+            'wsteczne - do wyjaśnienia': 'Wsteczne - do wyjaśnienia',
+            'wsteczne - uzasadnione': 'Wsteczne - uzasadnione',
+            'wsteczne - nie uzasadnione': 'Wsteczne - nie uzasadnione',
+            'wsteczne - nieuzasadnione': 'Wsteczne - nie uzasadnione'}
 
 
 @dataclass
@@ -38,6 +42,8 @@ class Certificate:
             notes.append('Anulowane — wymaga obsługi anulowania w Enovie')
         elif self.status == 'Skorygowane':
             notes.append('Skorygowane — sprawdź dokument powiązany w Enovie')
+        elif self.status.startswith('Wsteczne'):
+            notes.append('Zwolnienie wsteczne — wymaga sprawdzenia w Enovie')
         return '; '.join(notes) or 'Podgląd — nie zaimportowano'
 
 
@@ -112,7 +118,7 @@ def parse_report(data: bytes) -> Report:
         elif not re.fullmatch(r'[0-9]{11}', value):
             issues.append('Brak lub nieprawidłowy PESEL — nie dopasowuj po nazwisku')
         status = _text(document, 'status')
-        status = STATUSES.get(status.casefold(), status)
+        status = STATUSES.get(re.sub(r'\s+', ' ', status.casefold().replace('–', '-').replace('—', '-')), status)
         if status not in STATUSES.values():
             issues.append('Nieznany status — wymaga wyjaśnienia')
         cancelled = _text(document, 'czyAnulowane', False).casefold()

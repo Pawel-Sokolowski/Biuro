@@ -20,7 +20,7 @@ def list_accounting(actor_id, month):
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
         rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,s.ilosc_dok,
-            a.wartosc AS snapshot,j.wartosc AS jpk,c.wartosc AS checking,h.wartosc AS hr,
+            a.wartosc AS snapshot,j.wartosc AS jpk,c.wartosc AS checking,h.wartosc AS hr,z.wartosc AS ezla_sync,
             trim(COALESCE(pk.imie,'') || ' ' || COALESCE(pk.nazwisko,'')) AS ksiegowa,
             trim(COALESCE(ph.imie,'') || ' ' || COALESCE(ph.nazwisko,'')) AS kadrowa
             FROM firmy f LEFT JOIN pracownicy pk ON pk.id=f.ksiegowa_id
@@ -30,6 +30,7 @@ def list_accounting(actor_id, month):
             LEFT JOIN app_settings j ON j.klucz='enova_jpk_' || f.id::text || '_' || %s
             LEFT JOIN app_settings c ON c.klucz='enova_checking_' || f.id::text || '_' || %s
             LEFT JOIN app_settings h ON h.klucz='enova_hr_' || f.id::text
+            LEFT JOIN app_settings z ON z.klucz='ezla_sync_' || f.id::text
             WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (month, month, month, month, ids)).fetchall()
         history = conn.execute('''SELECT f.id,a.klucz,a.wartosc FROM firmy f JOIN app_settings a
             ON a.klucz='enova_checking_' || f.id::text || '_' || right(a.klucz,7)

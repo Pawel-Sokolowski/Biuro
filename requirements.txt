@@ -38,3 +38,6 @@ tzdata
 
 # Include the ENOVA Python adapter in the Windows desktop build.
 pyodbc>=5.2,<6; sys_platform == "win32"
+
+# ZUS e-ZLA reports use password-protected (including AES) ZIP archives.
+pyzipper==0.3.6

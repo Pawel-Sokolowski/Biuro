@@ -86,9 +86,9 @@ class EnovaConnectionSettings(QWidget):
         save = QPushButton('Zapisz połączenie Enova')
         save.clicked.connect(self.save)
         layout.addWidget(save)
-        note = QLabel('Uruchamianie bez otwartej aplikacji: zainstaluj na serwerze codzienne zadanie '
-                      'scripts/run_enova_import.ps1 -SavedSettings -Apply. '
-                      'Import respektuje etap „Wysłane wyniki”; szczegóły w docs/enova/README.md.')
+        note = QLabel('Uruchamianie bez otwartej aplikacji: zainstaluj wspólny worker przez '
+                      'scripts/install_background_worker.cmd na serwerze. '
+                      'Harmonogram ustaw w „Worker w tle”. Licznik rozliczeniowy respektuje etap „Wysłane wyniki”.')
         note.setWordWrap(True)
         layout.addWidget(note)
 

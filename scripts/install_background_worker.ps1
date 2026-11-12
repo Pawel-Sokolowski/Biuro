@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ProjectDirectory = (Split-Path $PSScriptRoot -Parent),
+    [string]$ProjectDirectory = '',
     [string]$ExecutablePath,
     [string]$TaskName = 'Biuro-Background-Worker',
     [switch]$CheckOnly,
@@ -11,11 +11,31 @@ $ErrorActionPreference = 'Stop'
 $installerLog = $null
 $password = $null
 try {
+    if ($PSVersionTable.PSVersion -lt [version]'5.1') {
+        throw 'Use Windows PowerShell 5.1 or newer. Run the .cmd launcher, not an older PowerShell host.'
+    }
     $logRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Biuro\logs'
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
     $installerLog = Join-Path $logRoot 'worker-install.log'
     Add-Content -LiteralPath $installerLog -Value "$(Get-Date -Format o) Worker installation started" -Encoding UTF8
 
+    # Resolve defaults only after parameter binding. Some Windows PowerShell
+    # entry points do not populate script-scope variables inside param defaults.
+    if ([string]::IsNullOrWhiteSpace($ProjectDirectory)) {
+        $scriptDirectory = ''
+        $scriptFile = $PSCommandPath
+        if ([string]::IsNullOrWhiteSpace($scriptFile)) { $scriptFile = $MyInvocation.MyCommand.Path }
+        if (-not [string]::IsNullOrWhiteSpace($scriptFile)) {
+            $scriptDirectory = [IO.Path]::GetDirectoryName($scriptFile)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($scriptDirectory)) {
+            $ProjectDirectory = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
+        } elseif ($ExecutablePath) {
+            $ProjectDirectory = [IO.Path]::GetDirectoryName((Resolve-Path -LiteralPath $ExecutablePath).Path)
+        } else {
+            $ProjectDirectory = (Get-Location).Path
+        }
+    }
     $project = (Resolve-Path -LiteralPath $ProjectDirectory).Path
     $program = $null
     $arguments = '--worker'
@@ -36,10 +56,23 @@ try {
         $installed = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Biuro\Biuro.exe'
         if (Test-Path -LiteralPath $installed) { $program = $installed }
     }
+    if (-not $program -and -not $CheckOnly -and -not $NonInteractive) {
+        Add-Type -AssemblyName System.Windows.Forms
+        $picker = New-Object System.Windows.Forms.OpenFileDialog
+        try {
+            $picker.Title = 'Select the installed Biuro.exe'
+            $picker.Filter = 'Biuro application (Biuro.exe)|Biuro.exe'
+            $picker.CheckFileExists = $true
+            if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $program = $picker.FileName
+            }
+        } finally { $picker.Dispose() }
+    }
     if (-not $program) {
         throw 'Biuro.exe or a source installation with .venv was not found. Install Biuro first, or pass -ExecutablePath "C:\path\Biuro.exe". An installed EXE does not require Python or .venv.'
     }
     $workingDirectory = if ($mode -eq 'installed EXE') { Split-Path $program -Parent } else { $project }
+    Write-Output "PowerShell: $($PSVersionTable.PSVersion)"
     Write-Output "Mode: $mode"
     Write-Output "Program: $program"
     Write-Output "Arguments: $arguments"

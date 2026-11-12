@@ -1,0 +1,65 @@
+BIURO WORKER - SERVER SETUP (INSTALLED EXE)
+
+Use install_background_worker.cmd. Keep its .ps1 file beside it.
+You do not need Python or a .venv when Biuro.exe is installed.
+
+1. On the server, sign into the Windows account that will run the worker
+   (for example TenvirkADM). Install Biuro if it is not already installed.
+
+2. Open Biuro under that Windows account. Configure the SAME PostgreSQL
+   database and import the SAME office encryption key used on your PC.
+   In Settings > Worker w tle, enable the worker and the jobs you need.
+   Configure mail accounts, reminders and Enova in their settings.
+   You may close the Biuro window afterward.
+
+3. Right-click install_background_worker.cmd and choose Run as administrator.
+   The launcher locates Biuro.exe automatically. If not found, select the
+   installed Biuro.exe in the file chooser.
+   If Windows requests another administrator account, the task credentials
+   in step 4 should still be the Windows account configured in step 2.
+
+4. In the credential prompt enter the WINDOWS account and WINDOWS password.
+   This is NOT the Biuro login and NOT the SQL login/password (sa).
+   The task will run at server startup, even when nobody is logged in.
+
+5. Confirm a recent heartbeat in Biuro > Settings > Worker w tle.
+   Task registration alone does not prove that the process is healthy.
+   The Biuro window does not need to remain open; the server must stay on.
+
+CUSTOM INSTALLATION FOLDER
+
+From an Administrator PowerShell window, open the helper folder and run:
+
+  .\install_background_worker.cmd -ExecutablePath "D:\Apps\Biuro\Biuro.exe"
+
+Replace the example path with the actual location of Biuro.exe.
+
+ERRORS
+
+The window stays open. The installer log is in the invoking account's:
+  %LOCALAPPDATA%\Biuro\logs\worker-install.log
+
+Worker startup/runtime errors are in the TASK ACCOUNT'S:
+  %LOCALAPPDATA%\Biuro\logs\biuro.log
+
+The task account needs access to the installed files and its configuration:
+  %LOCALAPPDATA%\Biuro\.env
+That file (or that account's environment) needs DB_URL and BIO_ENCRYPTION_KEY.
+Do not send those values or Windows passwords in chat.
+
+If Windows blocks script execution, retain the displayed error and follow
+company policy. The launcher does not weaken system execution policy.
+
+Do not run the removed standalone ENOVA daily-task scripts. Use one worker.
+If a legacy task Biuro-Enova-Daily exists, disable it in Task Scheduler after
+confirming the new worker heartbeat. Existing tasks are never removed or
+replaced automatically.
+
+ADVANCED / SOURCE INSTALLATIONS
+
+The same launcher supports a source checkout only when its real .venv exists
+and the project dependencies are installed. Installing system Python alone
+is not sufficient. Installed-EXE users should use the steps above.
+
+For a path-only diagnostic, with no task registration and no job execution:
+  .\install_background_worker.ps1 -CheckOnly -NonInteractive

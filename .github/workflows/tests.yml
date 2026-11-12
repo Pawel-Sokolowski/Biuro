@@ -117,6 +117,7 @@ jobs:
         run: |
           $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $compiler)) { choco install innosetup --version=6.4.3 -y --no-progress }
+          & .\scripts\prepare_odbc_prerequisite.ps1
           & $compiler installer\biuro.iss
           if ($LASTEXITCODE) { throw 'Installer compilation failed' }
           $setup = Get-ChildItem installer\output\*.exe | Select-Object -First 1
@@ -124,6 +125,7 @@ jobs:
           $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$target`"" -Wait -PassThru
           if ($process.ExitCode) { throw 'Installer failed' }
           $env:BIO_SMOKE_OUTPUT = "$env:RUNNER_TEMP\installed-smoke.json"
+          $env:BIO_SMOKE_REQUIRE_SQL_DRIVER = "1"
           $process = Start-Process "$target\Biuro.exe" -ArgumentList '--smoke-test' -Wait -PassThru
           if ($process.ExitCode) { throw 'Installed smoke test failed' }
           Get-Content $env:BIO_SMOKE_OUTPUT

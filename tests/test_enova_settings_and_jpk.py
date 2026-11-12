@@ -149,5 +149,8 @@ class DatabaseConnectionTests(TestCase):
             connection.close.assert_called_once()
             self.assertEqual(driver.connect.call_args.kwargs['attrs_before'], {101: 1})
             connection.cursor.return_value.execute.side_effect = RuntimeError('secret')
-            self.assertEqual(check_connection(config, password='secret'), [{'database': 'CompanyA', 'ok': False}])
+            failed = check_connection(config, password='secret')[0]
+            self.assertFalse(failed['ok'])
+            self.assertEqual(failed['database'], 'CompanyA')
+            self.assertNotIn('secret', failed['error']['details'])
             self.assertEqual(connection.close.call_count, 2)

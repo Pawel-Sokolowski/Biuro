@@ -334,6 +334,7 @@ class BackgroundViewTests(TestCase):
         page = FakturyPage.__new__(FakturyPage)
         QWidget.__init__(page)
         self.addCleanup(page.close)
+        page.pracownik_id = 7
         page._generation_busy = False
         page._generation_progress = None
         page._current_month = lambda: "2026-10"
@@ -355,6 +356,7 @@ class BackgroundViewTests(TestCase):
         )
         QTimer.singleShot(0, ready.set)
         with (
+            mock.patch('app.invoices.faktury_ui.can_manage_invoices', return_value=True) as permitted,
             mock.patch.object(
                 QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
             ) as confirm,
@@ -368,5 +370,6 @@ class BackgroundViewTests(TestCase):
             while page._generation_busy and time.monotonic() < deadline:
                 QT_APP.processEvents()
             self.assertFalse(page._generation_busy)
+            permitted.assert_any_call(page.pracownik_id)
         page.logic.generate_and_save_invoices_for_month.assert_called_once()
         page.refresh_async.assert_called_once()

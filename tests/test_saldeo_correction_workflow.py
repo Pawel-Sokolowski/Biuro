@@ -4,6 +4,8 @@ from unittest import mock
 from PyQt6.QtWidgets import QApplication
 
 from app.db.dao_conn import get_conn
+from app.db.dao_global_settings import add_role, assign_role
+from app.security.authorization import can
 from app.db.dao_invoices import (
     create_correction, create_or_update_invoice, delete_draft_invoice,
     get_invoice_by_id, mark_exported, set_invoice_number,
@@ -43,11 +45,25 @@ class SaldeoCorrectionWorkflowTests(DbTestCase):
         with self.assertRaises(ValueError):
             confirm_saldeo_correction(self.correction, '', 1)
         employee = self.make_employee()
+        role = add_role('Bez obsługi faktur', can_view_invoices=False)
+        assign_role(employee, role)
         with self.assertRaises(PermissionError):
             confirm_saldeo_correction(self.correction, 'KOR/1', employee)
         with self.assertRaises(ValueError):
             confirm_saldeo_correction(self.original, 'KOR/1', 1)
         self.assertFalse(get_invoice_by_id(self.correction)['eksportowana'])
+
+    def test_invoice_module_alone_can_confirm_external_correction(self):
+        employee = self.make_employee('invoice-only@example.test')
+        role = add_role('Obsługa korekt', can_view_invoices=True)
+        assign_role(employee, role)
+        self.assertFalse(can(employee, 'can_export_data'))
+        self.assertFalse(can(employee, 'can_view_finances'))
+        confirm_saldeo_correction(self.correction, 'KOR/UPRAWNIENIA/2026', employee)
+        invoice = get_invoice_by_id(self.correction)
+        self.assertEqual(invoice['numer'], 'KOR/UPRAWNIENIA/2026')
+        self.assertTrue(invoice['eksportowana'])
+        self.assertEqual(invoice['kwota_brutto'], -123)
 
     def test_external_confirmation_can_reuse_deleted_draft_but_not_live_number(self):
         abandoned = create_correction(self.original, 'Roboczy numer')

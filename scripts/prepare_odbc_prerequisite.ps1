@@ -1,8 +1,18 @@
 [CmdletBinding()]
 param(
-    [string]$Destination = (Join-Path (Split-Path $PSScriptRoot -Parent) 'installer\prerequisites\msodbcsql18-x64.msi')
+    [string]$Destination = ''
 )
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($Destination)) {
+    $scriptFile = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($scriptFile)) { $scriptFile = $MyInvocation.MyCommand.Path }
+    if ([string]::IsNullOrWhiteSpace($scriptFile)) {
+        throw 'Run this file with -File or provide -Destination explicitly.'
+    }
+    $scriptDirectory = [IO.Path]::GetDirectoryName($scriptFile)
+    $repository = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
+    $Destination = Join-Path $repository 'installer\prerequisites\msodbcsql18-x64.msi'
+}
 # Microsoft Learn's x64 link for ODBC Driver 18.7.1.1; pinned, not a moving alias.
 # https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server
 $downloadUrl = 'https://download.microsoft.com/download/d624e1c6-293b-4d6f-91b8-6e515a5d6a77/amd64/1033/msodbcsql.msi'

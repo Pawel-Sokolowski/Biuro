@@ -188,31 +188,20 @@ ODBC dodatkowo otrzymuje żądanie trybu tylko do odczytu; nie zastępuje ono pr
 
 ## Harmonogram raz dziennie
 
-W Harmonogramie zadań utwórz zadanie pod kontem mającym dostęp do konfiguracji,
-PostgreSQL i loginu SQL. Zaznacz **Uruchom niezależnie od tego, czy użytkownik
-jest zalogowany**. Wybierz godzinę codziennego uruchomienia w lokalnym czasie
-serwera, np. 02:00 po zakończeniu księgowania. Włącz uruchomienie po pominiętym
-terminie; dla istniejącej instancji wybierz **Nie uruchamiaj nowego wystąpienia**.
+Używaj wspólnego workera: `scripts/install_background_worker.cmd`, uruchomionego
+jako administrator na serwerze PostgreSQL. Godzinę Enova i pozostałe zadania
+ustaw w **Ustawienia → Worker w tle**. Instrukcja instalacji gotowego EXE:
+[worker-install.md](../worker-install.md).
 
-Program: `powershell.exe`
+Osobny instalator codziennego zadania Enova i jego wrapper PowerShell zostały
+usunięte. Do ręcznej diagnostyki ze źródeł pozostaje bezpośrednie polecenie
+`python -m app.integrations.enova.document_counts --saved-settings` (podgląd)
+lub z `--apply` (zapis). Nie trzeba tworzyć drugiego zadania harmonogramu.
+Jeżeli istnieje stare zadanie `Biuro-Enova-Daily`, wyłącz je po potwierdzeniu,
+że nowy worker działa. Aktualizacja plików nie usuwa istniejących zadań Windows.
 
-Argumenty:
-
-```text
--NoProfile -File "C:\BiuroSync\scripts\run_enova_import.ps1" -ConfigFile "C:\BiuroConfig\enova.json" -Apply
-```
-
-Katalog startowy: `C:\BiuroSync`. Stosuj obowiązującą na serwerze politykę
-uruchamiania/skryptów podpisanych. Skrypt nie zmienia ExecutionPolicy.
-Najpierw sprawdź ręczne **Uruchom** pod docelowym kontem zadania.
-
-Logi trafiają do `logs\enova`. Kod zakończenia 0 oznacza sukces wszystkich
-źródeł, 1 — błąd konfiguracji lub co najmniej jednej firmy. Historia zapisanych
-liczb (poprzednia/nowa, miesiąc, źródłowe składniki) oraz błędów jest dostępna
-w tabeli `import_history` jako `enova_document_counts`, w ustawieniach audytu
-aplikacji. Podgląd nie zapisuje historii ani liczników. Harmonogram i połączenie
-z rzeczywistą Enova trzeba skonfigurować na serwerze — nie są instalowane
-przez samo dodanie tych plików do repozytorium.
+Błędy są w audycie importów, a log wspólnego workera w `logs/biuro.log` konta
+zadania. Sprawdź sygnał działania w „Worker w tle”.
 
 ### Automatyczny wybór rodzaju księgowości
 
@@ -248,11 +237,11 @@ Po porównaniu wyników włącz import w ustawieniach. Codzienne zadanie można
 zarejestrować lokalnie na Windows Server:
 
 ```powershell
-.\scripts\install_enova_daily_task.ps1 -Time '02:00'
+.\scripts\install_background_worker.cmd
 ```
 
-Skrypt pyta lokalnie o konto Windows zadania i nie nadpisuje istniejącego zadania.
-Czas oznacza strefę lokalną serwera. Wymaga odpowiednich uprawnień Windows;
+Launcher pyta lokalnie o konto Windows zadania i nie nadpisuje istniejącego zadania.
+Godzinę importu ustaw w „Worker w tle” (Europe/Warsaw). Wymaga odpowiednich uprawnień Windows;
 repozytorium samo nie instaluje zadania. Konfiguracja JSON nadal jest obsługiwana.
 Zadanie korzysta ze wspólnych ustawień PostgreSQL i działa bez otwartej aplikacji.
 Pozostaje reguła odczytu tylko dla miesięcy „Wysłane wyniki”.
@@ -308,7 +297,7 @@ ODBC Driver 18. Nie trzeba instalować ani pozostawiać otwartego okna Biuro.
 Skonfiguruj `DB_URL` i wspólny `BIO_ENCRYPTION_KEY` w środowisku konta zadania
 lub zabezpieczonym lokalnym `.env`. Ustawienia zapisane w aplikacji są we wspólnej
 bazie PostgreSQL. Na serwerze uruchom podgląd `--saved-settings`, a po weryfikacji
-zarejestruj `scripts/install_enova_daily_task.ps1 -Time '02:00'`.
+zarejestruj wspólny worker przez `scripts/install_background_worker.cmd`.
 Zadanie uruchamia worker raz dziennie, także bez zalogowanego użytkownika,
 a proces kończy się po imporcie. Serwer musi być włączony w czasie pracy zadania;
 ustawienie StartWhenAvailable nadrabia pominięty termin. W Harmonogramie zadań

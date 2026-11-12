@@ -40,6 +40,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 [Files]
 Source: "..\scripts\install_background_worker.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\install_background_worker.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\WORKER-SETUP.txt"; DestDir: "{app}\scripts"; Flags: ignoreversion
 ; Original signed Microsoft MSI, extracted only for the selected prerequisite.
 Source: "{#MyOdbcMsi}"; Flags: dontcopy
 Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

@@ -30,6 +30,10 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         payload["data_dostarczenia"] = payload.get("data_dostarczenia") or datetime.date.today().isoformat()
     conn = get_conn()
     cur = conn.cursor()
+    before = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
+                          (firma_id, miesiac)).fetchone()
+    manual_count = payload.pop('_manual_document_count', False) or (
+        'ilosc_dok' in payload and before is not None and payload['ilosc_dok'] != before[0])
 
     cur.execute("""
         INSERT INTO statusy_miesieczne (
@@ -63,6 +67,13 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         payload.get("etap_kadry"),
     ))
 
+    if manual_count:
+        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                     (f'manual_document_count_{firma_id}_{miesiac}', '1'))
+        conn.execute('INSERT INTO monthly_document_imports(firma_id,miesiac,source_name) VALUES (%s,%s,%s) '
+                     'ON CONFLICT(firma_id,miesiac) DO UPDATE SET source_name=EXCLUDED.source_name, imported_at=now()',
+                     (firma_id, miesiac, 'Ręcznie'))
     conn.commit()
     conn.close()
 

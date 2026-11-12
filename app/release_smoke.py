@@ -25,6 +25,10 @@ def run():
             from app.integrations.enova.odbc_support import load_odbc
             load_odbc()
             result['checks'].append('enova_odbc_module')
+            if os.environ.get('BIO_SMOKE_REQUIRE_SQL_DRIVER') == '1':
+                from app.integrations.enova.odbc_support import resolve_driver
+                resolve_driver({}, load_odbc())
+                result['checks'].append('enova_native_odbc_driver')
         if not schema_is_current():
             raise RuntimeError('Database migration is required')
         result['checks'].append('schema')

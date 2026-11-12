@@ -13,8 +13,15 @@ def load_connection():
     config.setdefault('sources', [])
     config.setdefault('jpk_query', '')
     config.setdefault('driver', 'auto')
+    config.setdefault('trust_server_certificate', False)
+    config.setdefault('checking_enabled', True)
+    config.setdefault('declarations_query', '')
+    config.setdefault('payroll_query', '')
     config['_directory'] = Path(__file__).resolve().parents[3] / 'docs' / 'enova'
     for source in config['sources']:
+        for name in ('declarations_query', 'payroll_query'):
+            if config.get(name):
+                source[name] = config[name]
         if config.get('jpk_query'):
             source['jpk_query'] = config['jpk_query']
     return config
@@ -46,6 +53,13 @@ def save_connection(config, *, actor_id, password=''):
     if driver not in ('auto', *SUPPORTED_DRIVERS):
         raise ValueError('Nieprawidłowy sterownik SQL Server.')
     saved['driver'] = driver
+    trust = config.get('trust_server_certificate', False)
+    if type(trust) is not bool:
+        raise ValueError('Opcja zaufania certyfikatowi musi być wartością logiczną.')
+    saved['trust_server_certificate'] = trust
+    saved['checking_enabled'] = True
+    for name in ('declarations_query', 'payroll_query'):
+        saved[name] = str(config.get(name, '')).strip()
     saved['jpk_query'] = str(config.get('jpk_query', '')).strip()
     saved['password_enc'] = load_connection().get('password_enc', '')
     if password:

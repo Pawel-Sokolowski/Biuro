@@ -410,7 +410,7 @@ class OfficeManagerApp(QMainWindow):
             "Zadania",
             "Kalendarz",
             "Ustawienia",
-            "Księgowość"
+            "Sprawdzanie"
         ])
         for row in range(self.sidebar.count()):
             item = self.sidebar.item(row)

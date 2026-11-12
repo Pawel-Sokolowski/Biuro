@@ -74,7 +74,8 @@ class ConnectionAndJpkTests(DbTestCase):
         from app.accounting.accounting_ui import AccountingPage
         page = AccountingPage(self.admin)
         page.render(rows, '2026-11')
-        self.assertEqual(page.table.item(0, 7).text(), 'Przyjęty (UPO)')
+        column = next(i for i in range(page.table.columnCount()) if page.table.horizontalHeaderItem(i).text() == 'JPK_VAT\nStatus')
+        self.assertEqual(page.table.item(0, column).text(), 'Przyjęty (UPO)')
         self.assertEqual(page.table.item(0, 3).text(), '—')
         page.close()
 

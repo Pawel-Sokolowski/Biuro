@@ -136,19 +136,21 @@ def sql_credentials():
 
 
 def sql_connection_string(config, database, user, password):
-    return ';'.join(f'{key}={_odbc_quote(value)}' for key, value in {
+    values = {
         'DRIVER': config.get('driver', 'ODBC Driver 18 for SQL Server'),
-        'SERVER': config['server'], 'DATABASE': database, 'UID': user, 'PWD': password,
+        'SERVER': config['server'], 'UID': user, 'PWD': password,
         'Encrypt': 'yes', 'TrustServerCertificate': 'no', 'APP': 'Biuro document counts',
-    }.items())
+    }
+    if database:
+        values['DATABASE'] = database
+    return ';'.join(f'{key}={_odbc_quote(value)}' for key, value in values.items())
 
 
 def fetch_counts(config, source, months, *, result_kind="counts"):
     """SQL Server credentials must be SELECT-only; readonly is also requested from ODBC."""
-    try:
-        import pyodbc
-    except ImportError:
-        raise ValueError('Zainstaluj requirements-enova.txt oraz Microsoft ODBC Driver 18 for SQL Server.') from None
+    from app.integrations.enova.odbc_support import load_odbc, resolve_driver
+    pyodbc = load_odbc()
+    config = {**config, 'driver': resolve_driver(config, pyodbc)}
     if config.get('password_enc'):
         from app.integrations.enova.connection_settings import credentials
         user, password = credentials(config)

@@ -20,8 +20,9 @@ python -c "import mt940; from importlib.metadata import version; print('mt-940',
 python -m PyInstaller --clean --noconfirm packaging\biuro.spec
 ```
 
-Then open `installer\biuro.iss` in Inno Setup and build it. The installer
-expects the PyInstaller output in `dist\Biuro`.
+Run scripts/prepare_odbc_prerequisite.ps1 on Windows before compiling
+installer/biuro.iss in Inno Setup. The installer expects the PyInstaller output
+in dist/Biuro and the verified MSI in installer/prerequisites.
 
 Use the same Python environment for dependency installation and PyInstaller.
 The distribution is named `mt-940`; its Python import is `mt940`. The spec
@@ -47,3 +48,33 @@ then rerun the full suite before building. The spec includes the Alembic scripts
 psycopg pool, and IMAP UTF-7 codec. Exercise `Biuro.exe --migrate` twice: the second
 run must be a no-op. The first Alembic upgrade of an older installation reuses the
 frozen accounting bootstrap; subsequent changes belong in new revisions.
+
+## Bundled SQL Server driver
+
+The preparation script downloads the original Microsoft ODBC Driver 18.7.1.1
+x64 MSI from its pinned Microsoft download URL. It verifies a valid Microsoft
+Corporation Authenticode signature, the exact MSI product version and the x64
+architecture. Cached files are checked again and a SHA256 is printed. Do not
+substitute unsigned packages or individual DLLs. Generated MSI files are ignored
+by Git. Version 18.7 does not require a separate Visual C++ Redistributable.
+
+The x64 Biuro installer bundles the MSI, so end users do not need an internet
+connection. When 64-bit Driver 17 or 18 is already registered, installation of
+the prerequisite is skipped. Otherwise, the default-selected Enova prerequisite
+task launches Microsoft's MSI with administrator elevation. Its interactive
+wizard handles Microsoft's licence acceptance. Users may deselect this task
+when they do not need Enova or cannot elevate; Biuro remains a per-user install.
+The shared ODBC driver is retained when Biuro is uninstalled.
+
+Silent deployment accepts Microsoft's prerequisite licence with
+IACCEPTMSODBCSQLLICENSETERMS=YES. Deployment administrators must review those
+terms before using silent installation. Cancellation or MSI failure blocks
+installation while the prerequisite remains selected. Exit code 3010 prompts
+for restart without forcing it; Biuro is not launched before that restart.
+
+GitHub's Windows release job prepares the signed MSI, compiles and installs
+the installer, then checks native ODBC detection from the installed executable.
+
+The ENOVA connection dialog also validates named-instance address syntax and
+shows SQLSTATE with expandable, password-redacted driver error details. A correct
+address does not alone establish TCP reachability, login validity or TLS trust.

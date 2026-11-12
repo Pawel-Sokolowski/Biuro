@@ -130,7 +130,21 @@ class EnovaConnectionSettings(QWidget):
             if all(result['ok'] for result in results):
                 QMessageBox.information(self, 'Połączenie Enova', text)
             else:
-                QMessageBox.warning(self, 'Połączenie Enova', text + '\nSprawdź adres/instancję, login, hasło, certyfikat i dostęp sieciowy.')
+                from PyQt6.QtCore import Qt
+                failures = [result for result in results if not result['ok']]
+                hints, details = [], []
+                for result in failures:
+                    error = result.get('error', {})
+                    code = error.get('sqlstate') or 'brak SQLSTATE'
+                    hints.append(result['database'] + ' [' + code + ']: ' + error.get('hint', 'Błąd połączenia.'))
+                    details.append(result['database'] + '\n' + error.get('details', 'Brak szczegółów.'))
+                box = QMessageBox(self)
+                box.setWindowTitle('Połączenie Enova')
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setTextFormat(Qt.TextFormat.PlainText)
+                box.setText('\n'.join(hints))
+                box.setDetailedText('\n\n'.join(details))
+                box.exec()
         def failed(exc):
             self.connection_button.setEnabled(True)
             QMessageBox.warning(self, 'Połączenie Enova', str(exc) if isinstance(exc, ValueError) else type(exc).__name__)

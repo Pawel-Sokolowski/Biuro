@@ -40,7 +40,8 @@ def save_connection(config, *, actor_id, password=''):
     if config['enabled'] and not config['sources']:
         raise ValueError('Dodaj mapowanie bazy przynajmniej jednej firmy.')
     saved = {key: config[key] for key in ('server', 'username', 'enabled', 'months_back', 'sources')}
-    from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
+    from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS, validate_server
+    validate_server(config['server'])
     driver = config.get('driver', 'auto')
     if driver not in ('auto', *SUPPORTED_DRIVERS):
         raise ValueError('Nieprawidłowy sterownik SQL Server.')
@@ -63,7 +64,8 @@ def credentials(config):
 def check_connection(config, *, password=''):
     """Test actual database access without running imports or writing data."""
     from app.integrations.enova.document_counts import sql_connection_string
-    from app.integrations.enova.odbc_support import load_odbc, resolve_driver
+    from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server
+    validate_server(config.get('server'))
     pyodbc = load_odbc()
     config = {**config, 'driver': resolve_driver(config, pyodbc)}
     if not config.get('server') or not config.get('username'):
@@ -85,9 +87,11 @@ def check_connection(config, *, password=''):
             if not actual or (source['database'] and str(actual[0]).casefold() != source['database'].casefold()):
                 raise ValueError('Połączenie wskazuje inną bazę danych.')
             results.append({'database': source['database'] or 'Serwer SQL (baza domyślna)', 'ok': True})
-        except Exception:
-            # Driver messages can contain connection strings; never display them.
-            results.append({'database': source['database'] or 'Serwer SQL (baza domyślna)', 'ok': False})
+        except Exception as exc:
+            from app.integrations.enova.odbc_support import describe_sql_error
+            error = describe_sql_error(exc, secrets=(password, config.get('password_enc')))
+            results.append({'database': source['database'] or 'Serwer SQL (baza domyślna)',
+                            'ok': False, 'error': error})
         finally:
             if connection is not None:
                 connection.close()

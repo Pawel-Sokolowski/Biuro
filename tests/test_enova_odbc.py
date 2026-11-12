@@ -37,3 +37,26 @@ class OdbcSupportTests(TestCase):
         self.assertIn('Encrypt={yes}', driver.connect.call_args.args[0])
         self.assertIn('TrustServerCertificate={no}', driver.connect.call_args.args[0])
         connection.close.assert_called_once()
+
+    def test_named_instance_requires_backslash(self):
+        from app.integrations.enova.odbc_support import validate_server
+        self.assertEqual(validate_server(r'192.168.1.16\SQLEMKA'), r'192.168.1.16\SQLEMKA')
+        self.assertEqual(validate_server('sql.example,1433'), 'sql.example,1433')
+        with self.assertRaisesRegex(ValueError, 'ukośnika wstecznego'):
+            validate_server('192.168.1.16/SQLEMKA')
+
+    def test_sql_details_preserve_state_and_redact_password(self):
+        from app.integrations.enova.odbc_support import describe_sql_error
+        error = describe_sql_error(Exception('08001', 'SSL Provider: certificate chain not trusted; PWD={private;pass};'),
+                                   secrets=('private;pass',))
+        self.assertEqual(error['sqlstate'], '08001')
+        self.assertIn('TLS', error['hint'])
+        self.assertIn('certificate chain', error['details'])
+        self.assertNotIn('private', error['details'])
+        self.assertNotIn('pass}', error['details'])
+
+    def test_login_failure_is_distinguished_from_network_failure(self):
+        from app.integrations.enova.odbc_support import describe_sql_error
+        error = describe_sql_error(Exception('28000', 'Login failed (18456)'))
+        self.assertIn('logowanie', error['hint'])
+        self.assertEqual(error['sqlstate'], '28000')

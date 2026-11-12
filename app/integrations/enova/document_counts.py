@@ -136,9 +136,10 @@ def sql_credentials():
 
 
 def sql_connection_string(config, database, user, password):
+    from app.integrations.enova.odbc_support import validate_server
     values = {
         'DRIVER': config.get('driver', 'ODBC Driver 18 for SQL Server'),
-        'SERVER': config['server'], 'UID': user, 'PWD': password,
+        'SERVER': validate_server(config['server']), 'UID': user, 'PWD': password,
         'Encrypt': 'yes', 'TrustServerCertificate': 'no', 'APP': 'Biuro document counts',
     }
     if database:

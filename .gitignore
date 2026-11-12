@@ -44,3 +44,6 @@ inspect_export.log
 
 .hypothesis/
 /app/documents/templates/
+
+# Original Microsoft redistributable downloaded and verified at Windows build time.
+/installer/prerequisites/

@@ -118,3 +118,12 @@ class WorkerTests(DbTestCase):
             self.assertEqual(enova_job(day(3))['companies'], 1)
             self.assertEqual(enova_job(day(4))['mode'], 'checked_today')
             self.assertEqual(importer.call_count, 2)
+
+    def test_missing_key_in_headless_worker_is_logged_and_returns_failure(self):
+        from app.worker import main
+        with patch('app.utils.env_config.ensure_encryption_key', side_effect=ValueError('Shared key missing')), \
+             patch('app.diagnostics.configure_logging'), patch('app.worker.logger.exception') as logged, \
+             patch('app.worker.serve') as serve:
+            self.assertEqual(main(['--once']), 1)
+            logged.assert_called_once_with('worker_startup_or_runtime_failed')
+            serve.assert_not_called()

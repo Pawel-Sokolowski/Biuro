@@ -129,8 +129,8 @@ def _validate_invoice_xml(invoice: dict, metadata: dict) -> str:
 
 
 def _authorized_invoice(invoice_id: int, actor_id: int):
-    from app.security.authorization import can, is_administrator
-    if not (is_administrator(actor_id) or can(actor_id, "can_export_data")):
+    from app.security.authorization import can_manage_invoices
+    if not can_manage_invoices(actor_id):
         raise PermissionError("Brak uprawnień do wysyłania faktur do KSeF.")
     conn = get_conn()
     try:

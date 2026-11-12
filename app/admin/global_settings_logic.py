@@ -250,18 +250,10 @@ class GlobalSettingsLogic:
         dao_global_settings.delete_role(rola_id)
 
     def get_user_permissions(self, pracownik_id: int) -> Dict[str, bool]:
-        row = dao_global_settings.get_user_permissions(pracownik_id)
-        if not row:
-            return {
-                "can_view_invoices": False,
-                "can_access_admin_settings": False,
-                "can_manage_users": False,
-            }
-        return {
-            "can_view_invoices": bool(row["can_view_invoices"]),
-            "can_access_admin_settings": bool(row["can_access_admin_settings"]),
-            "can_manage_users": bool(row["can_manage_users"]),
-        }
+        from app.security.authorization import get_permissions
+        permissions = get_permissions(pracownik_id)
+        return {key: bool(permissions.get(key)) for key in
+                ('can_view_invoices', 'can_access_admin_settings', 'can_manage_users')}
 
     def assign_role(self, uid: int, rid: int, firma_id: int = 1):
         dao_global_settings.assign_role(uid, rid, firma_id)

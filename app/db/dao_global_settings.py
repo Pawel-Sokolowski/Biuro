@@ -50,8 +50,13 @@ def set_role_tabs(rid: int, tabs: List[str]) -> None:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE role SET zakladki = %s WHERE id = %s", ("|".join(tabs), rid))
+        from app.security.authorization import parse_tabs
+        tabs = parse_tabs('|'.join(tabs))
+        cur.execute("UPDATE role SET zakladki = %s,can_view_invoices=%s WHERE id = %s",
+                    ("|".join(tabs), int('Faktury' in tabs), rid))
         conn.commit()
+        from app.utils.request_cache import clear_request_cache
+        clear_request_cache()
     finally:
         conn.close()
 
@@ -79,6 +84,16 @@ def get_role(rid: int) -> Optional[Row]:
         conn.close()
 
 
+def _invoice_tabs(raw, admin_settings, enabled):
+    from app.security.authorization import parse_tabs, TABS
+    tabs = set(parse_tabs(raw, bool(admin_settings)))
+    if enabled:
+        tabs.add('Faktury')
+    else:
+        tabs.discard('Faktury')
+    return '|'.join(tab for tab in TABS if tab in tabs)
+
+
 def add_role(
     nazwa: str,
     can_view_invoices: bool = False,
@@ -94,8 +109,8 @@ def add_role(
         cur.execute(
             """
             INSERT INTO role (nazwa, can_view_invoices, can_edit_companies, can_manage_users,
-                              can_view_finances, can_export_data, can_access_admin_settings)
-            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+                              can_view_finances, can_export_data, can_access_admin_settings, zakladki)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
             (
                 nazwa,
@@ -105,11 +120,14 @@ def add_role(
                 int(can_view_finances),
                 int(can_export_data),
                 int(can_access_admin_settings),
+                _invoice_tabs(None, can_access_admin_settings, can_view_invoices),
             ),
         )
         _new_id = cur.fetchone()[0]
         rid = _new_id
         conn.commit()
+        from app.utils.request_cache import clear_request_cache
+        clear_request_cache()
         return rid
     finally:
         conn.close()
@@ -119,33 +137,37 @@ def update_role(rid: int, nazwa: str, **perms) -> None:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        try:
-            cur.execute(
-                """
-                UPDATE role
-                SET nazwa = %s,
-                    can_view_invoices = COALESCE(%s, can_view_invoices),
-                    can_edit_companies = COALESCE(%s, can_edit_companies),
-                    can_manage_users = COALESCE(%s, can_manage_users),
-                    can_view_finances = COALESCE(%s, can_view_finances),
-                    can_export_data = COALESCE(%s, can_export_data),
-                    can_access_admin_settings = COALESCE(%s, can_access_admin_settings)
-                WHERE id = %s
-                """,
-                (
-                    nazwa,
-                    int(bool(perms["can_view_invoices"])) if "can_view_invoices" in perms else None,
-                    int(bool(perms["can_edit_companies"])) if "can_edit_companies" in perms else None,
-                    int(bool(perms["can_manage_users"])) if "can_manage_users" in perms else None,
-                    int(bool(perms["can_view_finances"])) if "can_view_finances" in perms else None,
-                    int(bool(perms["can_export_data"])) if "can_export_data" in perms else None,
-                    int(bool(perms["can_access_admin_settings"])) if "can_access_admin_settings" in perms else None,
-                    rid,
-                ),
-            )
-        except psycopg.Error:
-            cur.execute("UPDATE role SET nazwa = %s WHERE id = %s", (nazwa, rid))
+        cur.execute(
+            """
+            UPDATE role
+            SET nazwa = %s,
+                can_view_invoices = COALESCE(%s, can_view_invoices),
+                can_edit_companies = COALESCE(%s, can_edit_companies),
+                can_manage_users = COALESCE(%s, can_manage_users),
+                can_view_finances = COALESCE(%s, can_view_finances),
+                can_export_data = COALESCE(%s, can_export_data),
+                can_access_admin_settings = COALESCE(%s, can_access_admin_settings)
+            WHERE id = %s
+            """,
+            (
+                nazwa,
+                int(bool(perms["can_view_invoices"])) if "can_view_invoices" in perms else None,
+                int(bool(perms["can_edit_companies"])) if "can_edit_companies" in perms else None,
+                int(bool(perms["can_manage_users"])) if "can_manage_users" in perms else None,
+                int(bool(perms["can_view_finances"])) if "can_view_finances" in perms else None,
+                int(bool(perms["can_export_data"])) if "can_export_data" in perms else None,
+                int(bool(perms["can_access_admin_settings"])) if "can_access_admin_settings" in perms else None,
+                rid,
+            ),
+        )
+        if 'can_view_invoices' in perms:
+            row = cur.execute('SELECT zakladki,can_access_admin_settings FROM role WHERE id=%s FOR UPDATE', (rid,)).fetchone()
+            if row:
+                tabs = _invoice_tabs(row['zakladki'], row['can_access_admin_settings'], bool(perms['can_view_invoices']))
+                cur.execute('UPDATE role SET zakladki=%s WHERE id=%s', (tabs, rid))
         conn.commit()
+        from app.utils.request_cache import clear_request_cache
+        clear_request_cache()
     finally:
         conn.close()
 
@@ -156,6 +178,8 @@ def delete_role(rola_id: int) -> None:
         cur = conn.cursor()
         cur.execute("DELETE FROM role WHERE id = %s", (rola_id,))
         conn.commit()
+        from app.utils.request_cache import clear_request_cache
+        clear_request_cache()
     finally:
         conn.close()
 
@@ -190,6 +214,8 @@ def assign_role(uid: int, rid: int, firma_id: int = 1) -> None:
             (rid, 1 if rid == 4 else 0, uid),
         )
         conn.commit()
+        from app.utils.request_cache import clear_request_cache
+        clear_request_cache()
     finally:
         conn.close()
 

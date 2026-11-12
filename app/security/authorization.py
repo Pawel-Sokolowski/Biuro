@@ -28,9 +28,12 @@ def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
             """,
             (pracownik_id,),
         ).fetchone()
-        return {key: bool(row[key]) for key in row.keys()} if row else {}
     finally:
         conn.close()
+    permissions = {key: bool(row[key]) for key in row.keys()} if row else {}
+    # Legacy invoice flag is an alias, never a second independent gate.
+    permissions['can_view_invoices'] = can_manage_invoices(pracownik_id)
+    return permissions
 
 
 @cached
@@ -99,6 +102,11 @@ def allowed_tabs(pracownik_id: Optional[int]) -> list:
     if not row:
         return []
     return parse_tabs(row["zakladki"], bool(row["adm"]))
+
+
+def can_manage_invoices(pracownik_id: Optional[int]) -> bool:
+    """The Faktury module grants its ordinary invoice workflow, including manual buyers."""
+    return bool(pracownik_id) and 'Faktury' in allowed_tabs(pracownik_id)
 
 
 @cached

@@ -74,7 +74,7 @@ class InvoiceHistoryTests(DbTestCase):
     def test_cancel_requires_access_to_the_locked_invoice(self):
         invoice = self.draft()
         mark_exported([invoice], 1)
-        with patch("app.db.dao_invoices.can", return_value=True), \
+        with patch("app.db.dao_invoices.can_manage_invoices", return_value=True), \
                 patch("app.db.dao_invoices.can_access_invoice", return_value=False):
             with self.assertRaises(PermissionError):
                 cancel_invoice(invoice, 999, "Niedozwolone")

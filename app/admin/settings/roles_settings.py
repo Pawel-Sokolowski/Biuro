@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
     QPushButton, QHeaderView, QMessageBox, QHBoxLayout,
-    QDialog, QFormLayout, QLineEdit, QCheckBox, QDialogButtonBox
+    QDialog, QFormLayout, QLineEdit, QCheckBox, QDialogButtonBox, QAbstractItemView
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
@@ -23,9 +23,10 @@ class RolesSettings(QWidget):
         layout.addWidget(title)
 
         self.table = QTableWidget(0, 7)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Nazwa", "Faktury", "Firmy", "Użytkownicy",
-            "Finanse", "Eksport"
+            "ID", "Nazwa", "Obsługa faktur", "Edycja firm", "Zarządzanie użytkownikami",
+            "Płatności / finanse", "Eksport zbiorczy"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
@@ -47,14 +48,23 @@ class RolesSettings(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        matrix_title = QLabel("Dostęp do zakładek (administrator widzi wszystkie)")
+        explanation = QLabel('Dostęp do modułu Faktury obejmuje podgląd wszystkich faktur biura, tworzenie, wystawianie, '
+                             'korekty, PDF i wysyłkę KSeF. Nie wymaga zaznaczenia Finansów ani Eksportu danych. '
+                             'Płatności/finanse to dodatkowe rozliczanie wpłat i raporty finansowe; '
+                             'Eksport zbiorczy dotyczy m.in. XLSX/JPK. Usuwanie do kosza pozostaje administracyjne. '
+                             'Pole Faktury w edycji roli i macierz poniżej zapisują ten sam dostęp.')
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        matrix_title = QLabel("Dostęp do modułów i ich zwykłych czynności (administrator ma pełny dostęp)")
         matrix_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         layout.addWidget(matrix_title)
 
         from app.security.authorization import TABS
         self._tabs = TABS
         self.matrix = QTableWidget(0, len(TABS))
-        self.matrix.setHorizontalHeaderLabels(TABS)
+        labels = {'Widok miesięczny': 'Widok miesięczny (oba działy)', 'Sprawdzanie': 'Sprawdzanie (oba działy)',
+                  'Faktury': 'Faktury — pełna obsługa'}
+        self.matrix.setHorizontalHeaderLabels([labels.get(tab, tab) for tab in TABS])
         self.matrix.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.matrix)
 
@@ -91,6 +101,7 @@ class RolesSettings(QWidget):
                     if self.matrix.item(row, col).checkState() == Qt.CheckState.Checked
                 ]
                 self.logic.set_role_tabs(rid, tabs)
+            self._refresh()
             QMessageBox.information(self, "OK", "Zapisano dostęp do zakładek.")
         except Exception as e:
             QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać: {e}")
@@ -128,7 +139,7 @@ class RolesSettings(QWidget):
 
             self.table.setItem(row, 0, QTableWidgetItem(str(rid)))
             self.table.setItem(row, 1, QTableWidgetItem(name))
-            self.table.setItem(row, 2, QTableWidgetItem("Tak" if safe_bool("can_view_invoices") else "Nie"))
+            self.table.setItem(row, 2, QTableWidgetItem("Tak" if "Faktury" in self.logic.get_role_tabs(rid) else "Nie"))
             self.table.setItem(row, 3, QTableWidgetItem("Tak" if safe_bool("can_edit_companies") else "Nie"))
             self.table.setItem(row, 4, QTableWidgetItem("Tak" if safe_bool("can_manage_users") else "Nie"))
             self.table.setItem(row, 5, QTableWidgetItem("Tak" if safe_bool("can_view_finances") else "Nie"))
@@ -141,11 +152,11 @@ class RolesSettings(QWidget):
 
         e_name = QLineEdit()
 
-        cb_inv = QCheckBox("Faktury")
-        cb_cmp = QCheckBox("Firmy")
-        cb_usr = QCheckBox("Użytkownicy")
-        cb_fin = QCheckBox("Finanse")
-        cb_exp = QCheckBox("Eksport danych")
+        cb_inv = QCheckBox("Faktury — podgląd, tworzenie, wystawianie i korekty")
+        cb_cmp = QCheckBox("Edycja kartoteki firm")
+        cb_usr = QCheckBox("Zarządzanie użytkownikami")
+        cb_fin = QCheckBox("Dodatkowo: rozliczanie płatności i raporty finansowe")
+        cb_exp = QCheckBox("Dodatkowo: zbiorczy eksport danych (np. XLSX/JPK)")
         cb_admin = QCheckBox("Ustawienia administracyjne")
 
         form.addRow("Nazwa roli:", e_name)
@@ -226,19 +237,19 @@ class RolesSettings(QWidget):
 
         e_name = QLineEdit(rget("nazwa", ""))
 
-        cb_inv = QCheckBox("Faktury")
-        cb_inv.setChecked(bool(rget("can_view_invoices", 0)))
+        cb_inv = QCheckBox("Faktury — podgląd, tworzenie, wystawianie i korekty")
+        cb_inv.setChecked("Faktury" in self.logic.get_role_tabs(rid))
 
-        cb_cmp = QCheckBox("Firmy")
+        cb_cmp = QCheckBox("Edycja kartoteki firm")
         cb_cmp.setChecked(bool(rget("can_edit_companies", 0)))
 
-        cb_usr = QCheckBox("Użytkownicy")
+        cb_usr = QCheckBox("Zarządzanie użytkownikami")
         cb_usr.setChecked(bool(rget("can_manage_users", 0)))
 
-        cb_fin = QCheckBox("Finanse")
+        cb_fin = QCheckBox("Dodatkowo: rozliczanie płatności i raporty finansowe")
         cb_fin.setChecked(bool(rget("can_view_finances", 0)))
 
-        cb_exp = QCheckBox("Eksport danych")
+        cb_exp = QCheckBox("Dodatkowo: zbiorczy eksport danych (np. XLSX/JPK)")
         cb_exp.setChecked(bool(rget("can_export_data", 0)))
 
         cb_admin = QCheckBox("Ustawienia administracyjne")

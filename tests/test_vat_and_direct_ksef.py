@@ -182,7 +182,7 @@ class DirectSendUiTests(unittest.TestCase):
         page=FakturyPage.__new__(FakturyPage);QWidget.__init__(page)
         self.addCleanup(page.close)
         page.pracownik_id=7;page._ksef_send_worker=None;page._ksef_thread=None;page._ksef_poll_counts={}
-        page._can_export=Mock(return_value=True)
+        page._can_issue=Mock(return_value=True)
         page.send_pdf_after_ksef=Mock();page.send_pdf_after_ksef.isChecked.return_value=False
         page._start_ksef_batch=Mock()
         page.issued_table=QTableWidget(2,1)

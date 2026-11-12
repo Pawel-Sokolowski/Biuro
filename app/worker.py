@@ -73,13 +73,20 @@ def enova_job(now=None):
     # failures do not consume this completion marker and retry at the interval.
     if not config['enabled'] or now.time().replace(tzinfo=None) < time.fromisoformat(settings['enova_time']):
         return {'mode': 'waiting'}
-    if get_setting('worker_enova_completed') == day:
+    if (get_setting('worker_enova_completed') == day
+            and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == day)):
         return {'mode': 'checked_today'}
     results = run_import(config, apply=True, today=now.date())
+    if config.get('checking_enabled', False):
+        from app.integrations.enova.checking import run_checking_import
+        checking = run_checking_import(config, apply=True, today=now.date())
+        results.extend(checking)
     if any(not result['ok'] for result in results):
         raise RuntimeError('Import Enova nieukończony. Sprawdź audyt importów i połączenie SQL.')
     set_setting('worker_enova_completed', day)
-    return {'companies': len(results)}
+    if config.get('checking_enabled', False):
+        set_setting('worker_enova_checking_completed', day)
+    return {'companies': len(config['sources']) if 'sources' in config else len(results)}
 
 
 def ksef_import_job():

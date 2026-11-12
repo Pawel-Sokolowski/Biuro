@@ -331,3 +331,78 @@ własnego dostawcy .NET zamiast ODBC. Brak modułu w starym EXE wymaga aktualiza
 Biuro, a brak systemowego sterownika wymaga instalacji Microsoft ODBC Driver
 na komputerze wykonującym połączenie. TLS i sprawdzanie certyfikatu pozostają
 włączone dla obu wersji.
+
+## Sprawdzanie: Księgowość | Kadry
+
+Dawna zakładka „Księgowość” nosi nazwę **Sprawdzanie**. Dotychczasowe uprawnienia
+roli do starej nazwy są zachowane. W środku są zakładki **Księgowość** i **Kadry**
+oraz miesiąc, wyszukiwarka firmy/NIP i filtry KPiR, Ryczałt, Księgi rachunkowe.
+
+Każdy rodzaj dokumentu jest osobną kolumną. Dla księgowości SPU pokazuje się jako
+„Sprzedaż”, ZR jako „Zakup”; DW, AMO i pozostałe symbole pozostają osobno. Nie
+łączy się różnych definicji w jedną kolumnę. Kolumny są uzupełniane na podstawie
+aktualnych danych i historii widocznych firm. Zero jest czerwone wyłącznie,
+gdy ten rodzaj wystąpił w **tej samej firmie i dziale w poprzednich 12 pełnych
+miesiącach**. Brak odczytu oznacza „—”, a nie zero. Nie ocenia się, czy brak
+AMO/DW jest błędem księgowania — kolor jest sygnałem do sprawdzenia.
+
+Odczyt Sprawdzania jest niezależny od rozliczenia faktury i etapu „Wysłane wyniki”.
+Dołączone `queries/checking.sql` liczy wszystkie definicje `DokEwidencja` według
+`DataEwidencji`, w tym DW/AMO oraz pozostałe definicje wyłączane przez reguły
+cennika ryczałtu. Nie przelicza pozycji WBEW na ekwiwalent dokumentów; tutaj
+pokazywane są nagłówki danego rodzaju. Worker zapisuje skonfigurowane miesiące
+oraz 12 miesięcy historii (maksymalnie 36 miesięcy). Nie zmienia etapów ani ręcznych
+liczników w Widoku miesięcznym. Do faktury nadal trafia dotychczasowa suma według
+reguł księgowych i ochrony ręcznych korekt. Stare konfiguracje JSON mogą włączyć
+odczyt przez `checking_enabled=true`; ustawienia zapisane w aplikacji mają ten
+odczyt włączony razem z integracją Enova.
+
+### Własny certyfikat SQL Server
+
+W **Enova — połączenie** zaznacz **Ufaj certyfikatowi serwera (własny certyfikat)**,
+aby używać `Encrypt=yes;TrustServerCertificate=yes`. Test korzysta z bieżącego
+stanu pola; po zapisaniu ustawienia użyje go także worker. Domyślnie opcja jest
+wyłączona. Szyfrowanie pozostaje włączone, ale zaznaczenie pomija sprawdzenie
+łańcucha certyfikatu i tożsamości serwera. JSON obsługuje logiczne pole
+`trust_server_certificate` (nie tekst „true”/„false”).
+
+### Kadry i wszystkie deklaracje elektroniczne z UPO
+
+Kadry przewidują osobne rodzaje dokumentów kadrowo-płacowych i formularze PIT/ZUS.
+Oba działy pokazują formularze osobno: status, **data wysyłki**, obecność UPO i
+**data UPO**. Wyświetlane są JPK_VAT/CIT-8 oraz PIT-11/PIT-4R/ZUS DRA jako punkty
+startowe, a każdy dodatkowy rodzaj zwrócony przez źródło dostaje własne kolumny.
+Brak danych nie oznacza „Niewysłany” ani „Nie dotyczy”. Przyjęcie wymaga jawnego
+statusu i potwierdzenia UPO; data pobrania nigdy nie zastępuje daty wysyłki/UPO.
+Starszy odczyt JPK bez dat nadal jest obsługiwany, z pustymi datami.
+
+**Do rzeczywistego odczytu kadr i deklaracji potrzebne jest potwierdzone mapowanie
+schematu danej instalacji Enova.** Repozytorium nie zawiera zweryfikowanych tabel
+ani znaczenia kodów tych modułów. Nie ma zapytań zgadujących numery statusów.
+W ustawieniach wybierz firmę z wpisaną bazą i kliknij **Eksportuj strukturę Enova —
+deklaracje i kadry**. Plik JSON zawiera wyłącznie nazwy tabel, kolumn, typy i relacje
+(bez haseł i danych dokumentów). Ułatwia przygotowanie właściwych zapytań.
+Konto SQL musi widzieć metadane wymaganych obiektów (`VIEW DEFINITION`).
+
+Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze workera:
+
+- `payroll_query` / „Dokumenty kadrowe”: dwa parametry dat (początek włącznie,
+  koniec wyłącznie), kolumny `nip`, `miesiac` (`YYYY-MM`), `rodzaj`, `liczba`.
+  Jeden wiersz na rodzaj/miesiąc. Miesiąc bez dokumentów musi zwrócić jawny wiersz
+  `rodzaj=NULL, liczba=0`; brak miesiąca jest błędem i zachowuje stare dane.
+- `declarations_query` / „Deklaracje i UPO”: te same dwa parametry dat, kolumny
+  `nip`, `miesiac`, `department` (`accounting` albo `payroll`), `form` (np. JPK_VAT,
+  CIT-8, PIT-11, ZUS DRA), `status`, `sent_at`, `upo` (referencja potwierdzenia),
+  `upo_at`. Statusy: `prepared`, `processing`, `not_sent`, `sent`, `accepted`,
+  `rejected`, `not_applicable`. Dla `accepted` UPO nie może być puste. Daty mogą
+  być NULL, datą ISO lub znacznikiem czasu ISO; nie są dopowiadane przez importer.
+  Zapytanie musi wybierać aktualny stan formularza, uwzględniając korekty; duplikat
+  formularza/działu/miesiąca jest błędem. Przypisanie formularzy rocznych lub
+  kwartalnych do okresu miesięcznego musi być jawne w zapytaniu, zgodne z zasadami
+  biura. Brak wiersza pozostawia „Brak danych”, nie tworzy fałszywego statusu.
+
+Oba zapytania mogą być globalne w ustawieniach albo osobne przy `sources` w JSON.
+Wszystkie wyniki muszą zawierać NIP zgodny z mapowaniem firmy. Błąd walidacji
+zachowuje dotychczasowy odczyt firmy; pozostałe firmy są przetwarzane dalej.
+Odczyt księgowości i kadr do Sprawdzania ma własną transakcję i blokadę, niezależną
+od importu licznika rozliczeniowego.

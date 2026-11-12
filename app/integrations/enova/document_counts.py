@@ -137,10 +137,13 @@ def sql_credentials():
 
 def sql_connection_string(config, database, user, password):
     from app.integrations.enova.odbc_support import validate_server
+    trust = config.get('trust_server_certificate', False)
+    if type(trust) is not bool:
+        raise ValueError('Nieprawidłowa opcja zaufania certyfikatowi serwera.')
     values = {
         'DRIVER': config.get('driver', 'ODBC Driver 18 for SQL Server'),
         'SERVER': validate_server(config['server']), 'UID': user, 'PWD': password,
-        'Encrypt': 'yes', 'TrustServerCertificate': 'no', 'APP': 'Biuro document counts',
+        'Encrypt': 'yes', 'TrustServerCertificate': 'yes' if trust else 'no', 'APP': 'Biuro document counts',
     }
     if database:
         values['DATABASE'] = database
@@ -172,14 +175,20 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
                        date.fromisoformat(month_bounds(months[-1])[1]))
         columns = [column[0].lower() for column in cursor.description or []]
-        required = ({'nip', 'miesiac', 'status', 'upo'} if result_kind == 'jpk'
-                    else {'nip', 'miesiac', 'dokumenty', 'pozycje_bankowe'})
+        contracts = {
+            'counts': {'nip', 'miesiac', 'dokumenty', 'pozycje_bankowe'},
+            'jpk': {'nip', 'miesiac', 'status', 'upo'},
+            'declarations': {'nip', 'miesiac', 'department', 'form', 'status', 'sent_at', 'upo', 'upo_at'},
+            'payroll': {'nip', 'miesiac', 'rodzaj', 'liczba'},
+        }
+        required = contracts[result_kind]
         optional = {'rodzaje'} if result_kind == 'counts' else set()
         if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
             raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))
-        rows = cursor.fetchmany(len(months) + 1)
-        if len(rows) > len(months):
-            raise ValueError('Zapytanie zwróciło za wiele wierszy (wymagany jeden na miesiąc).')
+        limit = len(months) if result_kind in ('counts', 'jpk') else 20000
+        rows = cursor.fetchmany(limit + 1)
+        if len(rows) > limit:
+            raise ValueError('Zapytanie zwróciło za wiele wierszy.')
         return [dict(zip(columns, row)) for row in rows]
     finally:
         connection.close()
@@ -360,6 +369,9 @@ def main(argv=None):
         from app.integrations.enova.connection_settings import load_connection
         config = load_connection() if args.saved_settings else load_config(args.config)
         results = run_import(config, apply=args.apply)
+        if config.get('checking_enabled', False):
+            from app.integrations.enova.checking import run_checking_import
+            results.extend(run_checking_import(config, apply=args.apply))
     except Exception as exc:
         print(json.dumps({'ok': False, 'error': str(exc) if isinstance(exc, ValueError) else type(exc).__name__}, ensure_ascii=True))
         return 1

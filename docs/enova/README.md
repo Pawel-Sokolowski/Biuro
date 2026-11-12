@@ -321,18 +321,21 @@ Biuro, a brak systemowego sterownika wymaga instalacji Microsoft ODBC Driver
 na komputerze wykonującym połączenie. TLS i sprawdzanie certyfikatu pozostają
 włączone dla obu wersji.
 
-## Sprawdzanie: Księgowość | Kadry
+## Księgowość i Kadry — Widok miesięczny oraz Sprawdzanie
 
-Dawna zakładka „Księgowość” nosi nazwę **Sprawdzanie**. Dotychczasowe uprawnienia
-roli do starej nazwy są zachowane. W środku są zakładki **Księgowość** i **Kadry**
-oraz miesiąc, wyszukiwarka firmy/NIP i filtry KPiR, Ryczałt, Księgi rachunkowe.
+Menu ma osobne działy **Księgowość** i **Kadry**. Każdy zawiera podzakładki
+**Widok miesięczny** i **Sprawdzanie**. Dotychczasowe uprawnienia modułów są
+zachowane: dostęp do Widoku miesięcznego nie przyznaje dostępu do Sprawdzania
+ani odwrotnie. Stary zapis roli „Księgowość” nadal oznacza dawny moduł sprawdzania.
+W Sprawdzaniu wybiera się raport dla danego działu i miesiąc. Dostępne są
+wyszukiwarka firmy/NIP oraz filtry KPiR, Ryczałt i Księgi rachunkowe.
 
 Każdy rodzaj dokumentu jest osobną kolumną. Dla księgowości SPU pokazuje się jako
 „Sprzedaż”, ZR jako „Zakup”; DW, AMO i pozostałe symbole pozostają osobno. Nie
 łączy się różnych definicji w jedną kolumnę. Kolumny są uzupełniane na podstawie
 aktualnych danych i historii widocznych firm. Zero jest czerwone wyłącznie,
-gdy ten rodzaj wystąpił w **tej samej firmie i dziale w poprzednich 12 pełnych
-miesiącach**. Brak odczytu oznacza „—”, a nie zero. Nie ocenia się, czy brak
+gdy ten rodzaj wystąpił w **tej samej firmie w poprzednim miesiącu księgowym**.
+Kadry nie mają porównań ani czerwonych zer wynikających z historii. Brak odczytu oznacza „—”, a nie zero. Nie ocenia się, czy brak
 AMO/DW jest błędem księgowania — kolor jest sygnałem do sprawdzenia.
 
 Odczyt Sprawdzania jest niezależny od rozliczenia faktury i etapu „Wysłane wyniki”.
@@ -386,7 +389,7 @@ Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze worker
   `rejected`, `not_applicable`. Dla `accepted` UPO nie może być puste. Daty mogą
   być NULL, datą ISO lub znacznikiem czasu ISO; nie są dopowiadane przez importer.
   Zapytanie musi wybierać aktualny stan formularza, uwzględniając korekty; duplikat
-  formularza/działu/miesiąca jest błędem. Przypisanie formularzy rocznych lub
+  formularza/działu/miesiąca/pracownika jest błędem. Przypisanie formularzy rocznych lub
   kwartalnych do okresu miesięcznego musi być jawne w zapytaniu, zgodne z zasadami
   biura. Brak wiersza pozostawia „Brak danych”, nie tworzy fałszywego statusu.
 
@@ -395,3 +398,87 @@ Wszystkie wyniki muszą zawierać NIP zgodny z mapowaniem firmy. Błąd walidacj
 zachowuje dotychczasowy odczyt firmy; pozostałe firmy są przetwarzane dalej.
 Odczyt księgowości i kadr do Sprawdzania ma własną transakcję i blokadę, niezależną
 od importu licznika rozliczeniowego.
+
+### Sprawdzanie — poprzedni miesiąc i pracownicy
+
+Księgowość ma zestawienie bieżący/poprzedni miesiąc, różnicę i zmianę procentową
+osobno dla każdego rodzaju oraz sumy. Spadek jest wyróżniony, a zero po dodatniej
+wartości w poprzednim miesiącu — czerwone. Brak odczytu pozostaje „—”; po zerowej
+podstawie pojawia się „Nowe”, bez dzielenia przez zero. Nie ma porównania rok do
+roku ani średnich. Kadry nie mają żadnego porównania miesięcy. Zachowana historia
+służy także do przeglądania wcześniejszych okresów.
+
+Dział wybiera się w menu głównym: **Księgowość** albo **Kadry**. Obie podzakładki
+pozostają w wybranym dziale; nie ma potrzeby ponownie wybierać działu wewnątrz
+Widoku miesięcznego lub Sprawdzania. Widok miesięczny korzysta z jednego edytora
+i jednej instancji logiki stoperów, zachowując odrębnie wybrane miesiące działów.
+Samodzielne użycie starego widoku nadal dobiera dział według roli. Nie zmienia to
+uprawnień do modułów.
+
+Tabela pokazuje firmę i przypisaną księgową/kadrową biura. Szczegóły deklaracji
+pokazują osobno pracowników firmy, status, datę wysyłki, referencję UPO i datę UPO.
+Filtry: do wysłania, wysłane, oczekujące na UPO, przyjęte z UPO, odrzucone.
+Opcjonalne kolumny `declarations_query`: `employee_id`, `employee_name`
+(obie podane albo obie puste) i `source_system` (`enova`, domyślnie, albo
+`platnik`). Każdy pracownik ma osobny aktualny wiersz. Puste dane pracownika
+oznaczają formularz całej firmy/zestawu. Zestawienie wielu formularzy pokazuje
+liczbę przyjętych i liczbę UPO; nie nadaje wszystkim statusu jednego pracownika.
+`source_system` to pochodzenie danych z zapytania, **nie gotowy osobny konektor
+Płatnika**. Mapowanie tabel i statusów Płatnika nadal wymaga weryfikacji.
+
+### Umowy, badania i BHP
+
+Pole „Umowy, badania i BHP” (`hr_events_query`) wskazuje zweryfikowane zapytanie
+SQL w tym samym mechanizmie odczytu. Wymagane kolumny:
+`nip`, `event_id`, `employee_id`, `employee_name`, `event_type`, `due_date`, `status`.
+Opcjonalnie `document_number`. Rodzaje: `contract_end`, `medical_exam`,
+`ohs_training`. Statusy: `active`, `completed`, `cancelled`. Identyfikator jest
+unikatowy w ramach firmy i rodzaju; jeden pracownik może mieć wiele umów.
+Daty: ISO YYYY-MM-DD albo SQL DATE; NULL dla umowy bezterminowej. Brak terminu
+badań/BHP jest sygnałem do sprawdzenia, nie umową bezterminową.
+
+Zapytanie otrzymuje dwa parametry: początek bieżącego miesiąca i koniec okna
+obejmującego najbliższe 91 dni (zaokrąglony do końca miesiąca). Musi zwrócić
+również nadal aktywne zaległe terminy i umowy bezterminowe — dolna granica
+**nie służy do odfiltrowania zaległości**. Zamknięte/anulowane zdarzenia są
+pomijane w widoku. Pusta poprawna lista oznacza brak zdarzeń, brak konfiguracji
+pozostaje „brak odczytu”. Terminy odnoszą się do dzisiaj w Europe/Warsaw,
+nie do wybranego miesiąca dokumentów. Dostępne okna 7/30/60/90 dni i wszystkie
+pobrane. Worker zapisuje aktualny odczyt atomowo z pozostałymi danymi firmy;
+błąd walidacji zachowuje poprzednie dane. Nowa konfiguracja adapterów unieważnia
+dzienny znacznik ukończenia i pozwala odczytać je bez czekania na następny dzień.
+
+Nie ma jeszcze zweryfikowanego zapytania do terminów kadrowych konkretnej
+instalacji Enovy. Należy przygotować je na podstawie eksportu struktury i
+potwierdzonych znaczeń pól, tak samo jak zapytanie deklaracji/UPO.
+
+### Wybór raportu i wszystkie firmy
+
+W **Księgowość → Sprawdzanie** lub **Kadry → Sprawdzanie** pole **Raport**
+przełącza zestawienie. Dostępne są dokumenty, deklaracje/UPO, poszczególne
+formularze i — wyłącznie w księgowości — poprzedni miesiąc. Kadry mają m.in.
+RCA, DRA, RSA, RPA, PIT-11, PIT-4R, umowy, badania, BHP oraz e-ZLA. Dodatkowe
+formularze otrzymane ze źródła pojawiają się automatycznie; wybór przetrwa zmianę
+filtrów i miesiąca. RCA oraz ZUS RCA oznaczają ten sam raport.
+
+Raport konkretnej deklaracji pokazuje wszystkie dostępne firmy według filtrów,
+a przy braku danych jawnie „Nie sprawdzono” lub „Brak danych”. Nie pokazuje
+w tym miejscu innych formularzy firmy. Filtr statusu celowo zawęża tę listę.
+„Tylko wymagające uwagi” dotyczy wybranego formularza, nie np. niewysłanego PIT-u
+przy poprawnym RCA. Umowy/badania/BHP również pokazują firmy bez odczytu lub
+bez terminów w zadanym zakresie. Brak odczytu nie oznacza niewysłanej deklaracji
+ani braku pracowników.
+
+RCA i inne deklaracje nadal wymagają skonfigurowanego źródła danych; sam wybór
+raportu nie uruchamia nowego konektora Płatnika. e-ZLA zestawia raporty pobrane
+z oficjalnej usługi ZUS przez worker i lokalnie wczytane XML. Dane pobrane przez
+worker są zaszyfrowane w PostgreSQL, dostępne także na innych komputerach.
+Konfiguracja w [ZUS — e-ZLA](../ezla-service.md). Import do Enovy nie jest wykonywany.
+
+### Główny przycisk stopera
+
+Gdy działa stoper firmy (księgowość lub kadry), główny przycisk ma etykietę
+**Stop stopera firmy**. Kliknięcie zapisuje i zatrzymuje stopery firm, bez
+uruchamiania ogólnego i bez otwierania wyboru zadania. Dopiero następne kliknięcie,
+przy braku aktywnego stopera, pozwala uruchomić ogólny. Działający stoper ogólny
+jest zatrzymywany tak jak dotychczas. Błąd zapisu nie uruchamia kolejnego stopera.

@@ -1,0 +1,148 @@
+"""A basic worker interface that observes the existing runner rather than starting another."""
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from PyQt6.QtCore import QTimer, QUrl, Qt
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                            QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView)
+from app.services.worker_monitor import snapshot
+from app.integrations.ezla.service import ServiceError
+from app.utils.background import TaskRunner
+
+JOB_LABELS = {'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
+              'enova': 'Enova', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
+STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto'}
+
+
+class WorkerMonitor(QWidget):
+    def __init__(self, actor_id, parent=None):
+        super().__init__(parent)
+        from app.security.authorization import is_administrator
+        if not is_administrator(actor_id):
+            raise PermissionError('Brak dostępu do panelu workera.')
+        self.actor_id = actor_id
+        self.reader = TaskRunner(self)
+        layout = QVBoxLayout(self)
+        bar = QHBoxLayout()
+        self.summary = QLabel('Panel odczytuje stan workera z bazy Biuro. Nie uruchamia drugiej kopii.')
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(Qt.TextFormat.PlainText)
+        bar.addWidget(self.summary, 1)
+        refresh = QPushButton('Odśwież')
+        refresh.clicked.connect(self.refresh)
+        bar.addWidget(refresh)
+        layout.addLayout(bar)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+        status_page = QWidget()
+        status_layout = QVBoxLayout(status_page)
+        self.progress = QLabel()
+        self.progress.setWordWrap(True)
+        self.progress.setTextFormat(Qt.TextFormat.PlainText)
+        status_layout.addWidget(self.progress)
+        self.jobs = self._table(['Zadanie', 'Stan', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
+        status_layout.addWidget(self.jobs)
+        self.tabs.addTab(status_page, 'Status')
+        log_page = QWidget()
+        log_layout = QVBoxLayout(log_page)
+        self.logs = self._table(['Data', 'Zadanie', 'Zdarzenie', 'Typ błędu'])
+        log_layout.addWidget(self.logs)
+        log_note = QLabel('Ostatnie 200 zdarzeń workera jest dostępne z każdego komputera. '
+                          'Szczegółowe pliki logów znajdują się na komputerze, na którym działa worker.')
+        log_note.setWordWrap(True)
+        log_layout.addWidget(log_note)
+        local_logs = QPushButton('Otwórz folder logów na tym komputerze')
+        local_logs.clicked.connect(self.open_logs)
+        log_layout.addWidget(local_logs)
+        self.tabs.addTab(log_page, 'Logi')
+        self.ezla = self._table(['Firma', 'NIP', 'Pobieranie', 'Stan', 'Ostatnia próba',
+                                 'Ostatni sukces', 'Nowe raporty', 'Błąd'])
+        self.tabs.addTab(self.ezla, 'e-ZLA')
+        self.timer = QTimer(self)
+        self.timer.setInterval(5000)
+        self.timer.timeout.connect(self.refresh)
+
+    @staticmethod
+    def _table(headers):
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        return table
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.timer.start()
+        self.refresh()
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        self.reader.invalidate()
+        super().hideEvent(event)
+
+    def refresh(self, *_):
+        self.reader.submit(lambda: snapshot(self.actor_id), self.render, self.failed, key='worker-monitor')
+
+    def failed(self, error):
+        self.summary.setText('Nie udało się odczytać stanu workera. Sprawdź połączenie z bazą i uprawnienia.')
+
+    @staticmethod
+    def _fill(table, rows):
+        table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(str(value if value not in (None, '') else '—')))
+        table.resizeColumnsToContents()
+
+    def render(self, data):
+        heartbeat = data['heartbeat']
+        now = datetime.now(ZoneInfo('Europe/Warsaw'))
+        checked = heartbeat.get('checked_at')
+        try:
+            stale = not checked or now - datetime.fromisoformat(checked) > timedelta(minutes=2)
+        except (ValueError, TypeError):
+            stale = True
+        state = 'Brak aktualnego sygnału workera' if stale else 'Worker aktywny'
+        enabled = 'zadania włączone' if heartbeat.get('enabled') else 'zadania wyłączone'
+        self.summary.setText(f'{state}; {enabled}. Ostatni sygnał: {checked or "—"}.')
+        jobs = heartbeat.get('jobs', {})
+        self._fill(self.jobs, [[JOB_LABELS.get(name, name), STATES.get(value.get('state'), value.get('state')),
+            value.get('started_at'), value.get('finished_at'), value.get('next_run_at'), value.get('error_type')]
+            for name, value in jobs.items()])
+        self._fill(self.logs, [[event.get('at'), JOB_LABELS.get(event.get('job'), event.get('job')),
+                               STATES.get(event.get('state'), event.get('state')), event.get('error_type')]
+                              for event in reversed(data['events'])])
+        progress = data['progress']
+        names = {row['id']: row['nazwa'] for row in data['companies']}
+        message = 'e-ZLA: ' + str(progress.get('stage') or 'Oczekiwanie na pobieranie')
+        if progress.get('company_id'):
+            message += ' — ' + str(names.get(progress['company_id'], progress['company_id']))
+        if progress.get('total') is not None:
+            message += f" ({progress.get('position', progress.get('processed', 0))}/{progress['total']})"
+        if progress.get('resume_at'):
+            try:
+                seconds = max(0, int((datetime.fromisoformat(progress['resume_at']) - now).total_seconds()))
+                message += f'; wznowienie za {seconds} s'
+            except (ValueError, TypeError):
+                pass
+        if jobs.get('ezla', {}).get('state') == 'failed':
+            message += ' [ostatni przebieg e-ZLA zakończony błędem]'
+        if progress.get('checked_at'):
+            message += '; stan z ' + progress['checked_at']
+        if stale:
+            message += ' [ostatni zapisany stan; worker nie potwierdza aktualności]'
+        if not data['ezla_enabled']:
+            message += ' [pobieranie e-ZLA wyłączone w ustawieniach]'
+        self.progress.setText(message)
+        rows = []
+        for row in data['companies']:
+            sync = row['sync']
+            error = str(ServiceError(sync.get('error_code'))) if sync.get('state') == 'failed' else ''
+            rows.append([row['nazwa'], row['nip'], 'Tak' if row['id'] in data['ezla_companies'] else 'Nie',
+                         STATES.get(sync.get('state'), 'Nie sprawdzono'), sync.get('checked_at'),
+                         sync.get('last_success'), sync.get('new_reports'), error])
+        self._fill(self.ezla, rows)
+
+    def open_logs(self):
+        from app.config import get_data_dir
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_data_dir() / 'logs')))

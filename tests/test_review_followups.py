@@ -668,7 +668,7 @@ class OtherReviewFollowupTests(DbTestCase):
             window = main_ui.OfficeManagerApp(1)
             try:
                 self.assertEqual(window.pages.currentIndex(), 0)
-                calendar = window.pages.widget(8)
+                calendar = window.page_calendar
                 self.assertIsInstance(calendar, main_ui.CalendarPage)
                 self.assertTrue(calendar._auto_timer.isActive())
                 self.assertTrue(wait_until(lambda: sync.called))

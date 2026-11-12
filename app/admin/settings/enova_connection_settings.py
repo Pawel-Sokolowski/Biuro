@@ -33,6 +33,8 @@ class EnovaConnectionSettings(QWidget):
         self.declarations_query.setPlaceholderText('Plik SQL odczytu deklaracji i UPO na serwerze workera')
         self.payroll_query = QLineEdit(config.get('payroll_query', ''))
         self.payroll_query.setPlaceholderText('Plik SQL rodzajów dokumentów kadrowych')
+        self.hr_events_query = QLineEdit(config.get('hr_events_query', ''))
+        self.hr_events_query.setPlaceholderText('Plik SQL terminów umów, badań i BHP')
         self.jpk_query = QLineEdit(config.get('jpk_query', ''))
         self.jpk_query.setPlaceholderText(r'C:\BiuroConfig\jpk.sql (ścieżka na serwerze importu)')
         self.enabled = QCheckBox('Włącz codzienny import')
@@ -42,7 +44,7 @@ class EnovaConnectionSettings(QWidget):
         self.months.setValue(config['months_back'])
         for label, widget in [('Serwer SQL / instancja', self.server), ('Sterownik SQL', self.driver), ('Login SQL', self.username),
                               ('Hasło SQL', self.password), ('Certyfikat TLS', self.trust_certificate),
-                              ('Deklaracje i UPO', self.declarations_query), ('Dokumenty kadrowe', self.payroll_query), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
+                              ('Deklaracje i UPO', self.declarations_query), ('Dokumenty kadrowe', self.payroll_query), ('Umowy, badania i BHP', self.hr_events_query), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
                               ('Import', self.enabled)]:
             form.addRow(label, widget)
         layout.addLayout(form)
@@ -96,6 +98,7 @@ class EnovaConnectionSettings(QWidget):
         try:
             config = dict(server=self.server.text().strip(), driver=self.driver.currentData(), username=self.username.text().strip(),
                           trust_server_certificate=self.trust_certificate.isChecked(),
+                          hr_events_query=self.hr_events_query.text().strip(),
                           declarations_query=self.declarations_query.text().strip(), payroll_query=self.payroll_query.text().strip(),
                           jpk_query=self.jpk_query.text().strip(), enabled=self.enabled.isChecked(), months_back=self.months.value(), sources=[])
             for row, company in enumerate(self.companies):

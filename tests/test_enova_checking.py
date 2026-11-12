@@ -102,7 +102,7 @@ class CheckingIntegrationTests(DbTestCase):
         common = {'checking': {'documents': {'accounting': {}, 'payroll': None}, 'declarations': None},
                   'snapshot': None, 'jpk': None, 'ilosc_dok': 77}
         rows = [{**common, 'id': self.company, 'nazwa': 'A', 'nip': NIP, 'forma_opodatkowania': 'Ryczałt',
-                 'history': [{'documents': {'accounting': {'AMO': 2}}}]},
+                 'history': [{'month': '2026-10', 'documents': {'accounting': {'AMO': 2}}}]},
                 {**common, 'id': 999, 'nazwa': 'B', 'nip': '9999999999', 'forma_opodatkowania': 'KPiR', 'history': []}]
         page = AccountingPage(self.admin)
         page.render(rows, '2026-11')
@@ -112,7 +112,51 @@ class CheckingIntegrationTests(DbTestCase):
         self.assertNotEqual(page.table.item(1, column).background().color().name(), '#fee2e2')
         self.assertEqual(page.tabs.tabText(0), 'Księgowość')
         self.assertEqual(page.tabs.tabText(1), 'Kadry')
+        self.assertNotIn('payroll', page.comparison_tables)
+        self.assertNotIn('Rok temu', [page.comparison_tables['accounting'].horizontalHeaderItem(i).text()
+                                     for i in range(page.comparison_tables['accounting'].columnCount())])
         page.tax_filter.setCurrentIndex(page.tax_filter.findData('KPIR'))
         self.assertEqual(page.table.rowCount(), 1)
         self.assertEqual(page.table.item(0, 0).text(), 'B')
         page.close()
+
+    def test_payroll_view_shows_employee_declarations_and_hr_without_comparisons(self):
+        from app.accounting.accounting_ui import AccountingPage
+        entry = {'department': 'payroll', 'form': 'PIT-11', 'status': 'not_sent',
+                 'employee_id': '23', 'employee_name': 'Anna Test', 'upo': '', 'source_system': 'enova'}
+        row = {'id': self.company, 'nazwa': 'Firma Test', 'nip': NIP, 'kadrowa': 'Kadrowa Biura',
+               'forma_opodatkowania': 'Ryczałt', 'history': [],
+               'checking': {'documents': {'accounting': {}, 'payroll': {'Umowa': 1}}, 'declarations': [entry]},
+               'hr': {'events': [{'employee_id': '23', 'employee_name': 'Anna Test', 'event_type': 'contract_end',
+                                  'status': 'active', 'due_date': None, 'document_number': 'U/23'}]}}
+        with patch('app.preferences.department.default_department', return_value='payroll'):
+            page = AccountingPage(self.admin)
+            page.render([row], '2026-11')
+            self.assertEqual(page.tabs.currentIndex(), 1)
+            self.assertNotIn('payroll', page.comparison_tables)
+            table = page.declaration_tables['payroll']
+            self.assertEqual(table.item(0, 2).text(), 'Anna Test (23)')
+            self.assertEqual(table.item(0, 1).text(), 'Kadrowa Biura')
+            selector = page.declaration_filters['payroll']
+            selector.setCurrentIndex(selector.findData('accepted'))
+            self.assertEqual(table.rowCount(), 0)
+            selector.setCurrentIndex(selector.findData('to_send'))
+            self.assertEqual(table.rowCount(), 1)
+            page.hr_range.setCurrentIndex(page.hr_range.findData(None))
+            self.assertEqual(page.hr_table.item(0, 3).text(), 'Anna Test (23)')
+            self.assertEqual(page.hr_table.item(0, 4).text(), 'U/23')
+            from app.integrations.ezla.report import Report, Certificate
+            report = Report(nip=NIP, payer_name='Firma Test', generated_at='2026-11-12', certificates=[
+                Certificate('Anna Test', '00000000000', 'PESEL', 'ZZ', '1', 'Anulowane',
+                            '2026-11-01', '2026-11-01', '2026-11-10')])
+            page.ezla_panel.render({'report': report, 'company': {'id': self.company, 'nazwa': 'Firma Test'}, 'database': 'EnovaTest'})
+            self.assertEqual(page.ezla_panel.table.item(0, 2).text(), 'PESEL: *******0000')
+            self.assertEqual(page.ezla_panel.table.item(0, 4).text(), 'Anulowane')
+            self.assertIn('nie wykonano importu', page.ezla_panel.summary.text())
+            page.ezla_panel.clear()
+            self.assertEqual(page.ezla_panel.table.rowCount(), 1)
+            self.assertEqual(page.ezla_panel.table.item(0, 4).text(), 'Nie wczytano raportu XML')
+            page.tabs.setCurrentIndex(0)
+            page.apply_department_default()
+            self.assertEqual(page.tabs.currentIndex(), 1)
+            page.close()

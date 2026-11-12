@@ -17,9 +17,10 @@ def load_connection():
     config.setdefault('checking_enabled', True)
     config.setdefault('declarations_query', '')
     config.setdefault('payroll_query', '')
+    config.setdefault('hr_events_query', '')
     config['_directory'] = Path(__file__).resolve().parents[3] / 'docs' / 'enova'
     for source in config['sources']:
-        for name in ('declarations_query', 'payroll_query'):
+        for name in ('declarations_query', 'payroll_query', 'hr_events_query'):
             if config.get(name):
                 source[name] = config[name]
         if config.get('jpk_query'):
@@ -58,7 +59,7 @@ def save_connection(config, *, actor_id, password=''):
         raise ValueError('Opcja zaufania certyfikatowi musi być wartością logiczną.')
     saved['trust_server_certificate'] = trust
     saved['checking_enabled'] = True
-    for name in ('declarations_query', 'payroll_query'):
+    for name in ('declarations_query', 'payroll_query', 'hr_events_query'):
         saved[name] = str(config.get(name, '')).strip()
     saved['jpk_query'] = str(config.get('jpk_query', '')).strip()
     saved['password_enc'] = load_connection().get('password_enc', '')

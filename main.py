@@ -69,8 +69,22 @@ if __name__ == "__main__":
     login_window = LoginWindow()
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id
-        window = OfficeManagerApp(pracownik_id)
-        window.restore_window_state()
+        if '--worker-panel' in sys.argv:
+            from app.security.authorization import is_administrator
+            if not is_administrator(pracownik_id):
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(None, 'Worker', 'Panel workera wymaga uprawnień administratora.')
+                sys.exit(1)
+            from PyQt6.QtWidgets import QMainWindow
+            from app.admin.settings.worker_monitor import WorkerMonitor
+            window = QMainWindow()
+            window.setWindowTitle('Biuro — panel workera')
+            window.setCentralWidget(WorkerMonitor(pracownik_id, window))
+            window.resize(1100, 700)
+            window.show()
+        else:
+            window = OfficeManagerApp(pracownik_id)
+            window.restore_window_state()
         sys.exit(app.exec())
     else:
         sys.exit()

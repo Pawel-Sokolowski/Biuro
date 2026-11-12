@@ -1,14 +1,14 @@
 """Rejestracja korekty wystawionej w Saldeo, bez udawania importu zwykłej faktury."""
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice, _reserve_number
-from app.security.authorization import can, is_administrator
+from app.security.authorization import can_manage_invoices
 
 
 def confirm_saldeo_correction(invoice_id: int, number: str, actor_id: int) -> None:
     number = (number or '').strip()
     if not number or len(number) > 256:
         raise ValueError('Podaj numer korekty nadany w Saldeo.')
-    if not (is_administrator(actor_id) or can(actor_id, 'can_export_data')):
+    if not can_manage_invoices(actor_id):
         raise PermissionError('Brak uprawnień do potwierdzenia wystawienia korekty.')
     conn = get_conn()
     try:

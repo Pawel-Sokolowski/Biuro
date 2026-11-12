@@ -207,8 +207,9 @@ class InvoiceEditorDialog(QDialog):
                 przyczyna_korekty=self.przyczyna.text().strip(),
                 podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
                 expected_revision=self.invoice.get('revision'),
+                actor_id=getattr(self.parent(), 'pracownik_id', None),
             )
-        except ValueError as exc:
+        except (ValueError, PermissionError) as exc:
             QMessageBox.warning(self, "Faktura", str(exc))
             return
         self.accept()

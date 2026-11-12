@@ -35,3 +35,6 @@ python-stdnum>=2,<3
 
 # Warsaw scheduling also needs IANA timezone data on Windows.
 tzdata
+
+# Include the ENOVA Python adapter in the Windows desktop build.
+pyodbc>=5.2,<6; sys_platform == "win32"

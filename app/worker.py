@@ -175,24 +175,29 @@ def main(argv=None):
     parser.add_argument('--once', action='store_true', help='Wykonaj jeden przebieg włączonych zadań.')
     args = parser.parse_args(argv)
     load_environment()
-    ensure_encryption_key()
     from app.diagnostics import configure_logging
     configure_logging()
-    # PDF generation needs Qt's font system, but never opens a window.
-    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-    from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication(['biuro-worker'])
-    stop = threading.Event()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(signum, lambda *_: stop.set())
+    app = None
     try:
+        # Configure logging before credential checks: the packaged EXE has no console.
+        ensure_encryption_key()
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication(['biuro-worker'])
+        stop = threading.Event()
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(signum, lambda *_: stop.set())
         return serve(once=args.once, stop=stop)
+    except Exception:
+        logger.exception('worker_startup_or_runtime_failed')
+        return 1
     finally:
-        from app.email.email_sync import close_sessions
-        from app.db.dao_conn import close_pool
-        close_sessions()
-        close_pool()
-        app.processEvents()
+        if app is not None:
+            from app.email.email_sync import close_sessions
+            from app.db.dao_conn import close_pool
+            close_sessions()
+            close_pool()
+            app.processEvents()
 
 
 if __name__ == '__main__':

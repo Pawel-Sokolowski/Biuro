@@ -19,7 +19,7 @@ class WorkerSettings(QWidget):
         layout = QVBoxLayout(self)
         note = QLabel('Worker działa na jednym serwerze, bez otwartego okna Biuro. '
                       'Używa wspólnej bazy i wspólnego klucza szyfrowania. '
-                      'Zainstaluj scripts/install_background_worker.ps1 na serwerze. '
+                      'Uruchom scripts/install_background_worker.cmd jako administrator na serwerze. '
                       'Wysyła wyłącznie faktury z potwierdzonej kolejki; przypomnienia według reguł z Automatyczne e-maile.')
         note.setWordWrap(True)
         layout.addWidget(note)

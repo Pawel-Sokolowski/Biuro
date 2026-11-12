@@ -229,6 +229,21 @@ class TimerExclusivityTests(DbTestCase):
         self.assertTrue(self.logic.is_general_timer_running())
         self.assertEqual(self._count("ksiegowosc"), 1)
 
+    def test_header_click_saves_company_time_without_starting_a_general_timer(self):
+        from types import SimpleNamespace
+        from app.main_ui import OfficeManagerApp
+        window = SimpleNamespace(page_monthly=SimpleNamespace(logic=self.logic, _reload_rows=mock.Mock()),
+                                 _update_header_timer=mock.Mock())
+        for department in ('ksiegowosc', 'kadry'):
+            with self.subTest(department=department), mock.patch('app.monthly_view.general_timer_dialog.GeneralTimerDialog') as dialog:
+                self.logic.toggle_stoper(self.firma, department)
+                OfficeManagerApp._toggle_general_timer(window)
+                self.assertFalse(self.logic.is_company_timer_running())
+                self.assertFalse(self.logic.is_general_timer_running())
+                self.assertEqual(self._count(department), 1)
+                self.assertEqual(self._count('ogolne'), 0)
+                dialog.assert_not_called()
+
     def test_starting_company_timer_stops_general_timer(self):
         self.logic.start_general_timer({})
         self.logic.toggle_stoper(self.firma, "kadry")

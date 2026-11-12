@@ -6,7 +6,7 @@
 - Podpisy CenCert i Certum na USB/kartach; podpisywanie odbywa się na stanowisku użytkownika.
 - Poprzedni Płatnik Manager obsługiwał okna programu, a nie tylko bazę SQL.
 - e-ZLA: raporty XML generowane na PUE/eZUS, ręcznie pobierane i przekazywane do opcji importu e-ZLA w Enovie.
-- Docelowo Sprawdzanie → Kadry pokazuje firmę, pracownika, stan wysyłki/potwierdzenia oraz wynik importu zwolnień.
+- Docelowo Kadry → Sprawdzanie pokazuje firmę, pracownika, stan wysyłki/potwierdzenia oraz wynik importu zwolnień.
 
 ## Stan implementacji
 
@@ -51,7 +51,8 @@ Dokument zapisuje wymagania; nie potwierdza dostępności API ani ukończenia ad
 
 ## Podgląd e-ZLA XML w Biuro
 
-W **Sprawdzanie → Kadry → e-ZLA** wybierz **Otwórz raport e-ZLA XML z ZUS**.
+W **Kadry → Sprawdzanie** wybierz **Raport: e-ZLA**, następnie
+**Wczytaj raporty e-ZLA XML z ZUS**. Można wskazać raporty wielu firm jednocześnie.
 Wybierz oryginalny raport, z korzeniem `raportEzla`, nagłówkiem `daneRaportu`
 i powtarzanymi elementami `dokumentyEzla`, zgodnie z przekazanym przykładem.
 Nie wklejaj treści skopiowanej z instrukcji PDF: cyfry stron, wielokropki,
@@ -72,7 +73,11 @@ To nie jest jeszcze rejestr importów ani deduplikacja między kolejnymi raporta
 
 Podgląd nie zapisuje zawartości raportu w bazie Biuro, nie przesyła go do Enovy,
 nie pobiera raportów z eZUS i nie oznacza dokumentów jako zaimportowane.
-**Wyczyść podgląd** usuwa listę z widoku. Limity: 10 MB i 20 000 dokumentów;
+**Wyczyść wczytane raporty** usuwa lokalne odczyty; lista firm pozostaje
+z oznaczeniem braku raportu. Raporty można doładowywać partiami (do 20 plików);
+ponowne wczytanie tych samych danych nie powiela pozycji w podglądzie.
+Zestawienie stosuje miesiąc i filtry firm ze Sprawdzania. Raport bez pozycji
+w wybranym miesiącu nie jest potwierdzeniem kompletności danych ZUS. Limity: 10 MB i 20 000 dokumentów;
 liczba dokumentów musi odpowiadać nagłówkowi. Parser nie ładuje DTD ani encji
 zewnętrznych i odrzuca niepoprawny XML. Do działania używa istniejącej zależności
 lxml, bez nowego pakietu instalacyjnego.

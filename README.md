@@ -626,3 +626,9 @@ i import pracują w tle, a nieaktualna podpowiedź nie zastąpi nowszego wpisu.
 Ta funkcja wymaga migracji bazy **20261105_01**. Po aktualizacji kodu lub EXE
 uruchom `python migrate_db.py` (w instalacji: skrót aktualizacji bazy lub
 `Biuro.exe --migrate`) przed uruchomieniem nowej wersji aplikacji.
+
+
+### Worker bez otwartego programu i wspólny klucz
+
+Konfiguracja zadań w tle, uruchamianie na serwerze i naprawa haseł poczty na innych
+komputerach: [docs/background-worker.md](docs/background-worker.md).

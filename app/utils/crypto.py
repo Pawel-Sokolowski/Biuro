@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 # W produkcji klucz powinien pochodzić ze zmiennych środowiskowych.
 def _get_encryption_key() -> bytes:
     """Get the deployment-specific encryption key."""
-    key_str = os.environ.get("BIO_ENCRYPTION_KEY")
+    from app.utils.env_config import ensure_encryption_key
+    key_str = ensure_encryption_key()
     if not key_str:
         raise RuntimeError(
             "BIO_ENCRYPTION_KEY is required to access stored email passwords."
@@ -78,7 +79,7 @@ def decrypt_password(encrypted_password: str) -> str:
         encrypted_password: Encrypted password string
         
     Returns:
-        Decrypted password as string, empty string if decryption fails
+        Decrypted password; an invalid deployment key raises a clear error
     """
     if not encrypted_password:
         return ""
@@ -87,11 +88,7 @@ def decrypt_password(encrypted_password: str) -> str:
         decrypted = _cipher().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
         return decrypted
     except InvalidToken:
-        logger.debug("Failed to decrypt password: invalid token or corrupted data")
-        return ""
-    except Exception as e:
-        logger.error(f"Decryption failed: {e}")
-        return ""
+        raise ValueError('Nie można odszyfrować zapisanego hasła: ten komputer używa innego klucza BIO_ENCRYPTION_KEY lub dane są uszkodzone. Zaimportuj klucz z działającego komputera. Nie zapisuj ponownie hasła pustą wartością.') from None
 
 
 # --- Funkcje hashujące hasła użytkowników (bcrypt) ---

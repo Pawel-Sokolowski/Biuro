@@ -5,7 +5,9 @@ import sys
 from app.utils.env_config import load_environment, ensure_encryption_key
 
 load_environment()
-ensure_encryption_key()
+if __name__ == '__main__' and '--worker' in sys.argv:
+    from app.worker import main as worker_main
+    sys.exit(worker_main([arg for arg in sys.argv[1:] if arg != '--worker']))
 # Hardware rendering is the normal path. Drivers that need the software
 # fallback can opt in without rebuilding the installed application.
 if os.environ.get("BIO_SOFTWARE_RENDERING") == "1" or os.environ.get("QT_OPENGL") == "software":
@@ -59,6 +61,11 @@ if __name__ == "__main__":
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     install_polish_translations(app)
+    try:
+        ensure_encryption_key()
+    except ValueError as exc:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(None, 'Wspólny klucz szyfrowania', str(exc))
     login_window = LoginWindow()
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id

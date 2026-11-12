@@ -60,7 +60,7 @@ def can(pracownik_id: Optional[int], permission: str) -> bool:
 
 TABS = [
     "Pulpit", "Widok miesięczny", "Klienci", "E-mail", "Czat",
-    "Faktury", "Raporty", "Zadania", "Kalendarz", "Ustawienia",
+    "Faktury", "Raporty", "Zadania", "Kalendarz", "Ustawienia", "Księgowość",
 ]
 
 

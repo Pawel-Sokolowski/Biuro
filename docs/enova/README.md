@@ -123,13 +123,21 @@ Domyślnie aktualizowany jest miesiąc bieżący i dwa poprzednie, aby uwzględn
 późniejsze księgowania. `months_back` można zmienić w zakresie 1–24. Miesiące
 obliczane są według daty w strefie Europe/Warsaw.
 
-Codzienne uruchomienie **zastępuje** pole `Ilość dokumentów` pełną liczbą za
-miesiąc; nigdy nie dodaje jej do wczorajszej wartości. Pozostałe statusy, czas,
-notatki i komplet dokumentów są zachowane. W tym zakresie Enova staje się
-źródłem licznika: ręczne zmiany licznika w aplikacji zostaną zastąpione.
-Wpis pochodzenia danych nadaje Enova pierwszeństwo w raportach, także dla zera.
-Błąd jednej bazy zachowuje jej dotychczasowe wartości; inne firmy są importowane.
-Nakładające się zadania zapisujące są blokowane w PostgreSQL.
+Codzienny import uzupełnia `Ilość dokumentów` w **Widoku miesięcznym** obliczoną
+sumą Enova. Etap „Wysłane wyniki” jest tylko warunkiem odczytu i nigdy nie jest
+zmieniany przez importer. Istniejące ręczne liczby (także pochodzące z innych
+importów) pozostają bez zmian. Wartość Enova może być odświeżana, dopóki użytkownik
+nie edytuje licznika. Ręczna edycja, także wpisanie zera, trwale chroni miesiąc
+przed kolejnymi zapisami Enova. Ponowne sprawdzenie i blokada wiersza przed zapisem
+chronią także zmianę dokonaną w trakcie pobierania danych z SQL Server.
+
+Dla starych danych bez informacji o pochodzeniu niezerowa wartość jest traktowana
+jako ręczna; domyślne zero jest traktowane jako nieuzupełnione. Zer wpisanych
+ręcznie przed wprowadzeniem tej funkcji nie można rozpoznać wstecznie.
+Podział według rodzajów i wynik Enova nadal odświeżają się osobno od chronionego
+licznika. Pozostałe statusy, czas i notatki są zachowane. Błąd jednej bazy zachowuje
+jej dotychczasowe wartości; inne firmy są importowane. Nakładające się zadania
+zapisujące są blokowane w PostgreSQL.
 
 ## Kontrakt zapytań SQL
 
@@ -219,3 +227,89 @@ Stare konfiguracje nadal działają. Gdy zawierają własny `count_query` i jawn
 usuń oba pola, aby używać automatycznego wyboru. Ryczałt liczy definicje ZR (zakupy), SPU (sprzedaż usług) i RKVE (faktury metodą kasową),
 według DataEwidencji. Nie dodaje deklaracji, list płac ani dokumentów środków trwałych.
 Potwierdzony przykład czerwca 2026: 18 ZR + 2 SPU + 1 RKVE = 21.
+
+## Konfiguracja w aplikacji i zakładka Księgowość
+
+Administrator otwiera **Ustawienia → System → Enova — połączenie**. Pole serwera
+przyjmuje `IP\INSTANCJA` lub `host,port`. Nazwa serwera musi odpowiadać
+certyfikatowi SQL Server. Login SQL powinien mieć wyłącznie prawa SELECT.
+W tabeli firm wpisz nazwę bazy Enova; puste pole pomija firmę. NIP jest sprawdzany
+przy każdym imporcie. Hasło jest przechowywane zaszyfrowane przez Fernet;
+aplikacja i konto zadania wymagają tego samego `BIO_ENCRYPTION_KEY`.
+Puste hasło przy kolejnym zapisie zachowuje dotychczasowe. Nie wpisuj klucza w chat.
+
+Po zapisaniu ustawień wykonaj podgląd na serwerze:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.integrations.enova.document_counts --saved-settings
+```
+
+Po porównaniu wyników włącz import w ustawieniach. Codzienne zadanie można
+zarejestrować lokalnie na Windows Server:
+
+```powershell
+.\scripts\install_enova_daily_task.ps1 -Time '02:00'
+```
+
+Skrypt pyta lokalnie o konto Windows zadania i nie nadpisuje istniejącego zadania.
+Czas oznacza strefę lokalną serwera. Wymaga odpowiednich uprawnień Windows;
+repozytorium samo nie instaluje zadania. Konfiguracja JSON nadal jest obsługiwana.
+Zadanie korzysta ze wspólnych ustawień PostgreSQL i działa bez otwartej aplikacji.
+Pozostaje reguła odczytu tylko dla miesięcy „Wysłane wyniki”.
+
+**Księgowość** pokazuje miesięczne liczniki według firmy, podział według symbolu
+definicji dokumentu, osobno pozycje bankowe KH oraz datę ostatniego importu.
+Podział KPiR dotyczy wpisów dziennika powiązanych z definicją dokumentu;
+brak powiązania jest oznaczony „Bez definicji”. Podział i licznik są zapisywane
+w tej samej transakcji. Zapytania z podziałem wymagają SQL Server 2017 lub nowszego
+(`STRING_AGG`, `STRING_ESCAPE`). Starsze własne zapytania z czterema kolumnami
+nadal działają, ale nie dostarczają podziału. Faktury korzystają nadal wyłącznie
+z obliczonej sumy miesięcznej; nie otrzymują pozycji według typów.
+
+Status JPK pochodzi z **Enova**, osobno dla firmy i miesiąca. Domyślne
+„Nie sprawdzono” nie sugeruje wysyłki ani UPO. Wskazanie „Przyjęty (UPO)” wymaga
+jawnego statusu `accepted` i niepustego potwierdzenia UPO. Odczyt odbywa się
+raz dziennie również dla miesięcy bez etapu „Wysłane wyniki”; podgląd nie zapisuje.
+Błąd źródła zachowuje dotychczasowe dane. Data odczytu i referencja UPO są
+widoczne w podpowiedzi statusu.
+
+Repozytorium nie zawiera potwierdzonego schematu JPK danej instalacji Enova.
+Uruchom `inspect-jpk-schema.sql` w SSMS. Po potwierdzeniu znaczenia pól przygotuj
+zapytanie SELECT wybierające ostateczny/najnowszy status danego okresu
+(z uwzględnieniem korekt). Nie zgaduj statusu na podstawie numeru kodu.
+Ścieżkę do pliku SQL na serwerze importu wpisz w polu „Zapytanie statusu JPK”.
+Dla konfiguracji JSON obsługiwane jest `jpk_query` w każdym wpisie `sources`.
+Bez skonfigurowanego zapytania dokumenty są importowane normalnie, JPK pozostaje
+niesprawdzony.
+
+Zapytanie JPK ma dwa parametry ODBC `?`: początek zakresu włącznie i koniec
+wyłącznie. Zwraca dokładnie jeden wiersz na miesiąc z kolumnami `nip`, `miesiac`
+(`YYYY-MM`), `status` oraz `upo` (referencja potwierdzenia, NULL dopuszczalny poza
+`accepted`). Dozwolone statusy: `not_sent`, `sent`, `accepted`, `rejected`,
+`not_applicable`. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
+nie są zamieniane na „niewysłany”. Bez prawdziwego źródła nie można potwierdzić
+połączenia z JPK ani przetestować go w tej sesji.
+
+Dostęp do nowej zakładki można nadać w ustawieniach roli (role z domyślnymi
+zakładkami otrzymują ją automatycznie).
+
+## Test połączenia i praca niezależna
+
+Przycisk **Sprawdź połączenie z bazą Enova** w ustawieniach korzysta z aktualnie
+wpisanego serwera, loginu, hasła i nazw baz, bez konieczności zapisywania ustawień.
+Sprawdza logowanie i dostęp do każdej wskazanej bazy (`SELECT DB_NAME()`), nie
+uruchamia importu, nie zmienia liczników ani statusów. Puste hasło wykorzystuje
+zapisane hasło. Test połączenia z komputera użytkownika nie zastępuje testu na
+serwerze, gdzie uruchamiany jest importer.
+
+Na Windows Server z dostępem do PostgreSQL Biuro i SQL Server Enova zainstaluj
+**worker ze źródeł**, Python 3.14+, zależności `requirements-enova.lock` i Microsoft
+ODBC Driver 18. Nie trzeba instalować ani pozostawiać otwartego okna Biuro.
+Skonfiguruj `DB_URL` i wspólny `BIO_ENCRYPTION_KEY` w środowisku konta zadania
+lub zabezpieczonym lokalnym `.env`. Ustawienia zapisane w aplikacji są we wspólnej
+bazie PostgreSQL. Na serwerze uruchom podgląd `--saved-settings`, a po weryfikacji
+zarejestruj `scripts/install_enova_daily_task.ps1 -Time '02:00'`.
+Zadanie uruchamia worker raz dziennie, także bez zalogowanego użytkownika,
+a proces kończy się po imporcie. Serwer musi być włączony w czasie pracy zadania;
+ustawienie StartWhenAvailable nadrabia pominięty termin. W Harmonogramie zadań
+sprawdź ręcznie pierwsze uruchomienie pod docelowym kontem, wynik i logi `logs/enova`.

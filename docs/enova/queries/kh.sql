@@ -56,6 +56,11 @@ BankPositions AS (
     GROUP BY s.MonthStart
 )
 SELECT c.nip, CONVERT(char(7), m.MonthStart, 120) AS miesiac,
+       COALESCE((SELECT '{' + STRING_AGG(CAST('"' + STRING_ESCAPE(t.symbol, 'json') + '":' + CAST(t.cnt AS varchar(20)) AS nvarchar(max)), ',') + '}'
+                 FROM (SELECT COALESCE(def.Symbol,N'Bez definicji') AS symbol, COUNT_BIG(*) AS cnt
+                       FROM dbo.DokEwidencja x LEFT JOIN dbo.DefDokumentow def ON def.ID=x.Definicja
+                       WHERE x.DataEwidencji >= m.MonthStart AND x.DataEwidencji < DATEADD(month,1,m.MonthStart) AND (def.Symbol IS NULL OR def.Symbol <> N'WBEW')
+                       GROUP BY COALESCE(def.Symbol,N'Bez definicji')) t), N'{}') AS rodzaje,
        COALESCE(d.documents, 0) AS dokumenty,
        -- A broken statement link must not silently become a zero bank contribution.
        CASE WHEN bad.MonthStart IS NOT NULL THEN NULL ELSE COALESCE(b.positions, 0) END AS pozycje_bankowe

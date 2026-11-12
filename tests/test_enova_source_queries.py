@@ -18,6 +18,9 @@ def postgres_query(name):
     sql = (QUERY_DIR / name).read_text()
     assert sql.count('?') == 2
     sql = sql.replace('WITH Parameters AS', 'WITH RECURSIVE Parameters AS', 1)
+    sql = sql.replace("'{' + STRING_AGG(CAST('\"' + STRING_ESCAPE(t.symbol, 'json') + '\":' + CAST(t.cnt AS varchar(20)) AS nvarchar(max)), ',') + '}'",
+                      'json_object_agg(t.symbol,t.cnt)::text')
+    sql = sql.replace('DATEADD(month,1,m.MonthStart)', "(m.MonthStart + interval '1 month')::date")
     sql = sql.replace('?', '%s').replace('dbo.', '').replace('COUNT_BIG(', 'COUNT(')
     sql = sql.replace("nip NOT LIKE N'%[^0-9]%'", "nip ~ '^[0-9]{10}$'")
     sql = sql.replace("N'", "'").replace('LEN(nip)', 'length(nip)')
@@ -35,7 +38,7 @@ class EnovaSourceQueryTests(DbTestCase):
         with get_conn() as conn:
             for statement in (
                 'CREATE TABLE OddzialyFirmy(DeklaracjeNIP text)',
-                'CREATE TABLE Dziennik(ID int, Data timestamp, KPiRLp int, Bufor int DEFAULT 1)',
+                'CREATE TABLE Dziennik(ID int, Data timestamp, KPiRLp int, Bufor int DEFAULT 1, Ewidencja int)',
                 'CREATE TABLE DefDokumentow(ID int, Symbol text)',
                 'CREATE TABLE DokEwidencja(ID int, DataEwidencji timestamp, Definicja int, Dokument int, DokumentType text)',
                 'CREATE TABLE RaportyESP(ID int PRIMARY KEY)',
@@ -47,7 +50,13 @@ class EnovaSourceQueryTests(DbTestCase):
 
     def query(self, name, start=date(2026, 6, 1), end=date(2026, 7, 1)):
         with get_conn() as conn:
-            return [dict(row) for row in conn.execute(postgres_query(name), (start, end)).fetchall()]
+            rows = [dict(row) for row in conn.execute(postgres_query(name), (start, end)).fetchall()]
+            for row in rows:
+                import json
+                kinds = json.loads(row.pop('rodzaje'))
+                if row['dokumenty'] is not None:
+                    self.assertEqual(sum(kinds.values()), row['dokumenty'])
+            return rows
 
     def make_kh(self):
         definitions = [('DR', 2), ('LPEW', 5), ('PKE', 11), ('RDEW', 1), ('RKVE', 2),
@@ -71,7 +80,7 @@ class EnovaSourceQueryTests(DbTestCase):
     def test_kpir_counts_numbered_entries_including_observed_buffer_state_and_empty_month(self):
         with get_conn() as conn:
             conn.execute("INSERT INTO Dziennik(ID,Data,KPiRLp) SELECT n,'2026-06-15',n FROM generate_series(141,195) n")
-            conn.execute("INSERT INTO Dziennik VALUES (196,'2026-06-15',0,1),(197,'2026-05-31',196,1)")
+            conn.execute("INSERT INTO Dziennik(ID,Data,KPiRLp,Bufor) VALUES (196,'2026-06-15',0,1),(197,'2026-05-31',196,1)")
         rows = self.query('kpir.sql', end=date(2026, 8, 1))
         self.assertEqual(rows, [{'nip': NIP, 'miesiac': '2026-06', 'dokumenty': 55, 'pozycje_bankowe': 0},
                                 {'nip': NIP, 'miesiac': '2026-07', 'dokumenty': 0, 'pozycje_bankowe': 0}])

@@ -86,7 +86,7 @@ class EnovaImportTests(DbTestCase):
         self.config = {'enabled': True, 'months_back': 1, 'sources': [deepcopy(SOURCE)]}
         with get_conn() as conn:
             conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,dokumenty_dostarczone,sekundy_ksiegowosc,etap) "
-                         "VALUES (%s,'2026-11',99,1,3600,'Wysłane wyniki')", (self.company,))
+                         "VALUES (%s,'2026-11',0,1,3600,'Wysłane wyniki')", (self.company,))
 
     def test_import_uses_saved_company_type_instead_of_legacy_type(self):
         with get_conn() as conn:
@@ -109,7 +109,7 @@ class EnovaImportTests(DbTestCase):
 
     def test_preview_is_read_only_and_apply_replaces_without_adding_or_resetting_status(self):
         self.assertTrue(self.run_job(apply=False)[0]['ok'])
-        self.assertEqual(tuple(self.state()), (99, 1, 3600))
+        self.assertEqual(tuple(self.state()), (0, 1, 3600))
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM import_history').fetchone()[0], 0)
         for _ in range(2):
@@ -122,7 +122,7 @@ class EnovaImportTests(DbTestCase):
 
     def test_missing_source_data_preserves_existing_counts_and_records_failure(self):
         self.assertFalse(self.run_job(rows=[])[0]['ok'])
-        self.assertEqual(self.state()[0], 99)
+        self.assertEqual(self.state()[0], 0)
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT status FROM import_history').fetchone()[0], 'failed')
 
@@ -130,7 +130,7 @@ class EnovaImportTests(DbTestCase):
         with get_conn() as conn:
             duplicate = conn.execute("INSERT INTO firmy(nazwa,nip) VALUES ('Duplicate',%s) RETURNING id", (SOURCE['nip'],)).fetchone()[0]
         self.assertFalse(self.run_job()[0]['ok'])
-        self.assertEqual(self.state()[0], 99)
+        self.assertEqual(self.state()[0], 0)
         with get_conn() as conn:
             conn.execute('DELETE FROM firmy WHERE id=%s', (duplicate,))
         self.assertTrue(self.run_job(rows=[row(documents=0, bank=0)])[0]['ok'])
@@ -145,7 +145,7 @@ class EnovaImportTests(DbTestCase):
             return [] if source['database'] == 'ClientA' else [row(nip=source['nip'])]
         results = run_import(self.config, apply=True, today=date(2026, 11, 9), fetch=fetch)
         self.assertEqual([result['ok'] for result in results], [False, True])
-        self.assertEqual(self.state()[0], 99)
+        self.assertEqual(self.state()[0], 0)
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s', (other,)).fetchone()[0], 12)
 
@@ -153,14 +153,14 @@ class EnovaImportTests(DbTestCase):
         self.config['enabled'] = False
         with self.assertRaises(ValueError):
             self.run_job()
-        self.assertEqual(self.state()[0], 99)
+        self.assertEqual(self.state()[0], 0)
 
     def test_overlapping_daily_job_cannot_write(self):
         with get_conn() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(748209)')
             with self.assertRaisesRegex(ValueError, 'już uruchomiony'):
                 self.run_job()
-        self.assertEqual(self.state()[0], 99)
+        self.assertEqual(self.state()[0], 0)
 
     def test_enova_zero_has_priority_over_physical_documents_in_reports(self):
         from app.reports.reports_logic import build_report

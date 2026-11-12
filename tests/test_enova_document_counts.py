@@ -52,7 +52,7 @@ class EnovaRulesTests(TestCase):
             cursor = connection.cursor.return_value
             cursor.description = [('nip',), ('miesiac',), ('dokumenty',), ('pozycje_bankowe',)]
             cursor.fetchmany.return_value = [('1234567890', '2026-11', 10, 5)]
-            driver = SimpleNamespace(connect=Mock(return_value=connection))
+            driver = SimpleNamespace(connect=Mock(return_value=connection), drivers=lambda: ['ODBC Driver 18 for SQL Server'])
             with patch.dict('sys.modules', {'pyodbc': driver}), patch.dict('os.environ',
                  {'ENOVA_SQL_USER': 'reader', 'ENOVA_SQL_PASSWORD': 'secret;value}'}):
                 rows = fetch_counts({'server': 'sql.example,1433', '_directory': Path(directory)}, source, ['2026-11'])
@@ -70,7 +70,7 @@ class EnovaRulesTests(TestCase):
             query.write_text('SELECT wrong_columns')
             connection = Mock()
             connection.cursor.return_value.description = [('wrong',)]
-            driver = SimpleNamespace(connect=Mock(return_value=connection))
+            driver = SimpleNamespace(connect=Mock(return_value=connection), drivers=lambda: ['ODBC Driver 18 for SQL Server'])
             with patch.dict('sys.modules', {'pyodbc': driver}), patch.dict('os.environ',
                  {'ENOVA_SQL_USER': 'reader', 'ENOVA_SQL_PASSWORD': 'secret'}):
                 with self.assertRaises(ValueError):

@@ -313,3 +313,21 @@ Zadanie uruchamia worker raz dziennie, także bez zalogowanego użytkownika,
 a proces kończy się po imporcie. Serwer musi być włączony w czasie pracy zadania;
 ustawienie StartWhenAvailable nadrabia pominięty termin. W Harmonogramie zadań
 sprawdź ręcznie pierwsze uruchomienie pod docelowym kontem, wynik i logi `logs/enova`.
+
+### Test z komputera użytkownika i sterownik
+
+Przycisk „Sprawdź połączenie z bazą Enova” łączy się bezpośrednio **z komputera,
+na którym działa Biuro**. Worker nie jest potrzebny do testu. Wystarczą serwer,
+login i hasło; bez mapowań firm sprawdzane jest logowanie do domyślnej bazy konta.
+Po wpisaniu baz firm test sprawdza również dostęp do każdej z nich.
+
+Windowsowy instalator Biuro zawiera moduł Python `pyodbc`. Sterownik systemowy
+Microsoft ODBC Driver for SQL Server jest oddzielnym składnikiem Windows.
+Opcja „Automatycznie” wybiera z zainstalowanych lokalnie sterowników najpierw 18,
+a następnie 17. Można też jawnie wskazać wersję. Każdy PC i worker wykrywają
+sterownik we własnym środowisku. Wymagana jest zgodna architektura (zwykle x64).
+Działająca Enova nie gwarantuje dostępności tego samego sterownika: może używać
+własnego dostawcy .NET zamiast ODBC. Brak modułu w starym EXE wymaga aktualizacji
+Biuro, a brak systemowego sterownika wymaga instalacji Microsoft ODBC Driver
+na komputerze wykonującym połączenie. TLS i sprawdzanie certyfikatu pozostają
+włączone dla obu wersji.

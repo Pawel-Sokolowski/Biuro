@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QCheckBox,
-    QSpinBox, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox)
+    QSpinBox, QComboBox, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox)
 from app.db.dao_conn import get_conn
 from app.integrations.enova.connection_settings import load_connection, save_connection
 
@@ -16,6 +16,12 @@ class EnovaConnectionSettings(QWidget):
         form = QFormLayout()
         self.server = QLineEdit(config.get('server', ''))
         self.server.setPlaceholderText(r'192.168.1.10\ENOVA lub sql.firma.local,1433')
+        from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
+        self.driver = QComboBox()
+        self.driver.addItem('Automatycznie — wykryj na tym komputerze', 'auto')
+        for name in SUPPORTED_DRIVERS:
+            self.driver.addItem(name, name)
+        self.driver.setCurrentIndex(max(0, self.driver.findData(config.get('driver', 'auto'))))
         self.username = QLineEdit(config.get('username', ''))
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -27,11 +33,16 @@ class EnovaConnectionSettings(QWidget):
         self.months = QSpinBox()
         self.months.setRange(1, 24)
         self.months.setValue(config['months_back'])
-        for label, widget in [('Serwer SQL / instancja', self.server), ('Login SQL', self.username),
+        for label, widget in [('Serwer SQL / instancja', self.server), ('Sterownik SQL', self.driver), ('Login SQL', self.username),
                               ('Hasło SQL', self.password), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
                               ('Import', self.enabled)]:
             form.addRow(label, widget)
         layout.addLayout(form)
+        local_note = QLabel('Test połączenia działa z tego komputera, bez uruchamiania workera. '
+                            'Możesz sprawdzić sam serwer przed wpisaniem baz firm. '
+                            'Sterownik musi być zainstalowany na tym komputerze; Enova może używać innego dostawcy SQL.')
+        local_note.setWordWrap(True)
+        layout.addWidget(local_note)
         note = QLabel('Wpisz nazwę bazy Enova przy każdej importowanej firmie. Puste pole pomija firmę. '
                       'Typ księgowości wynika z formy opodatkowania. Konto SQL wymaga praw tylko do odczytu. '
                       'Hasło jest szyfrowane kluczem BIO_ENCRYPTION_KEY wspólnym dla aplikacji i serwera importu.')
@@ -71,7 +82,7 @@ class EnovaConnectionSettings(QWidget):
 
     def save(self):
         try:
-            config = dict(server=self.server.text().strip(), username=self.username.text().strip(),
+            config = dict(server=self.server.text().strip(), driver=self.driver.currentData(), username=self.username.text().strip(),
                           jpk_query=self.jpk_query.text().strip(), enabled=self.enabled.isChecked(), months_back=self.months.value(), sources=[])
             for row, company in enumerate(self.companies):
                 database = self.table.item(row, 2).text().strip()
@@ -106,7 +117,7 @@ class EnovaConnectionSettings(QWidget):
         from app.integrations.enova.connection_settings import check_connection
         # Use the fields currently on screen; saving and enabling import are unnecessary.
         config = load_connection()
-        config.update(server=self.server.text().strip(), username=self.username.text().strip(), sources=[])
+        config.update(server=self.server.text().strip(), driver=self.driver.currentData(), username=self.username.text().strip(), sources=[])
         for row in range(self.table.rowCount()):
             database = self.table.item(row, 2).text().strip()
             if database:

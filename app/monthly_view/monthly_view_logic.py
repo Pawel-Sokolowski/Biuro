@@ -56,6 +56,10 @@ class MonthlyViewLogic:
     def is_general_timer_running(self) -> bool:
         return self.czas_start_general is not None
 
+    def is_company_timer_running(self) -> bool:
+        return any(getattr(self, fields[0]) is not None and getattr(self, fields[1]) is not None
+                   for fields in self._TIMER_FIELDS.values())
+
     def stop_company_timers(self) -> None:
         """Zapisuje i zatrzymuje stopery firm (księgowość i kadry)."""
         now = datetime.datetime.now()

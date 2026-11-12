@@ -401,7 +401,8 @@ class OfficeManagerApp(QMainWindow):
         self.sidebar.setItemDelegate(BadgeDelegate(self.sidebar))
         self.sidebar.addItems([
             "Pulpit",
-            "Widok miesięczny",
+            "Księgowość",
+            "Kadry",
             "Klienci",
             "E-mail",
             "Czat",
@@ -409,8 +410,7 @@ class OfficeManagerApp(QMainWindow):
             "Raporty",
             "Zadania",
             "Kalendarz",
-            "Ustawienia",
-            "Sprawdzanie"
+            "Ustawienia"
         ])
         for row in range(self.sidebar.count()):
             item = self.sidebar.item(row)
@@ -480,6 +480,10 @@ class OfficeManagerApp(QMainWindow):
         main_layout.addWidget(content)
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
+        self.page_monthly.setParent(self)
+        from app.accounting.department_ui import DepartmentPage
+        self.page_ksiegowosc = DepartmentPage(self.pracownik_id, 'accounting', self.page_monthly)
+        self.page_kadry = DepartmentPage(self.pracownik_id, 'payroll', self.page_monthly)
         self.page_dashboard = DashboardPage(self.pracownik_id)
         # These pages own background monitoring and must start before tab visits.
         self.page_email = EmailPage(self.pracownik_id)
@@ -489,17 +493,15 @@ class OfficeManagerApp(QMainWindow):
         self.page_chat._refresh_unread_marks()
         self.page_calendar = CalendarPage(self.pracownik_id)
         self._loaded_pages = {}
-        from app.accounting.accounting_ui import AccountingPage
         self._lazy_pages = {
-            "page_accounting": (10, lambda: AccountingPage(self.pracownik_id)),
-            "page_companies": (2, lambda: CompanyUI(self.pracownik_id, self)),
-            "page_faktury": (5, lambda: FakturyPage(self.pracownik_id)),
-            "page_raporty": (6, lambda: ReportsPage(self.pracownik_id)),
-            "page_tasks": (7, lambda: TasksPage(self.pracownik_id)),
-            "page_settings": (9, lambda: GlobalSettingsPage(self.pracownik_id, True, self)),
+            "page_companies": (3, lambda: CompanyUI(self.pracownik_id, self)),
+            "page_faktury": (6, lambda: FakturyPage(self.pracownik_id)),
+            "page_raporty": (7, lambda: ReportsPage(self.pracownik_id)),
+            "page_tasks": (8, lambda: TasksPage(self.pracownik_id)),
+            "page_settings": (10, lambda: GlobalSettingsPage(self.pracownik_id, True, self)),
         }
-        eager = {0: self.page_dashboard, 1: self.page_monthly, 3: self.page_email,
-                 4: self.page_chat, 8: self.page_calendar}
+        eager = {0: self.page_dashboard, 1: self.page_ksiegowosc, 2: self.page_kadry,
+                 4: self.page_email, 5: self.page_chat, 9: self.page_calendar}
         for row in range(11):
             self.pages.addWidget(eager[row] if row in eager else QWidget())
 
@@ -626,7 +628,7 @@ class OfficeManagerApp(QMainWindow):
             tray = getattr(self._mail_toaster, "_tray", None)
             if tray is not None:
                 self._mail_toaster.show_notice("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}")
-        if done and self.pages.currentWidget() is self.page_monthly:
+        if done and self.page_monthly.isVisible():
             self.page_monthly.refresh_background()
 
     def _show_chat_tab(self, target):
@@ -661,7 +663,8 @@ class OfficeManagerApp(QMainWindow):
         from app.security.authorization import allowed_tabs
 
         try:
-            allowed = set(allowed_tabs(self.pracownik_id))
+            from app.accounting.department_ui import navigation_tabs
+            allowed = navigation_tabs(allowed_tabs(self.pracownik_id))
             allowed.add("Ustawienia")
         except Exception:
             logger.warning("Nie udało się odczytać uprawnień do zakładek", exc_info=True)
@@ -774,7 +777,9 @@ class OfficeManagerApp(QMainWindow):
         if not logic:
             return
         try:
-            if logic.is_general_timer_running():
+            if logic.is_company_timer_running():
+                logic.stop_company_timers()
+            elif logic.is_general_timer_running():
                 logic.stop_general_timer()
             else:
                 from app.monthly_view.general_timer_dialog import GeneralTimerDialog
@@ -782,9 +787,9 @@ class OfficeManagerApp(QMainWindow):
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
                 logic.start_general_timer(dialog.activity())
-                reload_rows = getattr(self.page_monthly, "_reload_rows", None)
-                if callable(reload_rows):
-                    reload_rows()
+            reload_rows = getattr(self.page_monthly, "_reload_rows", None)
+            if callable(reload_rows):
+                reload_rows()
         except Exception as exc:
             logger.warning("Stoper ogólny: błąd", exc_info=True)
             QMessageBox.warning(self, "Stoper", f"Nie udało się zmienić stanu stopera: {exc}")
@@ -793,8 +798,13 @@ class OfficeManagerApp(QMainWindow):
     def _update_header_timer(self):
         logic = getattr(self.page_monthly, "logic", None)
         if hasattr(self, "btn_general_timer") and logic:
+            company_running = logic.is_company_timer_running()
             self.btn_general_timer.setText(
-                "■ Stop stopera" if logic.is_general_timer_running() else "▶ Start stopera")
+                "■ Stop stopera firmy" if company_running else
+                ("■ Stop stopera" if logic.is_general_timer_running() else "▶ Start stopera"))
+            self.btn_general_timer.setToolTip(
+                "Zatrzymaj stoper firmy i zapisz czas; stoper ogólny nie zostanie uruchomiony"
+                if company_running else "Uruchom lub zatrzymaj stoper zadań ogólnych (bez firmy)")
         self._update_header_timer_labels()
 
     def _update_header_timer_labels(self):
@@ -835,6 +845,12 @@ class OfficeManagerApp(QMainWindow):
             if row == index:
                 page = self._ensure_page(name)
                 break
+        default_department = getattr(page, 'apply_department_default', None)
+        if callable(default_department):
+            try:
+                default_department()
+            except Exception:
+                logger.warning('Nie udało się ustawić domyślnego działu', exc_info=True)
         for name in ("refresh_async", "_reload_rows", "_refresh", "refresh", "_refresh_all", "refresh_all"):
             action = getattr(page, name, None)
             if callable(action):

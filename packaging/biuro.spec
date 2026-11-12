@@ -19,6 +19,8 @@ try:
     import lxml.etree
     import docx
     import pypdf
+    import pyzipper
+    import Cryptodome.Cipher.AES
 except ImportError as exc:
     raise SystemExit(
         "Invoice/contract PDF dependencies unavailable. Run: "
@@ -102,6 +104,8 @@ a = Analysis(
         "bcrypt",
         "cryptography",
         "requests",
+        "pyzipper",
+        "Cryptodome.Cipher.AES",
         "dotenv",
         "xlsxwriter",
         "dateutil",

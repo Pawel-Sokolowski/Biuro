@@ -53,7 +53,14 @@ def validate_declarations(rows, source, months):
         form = str(row['form'] or '').strip().upper()
         if department not in DEPARTMENTS or not form or len(form) > 64:
             raise ValueError('Nieprawidłowy dział lub rodzaj deklaracji.')
-        identity = (month, department, form)
+        employee_id = str(row.get('employee_id') or '').strip()
+        employee_name = str(row.get('employee_name') or '').strip()
+        if bool(employee_id) != bool(employee_name):
+            raise ValueError('Deklaracja pracownika wymaga identyfikatora i nazwy pracownika.')
+        source_system = str(row.get('source_system') or 'enova').strip().casefold().replace('ł', 'l')
+        if source_system not in ('enova', 'platnik'):
+            raise ValueError('Nieznane źródło deklaracji.')
+        identity = (month, department, form, employee_id)
         if identity in seen:
             raise ValueError('Zapytanie deklaracji musi wybrać jeden aktualny stan formularza (uwzględniając korekty).')
         seen.add(identity)
@@ -61,6 +68,7 @@ def validate_declarations(rows, source, months):
         if status not in STATUSES or (status == 'accepted' and not upo):
             raise ValueError('Nieprawidłowy status deklaracji lub brak UPO dla przyjętej deklaracji.')
         result[month].append({'department': department, 'form': form, 'status': status,
+                              'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
                               'sent_at': _timestamp(row['sent_at']), 'upo': upo,
                               'upo_at': _timestamp(row['upo_at'])})
     return result
@@ -90,12 +98,12 @@ def validate_payroll(rows, source, months):
 def sync_checking(conn, config, source, company_id, day, *, apply):
     requested_months(day, config.get('months_back', 3))
     month = day.strftime('%Y-%m')
-    # The configured month window plus the preceding full year for zero detection.
+    # Retain historical snapshots for period navigation; the UI compares only the previous month.
     months = history_months(month, 12 + config.get('months_back', 3) - 1) + [month]
     key = f'enova_checking_checked_{company_id}'
-    signature = {'version': 1, 'day': day.isoformat(), 'server': config.get('server'),
+    signature = {'version': 3, 'day': day.isoformat(), 'server': config.get('server'),
                  'database': source['database'], 'months': months,
-                 'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query')}
+                 'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
     if apply and checked and json.loads(checked[0]) == signature:
         return {'mode': 'skipped'}
@@ -111,6 +119,10 @@ def sync_checking(conn, config, source, company_id, day, *, apply):
     if source.get('declarations_query'):
         query = {**source, 'count_query': source['declarations_query']}
         declarations = validate_declarations(fetch_counts(config, query, months, result_kind='declarations'), source, months)
+    events = None
+    if source.get('hr_events_query'):
+        from app.integrations.enova.hr_events import fetch_events
+        events = fetch_events(config, source, day)
     if apply:
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for count in counts:
@@ -121,10 +133,14 @@ def sync_checking(conn, config, source, company_id, day, *, apply):
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                          (f'enova_checking_{company_id}_{count.month}', json.dumps(value, ensure_ascii=False)))
+        hr_snapshot = {'events': events, 'imported_at': stamp, 'as_of': day.isoformat(), 'database': source['database']}
+        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                     (f'enova_hr_{company_id}', json.dumps(hr_snapshot, ensure_ascii=False)))
         conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                      'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
     return {'mode': 'applied' if apply else 'preview', 'months': len(months),
-            'payroll_configured': payroll is not None, 'declarations_configured': declarations is not None}
+            'payroll_configured': payroll is not None, 'declarations_configured': declarations is not None, 'hr_configured': events is not None}
 
 
 def run_checking_import(config, *, apply=False, today=None):

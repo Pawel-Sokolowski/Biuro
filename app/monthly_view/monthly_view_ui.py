@@ -591,7 +591,23 @@ class MonthlyViewPage(QWidget):
 
         self._build_ui()
         self._load_initial_data()
+        self.apply_department_default()
         self._setup_timer()
+
+    def apply_department_default(self):
+        from app.preferences.department import default_department
+        department = getattr(self, '_fixed_department', None) or default_department(self.pracownik_id)
+        self.tabs.setCurrentIndex(1 if department == 'payroll' else 0)
+
+    def set_department(self, department):
+        if department not in ('accounting', 'payroll'):
+            raise ValueError('Nieprawidłowy dział.')
+        self._fixed_department = department
+        index = 1 if department == 'payroll' else 0
+        changed = self.tabs.currentIndex() != index
+        self.tabs.setCurrentIndex(index)
+        self.tabs.tabBar().hide()
+        return changed
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -845,6 +861,10 @@ class MonthlyViewPage(QWidget):
         return self.status_combo.currentText() or "Wszystkie"
 
     def _on_month_tab_changed(self, index: int):
+        fixed = getattr(self, '_fixed_department', None)
+        if fixed and index != (1 if fixed == 'payroll' else 0):
+            self.tabs.setCurrentIndex(1 if fixed == 'payroll' else 0)
+            return
         if index not in self._months_by_tab:
             return
         month = self._months_by_tab[index]

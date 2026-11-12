@@ -95,7 +95,7 @@ class EncryptionSettings(QWidget):
         from cryptography.fernet import Fernet
         with get_conn() as conn:
             occupied = conn.execute("SELECT 1 FROM konta_email WHERE NULLIF(haslo_enc,'') IS NOT NULL LIMIT 1").fetchone()
-            other_secrets = conn.execute("SELECT 1 FROM app_settings WHERE klucz IN ('enova_connection','ksef_cert_pem_enc','ksef_key_pem_enc','ksef_token_enc','google_shared_refresh_token','google_client_secret','ksef_key_pass_enc','caldav_haslo_enc') LIMIT 1").fetchone()
+            other_secrets = conn.execute("SELECT 1 FROM app_settings WHERE klucz IN ('ezla_service','enova_connection','ksef_cert_pem_enc','ksef_key_pem_enc','ksef_token_enc','google_shared_refresh_token','google_client_secret','ksef_key_pass_enc','caldav_haslo_enc') OR klucz LIKE 'ezla_report_%' LIMIT 1").fetchone()
         if occupied or other_secrets or os.environ.get(KEY_NAME):
             QMessageBox.warning(self, 'Klucz', 'Biuro ma już klucz lub zapisane sekrety. Zaimportuj istniejący klucz zamiast tworzyć nowy.')
             return

@@ -1,7 +1,7 @@
 """Unattended shared-settings worker: python -m app.worker [--once]."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import hashlib
 from contextvars import copy_context
 import json
@@ -17,7 +17,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import load_settings
 
 logger = logging.getLogger(__name__)
-JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ksef_import')
+JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import')
 
 
 def mail_job(stop=None):
@@ -69,12 +69,15 @@ def enova_job(now=None):
     settings = load_settings()
     config = load_connection()
     day = now.date().isoformat()
-    # Connection/rule changes are picked up by the existing importer next day;
-    # failures do not consume this completion marker and retry at the interval.
+    checking_signature = json.dumps({'day': day, 'version': 3, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
+        'sources': [{key: source.get(key) for key in ('database', 'nip', 'payroll_query', 'declarations_query', 'hr_events_query')}
+                    for source in config.get('sources', [])]}, sort_keys=True, default=str)
+    # Checking adapters/configuration changes invalidate the daily marker.
+    # Failures do not consume it and retry at the interval.
     if not config['enabled'] or now.time().replace(tzinfo=None) < time.fromisoformat(settings['enova_time']):
         return {'mode': 'waiting'}
     if (get_setting('worker_enova_completed') == day
-            and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == day)):
+            and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == checking_signature)):
         return {'mode': 'checked_today'}
     results = run_import(config, apply=True, today=now.date())
     if config.get('checking_enabled', False):
@@ -85,7 +88,7 @@ def enova_job(now=None):
         raise RuntimeError('Import Enova nieukończony. Sprawdź audyt importów i połączenie SQL.')
     set_setting('worker_enova_completed', day)
     if config.get('checking_enabled', False):
-        set_setting('worker_enova_checking_completed', day)
+        set_setting('worker_enova_checking_completed', checking_signature)
     return {'companies': len(config['sources']) if 'sources' in config else len(results)}
 
 
@@ -100,11 +103,19 @@ def ksef_import_job():
     return {'months': 2}
 
 
+def ezla_job(stop=None):
+    from app.integrations.ezla.sync import run_sync
+    result = run_sync(stop=stop)
+    if result['failed']:
+        raise RuntimeError('Nie pobrano e-ZLA dla części firm. Szczegóły w raporcie e-ZLA.')
+    return {key: result[key] for key in ('companies', 'failed')}
+
+
 def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
         return {'mail': lambda: mail_job(stop), 'reminders': reminders_job,
-                'invoices': invoices_job, 'enova': enova_job, 'ksef_import': ksef_import_job}[name]()
+                'invoices': invoices_job, 'enova': enova_job, 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job}[name]()
 
 
 @contextmanager
@@ -136,13 +147,16 @@ def leadership():
 def serve(*, once=False, stop=None):
     stop = stop or threading.Event()
     running, last_started, statuses = {}, {}, {}
+    events = json.loads(get_setting('background_worker_events') or '[]')[-200:]
     with leadership() as leader, ThreadPoolExecutor(max_workers=len(JOBS)) as pool:
         while not stop.is_set():
             leader.execute('SELECT 1')  # Stop scheduling immediately if leadership disconnects.
             settings = load_settings()
+            events_changed = False
             for name, future in list(running.items()):
                 if not future.done():
                     continue
+                started_at = statuses[name].get('started_at')
                 try:
                     outcome = future.result()
                     statuses[name] = {'state': 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
@@ -151,14 +165,31 @@ def serve(*, once=False, stop=None):
                     logger.error('worker_job_failed job=%s error_type=%s', name, type(exc).__name__)
                     statuses[name] = {'state': 'failed', 'error_type': type(exc).__name__,
                                       'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                statuses[name]['started_at'] = started_at
+                last_started[name] = clock.monotonic()  # A full interval after completion, including failures.
+                events.append({'at': statuses[name]['finished_at'], 'job': name, 'state': statuses[name]['state'],
+                               'error_type': statuses[name].get('error_type')})
+                events_changed = True
                 del running[name]
             for name in JOBS:
                 if settings['enabled'] and settings[name] and name not in running:
                     due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= settings[name + '_interval'])
                     if due:
                         last_started[name] = clock.monotonic()
-                        statuses[name] = {'state': 'running'}
+                        stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+                        statuses[name] = {'state': 'running', 'started_at': stamp}
+                        events.append({'at': stamp, 'job': name, 'state': 'started'})
+                        events_changed = True
                         running[name] = pool.submit(copy_context().run, run_job, name, stop)
+            if events_changed:
+                events = events[-200:]
+                set_setting('background_worker_events', json.dumps(events))
+            for name, status in statuses.items():
+                if status['state'] != 'running' and settings['enabled'] and settings[name]:
+                    delay = max(0, settings[name + '_interval'] - (clock.monotonic() - last_started[name]))
+                    status['next_run_at'] = (datetime.now(ZoneInfo('Europe/Warsaw')) + timedelta(seconds=delay)).isoformat()
+                else:
+                    status.pop('next_run_at', None)
             set_setting('background_worker_heartbeat', json.dumps({
                 'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
                 'enabled': settings['enabled'], 'jobs': statuses}))

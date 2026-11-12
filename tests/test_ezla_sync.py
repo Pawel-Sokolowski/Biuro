@@ -44,6 +44,19 @@ class EzlaSyncTests(DbTestCase):
         self.assertEqual(saved[0]['report'].certificates[0].employee_name, 'JAN PRZYKŁAD')
         self.assertEqual(load_reports(self.admin, '2018-05')['reports'], [])
 
+    def test_plain_text_settings_are_never_cast_as_report_json(self):
+        with get_conn() as conn:
+            for key, value in (('ezla_test_month', '2026-11'), ('ezla_test_date', '2026-11-12'),
+                               ('ezla_test_label', 'zwykły tekst bez JSON')):
+                conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)', (key, value))
+        with patch('app.integrations.ezla.sync.fetch_reports', return_value=[Download('2018-08-01', report(certificate()))]):
+            run_sync(actor_id=self.admin)
+        included = load_reports(self.admin, '2018-04')
+        self.assertEqual(len(included['reports']), 1)
+        self.assertEqual(included['errors'], [])
+        self.assertEqual(included['reports'][0]['company']['id'], self.company)
+        self.assertEqual(load_reports(self.admin, '2018-05')['reports'], [])
+
     def test_failed_batch_rolls_back_new_reports_and_preserves_previous_cursor(self):
         original = Download('2018-08-01', report(certificate()))
         with patch('app.integrations.ezla.sync.fetch_reports', return_value=[original]):

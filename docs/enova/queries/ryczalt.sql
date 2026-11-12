@@ -35,6 +35,11 @@ Entries AS (
     GROUP BY DATEFROMPARTS(YEAR(d.DataEwidencji), MONTH(d.DataEwidencji), 1)
 )
 SELECT c.nip, CONVERT(char(7), m.MonthStart, 120) AS miesiac,
+       COALESCE((SELECT '{' + STRING_AGG(CAST('"' + STRING_ESCAPE(t.symbol, 'json') + '":' + CAST(t.cnt AS varchar(20)) AS nvarchar(max)), ',') + '}'
+                 FROM (SELECT COALESCE(def.Symbol,N'Bez definicji') AS symbol, COUNT_BIG(*) AS cnt
+                       FROM dbo.DokEwidencja x LEFT JOIN dbo.DefDokumentow def ON def.ID=x.Definicja
+                       WHERE x.DataEwidencji >= m.MonthStart AND x.DataEwidencji < DATEADD(month,1,m.MonthStart) AND def.Symbol IN (N'ZR',N'SPU',N'RKVE')
+                       GROUP BY COALESCE(def.Symbol,N'Bez definicji')) t), N'{}') AS rodzaje,
        COALESCE(e.documents, 0) AS dokumenty,
        CAST(0 AS bigint) AS pozycje_bankowe
 FROM Months AS m CROSS JOIN Company AS c

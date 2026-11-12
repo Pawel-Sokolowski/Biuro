@@ -409,7 +409,8 @@ class OfficeManagerApp(QMainWindow):
             "Raporty",
             "Zadania",
             "Kalendarz",
-            "Ustawienia"
+            "Ustawienia",
+            "Księgowość"
         ])
         for row in range(self.sidebar.count()):
             item = self.sidebar.item(row)
@@ -488,7 +489,9 @@ class OfficeManagerApp(QMainWindow):
         self.page_chat._refresh_unread_marks()
         self.page_calendar = CalendarPage(self.pracownik_id)
         self._loaded_pages = {}
+        from app.accounting.accounting_ui import AccountingPage
         self._lazy_pages = {
+            "page_accounting": (10, lambda: AccountingPage(self.pracownik_id)),
             "page_companies": (2, lambda: CompanyUI(self.pracownik_id, self)),
             "page_faktury": (5, lambda: FakturyPage(self.pracownik_id)),
             "page_raporty": (6, lambda: ReportsPage(self.pracownik_id)),
@@ -497,7 +500,7 @@ class OfficeManagerApp(QMainWindow):
         }
         eager = {0: self.page_dashboard, 1: self.page_monthly, 3: self.page_email,
                  4: self.page_chat, 8: self.page_calendar}
-        for row in range(10):
+        for row in range(11):
             self.pages.addWidget(eager[row] if row in eager else QWidget())
 
         self.sidebar.setCurrentRow(0)

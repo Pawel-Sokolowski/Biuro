@@ -22,6 +22,7 @@ class MonthlyCount:
     documents: int
     bank_transactions: int
     total: int
+    by_type: dict | None = None
 
 
 def normalize_nip(value):
@@ -78,8 +79,17 @@ def validate_rows(rows, source, months, bank_divisor=3):
             raise ValueError('Powtórzony miesiąc lub miesiąc spoza zakresu importu.')
         documents = whole_count(row['dokumenty'])
         bank = whole_count(row['pozycje_bankowe'])
+        breakdown = row.get('rodzaje')
+        if isinstance(breakdown, str):
+            breakdown = json.loads(breakdown)
+        if breakdown is not None:
+            if not isinstance(breakdown, dict):
+                raise ValueError('Nieprawidłowy podział dokumentów.')
+            breakdown = {str(k): whole_count(v) for k, v in breakdown.items()}
+            if sum(breakdown.values()) != documents:
+                raise ValueError('Podział dokumentów nie odpowiada sumie.')
         found[month] = MonthlyCount(month, documents, bank,
-                                   calculate_total(source['accounting_type'], documents, bank, bank_divisor))
+                                   calculate_total(source['accounting_type'], documents, bank, bank_divisor), breakdown)
     if set(found) != set(months):
         raise ValueError('Zapytanie nie zwróciło wszystkich miesięcy. Brak wiersza nie oznacza zera.')
     return [found[month] for month in months]
@@ -125,24 +135,32 @@ def sql_credentials():
     raise ValueError('Ustaw sql_user i sql_password lub ENOVA_SQL_USER i ENOVA_SQL_PASSWORD w pliku .env.')
 
 
-def fetch_counts(config, source, months):
+def sql_connection_string(config, database, user, password):
+    return ';'.join(f'{key}={_odbc_quote(value)}' for key, value in {
+        'DRIVER': config.get('driver', 'ODBC Driver 18 for SQL Server'),
+        'SERVER': config['server'], 'DATABASE': database, 'UID': user, 'PWD': password,
+        'Encrypt': 'yes', 'TrustServerCertificate': 'no', 'APP': 'Biuro document counts',
+    }.items())
+
+
+def fetch_counts(config, source, months, *, result_kind="counts"):
     """SQL Server credentials must be SELECT-only; readonly is also requested from ODBC."""
     try:
         import pyodbc
     except ImportError:
         raise ValueError('Zainstaluj requirements-enova.txt oraz Microsoft ODBC Driver 18 for SQL Server.') from None
-    user, password = sql_credentials()
+    if config.get('password_enc'):
+        from app.integrations.enova.connection_settings import credentials
+        user, password = credentials(config)
+    else:
+        user, password = sql_credentials()
     query_path = Path(source['count_query'])
     if not query_path.is_absolute():
         query_path = config['_directory'] / query_path
     query = query_path.read_text(encoding='utf-8-sig')
     if not query.strip():
         raise ValueError('Plik zapytania jest pusty.')
-    connection_string = ';'.join(f'{key}={_odbc_quote(value)}' for key, value in {
-        'DRIVER': config.get('driver', 'ODBC Driver 18 for SQL Server'),
-        'SERVER': config['server'], 'DATABASE': source['database'], 'UID': user, 'PWD': password,
-        'Encrypt': 'yes', 'TrustServerCertificate': 'no', 'APP': 'Biuro document counts',
-    }.items())
+    connection_string = sql_connection_string(config, source['database'], user, password)
     connection = pyodbc.connect(connection_string, timeout=15, attrs_before={101: 1})
     try:
         cursor = connection.cursor()
@@ -151,9 +169,11 @@ def fetch_counts(config, source, months):
         cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
                        date.fromisoformat(month_bounds(months[-1])[1]))
         columns = [column[0].lower() for column in cursor.description or []]
-        required = {'nip', 'miesiac', 'dokumenty', 'pozycje_bankowe'}
-        if set(columns) != required or len(columns) != len(required):
-            raise ValueError('Zapytanie musi zwrócić: nip, miesiac, dokumenty, pozycje_bankowe.')
+        required = ({'nip', 'miesiac', 'status', 'upo'} if result_kind == 'jpk'
+                    else {'nip', 'miesiac', 'dokumenty', 'pozycje_bankowe'})
+        optional = {'rodzaje'} if result_kind == 'counts' else set()
+        if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
+            raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))
         rows = cursor.fetchmany(len(months) + 1)
         if len(rows) > len(months):
             raise ValueError('Zapytanie zwróciło za wiele wierszy (wymagany jeden na miesiąc).')
@@ -193,22 +213,46 @@ def resolve_source(source, company):
 def apply_counts(conn, company, source, counts, *, bank_divisor=3):
     changes = []
     for count in counts:
-        previous = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s',
+        previous = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
                                 (company['id'], count.month)).fetchone()
-        conn.execute('INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok) VALUES (%s,%s,%s) '
-                     'ON CONFLICT(firma_id,miesiac) DO UPDATE SET ilosc_dok=EXCLUDED.ilosc_dok',
-                     (company['id'], count.month, count.total))
-        conn.execute('INSERT INTO monthly_document_imports(firma_id,miesiac,source_name) VALUES (%s,%s,%s) '
-                     'ON CONFLICT(firma_id,miesiac) DO UPDATE SET source_name=EXCLUDED.source_name, '
-                     'imported_by=NULL, imported_at=now()',
-                     (company['id'], count.month, 'Enova: ' + source['database']))
+        key = f"enova_snapshot_{company['id']}_{count.month}"
+        old_snapshot = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
+        old_total = json.loads(old_snapshot[0]).get('total') if old_snapshot else None
+        manual_key = f"manual_document_count_{company['id']}_{count.month}"
+        manual = conn.execute('SELECT 1 FROM app_settings WHERE klucz=%s', (manual_key,)).fetchone()
+        provenance = conn.execute('SELECT source_name FROM monthly_document_imports WHERE firma_id=%s AND miesiac=%s',
+                                  (company['id'], count.month)).fetchone()
+        current = previous[0] if previous else None
+        # Legacy nonzero values and other imports belong to the user. Imported values
+        # remain refreshable only while they still match our last successful write.
+        protected = bool(manual or (provenance and not provenance[0].startswith('Enova: ')) or
+                         (old_snapshot and current != old_total) or
+                         (not old_snapshot and current not in (None, 0)))
+        if protected:
+            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) ON CONFLICT DO NOTHING',
+                         (manual_key, '1'))
+        else:
+            conn.execute('INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok) VALUES (%s,%s,%s) '
+                         'ON CONFLICT(firma_id,miesiac) DO UPDATE SET ilosc_dok=EXCLUDED.ilosc_dok',
+                         (company['id'], count.month, count.total))
+            conn.execute('INSERT INTO monthly_document_imports(firma_id,miesiac,source_name) VALUES (%s,%s,%s) '
+                         'ON CONFLICT(firma_id,miesiac) DO UPDATE SET source_name=EXCLUDED.source_name, '
+                         'imported_by=NULL, imported_at=now()',
+                         (company['id'], count.month, 'Enova: ' + source['database']))
+        snapshot = {'documents': count.documents, 'bank_transactions': count.bank_transactions,
+                    'by_type': count.by_type, 'total': count.total, 'bank_divisor': bank_divisor,
+                    'database': source['database'], 'accounting_type': source['accounting_type'],
+                    'imported_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                     (f"enova_snapshot_{company['id']}_{count.month}", json.dumps(snapshot)))
         changes.append({'month': count.month, 'before': previous[0] if previous else None,
-                        'after': count.total, 'documents': count.documents, 'bank_transactions': count.bank_transactions})
+                        'after': current if protected else count.total, 'manual_preserved': protected, 'documents': count.documents, 'bank_transactions': count.bank_transactions})
     details = {'company_id': company['id'], 'database': source['database'],
                'accounting_type': source['accounting_type'], 'bank_divisor': bank_divisor, 'changes': changes}
     conn.execute("INSERT INTO import_history(import_type,source_path,updated_count,completed_at,status,details) "
                  "VALUES ('enova_document_counts',%s,%s,to_char(now(),'YYYY-MM-DD HH24:MI:SS'),'completed',%s)",
-                 (source['database'], len(counts), json.dumps(details, ensure_ascii=False)))
+                 (source['database'], sum(not change['manual_preserved'] for change in changes), json.dumps(details, ensure_ascii=False)))
     return changes
 
 
@@ -251,7 +295,11 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                     source = resolve_source(source, company)
                     divisor = effective_divisor(rules, company['id']) if source['accounting_type'] == 'KH' else 1
                     signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor,
-                                 'accounting_type': source['accounting_type']}
+                                 'accounting_type': source['accounting_type'], 'server': config.get('server')}
+                    jpk_result = None
+                    if source.get('jpk_query'):
+                        from app.integrations.enova.jpk import import_jpk
+                        jpk_result = import_jpk(conn, config, source, company['id'], months, run_day, apply=apply)
                     eligible = _eligible_months(conn, company['id'], months, signature, apply=apply)
                     counts = []
                     # Query each eligible month separately: do not query uncompleted gaps.
@@ -262,6 +310,7 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                                             (company['id'], month)).fetchone():
                             continue
                         counts.extend(validate_rows(fetch(config, source, [month]), source, [month], divisor))
+                    changes = []
                     if apply:
                         ready = []
                         for count in counts:
@@ -273,7 +322,7 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                                 ready.append(count)
                         counts = ready
                         if counts:
-                            apply_counts(conn, company, source, counts, bank_divisor=divisor)
+                            changes = apply_counts(conn, company, source, counts, bank_divisor=divisor)
                             for count in counts:
                                 conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                                              'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
@@ -281,7 +330,8 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                     results.append({'database': source['database'], 'company_id': company['id'],
                                     'mode': ('applied' if apply else 'preview') if counts else 'skipped',
                                     'skipped_months': [month for month in months if month not in {c.month for c in counts}],
-                                    'bank_divisor': divisor,
+                                    'bank_divisor': divisor, 'jpk': jpk_result,
+                                    'manual_preserved': [change['month'] for change in changes if change['manual_preserved']],
                                     'counts': {count.month: count.total for count in counts},
                                     'components': {count.month: {'documents': count.documents,
                                                                'bank_transactions': count.bank_transactions}
@@ -298,11 +348,15 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--config')
+    group.add_argument('--saved-settings', action='store_true', help='Użyj połączenia zapisanego w aplikacji.')
     parser.add_argument('--apply', action='store_true', help='Zapisz wyniki; domyślnie tylko podgląd.')
     args = parser.parse_args(argv)
     try:
-        results = run_import(load_config(args.config), apply=args.apply)
+        from app.integrations.enova.connection_settings import load_connection
+        config = load_connection() if args.saved_settings else load_config(args.config)
+        results = run_import(config, apply=args.apply)
     except Exception as exc:
         print(json.dumps({'ok': False, 'error': str(exc) if isinstance(exc, ValueError) else type(exc).__name__}, ensure_ascii=True))
         return 1

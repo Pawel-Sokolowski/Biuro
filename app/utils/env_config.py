@@ -2,7 +2,7 @@
 
 Instalator nie zawiera sekretów. Zainstalowana aplikacja czyta `.env` z folderu
 użytkownika (`%LOCALAPPDATA%\\Biuro\\.env`) albo spod pliku .exe. Klucz szyfrowania
-haseł e-mail jest tworzony automatycznie przy pierwszym uruchomieniu.
+haseł jest wspólny dla całego biura i musi zostać jawnie skonfigurowany.
 """
 
 from __future__ import annotations
@@ -48,20 +48,38 @@ def load_environment() -> List[Path]:
 
 
 def ensure_encryption_key() -> str:
-    """Zwraca klucz Fernet; gdy go brak, tworzy go i zapisuje w pliku .env użytkownika.
-
-    Przy bazie współdzielonej (np. na NAS) skopiuj ten sam klucz na pozostałe komputery,
-    bo hasła kont e-mail są zaszyfrowane tym kluczem.
-    """
-    existing = os.environ.get(KEY_NAME)
-    if existing:
-        return existing
+    """Require an explicitly provisioned deployment key; never invent a PC key."""
     from cryptography.fernet import Fernet
+    existing = os.environ.get(KEY_NAME)
+    if not existing:
+        raise ValueError('Brak wspólnego klucza szyfrowania. Otwórz Ustawienia → Klucz szyfrowania i zaimportuj klucz z działającego komputera. Nowe biuro wymaga jednego wspólnego klucza BIO_ENCRYPTION_KEY.')
+    try:
+        Fernet(existing.encode())
+    except (ValueError, TypeError):
+        raise ValueError('Nieprawidłowy BIO_ENCRYPTION_KEY. Zaimportuj wspólny klucz biura.') from None
+    return existing
 
-    key = Fernet.generate_key().decode()
+
+def install_encryption_key(key: str) -> None:
+    """Persist a locally supplied shared key without changing other settings."""
+    from cryptography.fernet import Fernet
+    import tempfile
+    key = key.strip()
+    Fernet(key.encode())
     path = user_env_path()
-    prefix = "\n" if path.is_file() and path.read_text(encoding="utf-8").strip() else ""
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{prefix}{KEY_NAME}={key}\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text(encoding='utf-8') if path.exists() else ''
+    import re
+    lines = [line for line in text.splitlines() if not re.match(r'^\s*(?:export\s+)?' + KEY_NAME + r'\s*=', line)]
+    lines.append(KEY_NAME + '=' + key)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write('\n'.join(lines) + '\n')
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     os.environ[KEY_NAME] = key
-    return key

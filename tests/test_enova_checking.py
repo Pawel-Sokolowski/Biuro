@@ -145,6 +145,16 @@ class CheckingIntegrationTests(DbTestCase):
             page.hr_range.setCurrentIndex(page.hr_range.findData(None))
             self.assertEqual(page.hr_table.item(0, 3).text(), 'Anna Test (23)')
             self.assertEqual(page.hr_table.item(0, 4).text(), 'U/23')
+            from app.integrations.ezla.report import Report, Certificate
+            report = Report(nip=NIP, payer_name='Firma Test', generated_at='2026-11-12', certificates=[
+                Certificate('Anna Test', '00000000000', 'PESEL', 'ZZ', '1', 'Anulowane',
+                            '2026-11-01', '2026-11-01', '2026-11-10')])
+            page.ezla_panel.render({'report': report, 'company': {'nazwa': 'Firma Test'}, 'database': 'EnovaTest'})
+            self.assertEqual(page.ezla_panel.table.item(0, 2).text(), 'PESEL: *******0000')
+            self.assertEqual(page.ezla_panel.table.item(0, 4).text(), 'Anulowane')
+            self.assertIn('nie wykonano importu', page.ezla_panel.summary.text())
+            page.ezla_panel.clear()
+            self.assertEqual(page.ezla_panel.table.rowCount(), 0)
             page.tabs.setCurrentIndex(0)
             page.apply_department_default()
             self.assertEqual(page.tabs.currentIndex(), 1)

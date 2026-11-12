@@ -15,6 +15,7 @@ konfigurowalnego, zweryfikowanego zapytania. Pokazuje pracowników osobno i ma
 filtry deklaracji do wysłania / wysłanych / przyjętych. Nie zawiera jeszcze
 sterowania Płatnikiem, automatycznego pobierania z eZUS ani importu XML do Enovy.
 Etykieta źródła `platnik` nie uruchamia osobnego połączenia z bazą Płatnika.
+Dodano lokalny podgląd raportu e-ZLA XML opisany poniżej.
 
 ## Docelowy przebieg
 
@@ -40,9 +41,42 @@ Nie należy zastępować importera bezpośrednim zapisem do tabel Enovy.
 
 1. Wersja Płatnika i przebieg okien wyboru zestawu, certyfikatu, wysyłki i wyniku.
 2. Weryfikacja tabel/statusów Płatnika dla odczytu potwierdzeń.
-3. Przykładowy raport e-ZLA XML z fikcyjnymi danymi oraz widok opcji importu
-   w używanej wersji Enovy. Żadnych haseł, PIN-ów ani rzeczywistych danych zdrowotnych.
+3. Widok opcji importu e-ZLA w używanej wersji Enovy oraz wynik próbnego importu
+   raportu z fikcyjnymi danymi. Struktura raportu została już przekazana.
+   Żadnych haseł, PIN-ów ani rzeczywistych danych zdrowotnych.
 4. Przebieg pobierania wygenerowanych raportów z eZUS i sposób logowania na
    stanowisku. Uwierzytelnienia nie można wywnioskować z posiadania podpisu USB.
 
 Dokument zapisuje wymagania; nie potwierdza dostępności API ani ukończenia adapterów.
+
+## Podgląd e-ZLA XML w Biuro
+
+W **Sprawdzanie → Kadry → e-ZLA** wybierz **Otwórz raport e-ZLA XML z ZUS**.
+Wybierz oryginalny raport, z korzeniem `raportEzla`, nagłówkiem `daneRaportu`
+i powtarzanymi elementami `dokumentyEzla`, zgodnie z przekazanym przykładem.
+Nie wklejaj treści skopiowanej z instrukcji PDF: cyfry stron, wielokropki,
+powtórzone pola lub niedomknięte znaczniki nie są naprawiane automatycznie.
+
+NIP z `daneRaportu/platnik/nip` musi jednoznacznie wskazywać dostępną firmę Biuro.
+Nazwa bazy pochodzi z dotychczasowego mapowania Enovy, nigdy z nazwy pliku.
+Brak mapowania jest widoczny w podsumowaniu i nie uruchamia innej bazy.
+Lista pokazuje pracownika **z raportu**, zamaskowany identyfikator, serię/numer,
+status, datę wystawienia oraz okres zwolnienia. Nie potwierdza dopasowania
+pracownika w Enovie. Brak PESEL nie prowadzi do dopasowania po nazwisku.
+
+Anulowane, skorygowane, nieznane statusy, sprzeczne oznaczenie anulowania,
+nieprawidłowe okresy i powtórzone identyfikatory są oznaczone do sprawdzenia.
+Nie wnioskujemy powiązania korekty z nowym zwolnieniem wyłącznie z dat lub nazwiska.
+Powtórzone pozycje w jednym raporcie pozostają widoczne, zamiast cicho znikać.
+To nie jest jeszcze rejestr importów ani deduplikacja między kolejnymi raportami.
+
+Podgląd nie zapisuje zawartości raportu w bazie Biuro, nie przesyła go do Enovy,
+nie pobiera raportów z eZUS i nie oznacza dokumentów jako zaimportowane.
+**Wyczyść podgląd** usuwa listę z widoku. Limity: 10 MB i 20 000 dokumentów;
+liczba dokumentów musi odpowiadać nagłówkowi. Parser nie ładuje DTD ani encji
+zewnętrznych i odrzuca niepoprawny XML. Do działania używa istniejącej zależności
+lxml, bez nowego pakietu instalacyjnego.
+
+Rozpoznanie struktury raportu jest gotowe na podstawie przykładu. Do następnego
+etapu pozostaje dopasowanie pobierania z eZUS oraz rzeczywistej opcji importu
+w używanej Enovie i sprawdzenie jej raportu wynikowego (w tym anulowań/korekt).

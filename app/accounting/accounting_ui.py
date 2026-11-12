@@ -105,6 +105,9 @@ class AccountingPage(QWidget):
                 self.hr_table = self._new_table()
                 panel_layout.addWidget(self.hr_table)
                 sections.addTab(panel, 'Umowy, badania i BHP')
+                from app.accounting.ezla_ui import EzlaPreviewPanel
+                self.ezla_panel = EzlaPreviewPanel(actor_id, self)
+                sections.addTab(self.ezla_panel, 'e-ZLA')
             self.tabs.addTab(sections, label)
         self.table = self.tables['accounting']
         layout.addWidget(self.tabs)

@@ -29,7 +29,7 @@ def postgres_query(name):
         sql = sql.replace(f'DATEFROMPARTS(YEAR({column}), MONTH({column}), 1)',
                           f'make_date(EXTRACT(YEAR FROM {column})::int, EXTRACT(MONTH FROM {column})::int, 1)')
     sql = sql.replace('CONVERT(char(7), m.MonthStart, 120)', "to_char(m.MonthStart, 'YYYY-MM')")
-    return sql.replace('OPTION (MAXRECURSION 24)', '')
+    return sql.replace('OPTION (MAXRECURSION 24)', '').replace('OPTION (MAXRECURSION 36)', '')
 
 
 class EnovaSourceQueryTests(DbTestCase):
@@ -131,3 +131,11 @@ class EnovaSourceQueryTests(DbTestCase):
                                 {'nip': NIP, 'miesiac': '2026-07', 'dokumenty': 0, 'pozycje_bankowe': 0}])
         self.assertEqual(validate_rows(rows, {'nip': NIP, 'accounting_type': 'RYCZALT'},
                                        ['2026-06', '2026-07'])[0].total, 21)
+
+    def test_checking_includes_all_definitions_without_pricing_exclusions(self):
+        with get_conn() as conn:
+            conn.execute("INSERT INTO DefDokumentow VALUES (1,'SPU'),(2,'ZR'),(3,'DW'),(4,'AMO'),(5,'WBEW')")
+            conn.execute("INSERT INTO DokEwidencja VALUES (1,'2026-06-15',1,NULL,NULL),(2,'2026-06-15',2,NULL,NULL),(3,'2026-06-15',3,NULL,NULL),(4,'2026-06-15',4,NULL,NULL),(5,'2026-06-15',5,NULL,NULL)")
+        rows = self.query('checking.sql')
+        self.assertEqual(rows[0]['dokumenty'], 5)
+        self.assertEqual(rows[0]['pozycje_bankowe'], 0)

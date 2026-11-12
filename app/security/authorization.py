@@ -60,7 +60,7 @@ def can(pracownik_id: Optional[int], permission: str) -> bool:
 
 TABS = [
     "Pulpit", "Widok miesięczny", "Klienci", "E-mail", "Czat",
-    "Faktury", "Raporty", "Zadania", "Kalendarz", "Ustawienia", "Księgowość",
+    "Faktury", "Raporty", "Zadania", "Kalendarz", "Ustawienia", "Sprawdzanie",
 ]
 
 
@@ -73,6 +73,8 @@ def parse_tabs(raw: Optional[str], can_admin_settings: bool = False) -> list:
     if raw is None:
         return default_tabs(can_admin_settings)
     chosen = {part.strip() for part in raw.split("|") if part.strip()}
+    if "Księgowość" in chosen:
+        chosen.add("Sprawdzanie")
     return [t for t in TABS if t in chosen]
 
 

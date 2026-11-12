@@ -49,13 +49,16 @@ class SaldeoCorrectionWorkflowTests(DbTestCase):
             confirm_saldeo_correction(self.original, 'KOR/1', 1)
         self.assertFalse(get_invoice_by_id(self.correction)['eksportowana'])
 
-    def test_external_confirmation_cannot_reuse_a_deleted_draft_reservation(self):
+    def test_external_confirmation_can_reuse_deleted_draft_but_not_live_number(self):
         abandoned = create_correction(self.original, 'Roboczy numer')
         set_invoice_number(abandoned, 'KOR/REZERWACJA/2026')
         delete_draft_invoice(abandoned)
+        confirm_saldeo_correction(self.correction, 'KOR/REZERWACJA/2026', 1)
+        self.assertTrue(get_invoice_by_id(self.correction)['eksportowana'])
+        other = create_correction(self.original, 'Inna korekta')
         with self.assertRaisesRegex(ValueError, 'zajęty|używany'):
-            confirm_saldeo_correction(self.correction, 'KOR/REZERWACJA/2026', 1)
-        self.assertFalse(get_invoice_by_id(self.correction)['eksportowana'])
+            confirm_saldeo_correction(other, 'KOR/REZERWACJA/2026', 1)
+        self.assertFalse(get_invoice_by_id(other)['eksportowana'])
 
     def test_dialog_requires_explicit_confirmation_of_external_issuance(self):
         from app.invoices import saldeo_correction_dialog as ui

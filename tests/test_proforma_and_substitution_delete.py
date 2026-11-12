@@ -88,7 +88,7 @@ class ProformaAndAdvanceTests(DbTestCase):
         regular = self._row(self._document("faktura"))
         self.assertEqual((proforma["rodzaj"], advance["rodzaj"], regular["rodzaj"]), ("proforma", "zaliczkowa", "faktura"))
         self.assertTrue(proforma["numer"].startswith("PRO/0001/"))
-        self.assertTrue(advance["numer"].startswith("FZ/0001/"))
+        self.assertTrue(advance["numer"].startswith("FZAL/0001/"))
         self.assertTrue(regular["numer"].startswith("FV/0001/"))
 
     def test_unknown_kind_is_rejected(self):

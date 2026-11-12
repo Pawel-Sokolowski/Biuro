@@ -30,14 +30,12 @@ class InvoiceHistoryTests(DbTestCase):
         self.assertIn(invoice, [i['id'] for i in list_invoices(1, True)])
         self.assertTrue(get_invoice_by_id(invoice)['numer'])
 
-    def test_deleted_draft_number_is_never_reused(self):
+    def test_deleted_unissued_draft_releases_its_number(self):
         first = self.draft()
         number = assign_invoice_number(first)
         delete_draft_invoice(first)
         second = self.draft("Drugi")
-        self.assertNotEqual(assign_invoice_number(second), number)
-        with self.assertRaises(ValueError):
-            set_invoice_number(second, number)
+        self.assertEqual(assign_invoice_number(second), number)
 
     def test_cancel_returns_invoice_to_drafts_without_number_and_keeps_audit(self):
         invoice = self.draft()

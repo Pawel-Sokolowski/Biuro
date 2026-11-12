@@ -79,5 +79,31 @@ class MonthlyTabsTests(unittest.TestCase):
                 page.close()
 
 
+    def test_embedded_department_preserves_months_and_prevents_hidden_department_switch(self):
+        from app.monthly_view.monthly_view_ui import MonthlyViewPage
+        with patch("app.monthly_view.monthly_view_ui.MonthlyViewLogic") as factory, \
+             patch.object(MonthlyViewPage, "_load_initial_data"), \
+             patch.object(MonthlyViewPage, "_setup_timer"), \
+             patch.object(MonthlyViewPage, "_reload_rows"), \
+             patch("app.preferences.department.default_department", return_value='accounting'):
+            factory.return_value.aktualny_miesiac = "2026-09"
+            page = MonthlyViewPage(1)
+            try:
+                logic = page.logic
+                page.set_department('payroll')
+                page.month_combo.setCurrentText('2026-08')
+                page._on_filters_changed()
+                page.tabs.setCurrentIndex(0)
+                self.assertEqual(page.tabs.currentIndex(), 1)
+                page.set_department('accounting')
+                self.assertEqual(page.month_combo.currentText(), '2026-09')
+                page.set_department('payroll')
+                self.assertEqual(page.month_combo.currentText(), '2026-08')
+                self.assertTrue(page.tabs.tabBar().isHidden())
+                self.assertIs(page.logic, logic)
+            finally:
+                page.close()
+
+
 if __name__ == "__main__":
     unittest.main()

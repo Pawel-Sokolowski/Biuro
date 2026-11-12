@@ -217,6 +217,9 @@ class UiSmokeTests(DbTestCase):
         items = [win.sidebar.item(i).text() for i in range(win.sidebar.count())]
         self.assertIn("Pulpit", items)
         self.assertIn("Kalendarz", items)
+        self.assertEqual(items[1:3], ["Księgowość", "Kadry"])
+        self.assertNotIn("Widok miesięczny", items)
+        self.assertNotIn("Sprawdzanie", items)
         self.assertNotIn("Dashboard", items)
 
     def test_monthly_tabs_split_by_role_and_activity_sum(self):

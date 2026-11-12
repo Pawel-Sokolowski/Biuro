@@ -4,7 +4,7 @@ from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDateEdit,
     QPushButton, QLineEdit, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QCheckBox)
+    QAbstractItemView, QCheckBox, QStackedWidget)
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
                                                 declaration_entries, declarations)
 from app.integrations.enova.jpk import STATUSES
@@ -14,7 +14,7 @@ from app.accounting.insights import comparison, declaration_issue, hr_status, ne
 
 BASE_TYPES = ('SPU', 'ZR', 'DW', 'AMO')
 TYPE_LABELS = {'SPU': 'Sprzedaż', 'ZR': 'Zakup'}
-DEFAULT_FORMS = {'accounting': ('JPK_VAT', 'CIT-8'), 'payroll': ('PIT-11', 'PIT-4R', 'ZUS DRA')}
+from app.accounting.report_types import DEFAULT_FORMS, form_matches, form_key
 
 
 def _item(value, tooltip=''):
@@ -30,8 +30,11 @@ def _date(value):
 
 class AccountingPage(QWidget):
     """Sprawdzanie: dynamic, read-only accounting/payroll pivots."""
-    def __init__(self, actor_id, parent=None):
+    def __init__(self, actor_id, parent=None, *, department=None):
         super().__init__(parent)
+        if department not in (None, 'accounting', 'payroll'):
+            raise ValueError('Nieprawidłowy dział.')
+        self._fixed_department = department
         self.actor_id = actor_id
         self.reader = TaskRunner(self)
         self.rows = []
@@ -66,14 +69,28 @@ class AccountingPage(QWidget):
         layout.addWidget(self.message)
         self.tabs = QTabWidget()
         self.tables, self.comparison_tables, self.declaration_tables, self.declaration_filters = {}, {}, {}, {}
+        self.report_selectors, self.report_stacks, self.report_indices = {}, {}, {}
         for department, label in [('accounting', 'Księgowość'), ('payroll', 'Kadry')]:
-            sections = QTabWidget()
+            sections = QWidget()
+            section_layout = QVBoxLayout(sections)
+            report_bar = QHBoxLayout()
+            report_bar.addWidget(QLabel('Raport:'))
+            report_selector = QComboBox()
+            report_selector.setMinimumWidth(240)
+            report_bar.addWidget(report_selector)
+            report_bar.addStretch()
+            section_layout.addLayout(report_bar)
+            stack = QStackedWidget()
+            section_layout.addWidget(stack)
+            self.report_selectors[department] = report_selector
+            self.report_stacks[department] = stack
+            self.report_indices[department] = {}
             table = self._new_table()
             self.tables[department] = table
-            sections.addTab(table, 'Dokumenty i deklaracje')
+            self._add_report(department, 'Dokumenty', 'documents', table)
             if department == 'accounting':
                 self.comparison_tables[department] = self._new_table()
-                sections.addTab(self.comparison_tables[department], 'Poprzedni miesiąc')
+                self._add_report(department, 'Poprzedni miesiąc', 'comparison', self.comparison_tables[department])
             declaration_panel = QWidget()
             declaration_layout = QVBoxLayout(declaration_panel)
             selector = QComboBox()
@@ -86,7 +103,9 @@ class AccountingPage(QWidget):
             self.declaration_tables[department] = self._new_table()
             declaration_layout.addWidget(self.declaration_tables[department])
             selector.currentIndexChanged.connect(self.filter_rows)
-            sections.addTab(declaration_panel, 'Deklaracje i UPO')
+            self._add_report(department, 'Deklaracje i UPO — wszystkie', 'declarations', declaration_panel)
+            for form in DEFAULT_FORMS[department]:
+                self._add_report(department, form, 'form:' + form_key(form), declaration_panel)
             if department == 'payroll':
                 panel = QWidget()
                 panel_layout = QVBoxLayout(panel)
@@ -104,11 +123,14 @@ class AccountingPage(QWidget):
                 panel_layout.addWidget(self.hr_note)
                 self.hr_table = self._new_table()
                 panel_layout.addWidget(self.hr_table)
-                sections.addTab(panel, 'Umowy, badania i BHP')
+                self._add_report(department, 'Umowy, badania i BHP', 'hr', panel)
+                for kind, title in HR_LABELS.items():
+                    self._add_report(department, title, 'hr:' + kind, panel)
                 from app.accounting.ezla_ui import EzlaPreviewPanel
                 self.ezla_panel = EzlaPreviewPanel(actor_id, self)
-                sections.addTab(self.ezla_panel, 'e-ZLA')
+                self._add_report(department, 'e-ZLA', 'ezla', self.ezla_panel)
             self.tabs.addTab(sections, label)
+            report_selector.currentIndexChanged.connect(self.filter_rows)
         self.table = self.tables['accounting']
         layout.addWidget(self.tabs)
         self.source_note = QLabel()
@@ -116,7 +138,38 @@ class AccountingPage(QWidget):
         layout.addWidget(self.source_note)
         self.month.dateChanged.connect(self.refresh_async)
         self.apply_department_default()
+        if self._fixed_department:
+            self.tabs.tabBar().hide()
+            self.tabs.currentChanged.connect(self.apply_department_default)
         self.filter_rows()
+
+    def _add_report(self, department, label, key, widget):
+        stack = self.report_stacks[department]
+        index = stack.indexOf(widget)
+        if index < 0:
+            index = stack.addWidget(widget)
+        self.report_indices[department][key] = index
+        self.report_selectors[department].addItem(label, key)
+
+    def _selected_form(self, department):
+        key = self.report_selectors[department].currentData() or ''
+        return key[5:] if key.startswith('form:') else None
+
+    def _update_report_choices(self, department):
+        selector = self.report_selectors[department]
+        blocked = selector.blockSignals(True)
+        try:
+            # Choices survive filters/month changes so a selected report never silently changes.
+            for row in self.rows:
+                for entry in declaration_entries(row, department):
+                    key = 'form:' + form_key(entry['form'])
+                    if selector.findData(key) < 0:
+                        index = self.report_indices[department]['declarations']
+                        self.report_indices[department][key] = index
+                        selector.addItem(entry['form'], key)
+        finally:
+            selector.blockSignals(blocked)
+        self.report_stacks[department].setCurrentIndex(self.report_indices[department][selector.currentData()])
 
     @staticmethod
     def _new_table():
@@ -126,9 +179,10 @@ class AccountingPage(QWidget):
         table.horizontalHeader().setStretchLastSection(False)
         return table
 
-    def apply_department_default(self):
+    def apply_department_default(self, *_):
         from app.preferences.department import default_department
-        self.tabs.setCurrentIndex(1 if default_department(self.actor_id) == 'payroll' else 0)
+        department = self._fixed_department or default_department(self.actor_id)
+        self.tabs.setCurrentIndex(1 if department == 'payroll' else 0)
 
     def refresh_async(self, *_):
         month = self.month.date().toString('yyyy-MM')
@@ -142,6 +196,21 @@ class AccountingPage(QWidget):
         self.rows, self.period = rows, month
         self.filter_rows()
 
+    def _report_attention(self, row, department, today, horizon):
+        selected = self._selected_form(department)
+        if selected:
+            entries = [entry for entry in declaration_entries(row, department) if form_matches(entry['form'], selected)]
+            return not entries or any(declaration_issue(entry) for entry in entries)
+        report_key = self.report_selectors[department].currentData()
+        if report_key.startswith('hr'):
+            events = decoded(row.get('hr')).get('events')
+            if events is None:
+                return True
+            kind = report_key[3:] if report_key.startswith('hr:') else None
+            return any((not kind or event['event_type'] == kind) and hr_status(event, today, horizon or 90)
+                       in ('Po terminie', 'Dzisiaj', 'Zbliża się termin', 'Brak terminu') for event in events)
+        return needs_attention(row, department, today, horizon or 90, self.period)
+
     def filter_rows(self, *_):
         query, selected = self.search.text().strip().casefold(), self.tax_filter.currentData()
         rows = [row for row in self.rows
@@ -150,13 +219,15 @@ class AccountingPage(QWidget):
         today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
         horizon = self.hr_range.currentData()
         for department in self.tables:
-            visible = [row for row in rows if not self.attention.isChecked() or needs_attention(row, department, today, horizon or 90, self.period)]
+            self._update_report_choices(department)
+            visible = [row for row in rows if not self.attention.isChecked() or self._report_attention(row, department, today, horizon)]
             self._render_table(visible, department)
             if department == 'accounting':
                 self._render_comparisons(visible, department)
             self._render_declarations(visible, department)
             if department == 'payroll':
                 self._render_hr(visible, today, horizon)
+                self.ezla_panel.set_companies(rows, self.period, self.attention.isChecked())
         missing_reports = sum(not decoded(row.get('checking')) for row in rows)
         missing_payroll = sum(documents(row, 'payroll') is None for row in rows)
         missing_declarations = sum(decoded(row.get('checking')).get('declarations') is None for row in rows)
@@ -252,10 +323,15 @@ class AccountingPage(QWidget):
         records, receipts = [], []
         for row in rows:
             entries = declaration_entries(row, department)
+            form = self._selected_form(department)
+            if form:
+                entries = [entry for entry in entries if form_matches(entry['form'], form)]
             owner = row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or '—'
             selected = self.declaration_filters[department].currentData()
             if not entries and not selected:
-                records.append([row.get('nazwa'), owner, '—', '—', 'Nie sprawdzono', '—', '—', '—', '—', 'Brak danych źródłowych'])
+                records.append([row.get('nazwa'), owner, '—', self.report_selectors[department].currentText() if form else '—',
+                                'Brak danych' if decoded(row.get('checking')).get('declarations') is not None else 'Nie sprawdzono',
+                                '—', '—', '—', '—', 'Brak danych źródłowych'])
                 receipts.append('')
             for entry in sorted(entries, key=lambda item: (item['form'], item.get('employee_name', ''))):
                 status = entry.get('status')
@@ -285,11 +361,16 @@ class AccountingPage(QWidget):
 
     def _render_hr(self, rows, today, days):
         records, missing = [], 0
+        selected = self.report_selectors['payroll'].currentData() or ''
+        kind = selected[3:] if selected.startswith('hr:') else None
         for row in rows:
+            before = len(records)
             report = decoded(row.get('hr'))
             if report.get('events') is None:
                 missing += 1
             for event in report.get('events') or []:
+                if kind and event['event_type'] != kind:
+                    continue
                 status = hr_status(event, today, days or 90)
                 if status is None:
                     continue
@@ -299,6 +380,10 @@ class AccountingPage(QWidget):
                 records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', employee,
                                 event.get('document_number') or '—', HR_LABELS[event['event_type']],
                                 event.get('due_date') or '—', status, _date(report.get('imported_at'))])
+            if len(records) == before:
+                state = 'Brak odczytu' if report.get('events') is None else 'Brak terminów w wybranym zakresie'
+                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—',
+                                '—', '—', HR_LABELS.get(kind, '—'), '—', state, _date(report.get('imported_at'))])
         records.sort(key=lambda record: (0 if record[7] in ('Po terminie', 'Brak terminu') else 1, record[6], record[0]))
         self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa w biurze', 'Pracownik firmy', 'Numer dokumentu',
                                   'Rodzaj', 'Data', 'Stan', 'Ostatni odczyt'], records)

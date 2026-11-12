@@ -332,11 +332,14 @@ Biuro, a brak systemowego sterownika wymaga instalacji Microsoft ODBC Driver
 na komputerze wykonującym połączenie. TLS i sprawdzanie certyfikatu pozostają
 włączone dla obu wersji.
 
-## Sprawdzanie: Księgowość | Kadry
+## Księgowość i Kadry — Widok miesięczny oraz Sprawdzanie
 
-Dawna zakładka „Księgowość” nosi nazwę **Sprawdzanie**. Dotychczasowe uprawnienia
-roli do starej nazwy są zachowane. W środku są zakładki **Księgowość** i **Kadry**
-oraz miesiąc, wyszukiwarka firmy/NIP i filtry KPiR, Ryczałt, Księgi rachunkowe.
+Menu ma osobne działy **Księgowość** i **Kadry**. Każdy zawiera podzakładki
+**Widok miesięczny** i **Sprawdzanie**. Dotychczasowe uprawnienia modułów są
+zachowane: dostęp do Widoku miesięcznego nie przyznaje dostępu do Sprawdzania
+ani odwrotnie. Stary zapis roli „Księgowość” nadal oznacza dawny moduł sprawdzania.
+W Sprawdzaniu wybiera się raport dla danego działu i miesiąc. Dostępne są
+wyszukiwarka firmy/NIP oraz filtry KPiR, Ryczałt i Księgi rachunkowe.
 
 Każdy rodzaj dokumentu jest osobną kolumną. Dla księgowości SPU pokazuje się jako
 „Sprzedaż”, ZR jako „Zakup”; DW, AMO i pozostałe symbole pozostają osobno. Nie
@@ -416,10 +419,12 @@ podstawie pojawia się „Nowe”, bez dzielenia przez zero. Nie ma porównania 
 roku ani średnich. Kadry nie mają żadnego porównania miesięcy. Zachowana historia
 służy także do przeglądania wcześniejszych okresów.
 
-Pracownik z rolą kadrową domyślnie otwiera Kadry zarówno w Widoku miesięcznym,
-jak i Sprawdzaniu, także po ponownym wejściu na stronę. Nadal może ręcznie zmienić
-dział. Administratorzy i księgowe domyślnie otwierają Księgowość. To ustawienie
-nawigacji nie zmienia uprawnień.
+Dział wybiera się w menu głównym: **Księgowość** albo **Kadry**. Obie podzakładki
+pozostają w wybranym dziale; nie ma potrzeby ponownie wybierać działu wewnątrz
+Widoku miesięcznego lub Sprawdzania. Widok miesięczny korzysta z jednego edytora
+i jednej instancji logiki stoperów, zachowując odrębnie wybrane miesiące działów.
+Samodzielne użycie starego widoku nadal dobiera dział według roli. Nie zmienia to
+uprawnień do modułów.
 
 Tabela pokazuje firmę i przypisaną księgową/kadrową biura. Szczegóły deklaracji
 pokazują osobno pracowników firmy, status, datę wysyłki, referencję UPO i datę UPO.
@@ -457,3 +462,33 @@ dzienny znacznik ukończenia i pozwala odczytać je bez czekania na następny dz
 Nie ma jeszcze zweryfikowanego zapytania do terminów kadrowych konkretnej
 instalacji Enovy. Należy przygotować je na podstawie eksportu struktury i
 potwierdzonych znaczeń pól, tak samo jak zapytanie deklaracji/UPO.
+
+### Wybór raportu i wszystkie firmy
+
+W **Księgowość → Sprawdzanie** lub **Kadry → Sprawdzanie** pole **Raport**
+przełącza zestawienie. Dostępne są dokumenty, deklaracje/UPO, poszczególne
+formularze i — wyłącznie w księgowości — poprzedni miesiąc. Kadry mają m.in.
+RCA, DRA, RSA, RPA, PIT-11, PIT-4R, umowy, badania, BHP oraz e-ZLA. Dodatkowe
+formularze otrzymane ze źródła pojawiają się automatycznie; wybór przetrwa zmianę
+filtrów i miesiąca. RCA oraz ZUS RCA oznaczają ten sam raport.
+
+Raport konkretnej deklaracji pokazuje wszystkie dostępne firmy według filtrów,
+a przy braku danych jawnie „Nie sprawdzono” lub „Brak danych”. Nie pokazuje
+w tym miejscu innych formularzy firmy. Filtr statusu celowo zawęża tę listę.
+„Tylko wymagające uwagi” dotyczy wybranego formularza, nie np. niewysłanego PIT-u
+przy poprawnym RCA. Umowy/badania/BHP również pokazują firmy bez odczytu lub
+bez terminów w zadanym zakresie. Brak odczytu nie oznacza niewysłanej deklaracji
+ani braku pracowników.
+
+RCA i inne deklaracje nadal wymagają skonfigurowanego źródła danych; sam wybór
+raportu nie uruchamia nowego konektora Płatnika. e-ZLA zestawia lokalnie wczytane
+XML z listą firm, bez pobierania z ZUS i bez importu do Enovy — szczegóły
+w [opisie automatyzacji kadr](../payroll-automation.md).
+
+### Główny przycisk stopera
+
+Gdy działa stoper firmy (księgowość lub kadry), główny przycisk ma etykietę
+**Stop stopera firmy**. Kliknięcie zapisuje i zatrzymuje stopery firm, bez
+uruchamiania ogólnego i bez otwierania wyboru zadania. Dopiero następne kliknięcie,
+przy braku aktywnego stopera, pozwala uruchomić ogólny. Działający stoper ogólny
+jest zatrzymywany tak jak dotychczas. Błąd zapisu nie uruchamia kolejnego stopera.

@@ -141,7 +141,7 @@ class DatabaseConnectionTests(TestCase):
         from app.integrations.enova.connection_settings import check_connection
         connection = Mock()
         connection.cursor.return_value.fetchone.return_value = ('CompanyA',)
-        driver = SimpleNamespace(connect=Mock(return_value=connection))
+        driver = SimpleNamespace(connect=Mock(return_value=connection), drivers=lambda: ['ODBC Driver 18 for SQL Server'])
         config = {'server': r'10.0.0.1\ENOVA', 'username': 'reader', 'sources': [{'database': 'CompanyA'}]}
         with patch.dict('sys.modules', {'pyodbc': driver}):
             self.assertEqual(check_connection(config, password='secret'), [{'database': 'CompanyA', 'ok': True}])

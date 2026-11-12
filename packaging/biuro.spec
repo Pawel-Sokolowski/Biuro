@@ -78,6 +78,7 @@ a = Analysis(
         "encodings.cp852",
         *PSYCOPG_HIDDEN,
         "psycopg_pool",
+        "pyodbc",
         "imapclient.imap_utf7",
         *collect_submodules('google.auth', filter=runtime_module),
         *collect_submodules('google.oauth2', filter=runtime_module),

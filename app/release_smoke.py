@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 import tempfile
 
@@ -20,6 +21,10 @@ def run():
     output.parent.mkdir(parents=True, exist_ok=True)
     result = {'version': __version__, 'checks': []}
     try:
+        if sys.platform == 'win32':
+            from app.integrations.enova.odbc_support import load_odbc
+            load_odbc()
+            result['checks'].append('enova_odbc_module')
         if not schema_is_current():
             raise RuntimeError('Database migration is required')
         result['checks'].append('schema')

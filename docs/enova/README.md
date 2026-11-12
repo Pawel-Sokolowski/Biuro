@@ -342,8 +342,8 @@ Każdy rodzaj dokumentu jest osobną kolumną. Dla księgowości SPU pokazuje si
 „Sprzedaż”, ZR jako „Zakup”; DW, AMO i pozostałe symbole pozostają osobno. Nie
 łączy się różnych definicji w jedną kolumnę. Kolumny są uzupełniane na podstawie
 aktualnych danych i historii widocznych firm. Zero jest czerwone wyłącznie,
-gdy ten rodzaj wystąpił w **tej samej firmie i dziale w poprzednich 12 pełnych
-miesiącach**. Brak odczytu oznacza „—”, a nie zero. Nie ocenia się, czy brak
+gdy ten rodzaj wystąpił w **tej samej firmie w poprzednim miesiącu księgowym**.
+Kadry nie mają porównań ani czerwonych zer wynikających z historii. Brak odczytu oznacza „—”, a nie zero. Nie ocenia się, czy brak
 AMO/DW jest błędem księgowania — kolor jest sygnałem do sprawdzenia.
 
 Odczyt Sprawdzania jest niezależny od rozliczenia faktury i etapu „Wysłane wyniki”.
@@ -397,7 +397,7 @@ Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze worker
   `rejected`, `not_applicable`. Dla `accepted` UPO nie może być puste. Daty mogą
   być NULL, datą ISO lub znacznikiem czasu ISO; nie są dopowiadane przez importer.
   Zapytanie musi wybierać aktualny stan formularza, uwzględniając korekty; duplikat
-  formularza/działu/miesiąca jest błędem. Przypisanie formularzy rocznych lub
+  formularza/działu/miesiąca/pracownika jest błędem. Przypisanie formularzy rocznych lub
   kwartalnych do okresu miesięcznego musi być jawne w zapytaniu, zgodne z zasadami
   biura. Brak wiersza pozostawia „Brak danych”, nie tworzy fałszywego statusu.
 
@@ -406,3 +406,54 @@ Wszystkie wyniki muszą zawierać NIP zgodny z mapowaniem firmy. Błąd walidacj
 zachowuje dotychczasowy odczyt firmy; pozostałe firmy są przetwarzane dalej.
 Odczyt księgowości i kadr do Sprawdzania ma własną transakcję i blokadę, niezależną
 od importu licznika rozliczeniowego.
+
+### Sprawdzanie — poprzedni miesiąc i pracownicy
+
+Księgowość ma zestawienie bieżący/poprzedni miesiąc, różnicę i zmianę procentową
+osobno dla każdego rodzaju oraz sumy. Spadek jest wyróżniony, a zero po dodatniej
+wartości w poprzednim miesiącu — czerwone. Brak odczytu pozostaje „—”; po zerowej
+podstawie pojawia się „Nowe”, bez dzielenia przez zero. Nie ma porównania rok do
+roku ani średnich. Kadry nie mają żadnego porównania miesięcy. Zachowana historia
+służy także do przeglądania wcześniejszych okresów.
+
+Pracownik z rolą kadrową domyślnie otwiera Kadry zarówno w Widoku miesięcznym,
+jak i Sprawdzaniu, także po ponownym wejściu na stronę. Nadal może ręcznie zmienić
+dział. Administratorzy i księgowe domyślnie otwierają Księgowość. To ustawienie
+nawigacji nie zmienia uprawnień.
+
+Tabela pokazuje firmę i przypisaną księgową/kadrową biura. Szczegóły deklaracji
+pokazują osobno pracowników firmy, status, datę wysyłki, referencję UPO i datę UPO.
+Filtry: do wysłania, wysłane, oczekujące na UPO, przyjęte z UPO, odrzucone.
+Opcjonalne kolumny `declarations_query`: `employee_id`, `employee_name`
+(obie podane albo obie puste) i `source_system` (`enova`, domyślnie, albo
+`platnik`). Każdy pracownik ma osobny aktualny wiersz. Puste dane pracownika
+oznaczają formularz całej firmy/zestawu. Zestawienie wielu formularzy pokazuje
+liczbę przyjętych i liczbę UPO; nie nadaje wszystkim statusu jednego pracownika.
+`source_system` to pochodzenie danych z zapytania, **nie gotowy osobny konektor
+Płatnika**. Mapowanie tabel i statusów Płatnika nadal wymaga weryfikacji.
+
+### Umowy, badania i BHP
+
+Pole „Umowy, badania i BHP” (`hr_events_query`) wskazuje zweryfikowane zapytanie
+SQL w tym samym mechanizmie odczytu. Wymagane kolumny:
+`nip`, `event_id`, `employee_id`, `employee_name`, `event_type`, `due_date`, `status`.
+Opcjonalnie `document_number`. Rodzaje: `contract_end`, `medical_exam`,
+`ohs_training`. Statusy: `active`, `completed`, `cancelled`. Identyfikator jest
+unikatowy w ramach firmy i rodzaju; jeden pracownik może mieć wiele umów.
+Daty: ISO YYYY-MM-DD albo SQL DATE; NULL dla umowy bezterminowej. Brak terminu
+badań/BHP jest sygnałem do sprawdzenia, nie umową bezterminową.
+
+Zapytanie otrzymuje dwa parametry: początek bieżącego miesiąca i koniec okna
+obejmującego najbliższe 91 dni (zaokrąglony do końca miesiąca). Musi zwrócić
+również nadal aktywne zaległe terminy i umowy bezterminowe — dolna granica
+**nie służy do odfiltrowania zaległości**. Zamknięte/anulowane zdarzenia są
+pomijane w widoku. Pusta poprawna lista oznacza brak zdarzeń, brak konfiguracji
+pozostaje „brak odczytu”. Terminy odnoszą się do dzisiaj w Europe/Warsaw,
+nie do wybranego miesiąca dokumentów. Dostępne okna 7/30/60/90 dni i wszystkie
+pobrane. Worker zapisuje aktualny odczyt atomowo z pozostałymi danymi firmy;
+błąd walidacji zachowuje poprzednie dane. Nowa konfiguracja adapterów unieważnia
+dzienny znacznik ukończenia i pozwala odczytać je bez czekania na następny dzień.
+
+Nie ma jeszcze zweryfikowanego zapytania do terminów kadrowych konkretnej
+instalacji Enovy. Należy przygotować je na podstawie eksportu struktury i
+potwierdzonych znaczeń pól, tak samo jak zapytanie deklaracji/UPO.

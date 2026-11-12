@@ -69,12 +69,15 @@ def enova_job(now=None):
     settings = load_settings()
     config = load_connection()
     day = now.date().isoformat()
-    # Connection/rule changes are picked up by the existing importer next day;
-    # failures do not consume this completion marker and retry at the interval.
+    checking_signature = json.dumps({'day': day, 'version': 3, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
+        'sources': [{key: source.get(key) for key in ('database', 'nip', 'payroll_query', 'declarations_query', 'hr_events_query')}
+                    for source in config.get('sources', [])]}, sort_keys=True, default=str)
+    # Checking adapters/configuration changes invalidate the daily marker.
+    # Failures do not consume it and retry at the interval.
     if not config['enabled'] or now.time().replace(tzinfo=None) < time.fromisoformat(settings['enova_time']):
         return {'mode': 'waiting'}
     if (get_setting('worker_enova_completed') == day
-            and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == day)):
+            and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == checking_signature)):
         return {'mode': 'checked_today'}
     results = run_import(config, apply=True, today=now.date())
     if config.get('checking_enabled', False):
@@ -85,7 +88,7 @@ def enova_job(now=None):
         raise RuntimeError('Import Enova nieukończony. Sprawdź audyt importów i połączenie SQL.')
     set_setting('worker_enova_completed', day)
     if config.get('checking_enabled', False):
-        set_setting('worker_enova_checking_completed', day)
+        set_setting('worker_enova_checking_completed', checking_signature)
     return {'companies': len(config['sources']) if 'sources' in config else len(results)}
 
 

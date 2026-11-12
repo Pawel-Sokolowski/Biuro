@@ -95,7 +95,7 @@ def check_connection(config, *, password=''):
             connection = pyodbc.connect(sql_connection_string(config, source['database'], config['username'], password),
                                         timeout=15, attrs_before={101: 1})
             cursor = connection.cursor()
-            cursor.timeout = 15
+            connection.timeout = 15
             cursor.execute('SELECT DB_NAME()')
             actual = cursor.fetchone()
             if not actual or (source['database'] and str(actual[0]).casefold() != source['database'].casefold()):

@@ -121,7 +121,7 @@ jobs:
           & $compiler installer\biuro.iss
           if ($LASTEXITCODE) { throw 'Installer compilation failed' }
           $setup = Get-ChildItem installer\output\*.exe | Select-Object -First 1
-          $target = "$env:RUNNER_TEMP\InstalledBiuro"
+          $target = "$env:RUNNER_TEMP\Installed Biuro"
           $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$target`"" -Wait -PassThru
           if ($process.ExitCode) { throw 'Installer failed' }
           $workerScript = Join-Path $target 'scripts\install_background_worker.ps1'
@@ -131,8 +131,15 @@ jobs:
           $parseErrors = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile($workerScript, [ref]$parseTokens, [ref]$parseErrors)
           if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-          & $workerScript -ExecutablePath "$target\Biuro.exe" -CheckOnly -NonInteractive
-          if ($LASTEXITCODE) { throw 'Worker installer EXE path validation failed' }
+          $windowsPowerShell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+          Push-Location $env:RUNNER_TEMP
+          try {
+            # Exercise the user's real host and default binding, not just pwsh parsing.
+            & $windowsPowerShell -NoProfile -NonInteractive -File $workerScript -CheckOnly -NonInteractive
+            if ($LASTEXITCODE) { throw 'Worker installer default path validation failed under Windows PowerShell' }
+            & $windowsPowerShell -NoProfile -NonInteractive -File $workerScript -ProjectDirectory "$target" -ExecutablePath "$target\Biuro.exe" -CheckOnly -NonInteractive
+            if ($LASTEXITCODE) { throw 'Worker launcher path validation failed under Windows PowerShell' }
+          } finally { Pop-Location }
           $env:BIO_SMOKE_OUTPUT = "$env:RUNNER_TEMP\installed-smoke.json"
           $env:BIO_SMOKE_REQUIRE_SQL_DRIVER = "1"
           $process = Start-Process "$target\Biuro.exe" -ArgumentList '--smoke-test' -Wait -PassThru
@@ -140,6 +147,14 @@ jobs:
           Get-Content $env:BIO_SMOKE_OUTPUT
           $process = Start-Process "$target\unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
           if ($process.ExitCode) { throw 'Uninstall failed' }
+      - name: Upload worker installation helpers
+        uses: actions/upload-artifact@v6
+        with:
+          name: worker-installer-windows
+          path: |
+            scripts/install_background_worker.cmd
+            scripts/install_background_worker.ps1
+            scripts/WORKER-SETUP.txt
       - name: Collect release diagnostics
         if: always()
         shell: pwsh

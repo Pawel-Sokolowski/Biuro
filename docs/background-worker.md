@@ -1,3 +1,5 @@
+Najkrótsza instrukcja gotowej instalacji EXE: [worker-install.md](worker-install.md).
+
 # Worker Biuro i wspólny klucz szyfrowania
 
 Worker jest osobnym procesem działającym bez okna Biuro i bez zalogowanego
@@ -63,7 +65,7 @@ stanowiskami. Ustawienia „Worker w tle” nie instalują procesu na zdalnym se
 6. Zarejestruj worker uruchamiany przy starcie serwera i po awarii:
 
    ```powershell
-   .\scripts\install_background_worker.ps1
+   .\scripts\install_background_worker.cmd
    ```
 
    Skrypt pyta lokalnie o konto Windows, uruchamia zadanie natychmiast,

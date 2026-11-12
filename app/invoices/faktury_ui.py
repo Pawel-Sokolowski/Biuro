@@ -41,7 +41,7 @@ from app.invoices.ksef_submission import process_invoice_batch
 from app.invoices.payments_ui import BankPaymentReview, record_cash_in_dialog, record_payment_in_dialog
 from app.db.dao_payments import list_settlements, payments_for_invoices, revert_settlement
 from app.monthly_view.month_picker import MonthPicker
-from app.security.authorization import can, is_administrator
+from app.security.authorization import can, is_administrator, can_manage_invoices
 from app.utils.saldeo_exporter import (
     SaldeoCorrectionExportError, SaldeoExportError, export_saldeo_xlsx, validate_saldeo_invoices,
 )
@@ -187,7 +187,7 @@ class KsefUnmatchedDialog(QDialog):
             ).fetchall()]
         finally:
             conn.close()
-        if not (is_administrator(actor_id) or can(actor_id, "can_view_finances")):
+        if not can_manage_invoices(actor_id):
             companies = [company for company in companies if can_access_invoice(actor_id, company["id"])]
             contractors = []
         self.companies = [dict(c, kind="firma") for c in companies] + [
@@ -317,6 +317,12 @@ class FakturyPage(QWidget):
         self._build_tab_robocze()
         self._build_tab_dodatkowe()
         self._build_tab_rozliczenia()
+        finance = can(self.pracownik_id, 'can_view_finances')
+        self.tabs.setTabVisible(self.tabs.indexOf(self.tab_rozliczenia), finance)
+        for button in (self.btn_bank, self.btn_cash):
+            button.setEnabled(finance)
+            if not finance:
+                button.setToolTip('Wymaga dodatkowego uprawnienia: rozliczanie płatności i raporty finansowe.')
         self.tabs.setCurrentWidget(self.tab_wystawione)
         self.refresh_async()
 
@@ -914,7 +920,7 @@ class FakturyPage(QWidget):
             self.refresh_async()
 
     def _send_selected_to_ksef(self, *, drafts=False):
-        if not self._can_export():
+        if not self._can_issue():
             return
         if self._ksef_send_worker is not None or self._sync_running():
             QMessageBox.information(self, "KSeF", "Obsługa wysyłki KSeF już trwa.")
@@ -966,7 +972,7 @@ class FakturyPage(QWidget):
         self._start_ksef_batch(ids, send=True)
 
     def _email_selected_pdfs(self):
-        if not self._can_export() or self._ksef_send_worker is not None or self._sync_running():
+        if not self._can_issue() or self._ksef_send_worker is not None or self._sync_running():
             return
         ids = self._selected_ids(self.issued_table)
         if not ids:
@@ -1049,7 +1055,7 @@ class FakturyPage(QWidget):
             self._start_ksef_batch(ids, send=False)
 
     def _check_ksef_submission(self):
-        if not self._can_export() or self._ksef_send_worker is not None or self._sync_running():
+        if not self._can_issue() or self._ksef_send_worker is not None or self._sync_running():
             return
         ids = self._selected_ids(self.issued_table)
         if not ids:
@@ -1081,6 +1087,8 @@ class FakturyPage(QWidget):
 
     # ---------------- generowanie ----------------
     def _on_generate_clicked(self):
+        if not self._can_issue():
+            return
         if self._generation_busy:
             return
         month = self._current_month()
@@ -1157,6 +1165,8 @@ class FakturyPage(QWidget):
 
     # ---------------- odświeżanie ----------------
     def _new_manual_invoice(self):
+        if not self._can_issue():
+            return
         dialog = ManualInvoiceDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh_async()
@@ -1409,7 +1419,7 @@ class FakturyPage(QWidget):
                              termin_platnosci=header.get("termin_platnosci", invoice.get("termin_platnosci")),
                              przyczyna_korekty=header.get("przyczyna_korekty", invoice.get("przyczyna_korekty")),
                              podstawa_zwolnienia=header.get("podstawa_zwolnienia", invoice.get("podstawa_zwolnienia")),
-                             expected_revision=self._shown_draft_revision)
+                             expected_revision=self._shown_draft_revision, actor_id=self.pracownik_id)
         if self._shown_draft_revision is not None:
             self._shown_draft_revision += 1
         self.refresh_async()
@@ -1561,7 +1571,7 @@ class FakturyPage(QWidget):
         if not ids:
             QMessageBox.information(self, "Faktura", "Zaznacz wystawioną fakturę do usunięcia.")
             return
-        if not self._can_export():
+        if not self._can_issue():
             return
         reason, ok = QInputDialog.getText(self, "Anulowanie faktur", "Przyczyna anulowania (faktura wróci do roboczych bez numeru; dokumenty z numerem KSeF wymagają korekty):")
         if not ok or not reason.strip():
@@ -1576,7 +1586,7 @@ class FakturyPage(QWidget):
 
     # ---------------- eksport ----------------
     def _prepare_saldeo_correction(self, invoice_id=None):
-        if not self._can_export():
+        if not self._can_issue():
             return
         if not invoice_id:
             ids = self._selected_ids(self.draft_table)
@@ -1594,18 +1604,24 @@ class FakturyPage(QWidget):
         from app.invoices.saldeo_correction_dialog import SaldeoCorrectionDialog
         try:
             SaldeoCorrectionDialog(invoice, self.pracownik_id, self).exec()
-        except ValueError as exc:
+        except (ValueError, PermissionError) as exc:
             QMessageBox.warning(self, "Korekta", str(exc))
         self.refresh_async()
 
+    def _can_issue(self):
+        if can_manage_invoices(self.pracownik_id):
+            return True
+        QMessageBox.warning(self, 'Brak uprawnień', 'Rola nie ma dostępu do modułu Faktury.')
+        return False
+
     def _can_export(self):
-        if is_administrator(self.pracownik_id) or can(self.pracownik_id, "can_export_data"):
+        if can_manage_invoices(self.pracownik_id) and can(self.pracownik_id, "can_export_data"):
             return True
         QMessageBox.warning(self, "Brak uprawnień", "Nie masz uprawnień do eksportowania danych.")
         return False
 
     def _export_selected_drafts(self):
-        if not self._can_export():
+        if not self._can_issue():
             return
         ids = self._selected_ids(self.draft_table)
         if not ids:
@@ -1761,8 +1777,8 @@ class FakturyPage(QWidget):
         if not ok:
             return
         try:
-            correction_id = create_correction(ids[0], reason.strip())
-        except ValueError as exc:
+            correction_id = create_correction(ids[0], reason.strip(), actor_id=self.pracownik_id)
+        except (ValueError, PermissionError) as exc:
             QMessageBox.warning(self, "Korekta", str(exc))
             return
         self.tabs.setCurrentWidget(self.tab_robocze)

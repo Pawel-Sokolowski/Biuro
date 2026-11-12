@@ -381,8 +381,8 @@ class ManualInvoiceDialog(QDialog):
                                   self.date_sale.date().toString("yyyy-MM-dd"),
                                   self.date_due.date().toString("yyyy-MM-dd"),
                                   podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
-                                  rodzaj=self.kind.currentData())
-        except (ValueError, TypeError) as exc:
+                                  rodzaj=self.kind.currentData(), actor_id=getattr(self.parent(), 'pracownik_id', None))
+        except (ValueError, TypeError, PermissionError) as exc:
             QMessageBox.warning(self, "Faktura", str(exc))
             return
         self.accept()

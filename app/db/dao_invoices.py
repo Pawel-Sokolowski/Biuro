@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from app.db.dao_conn import get_conn, Row
 from app.utils.payment_terms import default_due_date
 from app.invoices.positions import normalize_position, reverse_positions, totals
-from app.security.authorization import assigned_company_ids, can, is_administrator
+from app.security.authorization import is_administrator, can_manage_invoices
 
 DATE_FMT = "%Y-%m-%d"
 DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
@@ -89,6 +89,8 @@ def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
 
 
 def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    if pracownik_id is not None and not can_manage_invoices(pracownik_id):
+        return []
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -100,15 +102,6 @@ def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, 
             WHERE COALESCE(f.eksportowana, 0) = 1 AND f.rodzaj <> 'proforma'
         """
         params: List[Any] = []
-        if pracownik_id and not (
-            is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
-        ):
-            ids = assigned_company_ids(pracownik_id)
-            if not ids:
-                return []
-            placeholders = ",".join("%s" for _ in ids)
-            sql += f" AND f.firma_id IN ({placeholders})"
-            params.extend(sorted(ids))
         cur.execute(sql + " ORDER BY f.updated_at DESC, f.created_at DESC", params)
         rows = cur.fetchall()
         return [_row_to_dict(r) for r in rows]
@@ -546,8 +539,11 @@ def create_manual_invoice(
     termin_platnosci: str,
     podstawa_zwolnienia: str = "",
     rodzaj: str = "faktura",
+    *, actor_id: Optional[int] = None,
 ) -> int:
     """Tworzy robocz\u0105 faktur\u0119 r\u0119czn\u0105 (zwyk\u0142\u0105, zaliczkow\u0105 lub proforma) dla firmy lub kontrahenta."""
+    if actor_id is not None and not can_manage_invoices(actor_id):
+        raise PermissionError('Brak dostępu do obsługi faktur.')
     if rodzaj not in ("faktura", "zaliczkowa", "proforma"):
         raise ValueError("Nieobs\u0142ugiwany rodzaj dokumentu.")
     if buyer_type not in ("firma", "kontrahent"):
@@ -787,7 +783,7 @@ def validate_invoice_extra_services_ready(invoice_ids: List[int], *, conn=None, 
 def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     if not invoice_ids:
         return
-    if pracownik_id is not None and not can(pracownik_id, "can_export_data"):
+    if pracownik_id is not None and not can_manage_invoices(pracownik_id):
         raise PermissionError("Brak uprawnień do wystawiania faktur.")
     conn = get_conn()
     cur = conn.cursor()
@@ -1076,16 +1072,10 @@ INVOICE_LIST_SQL = """
 """
 
 
-def _has_full_finance_access(pracownik_id: Optional[int]) -> bool:
-    return bool(pracownik_id) and (
-        is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
-    )
-
-
 def can_access_invoice(pracownik_id: Optional[int], firma_id: Optional[int]) -> bool:
-    if firma_id is None:
-        return _has_full_finance_access(pracownik_id)
-    return _has_full_finance_access(pracownik_id) or firma_id in assigned_company_ids(pracownik_id)
+    # Office invoices include manual contractors, individuals and archived company snapshots.
+    # Their access follows the invoice module, not the separate payments/finance capability.
+    return can_manage_invoices(pracownik_id)
 
 
 def list_invoices(
@@ -1110,12 +1100,8 @@ def list_invoices(
     if kontrahent_id:
         where.append("f.kontrahent_id = %s")
         params.append(kontrahent_id)
-    if not _has_full_finance_access(pracownik_id):
-        ids = sorted(assigned_company_ids(pracownik_id))
-        if not ids:
-            return []
-        where.append(f"f.firma_id IN ({','.join('%s' for _ in ids)})")
-        params.extend(ids)
+    if not can_manage_invoices(pracownik_id):
+        return []
     # Sortowanie A-Z po nazwie skróconej w obu zakładkach (robocze i wystawione).
     order = (
         "LOWER(COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), "
@@ -1151,11 +1137,14 @@ def update_invoice_draft(
     przyczyna_korekty: Optional[str] = None,
     podstawa_zwolnienia: Optional[str] = None,
     expected_revision: Optional[int] = None,
+    actor_id: Optional[int] = None,
 ) -> Tuple[float, float]:
     """Zapisuje pozycje i nagłówek roboczej faktury; zwraca (netto, brutto)."""
     invoice = get_invoice_by_id(invoice_id)
     if not invoice:
         raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
+    if actor_id is not None and not can_access_invoice(actor_id, invoice.get('firma_id')):
+        raise PermissionError('Brak dostępu do obsługi faktur.')
     if invoice.get("eksportowana"):
         raise InvoiceLockedError("Faktura została już wystawiona. Zmiany wprowadź przez korektę.")
     if expected_revision is None:
@@ -1257,11 +1246,13 @@ def delete_dodatkowe(invoice_id: int) -> None:
     _delete_dodatkowe(invoice_id, draft_only=True)
 
 
-def create_correction(invoice_id: int, przyczyna: str = "") -> int:
+def create_correction(invoice_id: int, przyczyna: str = "", *, actor_id: Optional[int] = None) -> int:
     """Tworzy roboczą korektę wystawionej faktury (pozycje 'do zera', do edycji)."""
     original = get_invoice_by_id(invoice_id)
     if not original:
         raise ValueError(f"Nie znaleziono faktury o id {invoice_id}.")
+    if actor_id is not None and not can_access_invoice(actor_id, original.get('firma_id')):
+        raise PermissionError('Brak dostępu do obsługi faktur.')
     if not original.get("eksportowana"):
         raise ValueError("Korektę można wystawić tylko do wystawionej faktury. Roboczą fakturę po prostu edytuj.")
     if original.get("cancelled_at"):
@@ -1479,7 +1470,7 @@ def restore_trashed_invoice(trash_id: int, actor_id: int) -> int:
 
 
 def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
-    if not can(actor_id, "can_export_data"):
+    if not can_manage_invoices(actor_id):
         raise PermissionError("Brak uprawnień do anulowania faktur.")
     if not reason.strip():
         raise ValueError("Podaj przyczynę anulowania.")

@@ -170,7 +170,7 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
     connection = pyodbc.connect(connection_string, timeout=15, attrs_before={101: 1})
     try:
         cursor = connection.cursor()
-        cursor.timeout = 120
+        connection.timeout = 120
         # Exactly two positional date parameters: inclusive start, exclusive end.
         cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
                        date.fromisoformat(month_bounds(months[-1])[1]))

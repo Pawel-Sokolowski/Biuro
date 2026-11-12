@@ -54,7 +54,7 @@ class EnovaStageRuleTests(DbTestCase):
     def set_stage(self, month, stage, payroll_stage='Brak'):
         with get_conn() as conn:
             conn.execute('INSERT INTO statusy_miesieczne(firma_id,miesiac,etap,etap_kadry,ilosc_dok) '
-                         'VALUES (%s,%s,%s,%s,99) ON CONFLICT(firma_id,miesiac) DO UPDATE '
+                         'VALUES (%s,%s,%s,%s,0) ON CONFLICT(firma_id,miesiac) DO UPDATE '
                          'SET etap=EXCLUDED.etap,etap_kadry=EXCLUDED.etap_kadry',
                          (self.company, month, stage, payroll_stage))
 
@@ -72,7 +72,7 @@ class EnovaStageRuleTests(DbTestCase):
             result = self.run_job()[0]
             self.assertEqual(result['mode'], 'skipped')
             self.fetch.assert_not_called()
-            self.assertEqual(self.count(), 99)
+            self.assertEqual(self.count(), 0)
         with get_conn() as conn:
             conn.execute('DELETE FROM statusy_miesieczne WHERE firma_id=%s', (self.company,))
         self.assertEqual(self.run_job()[0]['mode'], 'skipped')
@@ -88,7 +88,7 @@ class EnovaStageRuleTests(DbTestCase):
 
     def test_preview_respects_stage_but_does_not_consume_daily_check(self):
         self.assertEqual(self.run_job(apply=False)[0]['counts'], {'2026-11': 155})
-        self.assertEqual(self.count(), 99)
+        self.assertEqual(self.count(), 0)
         self.assertEqual(self.run_job()[0]['counts'], {'2026-11': 155})
         self.assertEqual(self.fetch.call_count, 2)
 
@@ -99,7 +99,7 @@ class EnovaStageRuleTests(DbTestCase):
         result = self.run_job()[0]
         self.assertEqual(list(result['counts']), ['2026-09', '2026-11'])
         self.assertEqual([call.args[2] for call in self.fetch.call_args_list], [['2026-09'], ['2026-11']])
-        self.assertEqual(self.count('2026-10'), 99)
+        self.assertEqual(self.count('2026-10'), 0)
 
     def test_month_reopened_while_previous_month_is_read_is_never_queried(self):
         self.config['months_back'] = 3
@@ -113,7 +113,7 @@ class EnovaStageRuleTests(DbTestCase):
         result = self.run_job()[0]
         self.assertEqual(list(result['counts']), ['2026-09'])
         self.assertEqual([call.args[2] for call in self.fetch.call_args_list], [['2026-09']])
-        self.assertEqual(self.count('2026-11'), 99)
+        self.assertEqual(self.count('2026-11'), 0)
 
     def test_reopened_stage_during_source_read_prevents_write(self):
         original = self.fetch.side_effect
@@ -122,7 +122,7 @@ class EnovaStageRuleTests(DbTestCase):
             return original(*args)
         self.fetch.side_effect = fetch
         self.assertEqual(self.run_job()[0]['mode'], 'skipped')
-        self.assertEqual(self.count(), 99)
+        self.assertEqual(self.count(), 0)
         with get_conn() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM app_settings WHERE klucz LIKE 'enova_document_count_checked_%'").fetchone()[0], 0)
 
@@ -130,7 +130,7 @@ class EnovaStageRuleTests(DbTestCase):
         original = self.fetch.side_effect
         self.fetch.side_effect = RuntimeError('source offline')
         self.assertFalse(self.run_job()[0]['ok'])
-        self.assertEqual(self.count(), 99)
+        self.assertEqual(self.count(), 0)
         self.fetch.side_effect = original
         self.assertTrue(self.run_job()[0]['ok'])
         self.assertEqual(self.count(), 155)

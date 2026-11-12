@@ -25,6 +25,9 @@ from app.admin.settings.companies_settings import CompaniesSettings
 from app.admin.settings.database_settings import DatabaseSettings
 from app.admin.settings.email_settings import EmailSettings
 from app.admin.settings.enova_count_settings import EnovaCountSettings
+from app.admin.settings.enova_connection_settings import EnovaConnectionSettings
+from app.admin.settings.worker_settings import WorkerSettings
+from app.admin.settings.encryption_settings import EncryptionSettings
 from app.security.authorization import is_administrator
 from app.admin.settings.reminder_settings import ReminderSettings
 from app.admin.settings.import_all_settings import ImportAllSettings
@@ -97,7 +100,10 @@ class GlobalSettingsPage(QWidget):
                 ("KSeF – dostęp i certyfikat", KsefSettings, bool(perms.get("can_view_invoices"))),
             ]),
             ("System", [
+                ("Worker w tle", _scrollable(lambda: WorkerSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
+                ("Klucz szyfrowania", _scrollable(lambda: EncryptionSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Import danych", ImportAllSettings, True),
+                ("Enova — połączenie", _scrollable(lambda: EnovaConnectionSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Enova — liczba dokumentów", _scrollable(lambda: EnovaCountSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Baza danych i kopie", DatabaseSettings, True),
                 ("Logi", LogsSettings, True),

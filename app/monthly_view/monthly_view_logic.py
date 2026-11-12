@@ -443,6 +443,8 @@ class MonthlyViewLogic:
         if etap_kadry is not None:
             payload["etap_kadry"] = etap_kadry
 
+        if ilosc_dok is not None:
+            payload['_manual_document_count'] = True
         save_month_status(firma_id, self.aktualny_miesiac, payload)
 
         if uop is not None or uz is not None or uod is not None:

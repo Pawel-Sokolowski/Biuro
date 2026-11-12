@@ -5,3 +5,7 @@ psycopg[binary]>=3.2,<4
 psycopg_pool==3.3.1
 python-dotenv>=1,<2
 tzdata
+
+# Shared credentials use the same Fernet encryption as the desktop app.
+cryptography
+bcrypt

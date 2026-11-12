@@ -10,7 +10,7 @@ from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
 JOB_LABELS = {'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
-              'enova': 'Enova', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
+              'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto'}
 
 
@@ -39,7 +39,6 @@ class WorkerMonitor(QWidget):
         self.progress = QLabel()
         self.progress.setWordWrap(True)
         self.progress.setTextFormat(Qt.TextFormat.PlainText)
-        status_layout.addWidget(self.progress)
         self.jobs = self._table(['Zadanie', 'Stan', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
         status_layout.addWidget(self.jobs)
         self.tabs.addTab(status_page, 'Status')
@@ -54,10 +53,38 @@ class WorkerMonitor(QWidget):
         local_logs = QPushButton('Otwórz folder logów na tym komputerze')
         local_logs.clicked.connect(self.open_logs)
         log_layout.addWidget(local_logs)
-        self.tabs.addTab(log_page, 'Logi')
+        self.log_page = log_page
         self.ezla = self._table(['Firma', 'NIP', 'Pobieranie', 'Stan', 'Ostatnia próba',
                                  'Ostatni sukces', 'Nowe raporty', 'Błąd'])
-        self.tabs.addTab(self.ezla, 'e-ZLA')
+        ezla_page = QWidget()
+        ezla_layout = QVBoxLayout(ezla_page)
+        ezla_layout.addWidget(self.progress)
+        ezla_layout.addWidget(self.ezla)
+        self.tabs.addTab(ezla_page, 'e-ZLA')
+        import_page = QWidget()
+        import_layout = QVBoxLayout(import_page)
+        import_note = QLabel('Import e-ZLA do Enovy nie jest jeszcze podłączony. '
+                            'Pobranie raportu z ZUS nie oznacza zaimportowania go do Enovy. '
+                            'Status importu wymaga potwierdzenia z zadania importującego w Enovie.')
+        import_note.setWordWrap(True)
+        import_layout.addWidget(import_note)
+        import_layout.addStretch()
+        self.tabs.addTab(import_page, 'Import do Enovy')
+        self.job_views = {}
+        for keys, title in ((('enova',), 'Odczyt z Enovy'),
+                            (('mail',), 'Poczta'),
+                            (('invoices', 'reminders'), 'Faktury i przypomnienia'),
+                            (('ksef_import',), 'KSeF')):
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            note = QLabel('Ostatni zapisany stan zadań. Brak wpisu oznacza, że worker nie zgłosił jeszcze przebiegu.')
+            note.setWordWrap(True)
+            page_layout.addWidget(note)
+            table = self._table(['Zadanie', 'Stan', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
+            page_layout.addWidget(table)
+            self.job_views[keys] = table
+            self.tabs.addTab(page, title)
+        self.tabs.addTab(log_page, 'Logi')
         self.timer = QTimer(self)
         self.timer.setInterval(5000)
         self.timer.timeout.connect(self.refresh)
@@ -106,9 +133,12 @@ class WorkerMonitor(QWidget):
         enabled = 'zadania włączone' if heartbeat.get('enabled') else 'zadania wyłączone'
         self.summary.setText(f'{state}; {enabled}. Ostatni sygnał: {checked or "—"}.')
         jobs = heartbeat.get('jobs', {})
-        self._fill(self.jobs, [[JOB_LABELS.get(name, name), STATES.get(value.get('state'), value.get('state')),
+        job_rows = {name: [JOB_LABELS.get(name, name), STATES.get(value.get('state'), value.get('state')),
             value.get('started_at'), value.get('finished_at'), value.get('next_run_at'), value.get('error_type')]
-            for name, value in jobs.items()])
+            for name, value in jobs.items()}
+        self._fill(self.jobs, list(job_rows.values()))
+        for keys, table in self.job_views.items():
+            self._fill(table, [job_rows[key] for key in keys if key in job_rows])
         self._fill(self.logs, [[event.get('at'), JOB_LABELS.get(event.get('job'), event.get('job')),
                                STATES.get(event.get('state'), event.get('state')), event.get('error_type')]
                               for event in reversed(data['events'])])

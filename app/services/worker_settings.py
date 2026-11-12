@@ -5,9 +5,9 @@ from app.db.dao_app_settings import get_setting, set_setting
 
 KEY = 'background_worker'
 DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
-            'enova': True, 'ksef_import': False, 'mail_interval': 120,
+            'enova': True, 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
             'reminders_interval': 60, 'invoices_interval': 60, 'enova_interval': 900,
-            'ksef_import_interval': 3600, 'enova_time': '02:00'}
+            'ezla_interval': 3600, 'ksef_import_interval': 3600, 'enova_time': '02:00'}
 
 
 def load_settings():
@@ -20,10 +20,10 @@ def load_settings():
 def validate(value):
     from datetime import time
     time.fromisoformat(value['enova_time'])
-    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ksef_import'):
+    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import'):
         if type(value[key]) is not bool:
             raise ValueError('Nieprawidłowy przełącznik workera.')
-    for key in ('mail', 'reminders', 'invoices', 'enova', 'ksef_import'):
+    for key in ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import'):
         interval = value[key + '_interval']
         if type(interval) is not int or not 30 <= interval <= 86400:
             raise ValueError('Odstęp workera musi wynosić 30–86400 sekund.')

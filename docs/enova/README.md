@@ -481,9 +481,10 @@ bez terminów w zadanym zakresie. Brak odczytu nie oznacza niewysłanej deklarac
 ani braku pracowników.
 
 RCA i inne deklaracje nadal wymagają skonfigurowanego źródła danych; sam wybór
-raportu nie uruchamia nowego konektora Płatnika. e-ZLA zestawia lokalnie wczytane
-XML z listą firm, bez pobierania z ZUS i bez importu do Enovy — szczegóły
-w [opisie automatyzacji kadr](../payroll-automation.md).
+raportu nie uruchamia nowego konektora Płatnika. e-ZLA zestawia raporty pobrane
+z oficjalnej usługi ZUS przez worker i lokalnie wczytane XML. Dane pobrane przez
+worker są zaszyfrowane w PostgreSQL, dostępne także na innych komputerach.
+Konfiguracja w [ZUS — e-ZLA](../ezla-service.md). Import do Enovy nie jest wykonywany.
 
 ### Główny przycisk stopera
 

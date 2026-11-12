@@ -13,7 +13,9 @@
 Aktualna implementacja Sprawdzania obsługuje odczyt statusów i UPO z
 konfigurowalnego, zweryfikowanego zapytania. Pokazuje pracowników osobno i ma
 filtry deklaracji do wysłania / wysłanych / przyjętych. Nie zawiera jeszcze
-sterowania Płatnikiem, automatycznego pobierania z eZUS ani importu XML do Enovy.
+sterowania Płatnikiem ani importu XML do Enovy. Automatyczne pobieranie raportów
+z oficjalnej usługi ZUS jest już obsługiwane przez worker; konfiguracja w
+[Ustawienia → ZUS — e-ZLA](ezla-service.md).
 Etykieta źródła `platnik` nie uruchamia osobnego połączenia z bazą Płatnika.
 Dodano lokalny podgląd raportu e-ZLA XML opisany poniżej.
 
@@ -44,8 +46,8 @@ Nie należy zastępować importera bezpośrednim zapisem do tabel Enovy.
 3. Widok opcji importu e-ZLA w używanej wersji Enovy oraz wynik próbnego importu
    raportu z fikcyjnymi danymi. Struktura raportu została już przekazana.
    Żadnych haseł, PIN-ów ani rzeczywistych danych zdrowotnych.
-4. Przebieg pobierania wygenerowanych raportów z eZUS i sposób logowania na
-   stanowisku. Uwierzytelnienia nie można wywnioskować z posiadania podpisu USB.
+4. Dla pobierania raportów używamy oficjalnej usługi SOAP ZUS z dedykowanym
+   loginem, hasłem usługi i hasłem ZIP, bez podpisu USB i automatyzacji przeglądarki.
 
 Dokument zapisuje wymagania; nie potwierdza dostępności API ani ukończenia adapterów.
 
@@ -71,8 +73,10 @@ Nie wnioskujemy powiązania korekty z nowym zwolnieniem wyłącznie z dat lub na
 Powtórzone pozycje w jednym raporcie pozostają widoczne, zamiast cicho znikać.
 To nie jest jeszcze rejestr importów ani deduplikacja między kolejnymi raportami.
 
-Podgląd nie zapisuje zawartości raportu w bazie Biuro, nie przesyła go do Enovy,
-nie pobiera raportów z eZUS i nie oznacza dokumentów jako zaimportowane.
+Lokalnie wczytane XML nie są zapisywane w bazie. Raporty pobrane przez worker
+są natomiast przechowywane jako szyfrogramy w PostgreSQL i odczytywane na innych
+komputerach z tym samym kluczem Biuro. Żaden z tych odczytów nie przesyła danych
+do Enovy ani nie oznacza dokumentów jako zaimportowane.
 **Wyczyść wczytane raporty** usuwa lokalne odczyty; lista firm pozostaje
 z oznaczeniem braku raportu. Raporty można doładowywać partiami (do 20 plików);
 ponowne wczytanie tych samych danych nie powiela pozycji w podglądzie.
@@ -82,6 +86,6 @@ liczba dokumentów musi odpowiadać nagłówkowi. Parser nie ładuje DTD ani enc
 zewnętrznych i odrzuca niepoprawny XML. Do działania używa istniejącej zależności
 lxml, bez nowego pakietu instalacyjnego.
 
-Rozpoznanie struktury raportu jest gotowe na podstawie przykładu. Do następnego
-etapu pozostaje dopasowanie pobierania z eZUS oraz rzeczywistej opcji importu
-w używanej Enovie i sprawdzenie jej raportu wynikowego (w tym anulowań/korekt).
+Rozpoznanie raportu i pobieranie SOAP są zaimplementowane zgodnie z instrukcją
+ZUS. Pozostaje rzeczywiste sprawdzenie połączenia z danymi biura oraz dopasowanie
+opcji importu w używanej Enovie i jej raportu wynikowego (w tym anulowań/korekt).

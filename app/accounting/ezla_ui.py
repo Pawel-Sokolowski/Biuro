@@ -7,6 +7,8 @@ from app.utils.background import TaskRunner
 from app.integrations.ezla.preview import preview_reports
 from app.integrations.ezla.report import MAX_DOCUMENTS
 from app.utils.months import month_bounds
+from app.integrations.enova.accounting import decoded
+from app.integrations.ezla.service import ServiceError
 
 
 class EzlaPreviewPanel(QWidget):
@@ -14,7 +16,8 @@ class EzlaPreviewPanel(QWidget):
         super().__init__(parent)
         self.actor_id = actor_id
         self.runner = TaskRunner(self)
-        self.companies, self.reports = {}, {}
+        self.companies, self.reports, self.remote_reports = {}, {}, {}
+        self.remote_errors = []
         self.period, self.only_attention, self.errors = None, False, []
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
@@ -35,10 +38,10 @@ class EzlaPreviewPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
-        note = QLabel('Zestawienie wszystkich firm według filtrów powyżej. Dane e-ZLA pochodzą z lokalnie wczytanych XML; '
-                      'nie pobrano ich automatycznie z ZUS i nie wykonano importu do Enovy. '
-                      'Pracownik z XML nie został jeszcze dopasowany do kartoteki Enovy. '
-                      'Anulowania i korekty wymagają odrębnej obsługi. Raporty nie są zapisywane w bazie Biuro.')
+        note = QLabel('Zestawienie raportów pobranych przez worker ZUS oraz lokalnie wczytanych XML. '
+                      'Raporty z ZUS są zapisane w bazie w postaci zaszyfrowanej; lokalne XML nie są zapisywane. '
+                      'Nie wykonano importu do Enovy ani dopasowania pracownika do jej kartoteki. '
+                      'Anulowania i korekty wymagają odrębnej obsługi.')
         note.setWordWrap(True)
         layout.addWidget(note)
         self.clear()
@@ -47,6 +50,12 @@ class EzlaPreviewPanel(QWidget):
         self.companies = {row['id']: row for row in rows}
         self.period, self.only_attention = period, only_attention
         self._render()
+
+    def set_remote(self, batch):
+        remote = {}
+        for result in batch['reports']:
+            remote.setdefault(result['company']['id'], []).append(result)
+        self.remote_reports, self.remote_errors = remote, batch.get('errors', [])
 
     def clear(self):
         self.runner.invalidate()
@@ -87,9 +96,15 @@ class EzlaPreviewPanel(QWidget):
         records = []
         loaded = 0
         for company_id, company in sorted(self.companies.items(), key=lambda entry: str(entry[1].get('nazwa') or '').casefold()):
-            reports = list(self.reports.get(company_id, {}).values())
+            reports = list(self.remote_reports.get(company_id, [])) + list(self.reports.get(company_id, {}).values())
+            sync = decoded(company.get('ezla_sync'))
+            failed = sync.get('state') == 'failed'
+            failure = str(ServiceError(sync.get('error_code'))) if failed else ''
             if not reports:
-                records.append((company, None, 'Nie wczytano raportu XML', 'Brak danych z ZUS', ''))
+                status = 'Błąd pobierania ZUS' if failed else ('Brak raportów dla miesiąca' if sync.get('last_success') else 'Nie wczytano raportu XML')
+                review = failure or ('Brak dokumentów w pobranych raportach; nie potwierdza kompletności ZUS' if sync.get('last_success') else 'Brak danych z ZUS')
+                info = 'Ostatnie poprawne sprawdzenie: ' + str(sync.get('last_success') or '—')
+                records.append((company, None, status, review, info))
                 continue
             loaded += 1
             seen, visible = {}, []
@@ -113,11 +128,11 @@ class EzlaPreviewPanel(QWidget):
                                     'Nie oznacza potwierdzenia kompletności danych ZUS', f'Ostatni wczytany raport: {stamp}'))
                 continue
             for certificate, result in visible:
-                if self.only_attention and not certificate.issues and certificate.status == 'Wystawione':
+                if self.only_attention and not failed and not certificate.issues and certificate.status == 'Wystawione':
                     continue
                 database = result.get('database') or 'Brak mapowania bazy Enovy'
                 info = f"NIP: {result['report'].nip}; baza Enovy: {database}; raport: {result['report'].generated_at}"
-                records.append((company, certificate, '', certificate.review, info))
+                records.append((company, certificate, '', certificate.review + ('; ' + failure if failed else ''), info))
         self.table.setRowCount(len(records))
         for row, (company, certificate, status, review, info) in enumerate(records):
             if certificate:
@@ -138,6 +153,7 @@ class EzlaPreviewPanel(QWidget):
         self.table.resizeColumnsToContents()
         message = (f'Firmy: {len(self.companies)}; z wczytanym raportem: {loaded}; bez raportu: {len(self.companies) - loaded}. '
                    'Wyłącznie podgląd — nie wykonano importu do Enovy.')
-        if self.errors:
-            message += '\n' + '\n'.join(self.errors)
+        errors = self.remote_errors + self.errors
+        if errors:
+            message += '\n' + '\n'.join(errors)
         self.summary.setText(message)

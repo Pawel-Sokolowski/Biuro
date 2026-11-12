@@ -186,8 +186,19 @@ class AccountingPage(QWidget):
 
     def refresh_async(self, *_):
         month = self.month.date().toString('yyyy-MM')
-        self.reader.submit(lambda: list_accounting(self.actor_id, month),
-                           lambda rows: self.render(rows, month), self.failed)
+        def read():
+            rows = list_accounting(self.actor_id, month)
+            remote = None
+            if self._fixed_department != 'accounting':
+                from app.integrations.ezla.sync import load_reports
+                remote = load_reports(self.actor_id, month)
+            return rows, remote
+        def loaded(result):
+            rows, remote = result
+            if remote is not None:
+                self.ezla_panel.set_remote(remote)
+            self.render(rows, month)
+        self.reader.submit(read, loaded, self.failed)
 
     def failed(self, exc):
         self.source_note.setText('Nie udało się odczytać danych: ' + str(exc))

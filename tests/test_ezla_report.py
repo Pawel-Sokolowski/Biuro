@@ -44,6 +44,12 @@ class EzlaReportTests(TestCase):
         self.assertIn('powiązany', value.certificates[2].review)
         self.assertNotIn('00000000000', repr(value.certificates[0]))
 
+    def test_official_backdated_status_is_recognized_but_still_requires_review(self):
+        row = parse_report(report(certificate('Wsteczne – uzasadnione'))).certificates[0]
+        self.assertEqual(row.status, 'Wsteczne - uzasadnione')
+        self.assertFalse(row.issues)
+        self.assertIn('wsteczne', row.review)
+
     def test_missing_identity_unknown_status_and_conflict_need_review(self):
         value = parse_report(report(certificate(identifier=''), certificate('Nowy status', '2'),
                                     certificate(number='3', cancelled='Tak')))

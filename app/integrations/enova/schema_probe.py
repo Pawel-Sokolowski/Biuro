@@ -35,7 +35,7 @@ def inspect_schema(config, database, *, password=''):
         result = {'database': database}
         for name, query in queries.items():
             cursor = connection.cursor()
-            cursor.timeout = 30
+            connection.timeout = 30
             cursor.execute(query)
             names = [column[0] for column in cursor.description]
             rows = cursor.fetchmany(100001)

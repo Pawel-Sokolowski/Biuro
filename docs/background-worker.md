@@ -111,3 +111,40 @@ Pliki klucza i `.env` ogranicz uprawnieniami NTFS do właściwych kont Windows.
 Jeśli `BIO_ENCRYPTION_KEY` jest również ustawiony jako zmienna środowiskowa Windows,
 ma pierwszeństwo nad `.env`. Ujednolić trzeba także tę zmienną dla konta zadania
 i pozostałych stanowisk, a następnie uruchomić ich procesy ponownie.
+
+## Instalacja workera z gotowego EXE i widoczne błędy skryptu
+
+Na serwerze można używać gotowej instalacji Biuro — Python i `.venv` nie są wtedy
+potrzebne. Instalator Biuro umieszcza pomocnicze pliki w podfolderze `scripts`
+oraz dodaje skrót „Biuro - instalacja workera”.
+
+1. Zaloguj się na konto Windows, na którym skonfigurowano Biuro, wspólną bazę
+   i klucz. Wybierz to samo konto w późniejszym oknie poświadczeń zadania, chyba
+   że inne konto ma już osobno przygotowaną konfigurację i dostęp do plików.
+2. Uruchom `scripts\install_background_worker.cmd` przez „Uruchom jako administrator”.
+   Okno pozostaje otwarte również przy błędzie zasad wykonywania PowerShell
+   lub błędzie składni. Skrypt nie zmienia zasad wykonywania PowerShell.
+3. Można też otworzyć PowerShell jako administrator i wykonać:
+
+   ```powershell
+   & "C:\sciezka\scripts\install_background_worker.ps1" -ExecutablePath "C:\sciezka\Biuro.exe"
+   ```
+
+Skrypt wykrywa EXE w folderze instalacji, środowisko źródłowe `.venv`, wynik
+PyInstaller `dist\Biuro`, a następnie domyślną instalację użytkownika. Jawne
+`-ExecutablePath` ma pierwszeństwo. Brak środowiska nie jest już opisywany jako
+obowiązek instalacji Pythona przy korzystaniu z gotowego EXE.
+
+Błędy są zapisywane do `%LOCALAPPDATA%\Biuro\logs\worker-install.log` konta
+uruchamiającego instalator. Interaktywne uruchomienie zatrzymuje okno do naciśnięcia
+Enter. Hasło konta zadania jest pytane lokalnie i nie trafia do logu. Istniejące
+zadanie nie jest nadpisywane. `-NoStart` rejestruje zadanie bez natychmiastowego
+uruchomienia. `-CheckOnly -NonInteractive` sprawdza wyłącznie ścieżki: nie rejestruje
+zadania, nie prosi o hasło i nie uruchamia wysyłek ani importów.
+
+Po rejestracji sprawdź sygnał w „Worker w tle”. Samo zarejestrowanie zadania i
+żądanie uruchomienia nie potwierdzają poprawnego działania procesu. Jeśli brak
+sygnału, odczytaj wynik zadania w Harmonogramie oraz `Biuro\logs\biuro.log`
+w profilu **konta zadania**. Nowa wersja zapisuje tam także błędy startu, np. brak
+wspólnego klucza szyfrowania. Dla źródeł log i `.env` znajdują się w projekcie;
+dla EXE konfiguracja konta zadania jest w `%LOCALAPPDATA%\Biuro\.env`.

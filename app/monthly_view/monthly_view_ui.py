@@ -591,7 +591,12 @@ class MonthlyViewPage(QWidget):
 
         self._build_ui()
         self._load_initial_data()
+        self.apply_department_default()
         self._setup_timer()
+
+    def apply_department_default(self):
+        from app.preferences.department import default_department
+        self.tabs.setCurrentIndex(1 if default_department(self.pracownik_id) == 'payroll' else 0)
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)

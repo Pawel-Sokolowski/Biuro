@@ -835,6 +835,12 @@ class OfficeManagerApp(QMainWindow):
             if row == index:
                 page = self._ensure_page(name)
                 break
+        default_department = getattr(page, 'apply_department_default', None)
+        if callable(default_department):
+            try:
+                default_department()
+            except Exception:
+                logger.warning('Nie udało się ustawić domyślnego działu', exc_info=True)
         for name in ("refresh_async", "_reload_rows", "_refresh", "refresh", "_refresh_all", "refresh_all"):
             action = getattr(page, name, None)
             if callable(action):

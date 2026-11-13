@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QCheckBox,
-    QSpinBox, QComboBox, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QFileDialog,QProgressBar)
+    QSpinBox, QComboBox, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QFileDialog,QProgressBar,QDialog)
 from PyQt6.QtCore import Qt,pyqtSignal
 from app.db.dao_conn import get_conn
 from app.integrations.enova.connection_settings import load_connection, save_connection
@@ -7,6 +7,7 @@ from app.integrations.enova.connection_settings import load_connection, save_con
 
 class EnovaConnectionSettings(QWidget):
     discovery_progress = pyqtSignal(int,int,int,str)
+    import_progress = pyqtSignal(int,int,str)
 
     def __init__(self, actor_id, parent=None):
         super().__init__(parent)
@@ -17,6 +18,10 @@ class EnovaConnectionSettings(QWidget):
         self._discovery_token = 0
         self._discovery_running = False
         self.discovery_progress.connect(self._show_discovery_progress)
+        self.import_progress.connect(self._show_import_progress)
+        self._import_running = False
+        self._discovery_result = {'databases': [], 'matches': {}, 'errors': []}
+        self._mapping_server = None
         config = load_connection()
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -54,7 +59,7 @@ class EnovaConnectionSettings(QWidget):
         self.discovery_timeout.setRange(30,1200)
         self.discovery_timeout.setSuffix(' s')
         self.discovery_timeout.setValue(config.get('discovery_query_timeout',120))
-        self.discovery_timeout.setToolTip('Limit pojedynczego zapytania przy wyszukiwaniu baz, nie całego wyszukiwania. Domyślnie 120 s.')
+        self.discovery_timeout.setToolTip('Limit pojedynczego zapytania przy wyszukiwaniu baz i odczycie dokumentów, nie całego importu. Domyślnie 120 s.')
         for label, widget in [('Serwer SQL / instancja', self.server), ('Główna baza Enovy', self.database),
                               ('Sterownik SQL', self.driver), ('Login SQL', self.username),
                               ('Hasło SQL', self.password), ('Certyfikat TLS', self.trust_certificate),
@@ -86,8 +91,10 @@ class EnovaConnectionSettings(QWidget):
                 self.table.setItem(row, col, item)
             self.table.setItem(row, 2, QTableWidgetItem(sources.get(company['nip'], '')))
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.itemChanged.connect(lambda item: self.update_mapping_status() if item.column() == 2 else None)
         layout.addWidget(self.table)
-        from app.utils.background import TaskRunner
+        from app.utils.background import TaskRunner, CommandRunner
+        self.import_runner = CommandRunner(self)
         self.preview_runner = TaskRunner(self)
         self.connection_runner = TaskRunner(self)
         self.discovery_runner = TaskRunner(self)
@@ -101,12 +108,44 @@ class EnovaConnectionSettings(QWidget):
         self.discovery_bar = QProgressBar()
         self.discovery_bar.hide()
         layout.addWidget(self.discovery_bar)
+        self.mapping_status = QLabel('Ręczne powiązania: wpisz bazę w tabeli lub otwórz listę poniżej. Wyszukiwanie pokaże nierozpoznane bazy.')
+        self.mapping_status.setWordWrap(True)
+        self.mapping_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.mapping_status)
+        self.mapping_button = QPushButton('Nierozpoznane bazy i firmy — ręczne powiązania')
+        self.mapping_button.clicked.connect(self.review_mappings)
+        layout.addWidget(self.mapping_button)
         self.connection_button = QPushButton('Sprawdź połączenie z bazą Enova')
         self.connection_button.clicked.connect(self.check_connection)
         layout.addWidget(self.connection_button)
         self.preview_button = QPushButton('Sprawdź zapisane ustawienia — podgląd importu')
         self.preview_button.clicked.connect(self.preview)
         layout.addWidget(self.preview_button)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        self.import_year = QSpinBox()
+        self.import_year.setRange(2000, 2100)
+        self.import_year.setValue(datetime.now(ZoneInfo('Europe/Warsaw')).year)
+        year_form = QFormLayout()
+        year_form.addRow('Rok jednorazowego importu', self.import_year)
+        layout.addLayout(year_form)
+        self.import_button = QPushButton('Importuj jednorazowo liczbę dokumentów — cały rok do Sprawdzania')
+        self.import_button.clicked.connect(self.import_year_counts)
+        layout.addWidget(self.import_button)
+        import_note = QLabel('Pobiera 12 miesięcy i wszystkie rodzaje dokumentów dla przypisanych firm, '
+                            'także przy wyłączonym harmonogramie. Zapisuje wyłącznie dane Sprawdzania. '
+                            'Nie zmienia widoku miesięcznego, faktur, etapów, deklaracji ani danych kadrowych. '
+                            'Zwykły import do widoku miesięcznego obejmuje okresy od miesiąca uruchomienia tej konfiguracji '
+                            'i zachowuje ręczne wpisy.')
+        import_note.setWordWrap(True)
+        layout.addWidget(import_note)
+        self.import_status = QLabel()
+        self.import_status.setWordWrap(True)
+        self.import_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.import_status)
+        self.import_bar = QProgressBar()
+        self.import_bar.hide()
+        layout.addWidget(self.import_bar)
         self.schema_runner = TaskRunner(self)
         self.schema_button = QPushButton('Eksportuj strukturę Enova — deklaracje i kadry (wybrana firma)')
         self.schema_button.clicked.connect(self.export_schema)
@@ -120,6 +159,95 @@ class EnovaConnectionSettings(QWidget):
         note.setWordWrap(True)
         layout.addWidget(note)
         self._saved_state = self.form_state()
+        self.update_mapping_status()
+
+    def review_mappings(self):
+        from app.admin.settings.enova_mapping_dialog import EnovaMappingDialog
+        if self._mapping_server is not None and self._mapping_server != self.server.text().strip():
+            QMessageBox.warning(self, 'Powiązania Enova', 'Serwer zmienił się od wyszukiwania. Wyszukaj bazy ponownie.')
+            return
+        current = {company['id']: self.table.item(row, 2).text().strip() for row, company in enumerate(self.companies)}
+        dialog = EnovaMappingDialog(self.companies, current, self._discovery_result, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            for row, company in enumerate(self.companies):
+                self.table.item(row, 2).setText(dialog.mappings.get(company['id'], ''))
+            self.update_mapping_status()
+
+    def update_mapping_status(self):
+        from app.integrations.enova.discovery import mapping_review
+        current = {company['id']: self.table.item(row, 2).text().strip() for row, company in enumerate(self.companies)}
+        unmatched = sum(row['company_id'] is None for row in mapping_review(self.companies, current, self._discovery_result))
+        missing = sum(not value for value in current.values())
+        database_status = f'Nieprzypisane bazy: {unmatched}.' if self._mapping_server is not None else 'Nie wyszukano jeszcze baz.'
+        self.mapping_status.setText(database_status + f' Firmy bez bazy: {missing}. '
+                                   'Otwórz „Nierozpoznane bazy i firmy”, aby sprawdzić powody i powiązać ręcznie. '
+                                   'Zmiany przypisań wymagają zapisania połączenia.')
+
+    def _show_import_progress(self, done, total, database):
+        if not self._import_running:
+            return
+        self.import_bar.setRange(0, total)
+        self.import_bar.setValue(done)
+        self.import_status.setText(f'Import roczny: {done}/{total} baz. {database}')
+
+    def import_year_counts(self):
+        if self._import_running:
+            return
+        try:
+            # Use exactly the fields/mappings on screen, including a newly typed password.
+            if self.is_dirty():
+                self.persist()
+            config = load_connection()
+            if not config['sources']:
+                raise ValueError('Przypisz bazy do firm i zapisz połączenie przed importem.')
+        except Exception as exc:
+            QMessageBox.warning(self, 'Import roczny Enova', str(exc) if isinstance(exc, (ValueError, PermissionError)) else type(exc).__name__)
+            return
+        year, actor_id = self.import_year.value(), self.actor_id
+        self._import_running = True
+        self.import_button.setEnabled(False)
+        self.import_bar.setRange(0, 0)
+        self.import_bar.show()
+        self.import_status.setText(f'Rozpoczynanie importu za {year}…')
+        def progress(done, total, database):
+            try:
+                self.import_progress.emit(done, total, database)
+            except RuntimeError:
+                pass
+        def reset():
+            self._import_running = False
+            self.import_button.setEnabled(True)
+            self.import_bar.hide()
+        def done(results):
+            reset()
+            successes = sum(result['ok'] for result in results)
+            summary = f'Rok {year}: zaimportowano {successes}/{len(results)} baz do Sprawdzania. Widok miesięczny bez zmian.'
+            self.import_status.setText(summary)
+            details = []
+            for result in results:
+                if result['ok']:
+                    details.append(result['database'] + ' — ' + result['company'] + '\n' +
+                                   ', '.join(month + ': ' + str(count) for month, count in result['counts'].items()))
+                else:
+                    details.append(result['database'] + ': BŁĄD — ' + result['error'])
+            box = QMessageBox(self)
+            box.setWindowTitle('Import roczny Enova — wynik')
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            box.setIcon(QMessageBox.Icon.Information if successes == len(results) else QMessageBox.Icon.Warning)
+            box.setText(summary)
+            box.setDetailedText('\n\n'.join(details))
+            box.exec()
+        def failed(exc):
+            reset()
+            self.import_status.setText('Import nie zakończył się poprawnie.')
+            QMessageBox.warning(self, 'Import roczny Enova', str(exc) if isinstance(exc, (ValueError, PermissionError)) else type(exc).__name__)
+        def work():
+            from app.integrations.enova.checking import import_document_year
+            return import_document_year(config, year, actor_id=actor_id, progress=progress)
+        try:
+            self.import_runner.submit(work, done, failed)
+        except Exception as exc:
+            failed(exc)
 
     def form_config(self):
         config = dict(server=self.server.text().strip(), database=self.database.text().strip(),
@@ -325,6 +453,9 @@ class EnovaConnectionSettings(QWidget):
             for row,company in enumerate(self.companies):
                 if company['id'] in proposals:
                     self.table.item(row,2).setText(proposals[company['id']])
+            self._discovery_result = result
+            self._mapping_server = fields[0]
+            self.update_mapping_status()
             details = conflicts + result['warnings'] + result['errors']
             for nip,databases in result['matches'].items():
                 details.append(nip + ' → ' + ', '.join(databases))
@@ -334,6 +465,7 @@ class EnovaConnectionSettings(QWidget):
             box.setTextFormat(Qt.TextFormat.PlainText)
             box.setText(f"Widoczne bazy: {result['visible']}; bazy z rozpoznaną strukturą Enovy: {result['scanned']}. "
                         f"Uzupełniono pustych przypisań: {len(proposals)}. "
+                        'Nierozpoznane bazy oraz firmy bez bazy zobaczysz w „Nierozpoznane bazy i firmy — ręczne powiązania”. '
                         'Sprawdź wynik i kliknij Zapisz połączenie Enova. '
                         'Ręczne przypisania pozostawiono. Kopie baz i powielone NIP-y wymagają wyboru ręcznego. '
                         'Wyszukiwanie obejmuje tylko bazy widoczne i dostępne dla podanego konta SQL.')

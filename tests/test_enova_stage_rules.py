@@ -94,6 +94,7 @@ class EnovaStageRuleTests(DbTestCase):
 
     def test_ineligible_gaps_are_not_queried(self):
         self.config['months_back'] = 3
+        self.config['monthly_counts_from'] = '2026-09'  # Deployment already active in September.
         self.set_stage('2026-09', 'Wysłane wyniki')
         self.set_stage('2026-10', 'Zaksięgowane')
         result = self.run_job()[0]
@@ -103,6 +104,7 @@ class EnovaStageRuleTests(DbTestCase):
 
     def test_month_reopened_while_previous_month_is_read_is_never_queried(self):
         self.config['months_back'] = 3
+        self.config['monthly_counts_from'] = '2026-09'
         self.set_stage('2026-09', 'Wysłane wyniki')
         self.set_stage('2026-10', 'Zaksięgowane')
         original = self.fetch.side_effect

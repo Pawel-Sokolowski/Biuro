@@ -67,7 +67,12 @@ def save_connection(config, *, actor_id, password=''):
     for name in ('declarations_query', 'payroll_query', 'hr_events_query'):
         saved[name] = str(config.get(name, '')).strip()
     saved['jpk_query'] = str(config.get('jpk_query', '')).strip()
-    saved['password_enc'] = load_connection().get('password_enc', '')
+    previous = load_connection()
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    # Established once; yearly backfills must never move this boundary backwards.
+    saved['monthly_counts_from'] = previous.get('monthly_counts_from') or datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
+    saved['password_enc'] = previous.get('password_enc', '')
     if password:
         from app.utils.crypto import encrypt_password
         saved['password_enc'] = encrypt_password(password)

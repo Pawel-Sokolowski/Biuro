@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from app.integrations.enova.document_counts import fetch_counts, normalize_nip, validate_rows, whole_count, requested_months
 from app.integrations.enova.jpk import STATUSES
 from app.utils.months import previous_month, month_bounds
+from app.services.worker_activity import record
 
 DEPARTMENTS = ('accounting', 'payroll')
 
@@ -243,12 +244,19 @@ def run_checking_import(config, *, apply=False, today=None, months=None, force=F
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Import sprawdzania jest już uruchomiony.')
         for source in config['sources']:
+            company = None
             try:
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
+                    if apply:
+                        record('enova', 'reading', company_id=company['id'])
                     result = sync_checking(conn, config, source, company['id'], day, apply=apply, months=months, force=force)
                     results.append({'database': source['database'], 'company_id':company['id'], 'kind': 'checking', 'ok': True, **result})
+                if apply:
+                    record('enova', 'read', company_id=company['id'])
             except Exception as exc:
+                if apply:
+                    record('enova', 'failed', company_id=company['id'] if company else None)
                 error = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
                 results.append({'database': source['database'], 'kind': 'checking', 'ok': False, 'error': error})
                 if apply:

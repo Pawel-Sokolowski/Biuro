@@ -161,16 +161,18 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
                 raise ValueError('NIP wybranej firmy jest przypisany także innej firmie Biuro.')
         if not mapped:
             return {'mode': 'empty', 'companies': 0}
-        rows = fetch(config, months, annual=True) if annual else fetch(config, months)
-        records = normalize(rows, months, mapped, annual=annual)
-        stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
-        with get_conn() as conn:
-            for nip, fid in mapped.items():
-                for month, entries in records[nip].items():
-                    snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
-                    conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                                 'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                                 (f"platnik_declarations_{fid}_{'year_' if annual else ''}{month}", encrypt_password(snapshot)))
+        from app.services.worker_activity import batch
+        with batch('platnik', mapped.values()):
+            rows = fetch(config, months, annual=True) if annual else fetch(config, months)
+            records = normalize(rows, months, mapped, annual=annual)
+            stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+            with get_conn() as conn:
+                for nip, fid in mapped.items():
+                    for month, entries in records[nip].items():
+                        snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
+                        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                                     (f"platnik_declarations_{fid}_{'year_' if annual else ''}{month}", encrypt_password(snapshot)))
         return {'mode': 'applied', 'companies': len(mapped), 'months': months,
                 'documents': sum(len(entries) for by_month in records.values() for entries in by_month.values())}
 

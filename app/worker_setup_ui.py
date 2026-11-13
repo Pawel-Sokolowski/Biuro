@@ -198,6 +198,7 @@ class WorkerSetupWindow(QMainWindow):
         from app.admin.settings.reset_calendar_settings import CalendarAndResetSettings
         from app.admin.settings.reminder_settings import ReminderSettings
         from app.admin.settings.ksef_settings import KsefSettings
+        from app.admin.settings.platnik_settings import PlatnikSettings
         from app.admin.settings.saldeo_web_settings import SaldeoWebSettings
         # Build lazily: large account/company lists should not block opening the panel.
         self.factories = {
@@ -205,9 +206,10 @@ class WorkerSetupWindow(QMainWindow):
             3: lambda: EzlaSettings(actor_id), 4: lambda: EnovaConnectionSettings(actor_id),
             5: EmailSettings, 6: CalendarAndResetSettings, 7: ReminderSettings, 8: KsefSettings,
             9: lambda: SaldeoWebSettings(actor_id),
+            10: lambda: PlatnikSettings(actor_id),
         }
         for title in ('Panel i logi', 'Zadania', 'e-ZLA', 'Odczyt z Enovy', 'Konta poczty',
-                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo'):
+                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik'):
             self.tabs.addTab(QWidget(), title)
         self.tabs.currentChanged.connect(self.open_tab)
 

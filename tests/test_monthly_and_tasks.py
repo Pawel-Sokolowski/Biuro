@@ -28,11 +28,12 @@ class SubstitutionTests(DbTestCase):
 
 
 class MonthlyStageFilterAndSubstitutionDisplayTests(unittest.TestCase):
-    def _page(self, choice, employee_id=None):
+    def _page(self, choice, employee_id=None, delivery='Wszystkie'):
         from types import SimpleNamespace
         from app.monthly_view.monthly_view_ui import MonthlyViewPage
         stub = SimpleNamespace(
             stage_combo=SimpleNamespace(currentText=lambda: choice),
+            delivery_combo=SimpleNamespace(currentText=lambda: delivery),
             _current_employee_id=lambda: employee_id,
             _SUBSTITUTION_FIELDS=MonthlyViewPage._SUBSTITUTION_FIELDS,
         )
@@ -46,8 +47,6 @@ class MonthlyStageFilterAndSubstitutionDisplayTests(unittest.TestCase):
         }
         expected = {
             "Wszystkie": {"ok", "none", "booked"},
-            "Dostarczone": {"ok"},
-            "Niedostarczone": {"none", "booked"},
             "Brak": {"none"},
             "Zatwierdzone": {"ok"},
             "Zaksięgowane": {"booked"},

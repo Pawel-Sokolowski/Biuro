@@ -502,6 +502,11 @@ class FakturyPage(QWidget):
         self.btn_cash.setText("Zapłacono")
         self.btn_email_pdf = QPushButton("Wyślij pdf e-mailem")
         self.btn_email_pdf.clicked.connect(self._email_selected_pdfs)
+        self.btn_remind_payment = QPushButton('Przypomnij o płatności…')
+        self.btn_remind_payment.setToolTip('Zaznacz jedną niezapłaconą fakturę. Sprawdź wiadomość przed wysłaniem.')
+        self.btn_remind_payment.clicked.connect(self._remind_payment)
+        from app.email.reminder_ui import ManualReminderController
+        self._payment_reminders = ManualReminderController(self,self.pracownik_id,self.btn_remind_payment)
         self.btn_trash = QPushButton("Przenieś do kosza")
         self.btn_trash.setToolTip("Przenosi zaznaczone faktury (także wystawione i z KSeF) do kosza; można je przywrócić.")
         self.btn_trash.clicked.connect(self._trash_selected_issued)
@@ -511,7 +516,7 @@ class FakturyPage(QWidget):
             button.setVisible(is_administrator(self.pracownik_id))
         for button in (self.btn_view, self.btn_jpk, self.btn_correction, self.btn_delete_issued,
                        self.btn_ksef_download, self.btn_ksef_download_one, self.btn_send_ksef, self.btn_status_ksef,
-                       self.btn_bank, self.btn_cash, self.btn_email_pdf, self.btn_trash, self.btn_trash_bin):
+                       self.btn_bank, self.btn_cash, self.btn_email_pdf, self.btn_remind_payment, self.btn_trash, self.btn_trash_bin):
             buttons.addWidget(button)
         for button in (self.btn_reexport, self.btn_ksef):
             button.setVisible(False)
@@ -970,6 +975,15 @@ class FakturyPage(QWidget):
         for invoice_id in ids:
             self._ksef_poll_counts[invoice_id] = 0
         self._start_ksef_batch(ids, send=True)
+
+    def _remind_payment(self):
+        if not self._can_issue():
+            return
+        ids = self._selected_ids(self.issued_table)
+        if len(ids)!=1:
+            QMessageBox.information(self,'Przypomnienie','Zaznacz jedną fakturę z kwotą pozostałą do zapłaty.')
+            return
+        self._payment_reminders.open('payments',ids[0])
 
     def _email_selected_pdfs(self):
         if not self._can_issue() or self._ksef_send_worker is not None or self._sync_running():

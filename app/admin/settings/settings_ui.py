@@ -28,6 +28,7 @@ from app.admin.settings.enova_count_settings import EnovaCountSettings
 from app.admin.settings.enova_connection_settings import EnovaConnectionSettings
 from app.admin.settings.worker_settings import WorkerSettings
 from app.admin.settings.ezla_settings import EzlaSettings
+from app.admin.settings.platnik_settings import PlatnikSettings
 from app.admin.settings.saldeo_web_settings import SaldeoWebSettings
 from app.admin.settings.encryption_settings import EncryptionSettings
 from app.security.authorization import is_administrator
@@ -107,6 +108,7 @@ class GlobalSettingsPage(QWidget):
                 ("Import danych", ImportAllSettings, True),
                 ("Enova — połączenie", _scrollable(lambda: EnovaConnectionSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Saldeo — monitoring i historia", _scrollable(lambda: SaldeoWebSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
+                ("Płatnik — połączenie", _scrollable(lambda: PlatnikSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("ZUS — e-ZLA", _scrollable(lambda: EzlaSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Enova — liczba dokumentów", _scrollable(lambda: EnovaCountSettings(self.pracownik_id)), is_administrator(self.pracownik_id)),
                 ("Baza danych i kopie", DatabaseSettings, True),

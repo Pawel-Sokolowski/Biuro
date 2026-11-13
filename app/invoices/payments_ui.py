@@ -125,7 +125,7 @@ class BankPaymentReview(QDialog):
         buttons.addWidget(refresh)
         layout.addLayout(buttons)
         self.all_imports = QCheckBox("Pokaż wszystkie zaimportowane operacje, także rozliczone i wypływy")
-        self.all_imports.setChecked(True)
+        self.all_imports.setChecked(False)
         self.all_imports.toggled.connect(self.refresh)
         layout.addWidget(self.all_imports)
         self.more_imports = QPushButton("Wczytaj kolejne 100 operacji")

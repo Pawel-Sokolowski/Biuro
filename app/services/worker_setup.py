@@ -95,7 +95,7 @@ def _check_tokens(conn, key):
     try:
         tokens = [row[0] for row in conn.execute(
             "SELECT haslo_enc FROM konta_email WHERE NULLIF(haslo_enc,'') IS NOT NULL").fetchall()]
-        for row in conn.execute("SELECT klucz,wartosc FROM app_settings WHERE klucz IN ('enova_connection','ezla_service') OR wartosc LIKE 'gAAAAA%'").fetchall():
+        for row in conn.execute("SELECT klucz,wartosc FROM app_settings WHERE klucz IN ('enova_connection','ezla_service','saldeo_web') OR wartosc LIKE 'gAAAAA%'").fetchall():
             if row[1].startswith('gAAAAA'):
                 tokens.append(row[1])
             else:

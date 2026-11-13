@@ -62,7 +62,11 @@ def describe_sql_error(exc, *, secrets=()):
     elif state == '28000' or '18456' in raw:
         hint = 'SQL Server odrzucił logowanie. Sprawdź login, hasło i włączenie uwierzytelniania SQL.'
     elif state in ('HYT00', 'HYT01'):
-        hint = 'Przekroczono czas połączenia. Sprawdź TCP/IP, port SQL Server i zaporę sieciową.'
+        if any(call in lower for call in ('sqlexecdirect','sqlexecute','sqlfetch','sqlmoreresults')):
+            hint = ('Przekroczono czas wykonania zapytania po połączeniu z SQL Server. '
+                    'Sprawdź limit zapytania, obciążenie SQL i blokady; przy wyszukiwaniu baz możesz zwiększyć limit w ustawieniach.')
+        else:
+            hint = 'Przekroczono czas połączenia. Sprawdź TCP/IP, port SQL Server i zaporę sieciową.'
     elif state in ('08001', '08004', '08S01'):
         hint = 'Nie udało się połączyć z instancją SQL. Sprawdź TCP/IP, port i zaporę; instancja nazwana wymaga SQL Browser lub adresu host,port.'
     else:

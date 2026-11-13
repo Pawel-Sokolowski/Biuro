@@ -12,6 +12,7 @@ def load_connection():
     config.setdefault('months_back', 3)
     config.setdefault('sources', [])
     config.setdefault('database', '')
+    config.setdefault('discovery_query_timeout', 120)
     config.setdefault('jpk_query', '')
     config.setdefault('driver', 'auto')
     config.setdefault('trust_server_certificate', False)
@@ -50,6 +51,8 @@ def save_connection(config, *, actor_id, password=''):
         raise ValueError('Dodaj mapowanie bazy przynajmniej jednej firmy.')
     saved = {key: config[key] for key in ('server', 'username', 'enabled', 'months_back', 'sources')}
     saved['database'] = str(config.get('database') or '').strip()
+    from app.integrations.enova.discovery import query_timeout
+    saved['discovery_query_timeout'] = query_timeout(config)
     from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS, validate_server
     validate_server(config['server'])
     driver = config.get('driver', 'auto')

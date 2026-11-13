@@ -41,12 +41,14 @@ class ConnectionAndJpkTests(DbTestCase):
         self.company = self.make_company(nip='1234567890', forma_opodatkowania='Księgi rachunkowe')
 
     def test_connection_encryption_and_blank_password_preserves_secret(self):
-        config = {'server': r'10.0.0.1\ENOVA', 'database':'Biuro_rachunkowe', 'username': 'reader', 'enabled': True,
+        config = {'server': r'10.0.0.1\ENOVA', 'database':'Biuro_rachunkowe', 'discovery_query_timeout':300,
+                  'username': 'reader', 'enabled': True,
                   'months_back': 3, 'sources': [{'nip': '1234567890', 'database': 'ClientA'}]}
         with patch.dict('os.environ', {'BIO_ENCRYPTION_KEY': Fernet.generate_key().decode()}):
             save_connection(config, actor_id=self.admin, password='secret')
             stored = load_connection()
             self.assertEqual(stored['database'],'Biuro_rachunkowe')
+            self.assertEqual(stored['discovery_query_timeout'],300)
             self.assertEqual(stored['sources'][0]['database'],'ClientA')
             self.assertNotIn('secret', json.dumps({k: v for k, v in stored.items() if k != '_directory'}))
             self.assertEqual(credentials(stored), ('reader', 'secret'))
@@ -56,10 +58,24 @@ class ConnectionAndJpkTests(DbTestCase):
             page = EnovaConnectionSettings(self.admin)
             self.addCleanup(page.close)
             self.assertEqual(page.database.text(),'Biuro_rachunkowe')
+            self.assertEqual(page.discovery_timeout.value(),300)
+            page._discovery_token = 1
+            page._discovery_running = True
+            page.discovery_progress.emit(1,35,122,'Client035')
+            self.assertEqual(page.discovery_bar.maximum(),122)
+            self.assertEqual(page.discovery_bar.value(),35)
+            self.assertIn('35/122',page.discovery_status.text())
+            page.discovery_progress.emit(0,1,2,'Stary odczyt')
+            self.assertEqual(page.discovery_bar.value(),35)
+            page._discovery_running = False
+            page.discovery_progress.emit(1,122,122,'Spóźniony postęp')
+            self.assertEqual(page.discovery_bar.value(),35)
             page.database.setText('Biuro_rachunkowe_nowa')
+            page.discovery_timeout.setValue(360)
             with patch('app.admin.settings.enova_connection_settings.QMessageBox.information'):
                 page.save()
             self.assertEqual(load_connection()['database'],'Biuro_rachunkowe_nowa')
+            self.assertEqual(load_connection()['discovery_query_timeout'],360)
             self.assertEqual(credentials(load_connection()), ('reader','secret'))
         with patch('app.security.authorization.is_administrator', return_value=False):
             with self.assertRaises(PermissionError):

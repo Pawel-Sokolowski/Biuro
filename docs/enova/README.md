@@ -485,6 +485,22 @@ jest zatrzymywany tak jak dotychczas. Błąd zapisu nie uruchamia kolejnego stop
 
 ## Automatyczne przypisanie baz po NIP
 
+W wersji 1.5.5 wyszukiwanie ma domyślnie **120 sekund na pojedyncze zapytanie**,
+z możliwością ustawienia 30–600 sekund w polu **Limit zapytania — wyszukiwanie baz**.
+Ustawienie jest dostępne w aplikacji i panelu workera; działa także przed zapisaniem
+formularza. Nie jest to limit całej operacji: odczyt 122 baz może potrwać dłużej.
+Logowanie ma osobny limit 15 sekund. Postęp pokazuje liczbę sprawdzonych baz,
+np. 35/122, oraz aktualnie odczytywaną bazę. Zapytania działają w tle i po kolei.
+
+Lista baz jest odczytywana z metadanych bez wywoływania `HAS_DBACCESS` dla każdej
+bazy w jednym zapytaniu. Dostęp jest weryfikowany przy osobnym połączeniu do
+danej bazy. Błąd dostępu lub zapytania nadal wstrzymuje automatyczne przypisanie,
+aby częściowy odczyt nie rozstrzygał niejednoznacznego NIP-u.
+
+`HYT00` z `SQLExecDirectW` oznacza limit wykonania zapytania po połączeniu,
+a nie limit logowania. Wskazówka błędu kieruje wtedy do czasu zapytania,
+obciążenia SQL i blokad. Samo zwiększenie czasu nie usuwa blokad na serwerze.
+
 W formularzu połączenia aplikacji i workera wpisz oddzielnie:
 
 - **Serwer SQL / instancja:** `ENOVA\SQLEXPRESS`;

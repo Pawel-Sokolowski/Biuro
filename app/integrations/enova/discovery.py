@@ -3,9 +3,19 @@ from collections import defaultdict
 from app.integrations.enova.document_counts import normalize_nip, sql_connection_string
 from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server, describe_sql_error, SqlOperationError
 
+DEFAULT_QUERY_TIMEOUT = 120
 
-def discover(config, *, password=''):
+
+def query_timeout(config):
+    value = config.get('discovery_query_timeout',DEFAULT_QUERY_TIMEOUT)
+    if type(value) is not int or not 30<=value<=600:
+        raise ValueError('Limit zapytania wyszukiwania baz musi wynosić od 30 do 600 sekund.')
+    return value
+
+
+def discover(config, *, password='', progress=None):
     validate_server(config.get('server'))
+    timeout = query_timeout(config)
     if not config.get('username', '').strip():
         raise ValueError('Uzupełnij login SQL.')
     if not password:
@@ -18,19 +28,24 @@ def discover(config, *, password=''):
     main_database = str(config.get('database') or '').strip() or 'master'
     def connect(database):
         conn = odbc.connect(sql_connection_string(config,database,config['username'],password),
-                            timeout=10,attrs_before={101:1})
+                            timeout=15,attrs_before={101:1})
         try:
-            conn.timeout = 10
+            conn.timeout = timeout
         except Exception:
             conn.close()
             raise
         return conn
     root = None
+    if progress:
+        progress(0,0,main_database)
     try:
         root = connect(main_database)
         cursor = root.cursor()
+        # Enumerate metadata only. HAS_DBACCESS(name) can open/check every
+        # database inside this one statement, making it slow on large instances.
+        # Actual access is checked independently when connecting to each database.
         cursor.execute('''SELECT name FROM sys.databases
-            WHERE database_id>4 AND state=0 AND HAS_DBACCESS(name)=1 ORDER BY name''')
+            WHERE database_id>4 AND state=0 ORDER BY name''')
         databases = [str(row[0]) for row in cursor.fetchmany(501)]
     except Exception as error:
         diagnostic = describe_sql_error(error,secrets=(password,config.get('password_enc')))
@@ -44,7 +59,11 @@ def discover(config, *, password=''):
     warnings = []
     errors = []
     scanned = 0
-    for database in databases:
+    if progress:
+        progress(0,len(databases),'')
+    for index,database in enumerate(databases,1):
+        if progress:
+            progress(index-1,len(databases),database)
         conn = None
         try:
             conn = connect(database)
@@ -78,6 +97,8 @@ def discover(config, *, password=''):
         finally:
             if conn is not None:
                 conn.close()
+            if progress:
+                progress(index,len(databases),database)
     return {'matches':dict(matches),'warnings':warnings,'errors':errors,'scanned':scanned,'visible':len(databases)}
 
 

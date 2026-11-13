@@ -39,6 +39,18 @@ wartość hasła są usuwane z diagnostyki. Nie przesyłaj haseł ani klucza.
 - Poprawny test SQL i błąd odczytu: sprawdź szczegóły zapytania, tabele/kolumny
   oraz prawo SELECT konta w bazie `platnik`.
 
+Jeżeli SSMS łączy się lokalnie przez **Shared Memory**, taki test nie sprawdza
+TCP z maszyny workera. Port nasłuchu można odczytać bez zmian w SQL Server:
+
+```sql
+EXEC sys.xp_readerrorlog 0, 1, N'Server is listening on';
+```
+
+Po potwierdzeniu portu 1433 dla wskazanej instancji można wpisać
+`PLATNIK-SRV,1433` zamiast `PLATNIK-SRV\SQLEXPRESS`, z bazą `platnik`.
+Omija to rozpoznawanie nazwanej instancji przez SQL Browser. Gdy połączenie nadal
+nie działa, sprawdź `Test-NetConnection PLATNIK-SRV -Port 1433` na komputerze workera.
+
 ## Widok
 
 **Kadry → Sprawdzanie → Wakacje składkowe — Płatnik (rocznie)** ma własny wybór roku.

@@ -38,7 +38,7 @@ class BrowserSetupTests(TestCase):
             import json
             value = json.loads(save.call_args.args[1])
             self.assertEqual(value['username_selector'],'#existing')
-            self.assertEqual(value['password_selector'],'input[type="password"]')
+            self.assertEqual(value['password_selector'],'input[qa-id="password"]')
             self.assertFalse(value['enabled'])
             self.assertNotIn('input_value',repr(page.mock_calls))
         page.locator.return_value.count.return_value = 2

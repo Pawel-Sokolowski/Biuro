@@ -99,7 +99,7 @@ class EzlaPreviewPanel(QWidget):
             reports = list(self.remote_reports.get(company_id, [])) + list(self.reports.get(company_id, {}).values())
             sync = decoded(company.get('ezla_sync'))
             failed = sync.get('state') == 'failed'
-            failure = str(ServiceError(sync.get('error_code'))) if failed else ''
+            failure = str(ServiceError(sync.get('error_code'), http_status=sync.get('http_status'))) if failed else ''
             if not reports:
                 status = 'Błąd pobierania ZUS' if failed else ('Brak raportów dla miesiąca' if sync.get('last_success') else 'Nie wczytano raportu XML')
                 review = failure or ('Brak dokumentów w pobranych raportach; nie potwierdza kompletności ZUS' if sync.get('last_success') else 'Brak danych z ZUS')

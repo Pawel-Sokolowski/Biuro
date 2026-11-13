@@ -87,3 +87,23 @@ nakładaniu się ręcznego pobrania i workera. Przerwę przerywa zamknięcie pro
 workera; nie blokuje ona innych zadań ani interfejsu. Każde zadanie workera czeka
 pełny skonfigurowany interwał po zakończeniu poprzedniego przebiegu, również po
 błędzie — długie przebiegi nie powodują serii natychmiastowych powtórzeń.
+
+## Błędy HTTP, SOAP i sieci
+
+Komunikat obejmuje numer HTTP, np. 401 (uwierzytelnienie transportowe),
+403 (odmowa dostępu), 407 (proxy), 429 (limit żądań), 500/502/503/504 (serwer
+lub brama). Numer sam nie dowodzi, czy odpowiedź pochodzi z ZUS, czy pośrednika.
+HTTP 401 dotyczy warstwy HTTP z publicznymi danymi transportowymi podanymi w
+instrukcji ZUS, a nie bezpośrednio hasła ZIP. Błędny login usługi/hasło/NIP to
+kod biznesowy 101 zwrócony w SOAP.
+
+Odpowiedzi błędów są czytane do limitu 1 MiB, bez wyświetlania HTML, nagłówków,
+faultstring ani treści zawierających potencjalne sekrety. Dla HTTP 500 rozpoznajemy
+SOAP Fault Client/Server i znane kody biznesowe, zachowując osobno numer HTTP
+w statusie firmy. Nie przyjmujemy sukcesu przy odpowiedzi HTTP innej niż 200.
+Panel workera i Kadry/e-ZLA odtwarzają bezpieczny opis także po restarcie.
+
+Brak połączenia, przekroczenie czasu i błąd certyfikatu TLS mają odrębne komunikaty.
+Weryfikacja TLS i blokada przekierowań pozostają włączone. Sam stary komunikat
+„błąd HTTP” nie pozwala ustalić przyczyny: po aktualizacji ponów test usługi i podaj
+numer HTTP oraz bezpieczny opis. Nie przesyłaj loginu, haseł ani odpowiedzi ZIP/XML.

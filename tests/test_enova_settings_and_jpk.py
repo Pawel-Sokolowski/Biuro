@@ -41,15 +41,26 @@ class ConnectionAndJpkTests(DbTestCase):
         self.company = self.make_company(nip='1234567890', forma_opodatkowania='Księgi rachunkowe')
 
     def test_connection_encryption_and_blank_password_preserves_secret(self):
-        config = {'server': r'10.0.0.1\ENOVA', 'username': 'reader', 'enabled': True,
+        config = {'server': r'10.0.0.1\ENOVA', 'database':'Biuro_rachunkowe', 'username': 'reader', 'enabled': True,
                   'months_back': 3, 'sources': [{'nip': '1234567890', 'database': 'ClientA'}]}
         with patch.dict('os.environ', {'BIO_ENCRYPTION_KEY': Fernet.generate_key().decode()}):
             save_connection(config, actor_id=self.admin, password='secret')
             stored = load_connection()
+            self.assertEqual(stored['database'],'Biuro_rachunkowe')
+            self.assertEqual(stored['sources'][0]['database'],'ClientA')
             self.assertNotIn('secret', json.dumps({k: v for k, v in stored.items() if k != '_directory'}))
             self.assertEqual(credentials(stored), ('reader', 'secret'))
             save_connection({**config, 'server': 'new-server'}, actor_id=self.admin)
             self.assertEqual(credentials(load_connection()), ('reader', 'secret'))
+            from app.admin.settings.enova_connection_settings import EnovaConnectionSettings
+            page = EnovaConnectionSettings(self.admin)
+            self.addCleanup(page.close)
+            self.assertEqual(page.database.text(),'Biuro_rachunkowe')
+            page.database.setText('Biuro_rachunkowe_nowa')
+            with patch('app.admin.settings.enova_connection_settings.QMessageBox.information'):
+                page.save()
+            self.assertEqual(load_connection()['database'],'Biuro_rachunkowe_nowa')
+            self.assertEqual(credentials(load_connection()), ('reader','secret'))
         with patch('app.security.authorization.is_administrator', return_value=False):
             with self.assertRaises(PermissionError):
                 save_connection(config, actor_id=self.admin, password='secret')
@@ -136,6 +147,36 @@ class ConnectionAndJpkTests(DbTestCase):
 
 
 class DatabaseConnectionTests(TestCase):
+    def test_main_database_is_checked_before_company_sources_and_not_checked_twice(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from app.integrations.enova.connection_settings import check_connection
+        root,company = Mock(),Mock()
+        root.cursor.return_value.fetchone.return_value = ('Biuro_rachunkowe',)
+        company.cursor.return_value.fetchone.return_value = ('ClientA',)
+        driver = SimpleNamespace(connect=Mock(side_effect=[root,company]),drivers=lambda:['ODBC Driver 18 for SQL Server'])
+        config = {'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader',
+                  'sources':[{'database':'ClientA'},{'database':'Biuro_rachunkowe'}]}
+        with patch.dict('sys.modules',{'pyodbc':driver}):
+            result = check_connection(config,password='secret')
+        self.assertEqual(result,[{'database':'Biuro_rachunkowe','ok':True},{'database':'ClientA','ok':True}])
+        self.assertIn('DATABASE={Biuro_rachunkowe}',driver.connect.call_args_list[0].args[0])
+        self.assertIn('DATABASE={ClientA}',driver.connect.call_args_list[1].args[0])
+        root.close.assert_called_once()
+        company.close.assert_called_once()
+
+    def test_main_database_can_be_tested_without_company_mappings(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from app.integrations.enova.connection_settings import check_connection
+        connection = Mock()
+        connection.cursor.return_value.fetchone.return_value = ('Biuro_rachunkowe',)
+        driver = SimpleNamespace(connect=Mock(return_value=connection),drivers=lambda:['ODBC Driver 18 for SQL Server'])
+        with patch.dict('sys.modules',{'pyodbc':driver}):
+            result = check_connection({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader','sources':[]},password='secret')
+        self.assertEqual(result,[{'database':'Biuro_rachunkowe','ok':True}])
+        self.assertIn('DATABASE={Biuro_rachunkowe}',driver.connect.call_args.args[0])
+
     def test_test_checks_database_without_import_and_closes_connections(self):
         from types import SimpleNamespace
         from unittest.mock import Mock

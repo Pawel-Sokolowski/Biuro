@@ -1,16 +1,36 @@
 import json
+from contextlib import contextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.db.dao_app_settings import get_setting, set_setting
 from app.utils.crypto import encrypt_password, decrypt_password
 from app.integrations.enova.document_counts import normalize_nip, sql_connection_string
-from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server
+from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server, describe_sql_error
+from app.integrations.enova.odbc_support import SqlOperationError as PlatnikSqlError
 
 KEY = 'platnik_connection'
 FIELDS = ('imiona_nazwiska','kod_ubezpieczenia','wyslane_powiadomienie','skladki_oplacane',
           'miesiac','oswiadczenie','platnosc','kto_wyslal','decyzja')
 LABELS = ('Imiona i nazwiska','Kod ubezpieczenia','Wysłane powiadomienie','Składki opłacane',
           'Miesiąc','Oświadczenie','Płatność','Kto wysłał','Decyzja')
+
+
+@contextmanager
+def sql_operation(config,operation):
+    try:
+        yield
+    except (PlatnikSqlError,ValueError,PermissionError):
+        raise
+    except Exception as error:
+        # A native driver error may echo a connection string. Redact both the
+        # decrypted password and its ODBC-escaped representation before delivery.
+        encrypted = config.get('password_enc','')
+        try:
+            password = decrypt_password(encrypted)
+        except Exception:
+            raise ValueError('Nie można odczytać wspólnego klucza Płatnika. Sprawdź klucz workera.') from None
+        diagnostic = describe_sql_error(error,secrets=(password,encrypted))
+        raise PlatnikSqlError(diagnostic,config,operation) from None
 
 
 def load():
@@ -40,23 +60,34 @@ def save(value, actor_id, password=''):
 
 
 def connect(config):
+    validate_server(config.get('server'))
+    if not str(config.get('database') or '').strip() or not str(config.get('username') or '').strip():
+        raise ValueError('Uzupełnij bazę i użytkownika SQL Płatnika.')
+    if not config.get('password_enc'):
+        raise ValueError('Uzupełnij hasło SQL Płatnika. Puste pole korzysta wyłącznie z wcześniej zapisanego hasła.')
     odbc = load_odbc()
     config = {**config,'driver':resolve_driver(config,odbc)}
     password = decrypt_password(config['password_enc'])
-    connection = odbc.connect(sql_connection_string(config,config['database'],config['username'],password),
-                              timeout=15,attrs_before={101:1})
-    connection.timeout = 30
+    with sql_operation(config,'Połączenie z SQL Płatnika'):
+        connection = odbc.connect(sql_connection_string(config,config['database'],config['username'],password),
+                                  timeout=15,attrs_before={101:1})
+        try:
+            connection.timeout = 30
+        except Exception:
+            connection.close()
+            raise
     return connection
 
 
 def check_connection(config):
     connection = connect(config)
-    try:
-        row = connection.cursor().execute('SELECT DB_NAME()').fetchone()
-        if not row or str(row[0]).casefold()!=config['database'].casefold():
-            raise ValueError('Połączenie wskazuje inną bazę niż wybrana baza Płatnika.')
-    finally:
-        connection.close()
+    with sql_operation(config,'Sprawdzenie bazy Płatnika'):
+        try:
+            row = connection.cursor().execute('SELECT DB_NAME()').fetchone()
+            if not row or str(row[0]).casefold()!=config['database'].casefold():
+                raise ValueError('Połączenie wskazuje inną bazę niż wybrana baza Płatnika.')
+        finally:
+            connection.close()
 
 
 def normalize(rows, year):
@@ -114,18 +145,19 @@ def _import_year(year, actor_id=None):
     from .holiday_query import QUERY
     query = QUERY
     connection = connect(config)
-    try:
-        cursor = connection.cursor()
-        cursor.execute(query,year)
-        columns = [column[0].lower() for column in cursor.description or []]
-        if not {'source_id','nip','rok','imiona_nazwiska'}.issubset(columns) or len(columns)!=len(set(columns)):
-            raise ValueError('Adapter wymaga unikalnych kolumn nip, rok, imiona_nazwiska.')
-        values = cursor.fetchmany(10001)
-        if len(values)>10000:
-            raise ValueError('Raport przekracza 10000 pozycji. Poprzednie dane pozostawiono.')
-        rows = normalize([dict(zip(columns,row)) for row in values],year)
-    finally:
-        connection.close()
+    with sql_operation(config,f'Odczyt wakacji składkowych ({year})'):
+        try:
+            cursor = connection.cursor()
+            cursor.execute(query,year)
+            columns = [column[0].lower() for column in cursor.description or []]
+            if not {'source_id','nip','rok','imiona_nazwiska'}.issubset(columns) or len(columns)!=len(set(columns)):
+                raise ValueError('Adapter wymaga unikalnych kolumn nip, rok, imiona_nazwiska.')
+            values = cursor.fetchmany(10001)
+            if len(values)>10000:
+                raise ValueError('Raport przekracza 10000 pozycji. Poprzednie dane pozostawiono.')
+            rows = normalize([dict(zip(columns,row)) for row in values],year)
+        finally:
+            connection.close()
     snapshot = {'imported_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
                 'source':'Płatnik SQL — RWS_ZWOLNIENIE','rows_enc':encrypt_password(json.dumps(rows,ensure_ascii=False))}
     # Atomic replacement only after the entire source result was read and validated.
@@ -193,8 +225,10 @@ def worker_job():
             continue
         try:
             results.append(import_year(period))
-        except Exception:
-            results.append({'year':period,'failed':True})
+        except Exception as error:
+            results.append({'year':period,'failed':True,
+                            'error':str(error) if isinstance(error,PlatnikSqlError) else 'Odczyt nie powiódł się'})
     if any(value.get('failed') for value in results):
-        raise RuntimeError('Odczyt wakacji składkowych nieukończony. Sprawdź panel Płatnika.')
+        raise RuntimeError('Odczyt wakacji składkowych nieukończony. '+
+                           '; '.join(f"{value['year']}: {value['error']}" for value in results if value.get('failed')))
     return {'results':results}

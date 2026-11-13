@@ -11,6 +11,7 @@ def load_connection():
     config.setdefault('enabled', False)
     config.setdefault('months_back', 3)
     config.setdefault('sources', [])
+    config.setdefault('database', '')
     config.setdefault('jpk_query', '')
     config.setdefault('driver', 'auto')
     config.setdefault('trust_server_certificate', False)
@@ -48,6 +49,7 @@ def save_connection(config, *, actor_id, password=''):
     if config['enabled'] and not config['sources']:
         raise ValueError('Dodaj mapowanie bazy przynajmniej jednej firmy.')
     saved = {key: config[key] for key in ('server', 'username', 'enabled', 'months_back', 'sources')}
+    saved['database'] = str(config.get('database') or '').strip()
     from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS, validate_server
     validate_server(config['server'])
     driver = config.get('driver', 'auto')
@@ -90,22 +92,24 @@ def check_connection(config, *, password=''):
             raise ValueError('Wpisz hasło SQL. Puste pole może użyć tylko wcześniej zapisanego hasła.')
         _, password = credentials(config)
     results = []
-    for source in config.get('sources') or [{'database': ''}]:
+    main_database = str(config.get('database') or '').strip()
+    databases = ([main_database] if main_database else []) + [source['database'] for source in config.get('sources') or []]
+    for database in dict.fromkeys(databases or ['']):
         connection = None
         try:
-            connection = pyodbc.connect(sql_connection_string(config, source['database'], config['username'], password),
+            connection = pyodbc.connect(sql_connection_string(config, database, config['username'], password),
                                         timeout=15, attrs_before={101: 1})
             cursor = connection.cursor()
             connection.timeout = 15
             cursor.execute('SELECT DB_NAME()')
             actual = cursor.fetchone()
-            if not actual or (source['database'] and str(actual[0]).casefold() != source['database'].casefold()):
+            if not actual or (database and str(actual[0]).casefold() != database.casefold()):
                 raise ValueError('Połączenie wskazuje inną bazę danych.')
-            results.append({'database': source['database'] or 'Serwer SQL (baza domyślna)', 'ok': True})
+            results.append({'database': database or 'Serwer SQL (baza domyślna)', 'ok': True})
         except Exception as exc:
             from app.integrations.enova.odbc_support import describe_sql_error
             error = describe_sql_error(exc, secrets=(password, config.get('password_enc')))
-            results.append({'database': source['database'] or 'Serwer SQL (baza domyślna)',
+            results.append({'database': database or 'Serwer SQL (baza domyślna)',
                             'ok': False, 'error': error})
         finally:
             if connection is not None:

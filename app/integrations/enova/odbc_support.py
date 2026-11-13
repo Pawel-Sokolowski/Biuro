@@ -4,6 +4,15 @@ import sys
 SUPPORTED_DRIVERS = ('ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server')
 
 
+class SqlOperationError(RuntimeError):
+    """Carry sanitized driver diagnostics from background jobs to settings UIs."""
+    def __init__(self,diagnostic,config,operation):
+        self.diagnostic = {**diagnostic,'operation':operation,
+                           'server':config.get('server',''),'database':config.get('database',''),
+                           'driver':config.get('driver','auto')}
+        super().__init__(f"{operation} [{diagnostic['sqlstate'] or 'brak SQLSTATE'}]: {diagnostic['hint']}")
+
+
 def load_odbc():
     try:
         import pyodbc

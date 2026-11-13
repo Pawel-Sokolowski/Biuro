@@ -50,7 +50,8 @@ from app.monthly_view.notes_window import NotesWindow
 
 COMPANY_STATUS_FILTER = ["Aktywne", "Zawieszone", "Archiwalne", "Wszystkie"]
 ETAP_CHOICES = ["Brak", "Zatwierdzone", "Zaksięgowane", "Wysłane wyniki"]
-STAGE_FILTER = ["Wszystkie", "Dostarczone", "Niedostarczone"] + ETAP_CHOICES
+DELIVERY_FILTER = ["Wszystkie", "Dostarczone", "Niedostarczone"]
+STAGE_FILTER = ["Wszystkie"] + ETAP_CHOICES
 
 
 class SubstitutionDialog(QDialog):
@@ -627,11 +628,6 @@ class MonthlyViewPage(QWidget):
         filters_layout.addWidget(QLabel("Status:"))
         filters_layout.addWidget(self.status_combo)
 
-        self.stage_combo = QComboBox()
-        self.stage_combo.addItems(STAGE_FILTER)
-        filters_layout.addWidget(QLabel("Etap:"))
-        filters_layout.addWidget(self.stage_combo)
-
         filters_layout.addStretch()
 
         self.btn_refresh = QPushButton("Odśwież")
@@ -647,6 +643,18 @@ class MonthlyViewPage(QWidget):
         filters_layout.addWidget(recover)
 
         main_layout.addLayout(filters_layout)
+
+        progress_filters = QHBoxLayout()
+        self.delivery_combo = QComboBox()
+        self.delivery_combo.addItems(DELIVERY_FILTER)
+        progress_filters.addWidget(QLabel('Dokumenty:'))
+        progress_filters.addWidget(self.delivery_combo)
+        self.stage_combo = QComboBox()
+        self.stage_combo.addItems(STAGE_FILTER)
+        progress_filters.addWidget(QLabel('Etap:'))
+        progress_filters.addWidget(self.stage_combo)
+        progress_filters.addStretch()
+        main_layout.addLayout(progress_filters)
 
         self.activity_label = QLabel("Aktywność pracownika: 0")
         font = self.activity_label.font()
@@ -715,6 +723,7 @@ class MonthlyViewPage(QWidget):
         self.employee_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.status_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.stage_combo.currentIndexChanged.connect(lambda *_: self._render_tables())
+        self.delivery_combo.currentIndexChanged.connect(lambda *_: self._render_tables())
         self.btn_refresh.clicked.connect(self._reload_rows)
 
     def eventFilter(self, obj, event):
@@ -974,9 +983,9 @@ class MonthlyViewPage(QWidget):
             rows_prepared.append(rr)
 
         ks_rows = [self._mark_substitution(r, "ksiegowosc") for r in rows_prepared
-                   if self._row_in_tab(r, "ksiegowa_id") and self._stage_matches(r, "etap")]
+                   if self._row_in_tab(r, "ksiegowa_id") and self._delivery_matches(r) and self._stage_matches(r, "etap")]
         kadry_rows = [self._mark_substitution(r, "kadry") for r in rows_prepared
-                      if self._row_in_tab(r, "kadrowa_id") and self._stage_matches(r, "etap_kadry")]
+                      if self._row_in_tab(r, "kadrowa_id") and self._delivery_matches(r) and self._stage_matches(r, "etap_kadry")]
         key = lambda index: (index.data(Qt.ItemDataRole.UserRole) or {}).get("id")
         with preserve_view_state(self.table_ks, key), preserve_view_state(self.table_kadry, key):
             self.model_ks.set_rows(ks_rows)
@@ -989,13 +998,15 @@ class MonthlyViewPage(QWidget):
 
     def _stage_matches(self, row: Dict[str, Any], stage_field: str) -> bool:
         choice = self.stage_combo.currentText()
-        if choice == "Wszystkie":
-            return True
+        return choice == 'Wszystkie' or (row.get(stage_field) or 'Brak') == choice
+
+    def _delivery_matches(self, row: Dict[str, Any]) -> bool:
+        choice = self.delivery_combo.currentText()
         if choice == "Dostarczone":
             return bool(row.get("dokumenty_dostarczone"))
         if choice == "Niedostarczone":
             return not row.get("dokumenty_dostarczone")
-        return (row.get(stage_field) or "Brak") == choice
+        return True
 
     _SUBSTITUTION_FIELDS = {
         "ksiegowa_id": ("zast_ks_id", "zast_ks_za", "ksiegowosc"),

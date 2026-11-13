@@ -53,7 +53,7 @@ class PlatnikSettings(QWidget):
         self.driver.setCurrentIndex(max(0,self.driver.findData(config['driver'])))
         form.addRow('Sterownik SQL Server',self.driver)
         self.query_timeout = QSpinBox()
-        self.query_timeout.setRange(30,600)
+        self.query_timeout.setRange(30,1200)
         self.query_timeout.setSuffix(' s')
         self.query_timeout.setValue(config.get('query_timeout',120))
         self.query_timeout.setToolTip('Limit pojedynczego zapytania SQL; logowanie ma osobny limit 15 sekund.')
@@ -92,6 +92,7 @@ class PlatnikSettings(QWidget):
         self.error_button.hide()
         layout.addWidget(self.error_button)
         layout.addStretch()
+        self._saved_state = self.form_state()
 
     def config(self):
         value = dict(load())
@@ -100,13 +101,37 @@ class PlatnikSettings(QWidget):
                      trust_server_certificate=self.trust.isChecked(),query_timeout=self.query_timeout.value())
         return value
 
+    def form_state(self):
+        keys = ('server','database','username','driver','trust_server_certificate','enabled','query_timeout')
+        config = self.config()
+        return tuple(config.get(key) for key in keys),bool(self.password.text())
+
+    def is_dirty(self):
+        return self.form_state()!=self._saved_state
+
+    def persist(self):
+        save(self.config(),self.actor_id,self.password.text())
+        self.password.clear()
+        self.error_diagnostic = None
+        self.error_button.hide()
+        self._saved_state = self.form_state()
+        self.status.setText('Zapisano wspólne połączenie Płatnika. Worker użyje go przy następnym przebiegu zadania.')
+
+    def reload_saved(self):
+        if self.is_dirty():
+            return
+        config = load()
+        for key,field in self.fields.items():
+            field.setText(config[key])
+        self.driver.setCurrentIndex(max(0,self.driver.findData(config['driver'])))
+        self.trust.setChecked(config['trust_server_certificate'])
+        self.enabled.setChecked(config['enabled'])
+        self.query_timeout.setValue(config['query_timeout'])
+        self._saved_state = self.form_state()
+
     def save(self):
         try:
-            save(self.config(),self.actor_id,self.password.text())
-            self.password.clear()
-            self.error_diagnostic = None
-            self.error_button.hide()
-            self.status.setText('Zapisano wspólne połączenie Płatnika. Worker użyje go przy następnym przebiegu zadania.')
+            self.persist()
         except Exception as error:
             self.failed(error)
 

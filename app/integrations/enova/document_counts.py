@@ -296,6 +296,8 @@ def _eligible_months(conn, company_id, months, signature, *, apply):
 def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
     if apply and not config.get('enabled', False):
         raise ValueError('Import wyłączony. Najpierw sprawdź podgląd, następnie ustaw enabled=true.')
+    if not config.get('sources'):
+        raise ValueError('Połączenie Enovy można zapisać bez baz firm. Przed importem znajdź bazy po NIP lub przypisz je ręcznie i zapisz ustawienia.')
     run_day = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
     months = requested_months(run_day, config.get('months_back', 3))
     rules = load_rules()

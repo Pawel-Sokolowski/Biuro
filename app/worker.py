@@ -7,8 +7,12 @@ from contextvars import copy_context
 import json
 import logging
 import os
+from pathlib import Path
 import signal
+import socket
+import sys
 import threading
+import uuid
 import time as clock
 from zoneinfo import ZoneInfo
 
@@ -79,6 +83,8 @@ def enova_job(now=None):
     # Failures do not consume it and retry at the interval.
     if not config['enabled'] or now.time().replace(tzinfo=None) < time.fromisoformat(settings['enova_time']):
         return {'mode': 'waiting'}
+    if not config.get('sources'):
+        raise ValueError('Połączenie Enovy zapisane, ale brak przypisanych baz firm. Uzupełnij mapowanie w panelu workera.')
     if (get_setting('worker_enova_completed') == day
             and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == checking_signature)):
         return {'mode': 'checked_today'}
@@ -162,9 +168,16 @@ def serve(*, once=False, stop=None):
     running, last_started, statuses = {}, {}, {}
     events = json.loads(get_setting('background_worker_events') or '[]')[-200:]
     with leadership() as leader, ThreadPoolExecutor(max_workers=len(JOBS)) as pool:
+        from app.version import __version__
+        from app.services.worker_setup import worker_env_path
+        instance = {'id':uuid.uuid4().hex,'host':socket.gethostname(),'pid':os.getpid(),
+                    'version':__version__,'executable':str(Path(sys.executable).resolve()),
+                    'config_file':str(worker_env_path()),
+                    'started_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
         while not stop.is_set():
             leader.execute('SELECT 1')  # Stop scheduling immediately if leadership disconnects.
             settings = load_settings()
+            settings_checked_at = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
             events_changed = False
             for name, future in list(running.items()):
                 if not future.done():
@@ -205,6 +218,7 @@ def serve(*, once=False, stop=None):
                     status.pop('next_run_at', None)
             set_setting('background_worker_heartbeat', json.dumps({
                 'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
+                'instance':instance,'settings_checked_at':settings_checked_at,
                 'enabled': settings['enabled'], 'jobs': statuses}))
             if once and not running:
                 return int(any(value['state'] == 'failed' for value in statuses.values()))

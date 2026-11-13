@@ -52,6 +52,13 @@ class WorkerTests(DbTestCase):
         with patch('app.worker.run_job') as job:
             self.assertEqual(serve(once=True), 0)
             job.assert_not_called()
+        from app.db.dao_app_settings import get_setting
+        from app.version import __version__
+        heartbeat = json.loads(get_setting('background_worker_heartbeat'))
+        self.assertEqual(heartbeat['instance']['pid'],os.getpid())
+        self.assertEqual(heartbeat['instance']['version'],__version__)
+        self.assertTrue(heartbeat['instance']['id'])
+        self.assertTrue(heartbeat['settings_checked_at'])
         with leadership():
             with self.assertRaisesRegex(RuntimeError, 'już działa'):
                 with leadership():
@@ -108,7 +115,9 @@ class WorkerTests(DbTestCase):
         from datetime import datetime
         from zoneinfo import ZoneInfo
         day = lambda hour: datetime(2026, 11, 12, hour, tzinfo=ZoneInfo('Europe/Warsaw'))
-        with patch('app.integrations.enova.connection_settings.load_connection', return_value={'enabled': True}), patch('app.integrations.enova.document_counts.run_import') as importer:
+        with patch('app.integrations.enova.connection_settings.load_connection', return_value={
+                'enabled': True,'sources':[{'nip':'1112223344','database':'ClientA'}]}), \
+                patch('app.integrations.enova.document_counts.run_import') as importer:
             self.assertEqual(enova_job(day(1))['mode'], 'waiting')
             importer.assert_not_called()
             importer.return_value = [{'ok': False}]
@@ -118,6 +127,18 @@ class WorkerTests(DbTestCase):
             self.assertEqual(enova_job(day(3))['companies'], 1)
             self.assertEqual(enova_job(day(4))['mode'], 'checked_today')
             self.assertEqual(importer.call_count, 2)
+
+    def test_enova_connection_without_company_mapping_does_not_consume_daily_run(self):
+        from app.worker import enova_job
+        from app.db.dao_app_settings import get_setting
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        with patch('app.integrations.enova.connection_settings.load_connection',return_value={'enabled':True,'sources':[]}), \
+             patch('app.integrations.enova.document_counts.run_import') as importer:
+            with self.assertRaisesRegex(ValueError,'brak przypisanych baz'):
+                enova_job(datetime(2026,11,12,13,tzinfo=ZoneInfo('Europe/Warsaw')))
+        importer.assert_not_called()
+        self.assertIsNone(get_setting('worker_enova_completed'))
 
     def test_missing_key_in_headless_worker_is_logged_and_returns_failure(self):
         from app.worker import main

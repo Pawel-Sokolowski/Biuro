@@ -118,6 +118,18 @@ class ReminderDeliveryTests(DbTestCase):
         self.assertEqual(run_reminders(at('2026-11-09')), 0)
         self.sender.assert_not_called()
 
+    def test_worker_documents_use_contact_table_and_do_not_send_to_ambiguous_contacts(self):
+        from app.db.dao_companies import save_contact
+        with get_conn() as conn:
+            conn.execute("UPDATE firmy SET adres_email='' WHERE id=%s",(self.company,))
+        save_contact(self.company,{'email':'current@example.com'})
+        self.enable('documents')
+        self.assertEqual(run_reminders(at('2026-11-12')),1)
+        self.assertEqual(self.sender.call_args.args[1],['current@example.com'])
+        save_contact(self.company,{'email':'other@example.com'})
+        self.assertEqual(run_reminders(at('2026-11-16')),0)
+        self.assertEqual(self.sender.call_count,1)
+
     def test_unpaid_invoice_followups_use_selected_template(self):
         self.invoice()
         self.settings['templates'].append({'name': 'Custom', 'subject': 'Prosimy o płatność {numer}', 'body': '{firma} — {pozostalo}'})

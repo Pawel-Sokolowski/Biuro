@@ -1,6 +1,6 @@
 """Shared preview/send controller for manual reminder buttons."""
 from PyQt6.QtCore import QObject
-from PyQt6.QtWidgets import QDialog, QMessageBox
+from PyQt6.QtWidgets import QDialog, QMessageBox, QInputDialog
 from app.utils.background import TaskRunner,CommandRunner
 from app.email.compose_dialog import ComposeDialog
 from app.email.email_storage import get_email_accounts_for_employee
@@ -29,9 +29,17 @@ class ManualReminderController(QObject):
 
     def review(self,result):
         plan,accounts = result
-        dialog = ComposeDialog(self.owner,to=', '.join(plan['recipients']),
+        recipients = plan['recipients']
+        if not recipients and plan.get('recipient_choices'):
+            address, accepted = QInputDialog.getItem(self.owner,'Odbiorca przypomnienia',
+                'Wybierz kontakt firmy '+plan['context']['firma']+':',plan['recipient_choices'],0,False)
+            if not accepted:
+                self.finish()
+                return
+            recipients = [address]
+        dialog = ComposeDialog(self.owner,to=', '.join(recipients),
                                subject=plan['subject'],body=plan['body'],
-                               title='Przypomnienie — sprawdź i wyślij',
+                               title='Przypomnienie — sprawdź i wyślij' if recipients else 'Przypomnienie — uzupełnij odbiorcę i wyślij',
                                pracownik_id=self.actor_id,accounts=accounts,
                                account_id=accounts[0]['id'],from_addr=accounts[0]['email'])
         if dialog.exec()!=QDialog.DialogCode.Accepted:

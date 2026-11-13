@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDateEdi
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
                                                 declaration_entries, declarations)
 from app.integrations.enova.jpk import STATUSES
-from app.companies.cennik_keys import typ_from_forma
+from app.companies.cennik_keys import company_accounting_type
 from app.utils.background import TaskRunner
 from app.accounting.insights import comparison, declaration_issue, hr_status, needs_attention, previous_active_types, HR_LABELS
 
@@ -136,6 +136,10 @@ class AccountingPage(QWidget):
             report_selector.currentIndexChanged.connect(self.filter_rows)
         self.table = self.tables['accounting']
         layout.addWidget(self.tabs)
+        from app.accounting.refresh_ui import CheckingRefreshControls
+        self.refresh_controls = CheckingRefreshControls(actor_id,self.refresh_companies,self.selected_company_ids,
+            lambda kind:self.holiday_panel.year.value() if kind=='platnik' else self.month.date().toString('yyyy-MM'),self.refresh_async,self)
+        layout.addWidget(self.refresh_controls)
         self.source_note = QLabel()
         self.source_note.setWordWrap(True)
         layout.addWidget(self.source_note)
@@ -180,6 +184,8 @@ class AccountingPage(QWidget):
         table = QTableWidget(0, 0)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.horizontalHeader().setStretchLastSection(False)
         return table
 
@@ -195,6 +201,39 @@ class AccountingPage(QWidget):
         annual = self.yearly_selected()
         for widget in (self.month,self.tax_filter,self.attention,self.message,self.source_note):
             widget.setVisible(not annual)
+        if hasattr(self,'refresh_controls'):
+            payroll = self.tabs.currentIndex()==1
+            self.refresh_controls.buttons['enova'].setVisible(not annual)
+            self.refresh_controls.buttons['ezla'].setVisible(payroll and not annual)
+            self.refresh_controls.buttons['platnik'].setVisible(annual)
+
+    def refresh_companies(self):
+        if self.yearly_selected():
+            return self.holiday_panel.payload.get('companies',[])
+        return self.rows
+
+    def selected_company_ids(self):
+        department = 'payroll' if self.tabs.currentIndex()==1 else 'accounting'
+        key = self.report_selectors[department].currentData() or 'documents'
+        table = (self.holiday_panel.table if key=='holidays' else self.ezla_panel.table if key=='ezla'
+                 else self.hr_table if key.startswith('hr') else self.comparison_tables['accounting'] if key=='comparison'
+                 else self.declaration_tables[department] if key=='declarations' or key.startswith('form:')
+                 else self.tables[department])
+        by_name = {}
+        for company in self.refresh_companies():
+            by_name.setdefault(company['nazwa'],[]).append(company['id'])
+        ids = set()
+        for row in {item.row() for item in table.selectedItems()}:
+            item = table.item(row,0)
+            if item is None:
+                continue
+            fid = item.data(Qt.ItemDataRole.UserRole)
+            if fid is None:
+                matches = by_name.get(item.text(),[])
+                fid = matches[0] if len(matches)==1 else None
+            if fid is not None:
+                ids.add(fid)
+        return sorted(ids)
 
     def refresh_async(self, *_):
         if self.yearly_selected():
@@ -245,7 +284,7 @@ class AccountingPage(QWidget):
             return
         query, selected = self.search.text().strip().casefold(), self.tax_filter.currentData()
         rows = [row for row in self.rows
-                if (not selected or (typ_from_forma(row.get('forma_opodatkowania')) or 'OTHER') == selected)
+                if (not selected or (company_accounting_type(row) or 'OTHER') == selected)
                 and query in (str(row.get('nazwa') or '') + ' ' + str(row.get('nip') or '')).casefold()]
         today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
         horizon = self.hr_range.currentData()
@@ -323,6 +362,8 @@ class AccountingPage(QWidget):
                               _item(f"{entry['upo_count']}/{entry['count']}" if 'count' in entry else ('Tak' if entry.get('upo') else '—'), str(entry.get('upo') or 'Szczegóły pracowników w zakładce Deklaracje i UPO.')),
                               _item(_date(entry.get('upo_at')))))
             for column, item in enumerate(cells):
+                if column==0:
+                    item.setData(Qt.ItemDataRole.UserRole,row['id'])
                 table.setItem(index, column, item)
         table.resizeColumnsToContents()
         if rows:

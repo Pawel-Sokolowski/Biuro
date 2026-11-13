@@ -57,6 +57,8 @@ class ContributionHolidays(QWidget):
         self.table.setHorizontalHeaderLabels(['Firma',*LABELS,'Status RWS (Płatnik)'])
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.cellDoubleClicked.connect(self.edit_cell)
         layout.addWidget(self.table)
 
@@ -112,6 +114,8 @@ class ContributionHolidays(QWidget):
                 info += '; '.join(source.get('issues',[]))+'\n'
             for column,value in enumerate(values):
                 item = QTableWidgetItem(str(value) if value not in (None,'') else 'Brak danych')
+                if column==0:
+                    item.setData(Qt.ItemDataRole.UserRole,row.get('firma_id'))
                 detail = info
                 if 1<=column<=len(FIELDS):
                     metadata = row.get('notes',{}).get(FIELDS[column-1],{})
@@ -128,6 +132,8 @@ class ContributionHolidays(QWidget):
         self.table.resizeColumnsToContents()
         stamp = self.payload.get('imported_at')
         message = f'Rok {self.year.value()}; wierszy: {len(rows)}. Ostatni poprawny odczyt: {stamp or "jeszcze nie wykonano"}.'
+        if self.payload.get('scope_nips') is not None:
+            message += f" Ostatni odczyt obejmował wybrane firmy ({len(self.payload['scope_nips'])}), pozostałe zachowują poprzednie dane."
         message += f" Wpisy RWS dostępne w szczegółach: {self.payload.get('source_count',0)}."
         if not self.payload.get('configured'):
             message += ' Połączenie Płatnika nie jest włączone w ustawieniach workera.'

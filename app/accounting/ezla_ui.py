@@ -37,6 +37,8 @@ class EzlaPreviewPanel(QWidget):
             'Dokument', 'Status ZUS', 'Data wystawienia', 'Od', 'Do', 'Do sprawdzenia / import'])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         layout.addWidget(self.table)
         note = QLabel('Zestawienie raportów pobranych przez worker ZUS oraz lokalnie wczytanych XML. '
                       'Raporty z ZUS są zapisane w bazie w postaci zaszyfrowanej; lokalne XML nie są zapisywane. '
@@ -147,6 +149,8 @@ class EzlaPreviewPanel(QWidget):
                 item = QTableWidgetItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setToolTip(info)
+                if column==0:
+                    item.setData(Qt.ItemDataRole.UserRole,company['id'])
                 if column in (4, 8) and (not certificate or certificate.issues or certificate.status != 'Wystawione'):
                     item.setBackground(QColor('#fef3c7'))
                     item.setForeground(QColor('#92400e'))

@@ -689,6 +689,11 @@ class MonthlyViewPage(QWidget):
         )
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
+        for table in (self.table_ks, self.table_kadry):
+            table.horizontalHeader().setSectionsClickable(True)
+            table.horizontalHeader().setSortIndicatorShown(False)
+            table.horizontalHeader().sectionClicked.connect(
+                lambda column, table=table: self._sort_delivery(table, column))
 
         self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
         self.table_ks.setItemDelegateForColumn(9, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
@@ -999,6 +1004,19 @@ class MonthlyViewPage(QWidget):
     def _stage_matches(self, row: Dict[str, Any], stage_field: str) -> bool:
         choice = self.stage_combo.currentText()
         return choice == 'Wszystkie' or (row.get(stage_field) or 'Brak') == choice
+
+    @staticmethod
+    def _sort_delivery(table, column):
+        model, header = table.model(), table.horizontalHeader()
+        if column != model._docs_col():
+            if model._delivery_order is not None:
+                header.setSortIndicator(model._docs_col(), model._delivery_order)
+            return
+        order = (Qt.SortOrder.DescendingOrder if model._delivery_order == Qt.SortOrder.AscendingOrder
+                 else Qt.SortOrder.AscendingOrder)
+        model.sort(column, order)
+        header.setSortIndicator(column, order)
+        header.setSortIndicatorShown(True)
 
     def _delivery_matches(self, row: Dict[str, Any]) -> bool:
         choice = self.delivery_combo.currentText()

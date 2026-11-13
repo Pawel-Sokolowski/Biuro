@@ -15,10 +15,13 @@ class MonthlyViewModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: List[Dict[str, Any]] = rows
         self._mode: str = mode
+        self._delivery_order = None
         self.COL_DOCS = 3 if mode == "ksiegowosc" else 1
         self.COL_ETAP = 4 if mode == "ksiegowosc" else 2
 
     def set_rows(self, rows: List[Dict[str, Any]]):
+        if self._delivery_order is not None:
+            rows = self._delivery_sorted(rows, self._delivery_order)
         if rows == self._rows:
             return
         # szybkie porównanie po id
@@ -39,6 +42,34 @@ class MonthlyViewModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()
+
+    @staticmethod
+    def _delivery_date(row):
+        if not row.get("dokumenty_dostarczone"):
+            return None
+        try:
+            return datetime.date.fromisoformat(str(row.get("data_dostarczenia") or "")[:10])
+        except ValueError:
+            return None
+
+    def _delivery_sorted(self, rows, order):
+        dated = [row for row in rows if self._delivery_date(row) is not None]
+        missing = [row for row in rows if self._delivery_date(row) is None]
+        # Stable ties preserve the existing company ordering. Undated rows stay last in either direction.
+        return sorted(dated, key=self._delivery_date, reverse=order == Qt.SortOrder.DescendingOrder) + missing
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        if column != self._docs_col():
+            return
+        self._delivery_order = order
+        self.layoutAboutToBeChanged.emit()
+        persistent = self.persistentIndexList()
+        identities = [id(self._rows[index.row()]) for index in persistent]
+        self._rows = self._delivery_sorted(self._rows, order)
+        positions = {id(row): index for index, row in enumerate(self._rows)}
+        self.changePersistentIndexList(persistent, [self.index(positions[identity], index.column())
+                                                   for identity, index in zip(identities, persistent)])
+        self.layoutChanged.emit()
 
     COL_DOCS = 1
     COL_ETAP = 2
@@ -194,6 +225,8 @@ class MonthlyViewModel(QAbstractTableModel):
         return QVariant()
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        if orientation == Qt.Orientation.Horizontal and section == self._docs_col() and role == Qt.ItemDataRole.ToolTipRole:
+            return "Kliknij, aby sortować według daty dostarczenia. Ponowne kliknięcie odwraca kolejność."
         if role != Qt.ItemDataRole.DisplayRole:
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
@@ -244,12 +277,17 @@ class MonthlyViewModel(QAbstractTableModel):
                 dokumenty_dostarczone=row["dokumenty_dostarczone"],
                 data_dostarczenia=row["data_dostarczenia"],
             )
+            if self._delivery_order is not None:
+                self.sort(self._docs_col(), self._delivery_order)
             return True
 
         if role == self.DATE_ROLE and col == self._docs_col():
             row["data_dostarczenia"] = str(value)
+            row["dokumenty_dostarczone"] = 1
             self.dataChanged.emit(index, index)
             self._persist(row, dokumenty_dostarczone=1, data_dostarczenia=str(value))
+            if self._delivery_order is not None:
+                self.sort(self._docs_col(), self._delivery_order)
             return True
 
         if role != Qt.ItemDataRole.EditRole:

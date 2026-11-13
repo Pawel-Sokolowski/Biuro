@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.integrations.enova.document_counts import fetch_counts, normalize_nip
 
-STATUSES = {'prepared': 'Przygotowany', 'processing': 'Przetwarzany', 'not_sent': 'Niewysłany', 'sent': 'Wysłany', 'accepted': 'Przyjęty (UPO)', 'rejected': 'Odrzucony', 'not_applicable': 'Nie dotyczy'}
+STATUSES = {'unknown': 'Nieustalony — sprawdź źródło', 'prepared': 'Przygotowany', 'processing': 'Przetwarzany', 'not_sent': 'Niewysłany', 'sent': 'Wysłany', 'accepted': 'Przyjęty (UPO)', 'rejected': 'Odrzucony', 'not_applicable': 'Nie dotyczy'}
 
 
 def validate_jpk(rows, source, months):
@@ -18,6 +18,8 @@ def validate_jpk(rows, source, months):
         if status not in STATUSES or (status == 'accepted' and not upo):
             raise ValueError('Nieprawidłowy status JPK lub brak potwierdzenia UPO.')
         found[month] = {'status': status, 'upo': upo}
+        if row.get('raw_status'):
+            found[month]['raw_status'] = str(row['raw_status'])[:256]
     if set(found) != set(months):
         raise ValueError('Brak statusu JPK dla żądanego miesiąca nie oznacza niewysłanego JPK.')
     return found

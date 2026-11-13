@@ -20,7 +20,8 @@ class QueryDefaultsTests(TestCase):
         self.assertTrue(query.is_file())
         self.assertEqual(query.name, 'payroll.sql')
         self.assertEqual(config['payroll_query'], '')
-        self.assertNotIn('declarations_query', config['sources'][0])
+        self.assertEqual(Path(config['sources'][0]['declarations_query']).name, 'declarations.sql')
+        self.assertTrue(Path(config['sources'][0]['jpk_query']).is_file())
 
     def test_json_configuration_uses_bundle_independently_of_config_directory(self):
         with TemporaryDirectory() as directory:
@@ -37,3 +38,13 @@ class QueryDefaultsTests(TestCase):
         config['payroll_query'] = ''
         config['sources'][0]['payroll_query'] = ''
         self.assertEqual(Path(with_query_defaults(config)['sources'][0]['payroll_query']).name, 'payroll.sql')
+
+    def test_tax_overrides_resolve_per_source_and_do_not_mutate_saved_config(self):
+        config = {'jpk_query': 'shared-jpk.sql', 'declarations_query': 'shared-tax.sql',
+                  'sources': [{'jpk_query': 'client-jpk.sql', 'declarations_query': 'client-tax.sql'}, {}]}
+        resolved = with_query_defaults(config)['sources']
+        self.assertEqual(resolved[0]['jpk_query'], 'client-jpk.sql')
+        self.assertEqual(resolved[0]['declarations_query'], 'client-tax.sql')
+        self.assertEqual(resolved[1]['jpk_query'], 'shared-jpk.sql')
+        self.assertEqual(resolved[1]['declarations_query'], 'shared-tax.sql')
+        self.assertEqual(config['sources'][1], {})

@@ -15,7 +15,7 @@ class JpkValidationTests(TestCase):
         source = {'nip': '1234567890'}
         row = {'nip': source['nip'], 'miesiac': '2026-11', 'status': 'sent', 'upo': None}
         self.assertEqual(validate_jpk([row], source, ['2026-11'])['2026-11']['status'], 'sent')
-        for changes in ({'status': 'accepted'}, {'status': 'unknown'}, {'nip': '9999999999'}):
+        for changes in ({'status': 'accepted'}, {'status': 'invalid'}, {'nip': '9999999999'}):
             with self.assertRaises(ValueError):
                 validate_jpk([{**row, **changes}], source, ['2026-11'])
         with self.assertRaises(ValueError):

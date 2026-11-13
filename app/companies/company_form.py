@@ -240,6 +240,13 @@ class CompanyForm(QDialog):
             [status_vat, urzad_skarbowy, forma_opodatkowania]
         )
 
+        monthly_group = QGroupBox('Rozliczenia miesięczne i kwartalne')
+        from app.companies.monthly_setup import MonthlySetup
+        self.monthly_setup = MonthlySetup(self.firma_id, monthly_group)
+        monthly_box = QVBoxLayout(monthly_group)
+        monthly_box.addWidget(self.monthly_setup)
+        dane_layout.addWidget(monthly_group)
+
         annual_group = QGroupBox("Roczne rozliczenie")
         annual_box = QVBoxLayout(annual_group)
         year_row = QHBoxLayout()
@@ -1328,6 +1335,7 @@ class CompanyForm(QDialog):
         payload = self._collect_payload()
         try:
             self.firma_id = save_company(payload, actor_id=self.actor_id)
+            self.monthly_setup.persist(self.firma_id, self.actor_id)
             from app.db.dao_year_end import save_company_year_declarations
             save_company_year_declarations(self.firma_id, self._annual_edits, self.actor_id)
             from app.db.dao_year_end import save_owner_year_declarations

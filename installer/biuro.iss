@@ -49,6 +49,7 @@ Name: "worker"; Description: "Worker na tym serwerze — zadania w tle i panel k
 Source: "..\docs\worker-configuration.md"; DestDir: "{app}\docs"; Flags: ignoreversion; Components: worker
 Source: "..\docs\platnik-holidays.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\manual-reminders.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "..\docs\monthly-obligations.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\scripts\export_platnik_schema.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 Source: "..\scripts\export_platnik_schema.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 Source: "..\scripts\install_background_worker.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker

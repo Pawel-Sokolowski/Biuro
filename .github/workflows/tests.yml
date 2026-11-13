@@ -147,6 +147,7 @@ jobs:
           $workerScript = Join-Path $target 'scripts\install_background_worker.ps1'
           $payrollSql = Join-Path $target '_internal\docs\enova\queries\payroll.sql'
           if (-not (Test-Path $payrollSql)) { throw 'Bundled Enova payroll adapter missing from worker installation' }
+          if (-not (Test-Path (Join-Path $target '_internal\docs\platnik\queries\declarations.sql'))) { throw 'Bundled Platnik RCA/DRA adapter missing from worker installation' }
           $workerLauncher = Join-Path $target 'scripts\install_background_worker.cmd'
           if (-not (Test-Path $workerLauncher)) { throw 'Worker launcher missing from installation' }
           $parseTokens = $null

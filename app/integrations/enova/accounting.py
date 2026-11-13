@@ -19,8 +19,10 @@ def list_accounting(actor_id, month):
     prior = history_months(month)
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,s.ilosc_dok,
+        rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,f.status_vat,f.vat_czynny,s.ilosc_dok,
             a.wartosc AS snapshot,j.wartosc AS jpk,c.wartosc AS checking,h.wartosc AS hr,z.wartosc AS ezla_sync,
+            pd.wartosc AS platnik_declarations,
+            co.wartosc AS checking_obligations,
             trim(COALESCE(pk.imie,'') || ' ' || COALESCE(pk.nazwisko,'')) AS ksiegowa,
             trim(COALESCE(ph.imie,'') || ' ' || COALESCE(ph.nazwisko,'')) AS kadrowa
             FROM firmy f LEFT JOIN pracownicy pk ON pk.id=f.ksiegowa_id
@@ -31,7 +33,9 @@ def list_accounting(actor_id, month):
             LEFT JOIN app_settings c ON c.klucz='enova_checking_' || f.id::text || '_' || %s
             LEFT JOIN app_settings h ON h.klucz='enova_hr_' || f.id::text
             LEFT JOIN app_settings z ON z.klucz='ezla_sync_' || f.id::text
-            WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (month, month, month, month, ids)).fetchall()
+            LEFT JOIN app_settings pd ON pd.klucz='platnik_declarations_' || f.id::text || '_' || %s
+            LEFT JOIN app_settings co ON co.klucz='checking_obligations_' || f.id::text
+            WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (month, month, month, month, month, ids)).fetchall()
         history = conn.execute('''SELECT f.id,a.klucz,a.wartosc FROM firmy f JOIN app_settings a
             ON a.klucz='enova_checking_' || f.id::text || '_' || right(a.klucz,7)
             WHERE f.id=ANY(%s) AND right(a.klucz,7)=ANY(%s)''', (ids, prior)).fetchall()
@@ -41,6 +45,9 @@ def list_accounting(actor_id, month):
     result = []
     for record in rows:
         row = dict(record)
+        row['checking_period'] = month
+        from app.integrations.platnik.declarations import decoded_snapshot
+        row['platnik_declarations'] = decoded_snapshot(row.get('platnik_declarations'))
         row['history'] = by_company.get(row['id'], [])
         result.append(row)
     return result
@@ -62,14 +69,19 @@ def active_types(row, department):
 
 
 def declaration_entries(row, department):
+    from app.companies.checking_obligations import report_applies
     report = decoded(row.get('checking'))
     result = [entry for entry in report.get('declarations') or [] if entry['department'] == department]
+    if department == 'payroll':
+        snapshot = decoded(row.get('platnik_declarations'))
+        result += [{**entry, 'imported_at': snapshot.get('imported_at')}
+                   for entry in snapshot.get('declarations') or []]
     if department == 'accounting' and not any(entry['form'] == 'JPK_VAT' for entry in result):
         legacy = decoded(row.get('jpk'))
         if legacy:
             result.append({**legacy, 'form': 'JPK_VAT', 'employee_id': '', 'employee_name': '',
                            'source_system': 'enova', 'sent_at': None, 'upo_at': None})
-    return result
+    return [entry for entry in result if report_applies(row, entry['form'])]
 
 
 def declarations(row, department):
@@ -86,4 +98,6 @@ def declarations(row, department):
             result[form] = {'form': form, 'count': len(entries), 'entries': entries,
                             'status_text': f'Przyjęte: {accepted}/{len(entries)}', 'upo_count': receipts,
                             'sent_at': None, 'upo_at': None}
+            if any(entry.get('status') == 'unknown' for entry in entries):
+                result[form]['status_text'] = f'Dokumenty: {len(entries)}; nieustalony status wysyłki'
     return result

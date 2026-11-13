@@ -206,11 +206,15 @@ class AccountingPage(QWidget):
             self.refresh_controls.buttons['enova'].setVisible(not annual)
             self.refresh_controls.buttons['ezla'].setVisible(payroll and not annual)
             self.refresh_controls.buttons['platnik'].setVisible(annual)
+            self.refresh_controls.buttons['platnik_declarations'].setVisible(payroll and not annual)
 
     def refresh_companies(self):
         if self.yearly_selected():
             return self.holiday_panel.payload.get('companies',[])
-        return self.rows
+        from app.companies.checking_obligations import report_applies
+        department = 'payroll' if self.tabs.currentIndex() == 1 else 'accounting'
+        form = self._selected_form(department)
+        return [row for row in self.rows if not form or report_applies(row, form)]
 
     def selected_company_ids(self):
         department = 'payroll' if self.tabs.currentIndex()==1 else 'accounting'
@@ -258,6 +262,7 @@ class AccountingPage(QWidget):
         self.source_note.setText('Nie udało się odczytać danych: ' + str(exc))
 
     def render(self, rows, month):
+        rows = [{**row, 'checking_period': month} for row in rows]
         self.rows, self.period = rows, month
         self.filter_rows()
 
@@ -290,7 +295,10 @@ class AccountingPage(QWidget):
         horizon = self.hr_range.currentData()
         for department in self.tables:
             self._update_report_choices(department)
-            visible = [row for row in rows if not self.attention.isChecked() or self._report_attention(row, department, today, horizon)]
+            from app.companies.checking_obligations import report_applies
+            form = self._selected_form(department)
+            applicable = [row for row in rows if not form or report_applies(row, form)]
+            visible = [row for row in applicable if not self.attention.isChecked() or self._report_attention(row, department, today, horizon)]
             self._render_table(visible, department)
             if department == 'accounting':
                 self._render_comparisons(visible, department)
@@ -303,7 +311,7 @@ class AccountingPage(QWidget):
         missing_declarations = sum(decoded(row.get('checking')).get('declarations') is None for row in rows)
         self.source_note.setText(f'Firmy: {len(rows)}. Brak pełnego odczytu dokumentów: {missing_reports}; '
                                  f'brak odczytu kadr: {missing_payroll}; brak odczytu deklaracji: {missing_declarations}. '
-                                 'Źródła kadrowe i deklaracje/UPO wymagają skonfigurowania w połączeniu Enova. '
+                                 'Listy płac odczytuje Enova, RCA/DRA — Płatnik. Brak potwierdzenia nie oznacza przyjęcia. '
                                  'Liczba do faktury pochodzi z Widoku miesięcznego.')
 
     def _render_table(self, rows, department):
@@ -420,10 +428,12 @@ class AccountingPage(QWidget):
                 if entry.get('employee_id'):
                     employee += ' (' + entry['employee_id'] + ')'
                 records.append([row.get('nazwa'), owner, employee, entry['form'],
-                                STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
+                                entry.get('status_text') or STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
                                 _date(entry.get('sent_at')), 'Tak' if entry.get('upo') else '—',
                                 _date(entry.get('upo_at')), entry.get('source_system', 'enova'),
-                                declaration_issue(entry) or 'OK'])
+                                (declaration_issue(entry) or 'OK') +
+                                (f"; dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
+                                 if entry.get('source_system') == 'platnik' and entry.get('source_id') else '')])
                 receipts.append(str(entry.get('upo') or 'Brak potwierdzenia UPO.'))
         self._fill(table, ['Firma', 'Opiekun w biurze', 'Pracownik firmy', 'Deklaracja', 'Status',
                            'Data wysyłki', 'UPO', 'Data UPO', 'Źródło', 'Do sprawdzenia'], records)

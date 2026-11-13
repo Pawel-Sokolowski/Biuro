@@ -9,7 +9,7 @@ from app.security.authorization import assigned_company_ids
 from app.utils.months import month_bounds, previous_month
 
 PREFIX = 'checking_refresh_'
-KINDS = ('enova', 'ezla', 'platnik')
+KINDS = ('enova', 'ezla', 'platnik', 'platnik_declarations')
 
 
 def stamp():
@@ -88,6 +88,14 @@ def recover_interrupted():
 
 def _execute(value, stop):
     companies = scope(value['actor_id'],value['company_ids'])  # Recheck after waiting in queue.
+    if value['kind'] == 'platnik_declarations':
+        from app.integrations.platnik.declarations import import_months
+        result = import_months([previous_month(value['period']), value['period']], company_ids=value['company_ids'])
+        if result.get('mode') == 'busy':
+            return None
+        if result.get('mode') == 'disabled':
+            raise ValueError('Odczyt RCA/DRA jest wyłączony w ustawieniach Płatnika.')
+        return [{'company_id': row['id'], 'ok': True, 'months': result['months']} for row in companies]
     if value['kind']=='ezla':
         from app.integrations.ezla.settings import load_settings
         from app.integrations.ezla.sync import run_sync

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
 from app.utils.background import TaskRunner,CommandRunner
 from app.services.checking_refresh import enqueue,latest
 
-LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik'}
+LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik', 'platnik_declarations':'Płatnik RCA/DRA'}
 STATES = {'queued':'W kolejce workera','running':'Pobieranie','completed':'Zakończono',
           'partial':'Zakończono z błędami części firm','failed':'Błąd pobierania'}
 
@@ -21,7 +21,8 @@ class CheckingRefreshControls(QWidget):
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.buttons = {}
-        for kind,label in (('enova','Pobierz z Enovy…'),('ezla','Pobierz e-ZLA z ZUS…'),('platnik','Pobierz z Płatnika…')):
+        for kind,label in (('enova','Pobierz z Enovy…'),('ezla','Pobierz e-ZLA z ZUS…'),
+                           ('platnik','Pobierz z Płatnika…'),('platnik_declarations','Pobierz RCA/DRA z Płatnika…')):
             button = QPushButton(label)
             button.clicked.connect(lambda _,kind=kind:self.choose(kind))
             self.buttons[kind] = button

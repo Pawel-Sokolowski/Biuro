@@ -74,7 +74,6 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 40
     env:
-      DB_URL: postgresql://biuro@127.0.0.1:55432/biuro_release_test
       QT_OPENGL: software
     steps:
       - uses: actions/checkout@v5
@@ -89,8 +88,22 @@ jobs:
           if (-not $pgBin) { throw 'PostgreSQL tools missing from runner' }
           & "$pgBin\initdb.exe" -D "$env:RUNNER_TEMP\biuro-pg" -U biuro -A trust --encoding=UTF8 --locale=C
           if ($LASTEXITCODE) { throw 'initdb failed' }
-          & "$pgBin\pg_ctl.exe" -D "$env:RUNNER_TEMP\biuro-pg" -l "$env:RUNNER_TEMP\biuro-pg.log" -o '-h 127.0.0.1 -p 55432' -w start
-          & "$pgBin\createdb.exe" -h 127.0.0.1 -p 55432 -U biuro biuro_release_test
+          # Windows runner images can reserve fixed ports (WSAEACCES on 55432).
+          # Ask Windows for a bindable ephemeral loopback port instead.
+          $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          try {
+            $probe.Start()
+            $pgPort = ([System.Net.IPEndPoint]$probe.LocalEndpoint).Port
+          } finally { $probe.Stop() }
+          & "$pgBin\pg_ctl.exe" -D "$env:RUNNER_TEMP\biuro-pg" -l "$env:RUNNER_TEMP\biuro-pg.log" -o "-h 127.0.0.1 -p $pgPort" -w start
+          if ($LASTEXITCODE) {
+            Get-Content "$env:RUNNER_TEMP\biuro-pg.log" -ErrorAction SilentlyContinue
+            throw 'Isolated PostgreSQL startup failed'
+          }
+          & "$pgBin\createdb.exe" -h 127.0.0.1 -p $pgPort -U biuro biuro_release_test
+          if ($LASTEXITCODE) { throw 'Isolated test database creation failed' }
+          $env:DB_URL = "postgresql://biuro@127.0.0.1:$pgPort/biuro_release_test"
+          Add-Content -Path $env:GITHUB_ENV -Value "DB_URL=$env:DB_URL"
       - name: Install locked dependencies and build tools
         run: |
           python -m pip install --require-hashes -r requirements.lock -r requirements-test.lock -r requirements-build.lock

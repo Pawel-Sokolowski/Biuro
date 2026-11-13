@@ -27,9 +27,9 @@ HEADERS = [
 ROW = [
     "9240000010", "123456785", "", "", "BIURO RACHUNKOWE DEMO SP. Z O.O.", "DEMO ",
     "Osoba fizyczna (KPiR)", "Skala podatkowa", "", "Jan Kowalski", "biuro@example.com",
-    "600000001", "Testowo", "78-500", "ul. Testowa 21", "Testowo",
-    "78-500", "ul. Testowa 21", "Testowo", "78-500", "ul. Testowa 21", "",
-    "2000-12-20", "", "", "", "", "", "2024-09-01", "", "", "7112Z, 6820Z",
+    "600000001", "Testowo", "00-001", "ul. Testowa 21", "Testowo",
+    "00-001", "ul. Testowa 21", "Testowo", "00-001", "ul. Testowa 21", "",
+    "2001-01-01", "", "", "", "", "", "2024-09-01", "", "", "7112Z, 6820Z",
     "Cena ponad limit 20 szt. 5,5 zł, Ryczałt 412,50 netto", "", "", "Drugi Urz\u0105d Skarbowy w Szczecinie", "12 3456 7890",
 ]
 
@@ -74,12 +74,12 @@ class ExcelImportTests(DbTestCase):
             "adres_email": "biuro@example.com",
             "nr_telefonu": "600000001",
             "miasto": "Testowo",
-            "kod_pocztowy": "78-500",
+            "kod_pocztowy": "00-001",
             "adres_zam_miasto": "Testowo",
-            "adres_zam_kod_pocztowy": "78-500",
+            "adres_zam_kod_pocztowy": "00-001",
             "adres_koresp_miasto": "Testowo",
-            "adres_koresp_kod_pocztowy": "78-500",
-            "data_rozpoczecia_dg": "2000-12-20",
+            "adres_koresp_kod_pocztowy": "00-001",
+            "data_rozpoczecia_dg": "2001-01-01",
             "data_rozpoczecia_obslugi": "2024-09-01",
         }
         for column, value in expected.items():

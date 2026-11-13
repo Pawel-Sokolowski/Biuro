@@ -91,7 +91,8 @@ def office_context():
     from app.db.dao_app_settings import get_setting
     from app.documents.power_of_attorney import office_email
     keys = {'office_name': 'nazwa', 'office_nip': 'nip', 'office_city': 'miasto', 'office_street': 'adres',
-            'office_phone': 'telefon', 'office_representative': 'reprezentant'}
+            'office_phone': 'telefon', 'office_representative': 'reprezentant',
+            'office_data_contact': 'kontakt_rodo', 'office_legal_footer': 'stopka_prawna'}
     result = {name: str(get_setting('faktury_sprzedawca_' + key) or '') for name, key in keys.items()}
     result['office_postal'] = ' '.join(str(get_setting('faktury_sprzedawca_' + key) or '') for key in ('kod', 'miasto')).strip()
     result['office_address'] = ', '.join(v for v in (result['office_street'], result['office_postal']) if v)
@@ -165,7 +166,7 @@ def fill_template(key, data, destination):
     context = {name: '' for name in ('name', 'address', 'phone', 'email', 'nip', 'krs', 'pesel', 'monthly_fee',
         'agreement_date', 'main_agreement_date', 'document_limit', 'extra_document_price', 'insured_limit',
         'first_period', 'tax_office', 'pep_person', 'authorized_person', 'termination_date', 'last_period')}
-    context.update({key: '' for key in ('office_name','office_nip','office_city','office_street','office_phone','office_representative','office_postal','office_address','office_email')})
+    context.update({key: '' for key in ('office_name','office_nip','office_city','office_street','office_phone','office_representative','office_postal','office_address','office_email','office_data_contact','office_legal_footer')})
     context.update(data)
     representatives = list(data.get('representatives') or ())
     for index in range(2):

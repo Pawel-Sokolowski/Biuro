@@ -87,3 +87,41 @@ nakładaniu się ręcznego pobrania i workera. Przerwę przerywa zamknięcie pro
 workera; nie blokuje ona innych zadań ani interfejsu. Każde zadanie workera czeka
 pełny skonfigurowany interwał po zakończeniu poprzedniego przebiegu, również po
 błędzie — długie przebiegi nie powodują serii natychmiastowych powtórzeń.
+
+## Błędy HTTP, SOAP i sieci
+
+Komunikat obejmuje numer HTTP, np. 401 (uwierzytelnienie transportowe),
+403 (odmowa dostępu), 407 (proxy), 429 (limit żądań), 500/502/503/504 (serwer
+lub brama). Numer sam nie dowodzi, czy odpowiedź pochodzi z ZUS, czy pośrednika.
+HTTP 401 dotyczy warstwy HTTP z publicznymi danymi transportowymi podanymi w
+instrukcji ZUS, a nie bezpośrednio hasła ZIP. Błędny login usługi/hasło/NIP to
+kod biznesowy 101 zwrócony w SOAP.
+
+Odpowiedzi błędów są czytane do limitu 1 MiB, bez wyświetlania HTML, nagłówków,
+faultstring ani treści zawierających potencjalne sekrety. Dla HTTP 500 rozpoznajemy
+SOAP Fault Client/Server i znane kody biznesowe, zachowując osobno numer HTTP
+w statusie firmy. Nie przyjmujemy sukcesu przy odpowiedzi HTTP innej niż 200.
+Panel workera i Kadry/e-ZLA odtwarzają bezpieczny opis także po restarcie.
+
+Brak połączenia, przekroczenie czasu i błąd certyfikatu TLS mają odrębne komunikaty.
+Weryfikacja TLS i blokada przekierowań pozostają włączone. Sam stary komunikat
+„błąd HTTP” nie pozwala ustalić przyczyny: po aktualizacji ponów test usługi i podaj
+numer HTTP oraz bezpieczny opis. Nie przesyłaj loginu, haseł ani odpowiedzi ZIP/XML.
+
+## Instrukcja obowiązująca od 13 lutego 2026 r.
+
+Porównano przekazane przez użytkownika dokumenty: DOCX z 13.07.2021 oraz nowy PDF
+`ccdbcd11-e6f3-46f4-0325-3f1bba207922.pdf` (str. 2–3 i 7–10).
+W obu dokumentach wymagany jest nagłówek SOAP 1.1:
+`SOAPAction: "zus_channel_platnikRaportyZla_wsdlPlatnikRaportyZla_Binder_pobierzRaporty"`.
+Dotychczasowy pusty nagłówek był błędem adaptera. Żądania wysyłamy do endpointu
+operacji; adres z `?wsdl` służy do opisu usługi, nie do pobierania raportów.
+Login/hasło transportowe, parametry operacji i odrębne hasło ZIP pozostają bez zmian.
+
+Nowy raport może zawierać `liczbaDokumentowEzlaK` i `dokumentyEzlaK` z
+`dataZwolnieniaDo`. Podgląd pokazuje je jako **Skrócenie e-ZLA/K**, do ręcznego
+powiązania z dokumentem pierwotnym. Nie tworzymy z nich zwykłych nieobecności.
+Jeśli ZUS zwraca tylko liczbę ZLA/K bez szczegółów, raport wymaga sprawdzenia;
+w raporcie cyklicznym PUE/eZUS trzeba włączyć dołączanie ZLA/K w formie XML.
+Oryginalny raport jest nadal zachowywany w postaci zaszyfrowanej, bez modyfikacji.
+Import do Enovy pozostaje niepodłączony.

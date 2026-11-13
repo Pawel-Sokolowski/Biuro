@@ -131,3 +131,45 @@ class EzlaPreviewTests(TestCase):
              patch('app.integrations.ezla.preview.read_report') as read, self.assertRaises(PermissionError):
             preview_report(5, 'local.xml')
         read.assert_not_called()
+
+
+def shortening(number='123456', end='2018-04-26'):
+    return f'''<dokumentyEzlaK><daneUbezpieczonego>
+        <identyfikator><typ>PESEL</typ><wartosc>00000000000</wartosc></identyfikator>
+        <imie>JAN</imie><nazwisko>PRZYKŁAD</nazwisko></daneUbezpieczonego>
+        <daneDokumentu><seria>ZZ</seria><numer>{number}</numer>
+        <dataZwolnieniaDo>{end}</dataZwolnieniaDo></daneDokumentu></dokumentyEzlaK>'''
+
+
+def correction_report(*ordinary, correction_count=1, corrections=None):
+    return report(*ordinary).replace(b'</daneRaportu>',
+        f'<liczbaDokumentowEzlaK>{correction_count}</liczbaDokumentowEzlaK></daneRaportu>'.encode()).replace(
+            b'</raportEzla>', (shortening() if corrections is None else corrections).encode() + b'</raportEzla>')
+
+
+class Ezla2026ReportTests(TestCase):
+    def test_shortening_is_visible_but_never_a_new_absence(self):
+        value = parse_report(correction_report(certificate()))
+        self.assertEqual(len(value.certificates),2)
+        original, correction = value.certificates
+        self.assertEqual(original.status,'Wystawione')
+        self.assertEqual(correction.status,'Skrócenie e-ZLA/K')
+        self.assertEqual(correction.end,'2018-04-26')
+        self.assertEqual(correction.start,'')
+        self.assertIn('nie jest nową nieobecnością',correction.review)
+        self.assertNotIn('00000000000',repr(correction))
+        self.assertFalse(original.issues)
+
+    def test_count_only_shortening_requires_review_and_is_not_lost_in_month_filter(self):
+        from app.integrations.ezla.sync import _metadata
+        value = parse_report(correction_report(corrections=''))
+        self.assertFalse(value.certificates)
+        self.assertIn('bez szczegółów',value.issues[0])
+        self.assertTrue(_metadata(value)[1])
+        self.assertTrue(_metadata(parse_report(correction_report()))[1])
+
+    def test_shortening_count_mismatch_and_invalid_date(self):
+        with self.assertRaises(ValueError):
+            parse_report(correction_report(correction_count=2))
+        value = parse_report(correction_report(corrections=shortening(end='2018-02-31')))
+        self.assertIn('Nieprawidłowa data',value.certificates[0].review)

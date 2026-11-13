@@ -138,3 +138,12 @@ class EzlaSyncTests(DbTestCase):
         self.assertNotIn('zip-secret', text)
         self.assertNotIn('password_enc', text)
         self.assertEqual(value['ezla_companies'], [self.company])
+
+    def test_http_status_is_persisted_for_worker_diagnostics(self):
+        with patch('app.integrations.ezla.sync.fetch_reports',side_effect=ServiceError('http_503')):
+            result = run_sync(actor_id=self.admin,today=date(2026,11,12))
+        self.assertEqual(result['failed'],1)
+        status = self.status()
+        self.assertEqual(status['error_code'],'http_503')
+        self.assertEqual(status['http_status'],503)
+        self.assertIn('HTTP 503',str(ServiceError(status['error_code'],http_status=status['http_status'])))

@@ -19,7 +19,7 @@ from docx.shared import Pt
 from pypdf import PdfReader, PdfWriter
 
 TEMPLATES = Path(__file__).with_name('templates')
-STATIC_PDFS = {'01_terms': TEMPLATES / '01_terms.pdf'}
+STATIC_PDFS = {}
 DOCUMENTS = (
     ('00_framework', 'Umowa ramowa', True),
     ('01_terms', 'Ogólne warunki świadczenia usług', True),
@@ -49,9 +49,12 @@ def company_context(company, partners=(), contacts=()):
     if apartment:
         street += '/' + apartment
     locality = ' '.join(str(company.get(k) or '').strip() for k in ('kod_pocztowy', 'miasto')).strip()
+    from app.companies.identities import is_civil
     partner_data = []
     for partner in partners[:4]:
         p = dict(partner)
+        if is_civil(company) and not p.get('stanowisko'):
+            p['stanowisko'] = 'Wspólnik'
         address = ' '.join(str(p.get(k) or '').strip() for k in ('ulica', 'nr_domu'))
         if p.get('nr_mieszkania'):
             address += '/' + str(p['nr_mieszkania'])
@@ -73,11 +76,26 @@ def company_context(company, partners=(), contacts=()):
         'postcode': company.get('kod_pocztowy') or '', 'city': company.get('miasto') or '',
         'country': 'PL' if str(company.get('kraj') or 'PL').casefold() in ('pl', 'polska', 'poland') else company['kraj'],
         'region': company.get('wojewodztwo') or '', 'county': company.get('powiat') or '', 'municipality': company.get('gmina') or '',
+        'civil_partnership': is_civil(company),
+        'principal_first_name': partner_data[0].get('imie_pierwsze', '') if len(partner_data) == 1 and principal_kind_for_company(company) == 'person' else '',
+        'principal_surname': partner_data[0].get('nazwisko', '') if len(partner_data) == 1 and principal_kind_for_company(company) == 'person' else '',
         'representatives': [], 'partners': partner_data,
         'representative_candidates': [*partner_data, *[
             dict(imie_pierwsze=c.get('imie') or '', nazwisko=c.get('nazwisko') or '',
                  telefon=c.get('telefon') or '', stanowisko=c.get('rola') or '') for c in contacts]],
     }
+
+
+def office_context():
+    from app.db.dao_app_settings import get_setting
+    from app.documents.power_of_attorney import office_email
+    keys = {'office_name': 'nazwa', 'office_nip': 'nip', 'office_city': 'miasto', 'office_street': 'adres',
+            'office_phone': 'telefon', 'office_representative': 'reprezentant'}
+    result = {name: str(get_setting('faktury_sprzedawca_' + key) or '') for name, key in keys.items()}
+    result['office_postal'] = ' '.join(str(get_setting('faktury_sprzedawca_' + key) or '') for key in ('kod', 'miasto')).strip()
+    result['office_address'] = ', '.join(v for v in (result['office_street'], result['office_postal']) if v)
+    result['office_email'] = office_email()
+    return result
 
 
 def load_context(company_id, actor_id):
@@ -88,7 +106,7 @@ def load_context(company_id, actor_id):
     company = get_company(company_id)
     if not company:
         raise ValueError('Firma nie istnieje.')
-    return company_context(company, get_partners(company_id), get_contacts(company_id))
+    return {**company_context(company, get_partners(company_id), get_contacts(company_id)), **office_context()}
 
 
 def _cell(cell, text):
@@ -146,6 +164,7 @@ def fill_template(key, data, destination):
     context = {name: '' for name in ('name', 'address', 'phone', 'email', 'nip', 'krs', 'pesel', 'monthly_fee',
         'agreement_date', 'main_agreement_date', 'document_limit', 'extra_document_price', 'insured_limit',
         'first_period', 'tax_office', 'pep_person', 'authorized_person', 'termination_date', 'last_period')}
+    context.update({key: '' for key in ('office_name','office_nip','office_city','office_street','office_phone','office_representative','office_postal','office_address','office_email')})
     context.update(data)
     representatives = list(data.get('representatives') or ())
     for index in range(2):
@@ -381,7 +400,12 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
     form_keys = [key for key, _, _ in DOCUMENTS if key in selected and key in ('11_upl', '12_pel', '13_pel_z')]
     if form_keys:
         from app.documents.power_of_attorney import reviewed_data, resolve_employee, split_street, formatted_address
-        data['attorney'] = resolve_employee(data)
+        candidates = data.get('attorneys') or [data.get('attorney') or {}]
+        employee_ids = [row.get('employee_id') for row in candidates]
+        if not employee_ids or len(candidates) > 100 or len(set(employee_ids)) != len(employee_ids):
+            raise ValueError('Zaznacz różnych pracowników (maks. 100).')
+        resolved_attorneys = [resolve_employee(dict(data, attorney=person), actor_id) for person in candidates]
+        data['attorney'] = resolved_attorneys[0]
         if not data.get('building'):
             data.update(split_street(data.get('street')))
         if not data.get('postcode') or not data.get('city'):
@@ -389,7 +413,8 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
         data['address'] = formatted_address(data)
         for key in form_keys:
             if key == '11_upl':
-                reviewed_data(data, 'UPL-PAPER')
+                for person in resolved_attorneys:
+                    reviewed_data(dict(data, attorney=person), 'UPL-PAPER')
         data['pel_z_attached'] = '13_pel_z' in form_keys
         if form_renderer is None:
             raise ValueError('Generowanie PDF pełnomocnictw wymaga mechanizmu wydruku aplikacji.')
@@ -407,20 +432,22 @@ def generate_pack(company_id, actor_id, overrides, selected, destination, *, ext
                 documents.append(path)
         result = staging / ('komplet.zip' if docx_only else 'komplet.pdf')
         form_pdfs = []
-        for key in form_keys:
-            pdf = staging / (key + '.pdf')
-            if key == '11_upl':
-                from app.documents.upl_paper import write_pdf
-                write_pdf(data, pdf, form_renderer)
-            elif key == '13_pel_z':
-                from app.documents.pel_z import write_pdf
-                write_pdf(data, pdf, form_renderer)
-            else:
-                from app.documents.pel_paper import write_pdf
-                write_pdf(data, pdf, form_renderer)
-            if not pdf.is_file() or not PdfReader(pdf).pages:
-                raise RuntimeError('Nie powstał poprawny PDF pełnomocnictwa.')
-            form_pdfs.append(pdf)
+        for person in resolved_attorneys if form_keys else []:
+            person_data = dict(data, attorney=person)
+            for key in form_keys:
+                pdf = staging / (key + '_pracownik_' + str(person['employee_id']) + '.pdf')
+                if key == '11_upl':
+                    from app.documents.upl_paper import write_pdf
+                    write_pdf(person_data, pdf, form_renderer)
+                elif key == '13_pel_z':
+                    from app.documents.pel_z import write_pdf
+                    write_pdf(person_data, pdf, form_renderer)
+                else:
+                    from app.documents.pel_paper import write_pdf
+                    write_pdf(person_data, pdf, form_renderer)
+                if not pdf.is_file() or not PdfReader(pdf).pages:
+                    raise RuntimeError('Nie powstał poprawny PDF pełnomocnictwa.')
+                form_pdfs.append(pdf)
         if docx_only:
             with ZipFile(result, 'w', ZIP_DEFLATED) as archive:
                 for path in documents:

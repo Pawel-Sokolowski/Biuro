@@ -25,7 +25,7 @@ HEADERS = [
 ]
 
 ROW = [
-    "9240000010", "123456785", "", "", "Przykładowe Biuro", "DEMO ",
+    "9240000010", "123456785", "", "", "BIURO RACHUNKOWE DEMO SP. Z O.O.", "DEMO ",
     "Osoba fizyczna (KPiR)", "Skala podatkowa", "", "Jan Kowalski", "biuro@example.com",
     "600000001", "Testowo", "78-500", "ul. Testowa 21", "Testowo",
     "78-500", "ul. Testowa 21", "Testowo", "78-500", "ul. Testowa 21", "",
@@ -66,7 +66,7 @@ class ExcelImportTests(DbTestCase):
         self.assertIsNotNone(row)
         expected = {
             "regon": "123456785",
-            "nazwa": "Przykładowe Biuro",
+            "nazwa": "BIURO RACHUNKOWE DEMO SP. Z O.O.",
             "nazwa_skrocona": "DEMO",
             "forma_dzialalnosci": "Osoba fizyczna (KPiR)",
             "forma_opodatkowania": "Skala podatkowa",

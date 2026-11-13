@@ -52,8 +52,8 @@ W zakładce **UPL / PEL** wybierz pracownika jako pełnomocnika. Imię i nazwisk
 pochodzą z jego konta; nie można podstawić innej osoby przez edycję danych
 wydruku. Pracownik jest ponownie sprawdzany przy generowaniu i musi być aktywny.
 Jego adres do korespondencji pochodzi z danych biura w **Ustawienia → Faktury
-i KSeF**, a e-mail jest zawsze `office@example.test`, niezależnie od
-prywatnego e-maila pracownika i e-maila sprzedawcy na fakturach. Można tam
+i KSeF**, a e-mail pochodzi z konfiguracji sprzedawcy (lub stopki),
+nie z prywatnego e-maila pracownika. W repozytorium nie ma domyślnego adresu biura. Można tam
 uzupełnić również województwo, powiat i gminę biura. Prywatnego adresu
 pracownika nie używa się w formularzach.
 
@@ -63,7 +63,7 @@ do odpowiednich ról eZUS, zgodnie z opisem poniżej.
 Pełnomocnictwa są zawsze bezterminowe / do odwołania: data „ważne do”
 pozostaje pusta, także gdy starszy formularz przekazuje datę końcową.
 Pole „Adres elektroniczny” w UPL pozostaje puste; nie jest to pole kontaktowego
-e-maila, w którym nadal widnieje stały adres biura.
+e-maila, który jest pobierany z konfiguracji biura.
 Przesłany XSD UPL wymaga daty urodzenia pełnomocnika; można ją wyliczyć z PESEL
 albo wpisać, gdy używany jest inny identyfikator. Przy zmianie pracownika
 poprzednie identyfikatory są czyszczone. Dane identyfikacyjne wpisane w oknie
@@ -145,3 +145,36 @@ autoryzację, brak powtórnego eksportu podczas generowania i zachowanie
 istniejącego pliku przy błędzie. Wszystkie dziesięć DOCX przekonwertowano
 rzeczywiście w LibreOffice w izolowanym kontenerze. Ścieżka automatyzacji
 Microsoft Word wymaga jeszcze sprawdzenia na Windows z zainstalowanym Wordem.
+
+
+## Wielu pełnomocników i dane lokalne
+
+W Ustawienia → Użytkownicy → Dane do PEL / UPL zapisz PESEL/NIP, datę urodzenia
+lub dane dokumentu pracownika. Dane identyfikacyjne są szyfrowane we wspólnej
+bazie biura i nie trafiają do repozytorium. Nazwisko i aktywność pracownika są
+ponownie sprawdzane przy generowaniu. W komplecie dokumentów zaznacz pracowników
+checkboxami: każdy otrzyma osobny UPL/PEL, w jednym PDF albo ZIP. Poprawki
+w dialogu dotyczą konkretnej osoby i danego wydruku.
+
+Dane biura i reprezentanta umowy ustaw w Faktury i KSeF; stopkę ustaw osobno.
+Szablony mają neutralne pola, bez logo, danych biura i metadanych autora.
+Warunki umowy są teraz renderowane z DOCX z aktualną konfiguracją, zamiast
+z wcześniej wypełnionego, stałego PDF. Wymaga to Word/LibreOffice jak inne umowy.
+
+Wspólnicy spółki cywilnej mają osobne NIP, PESEL, adresy i e-maile w kartotece
+firmy. W pełnomocnictwach wybór mocodawcy „Firma” zachowuje NIP spółki; wybór
+konkretnego wspólnika używa jego indywidualnych danych. Dane wspólników wypełniają
+przedstawicieli spółki; każdą osobę i zakres trzeba sprawdzić przed podpisem.
+Powiązanie wspólnika nie tworzy ani nie scala kartotek JDG i spółki.
+
+Worker e-ZLA odczytuje NIP spółki i zapisane NIP-y jej wspólników. Nowy NIP
+ma własny zakres początkowy i kursor; błąd jednego płatnika nie kasuje raportów
+pobranych dla pozostałych. Raport nadal zachowuje rzeczywisty NIP płatnika.
+Ten sam właściciel może być jawnie powiązany z kilkoma firmami; raport może być
+wtedy widoczny w tych firmach, bez zgadywania relacji po nazwisku.
+
+Domyślni adresaci poczty do spółki cywilnej to wszyscy zapisani wspólnicy:
+faktury, przypomnienia i lista firm do poczty masowej. Nie obejmuje to wszystkich
+kontaktów z książki adresowej. Brak adresu któregoś wspólnika blokuje domyślną
+wysyłkę zamiast po cichu wysyłać tylko do jednej osoby. Odbiorcy pozostają
+widoczni do sprawdzenia przed ręczną wysyłką.

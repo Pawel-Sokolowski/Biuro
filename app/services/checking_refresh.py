@@ -9,7 +9,7 @@ from app.security.authorization import assigned_company_ids
 from app.utils.months import month_bounds, previous_month
 
 PREFIX = 'checking_refresh_'
-KINDS = ('enova', 'ezla', 'platnik', 'platnik_declarations')
+KINDS = ('enova', 'ezla', 'platnik', 'platnik_declarations', 'platnik_annual')
 
 
 def stamp():
@@ -42,8 +42,8 @@ def enqueue(actor_id, kind, company_ids, period):
     scope(actor_id,company_ids)
     if kind not in KINDS:
         raise ValueError('Nieprawidłowe źródło odczytu.')
-    if kind=='platnik':
-        if type(period) is not int or not 2024<=period<=2100:
+    if kind in ('platnik', 'platnik_annual'):
+        if type(period) is not int or not (2024 if kind == 'platnik' else 2000)<=period<=2100:
             raise ValueError('Wybierz rok zestawienia Płatnika.')
     else:
         month_bounds(period)
@@ -88,6 +88,14 @@ def recover_interrupted():
 
 def _execute(value, stop):
     companies = scope(value['actor_id'],value['company_ids'])  # Recheck after waiting in queue.
+    if value['kind'] == 'platnik_annual':
+        from app.integrations.platnik.declarations import import_year
+        result = import_year(value['period'], company_ids=value['company_ids'])
+        if result.get('mode') == 'busy':
+            return None
+        if result.get('mode') == 'disabled':
+            raise ValueError('Odczyt formularzy ZUS jest wyłączony w ustawieniach Płatnika.')
+        return [{'company_id': row['id'], 'ok': True, 'year': value['period']} for row in companies]
     if value['kind'] == 'platnik_declarations':
         from app.integrations.platnik.declarations import import_months
         result = import_months([previous_month(value['period']), value['period']], company_ids=value['company_ids'])

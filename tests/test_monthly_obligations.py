@@ -38,6 +38,8 @@ class MonthlyScopeRulesTests(TestCase):
                                 '2026-11': {'vat_period': 'quarterly', 'forms': {'RCA': 'none'}}}}
         self.assertEqual(profile(settings, '2026-10')['forms']['RCA'], 'monthly')
         self.assertEqual(profile(settings, '2027-01')['forms']['RCA'], 'none')
+        row = {'checking_obligations': settings, 'checking_period': '2026-11'}
+        self.assertFalse(report_applies(row, 'ZUS ZUA'))  # newly added forms do not opt into a saved profile
 
 
 class MonthlyScopeIntegrationTests(DbTestCase):
@@ -89,3 +91,15 @@ class MonthlyScopeIntegrationTests(DbTestCase):
         with self.assertRaises(ValueError):
             save(self.company, {'2026-11': {'vat_period': 'auto', 'forms': {'JPKVAT': 'quarterly'}}}, self.admin)
         self.assertEqual(load(self.company), {})
+
+    def test_no_registration_event_in_completed_read_is_not_a_missing_monthly_filing(self):
+        from app.accounting.accounting_ui import AccountingPage
+        page = AccountingPage(self.admin, department='payroll')
+        self.addCleanup(page.close)
+        row = {'id': self.company, 'nazwa': 'No event', 'platnik_declarations': {
+            'imported_at': '2026-11-13T12:00:00', 'declarations': []}}
+        page.render([row], '2026-11')
+        selector = page.report_selectors['payroll']
+        selector.setCurrentIndex(selector.findData('form:ZUA'))
+        page.attention.setChecked(True)
+        self.assertEqual(page.declaration_tables['payroll'].rowCount(), 0)

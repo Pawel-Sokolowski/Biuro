@@ -42,6 +42,7 @@ class MonthlySetup(QWidget):
         note = QLabel('Zaznacz raporty dotyczące firmy. Tylko DRA: zaznacz DRA, odznacz RCA/RSA/RPA/RZA. '
                       'Ustawienia obowiązują od wybranego miesiąca do kolejnej zmiany. '
                       'Przy VAT kwartalnym ewidencja JPK pozostaje miesięczna, część deklaracyjna jest kwartalna. '
+                      'Zgłoszenia ZUA/ZZA/ZWUA/ZIUA/ZCNA są zdarzeniami, nie obowiązkiem tworzenia dokumentu co miesiąc. '
                       'Firma bez VAT nie pojawi się w JPK VAT. Ustawienia nie usuwają pobranych dokumentów.')
         note.setWordWrap(True)
         box.addWidget(note)
@@ -57,7 +58,7 @@ class MonthlySetup(QWidget):
         value = profile({'periods': {**self.saved.get('periods', {}), **self.edits}}, self.period())
         self.vat.setCurrentIndex(max(0, self.vat.findData(value['vat_period'])))
         for key, check in self.checks.items():
-            cadence = value['forms'].get(key, 'monthly')
+            cadence = value['forms'].get(key, 'none' if value.get('_configured') else 'monthly')
             check.setChecked(cadence != 'none')
             if key in self.cadences:
                 self.cadences[key].setCurrentIndex(max(0, self.cadences[key].findData(cadence)))

@@ -2,7 +2,9 @@
 import re
 
 DEFAULT_FORMS = {'accounting': ('JPK_VAT', 'VAT', 'VAT-UE', 'PIT', 'CIT', 'CIT-8'),
-                 'payroll': ('ZUS RCA', 'ZUS DRA', 'ZUS RSA', 'ZUS RPA', 'PIT-11', 'PIT-4R')}
+                 'payroll': ('ZUS RCA', 'ZUS DRA', 'ZUS RSA', 'ZUS RPA', 'ZUS RZA',
+                             'ZUS ZUA', 'ZUS ZZA', 'ZUS ZWUA', 'ZUS ZIUA', 'ZUS ZCNA', 'PIT-11', 'PIT-4R')}
+EVENT_FORMS = {'ZUA', 'ZZA', 'ZWUA', 'ZIUA', 'ZCNA'}
 
 
 def form_key(value):

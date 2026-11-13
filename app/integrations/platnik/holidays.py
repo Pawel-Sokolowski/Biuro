@@ -36,7 +36,7 @@ def sql_operation(config,operation):
 
 def load():
     return {'enabled':False,'server':'','database':'platnik','username':'','password_enc':'',
-            'declarations_enabled':True,'declarations_query':'',
+            'declarations_enabled':True,'declarations_query':'','annual_declarations_query':'',
             'driver':'auto','trust_server_certificate':False,'query_timeout':DEFAULT_QUERY_TIMEOUT,
             **json.loads(get_setting(KEY) or '{}')}
 
@@ -46,8 +46,9 @@ def save(value, actor_id, password=''):
     if not is_administrator(actor_id):
         raise PermissionError('Tylko administrator konfiguruje Płatnika.')
     current = load()
-    value = {key:value.get(key,current[key]) for key in ('enabled','server','database','username','password_enc','driver','trust_server_certificate','query_timeout','declarations_enabled','declarations_query')}
+    value = {key:value.get(key,current[key]) for key in ('enabled','server','database','username','password_enc','driver','trust_server_certificate','query_timeout','declarations_enabled','declarations_query','annual_declarations_query')}
     value['declarations_query'] = str(value['declarations_query'] or '').strip()
+    value['annual_declarations_query'] = str(value['annual_declarations_query'] or '').strip()
     value['query_timeout'] = validate_query_timeout(value['query_timeout'])
     from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
     if value['driver'] not in ('auto',*SUPPORTED_DRIVERS):

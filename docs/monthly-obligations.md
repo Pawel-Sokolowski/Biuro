@@ -3,13 +3,16 @@
 W formularzu firmy, obok rozliczeń rocznych, znajduje się **Rozliczenia
 miesięczne i kwartalne**. Wybierz miesiąc, od którego obowiązuje konfiguracja,
 częstotliwość VAT oraz zaznacz dotyczące firmy raporty: JPK VAT, VAT-UE,
-zaliczki PIT/CIT, DRA, RCA, RSA, RPA i RZA. Zaliczki PIT/CIT mają osobny wybór
+zaliczki PIT/CIT, DRA, RCA, RSA, RPA, RZA oraz zgłoszenia ZUA/ZZA/ZWUA/ZIUA/ZCNA. Zaliczki PIT/CIT mają osobny wybór
 miesięczny/kwartalny. Odznaczenie raportu wyłącza firmę z tego raportu w Sprawdzaniu.
 
 Przykład firmy rozliczającej wyłącznie DRA: pozostaw DRA, odznacz RCA/RSA/RPA/RZA.
 Firma nie pojawi się w widoku RCA ani jako brakujący RCA w filtrze uwagi,
 także gdy w bazie zachowały się stare dokumenty RCA. Zmiana zakresu ich nie usuwa.
 Bez konfiguracji istniejące firmy zachowują dotychczasową widoczność raportów.
+Nowe rodzaje raportów pozostają odznaczone w już zapisanej konfiguracji,
+dopóki biuro ich nie włączy. Zgłoszenia dotyczą zdarzeń: udany pusty odczyt
+nie oznacza, że firma zalega ze zgłoszeniem. IWA/ZSWA wybieraj w setupie rocznym.
 
 VAT nieczynny/zwolniony wyłącza firmę z JPK VAT na podstawie Statusu VAT firmy.
 Brak danych o statusie pozostaje widoczny do sprawdzenia. Jawny Status VAT ma

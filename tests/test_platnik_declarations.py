@@ -1,9 +1,11 @@
 import json
+import re
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from app.db.dao_conn import get_conn
-from app.integrations.platnik.declarations import REQUIRED, source_query, normalize, import_months, decoded_snapshot
+from app.integrations.platnik.declarations import REQUIRED, source_query, normalize, import_months, import_year, decoded_snapshot, read_year
+from app.integrations.platnik.form_catalog import MONTHLY, ANNUAL
 from app.integrations.enova.accounting import list_accounting, declaration_entries
 from tests.base import DbTestCase
 
@@ -22,7 +24,18 @@ class PlatnikDeclarationRulesTests(TestCase):
         self.assertNotIn('__DRA_STATUS__', query)
         self.assertEqual(query.count('?'), 2)
         self.assertNotIn('__DOCUMENT_KEY__', query)
+        self.assertNotIn('__RECORDS__', query)
+        self.assertNotIn('__PERIOD_RESULT__', query)
         self.assertIn('d.ID_DOKUMENT', query)
+        for code in MONTHLY:
+            self.assertIn("N'ZUS " + code + "'", query)
+        self.assertIn('a.XV_1_DATAWYPEL', query)
+        self.assertNotIn('ZUSIWA', query)
+        annual = source_query(cursor, {}, annual=True)
+        self.assertIn('ZUSIWA', annual)
+        self.assertIn('ZUSZSWA', annual)
+        self.assertIn('AS rok', annual)
+        self.assertNotIn('ZUSZUA', annual)
         cursor.fetchmany.return_value = metadata + [('DOKUMENT', 'STATUSPT')]
         self.assertIn('d.STATUSPT', source_query(cursor, {}))
         cursor.fetchmany.return_value = [(table, col) for table, col in metadata if (table, col) != ('DOKUMENT', 'ID_DOKUMENT')] + [('DOKUMENT', 'ID')]
@@ -44,6 +57,20 @@ class PlatnikDeclarationRulesTests(TestCase):
                         {'source_id': 2, 'employee_id': 2, 'employee_name': ''}):
             with self.assertRaises(ValueError):
                 normalize([ROW, {**ROW, **changed}], ['2026-11'], [NIP])
+
+    def test_every_standard_form_and_registration_identity_is_supported(self):
+        for index, code in enumerate(MONTHLY, 1):
+            row = {**ROW, 'form': 'ZUS ' + code, 'source_id': index,
+                   'employee_id': 12, 'employee_name': 'Test Person'}
+            entry = normalize([row], ['2026-11'], [NIP])[NIP]['2026-11'][0]
+            self.assertEqual(entry['form'], 'ZUS ' + code)
+            self.assertEqual(entry['employee_id'], '12')
+        for code in ANNUAL:
+            row = {**ROW, 'form': 'ZUS ' + code, 'rok': '2025'}
+            entry = normalize([row], ['2025'], [NIP], annual=True)[NIP]['2025'][0]
+            self.assertEqual(entry['reporting_year'], '2025')
+            with self.assertRaises(ValueError):
+                normalize([row], ['2026'], [NIP], annual=True)
 
 
 class PlatnikDeclarationSnapshotTests(DbTestCase):
@@ -97,3 +124,97 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
         self.make_company('Duplicate NIP', nip=NIP)
         with self.assertRaises(ValueError):
             self.import_rows([ROW])
+
+    def test_annual_reads_use_reporting_year_and_yearly_obligations_without_changing_office_filings(self):
+        from app.db.dao_year_end import save_company_year_declarations
+        from app.db.dao_app_settings import get_setting
+        save_company_year_declarations(self.company, {2025: ['ZUS IWA']}, self.admin)
+        rows = [{**ROW, 'form': 'ZUS IWA', 'rok': '2025'},
+                {**ROW, 'form': 'ZUS ZSWA', 'rok': '2025', 'source_id': 2}]
+        with patch('app.integrations.platnik.declarations.load', return_value={'enabled': False}), \
+             patch('app.integrations.platnik.declarations.fetch', return_value=rows) as fetch:
+            import_year(2025, company_ids=[self.company])
+        fetch.assert_called_once_with({'enabled': False}, ['2025'], annual=True)
+        self.assertIsNone(get_setting(f'platnik_declarations_{self.company}_2025-12'))
+        stored = decoded_snapshot(get_setting(f'platnik_declarations_{self.company}_year_2025'))
+        self.assertEqual(len(stored['declarations']), 2)
+        payload = read_year(self.admin, 2025)
+        company = next(company for company in payload['companies'] if company['id'] == self.company)
+        self.assertEqual(company['forms'], ['IWA'])
+        self.assertEqual([entry['form'] for entry in company['declarations']], ['ZUS IWA'])
+        from app.accounting.annual_zus_ui import AnnualZusPanel
+        panel = AnnualZusPanel(self.admin)
+        self.addCleanup(panel.close)
+        panel.payload = payload
+        panel.set_filter('IWA', '')
+        self.assertEqual(panel.table.rowCount(), 1)
+        panel.set_filter('ZSWA', '')
+        self.assertEqual(panel.table.rowCount(), 0)
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM zakonczenie_roku WHERE firma_id=%s', (self.company,)).fetchone()[0], 0)
+
+
+class PlatnikSourceSqlTests(DbTestCase):
+    """Execute shipped joins/ranges against PostgreSQL with explicit dialect conversion.
+
+    This does not establish native SQL Server compatibility.
+    """
+    def setUp(self):
+        super().setUp()
+        self.metadata = [(table, col) for table, cols in REQUIRED.items() for col in cols]
+        self.metadata += [('DOKUMENT', 'ID_DOKUMENT'), ('DOKUMENT', 'STATUSPT')]
+        with get_conn() as conn:
+            for table in REQUIRED:
+                cols = [col for name, col in self.metadata if name == table]
+                declarations = [col + (' int' if col.startswith('ID_') else ' text') for col in cols]
+                conn.execute('CREATE TABLE ' + table + '(' + ','.join(declarations) + ')')
+
+    def query(self, conn, annual=False):
+        cursor = Mock()
+        cursor.fetchmany.return_value = self.metadata
+        sql = source_query(cursor, {}, annual=annual)
+        # The conversion helper rejects malformed dates just like TRY_CONVERT.
+        conn.execute("""CREATE OR REPLACE FUNCTION pg_temp.try_date(value text, fmt text) RETURNS date
+            LANGUAGE plpgsql AS $$ BEGIN RETURN to_date(value,fmt); EXCEPTION WHEN others THEN RETURN NULL; END $$""")
+        sql = re.sub(r'CONVERT\(nvarchar\(\d+\),\s*(a\.[A-Z0-9_]+|d\.STATUSPT)(?:,23)?\)', r'CAST(\1 AS varchar)', sql)
+        sql = sql.replace('CONVERT(char(7),r.reporting_date,120)', "to_char(r.reporting_date,'YYYY-MM')")
+        sql = sql.replace('CONVERT(char(4),r.reporting_date,112)', "to_char(r.reporting_date,'YYYY')")
+        sql = sql.replace('TRY_CONVERT(date,r.source_period,23)', "pg_temp.try_date(r.source_period,'YYYY-MM-DD')")
+        sql = sql.replace("TRY_CONVERT(date,r.compact_period + N'0101',112)", "pg_temp.try_date(r.compact_period || '0101','YYYYMMDD')")
+        sql = sql.replace("TRY_CONVERT(date,RIGHT(r.compact_period,4) + LEFT(r.compact_period,2) + N'01',112)",
+                          "pg_temp.try_date(RIGHT(r.compact_period,4) || LEFT(r.compact_period,2) || '01','YYYYMMDD')")
+        sql = sql.replace("r.compact_period NOT LIKE N'%[^0-9]%'", "r.compact_period ~ '^[0-9]+$'")
+        sql = re.sub(r'nvarchar\(\d+\)', 'varchar', sql)
+        sql = sql.replace('LEN(', 'length(').replace("N'", "'").replace('dbo.', '').replace(' + ', ' || ').replace('?', '%s')
+        bounds = ('2025-01-01', '2026-01-01') if annual else ('2026-06-01', '2026-07-01')
+        return [dict(row) for row in conn.execute(sql, bounds).fetchall()]
+
+    def test_monthly_and_registration_joins_use_correct_period_and_exclusive_end(self):
+        with get_conn() as conn:
+            conn.execute("INSERT INTO DOKUMENT(ID_DOKUMENT,ID_PLATNIK,STATUSPT) VALUES (1,7,'P'),(10,7,'N'),(11,7,'N')")
+            conn.execute("INSERT INTO ZUSRSA(ID_DOKUMENT,ID_PLATNIK,II_1_NIP,I_1_2OKRROZL,I_1_1IDRAPS) VALUES (1,7,%s,'06/2026','02')", (NIP,))
+            conn.execute("INSERT INTO UBEZP_ZUSRSA(ID_DOKUMENT,ID_DOK_NAD,ID_PLATNIK,ID_UBEZPIECZONY,III_A_2_IMIEPIERW,III_A_1_NAZWISKO) "
+                         "VALUES (2,1,7,20,'Anna','A'),(3,1,7,21,'Jan','B')")
+            conn.execute("INSERT INTO ZUSZUA(ID_DOKUMENT,ID_PLATNIK,II_1_NIP,ID_UBEZPIECZONY,III_6_IMIEPIERW,III_5_NAZWISKO,XV_1_DATAWYPEL) "
+                         "VALUES (10,7,%s,20,'Anna','A','2026-06-01')", (NIP,))
+            conn.execute("INSERT INTO ZUSZWUA(ID_DOKUMENT,ID_PLATNIK,II_1_NIP,ID_UBEZPIECZONY,III_6_IMIEPIERW,III_5_NAZWISKO,VI_1_DATAWYPEL) "
+                         "VALUES (11,7,%s,20,'Anna','A','2026-07-01')", (NIP,))
+            rows = self.query(conn)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({row['form'] for row in rows}, {'ZUS RSA', 'ZUS ZUA'})
+        self.assertEqual({row['miesiac'] for row in rows}, {'2026-06'})
+        entries = normalize(rows, ['2026-06'], [NIP])[NIP]['2026-06']
+        self.assertEqual({entry['employee_id'] for entry in entries if entry['employee_id']}, {'20', '21'})
+
+    def test_annual_query_uses_declared_year_and_rejects_cross_payer_child(self):
+        with get_conn() as conn:
+            conn.execute("INSERT INTO DOKUMENT(ID_DOKUMENT,ID_PLATNIK) VALUES (1,7),(2,7)")
+            conn.execute("INSERT INTO ZUSIWA(ID_DOKUMENT,ID_PLATNIK,II_1_NIP,I_1_2OKRINFOR,I_1_1IDINFOR) VALUES (1,7,%s,'2025','01')", (NIP,))
+            conn.execute("INSERT INTO ZUSZSWA(ID_DOKUMENT,ID_PLATNIK,II_1_NIP,I_1_2OKRESZGL,I_1_1IDZGLOSZ) VALUES (2,7,%s,'2025','02')", (NIP,))
+            conn.execute("INSERT INTO UBEZP_ZUSZSWA(ID_DOKUMENT,ID_DOK_NAD,ID_PLATNIK,ID_UBEZPIECZONY,III_A_8_IMIEPIERW,III_A_7_NAZWISKO) "
+                         "VALUES (3,2,8,20,'Wrong','Payer')")
+            rows = self.query(conn, annual=True)
+        self.assertEqual({row['rok'] for row in rows}, {'2025'})
+        self.assertEqual({row['form'] for row in rows}, {'ZUS IWA', 'ZUS ZSWA'})
+        with self.assertRaises(ValueError):
+            normalize(rows, ['2025'], [NIP], annual=True)

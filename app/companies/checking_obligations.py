@@ -11,7 +11,10 @@ from app.utils.months import month_bounds
 MONTHLY_FORMS = (('JPKVAT', 'JPK VAT — ewidencja miesięczna'), ('VATUE', 'VAT-UE'),
                  ('PIT', 'Zaliczka PIT'), ('CIT', 'Zaliczka CIT'),
                  ('DRA', 'ZUS DRA'), ('RCA', 'ZUS RCA'), ('RSA', 'ZUS RSA'),
-                 ('RPA', 'ZUS RPA'), ('RZA', 'ZUS RZA'))
+                 ('RPA', 'ZUS RPA'), ('RZA', 'ZUS RZA'),
+                 ('ZUA', 'ZUS ZUA — zgłoszenia'), ('ZZA', 'ZUS ZZA — zgłoszenia'),
+                 ('ZWUA', 'ZUS ZWUA — wyrejestrowania'), ('ZIUA', 'ZUS ZIUA — zmiany danych'),
+                 ('ZCNA', 'ZUS ZCNA — zgłoszenia rodzin'))
 VAT_PERIODS = (('auto', 'Według statusu VAT — miesięcznie'), ('monthly', 'VAT miesięczny'),
                ('quarterly', 'VAT kwartalny'), ('none', 'Nie dotyczy'))
 
@@ -27,7 +30,7 @@ def profile(value, month):
     periods = (value or {}).get('periods', {})
     eligible = [period for period in periods if period <= month]
     # Unconfigured legacy companies stay visible until their scope is specified.
-    return periods[max(eligible)] if eligible else {'vat_period': 'auto', 'forms': {}}
+    return {**periods[max(eligible)], '_configured': True} if eligible else {'vat_period': 'auto', 'forms': {}}
 
 
 def save(company_id, edits, actor_id):
@@ -41,7 +44,7 @@ def save(company_id, edits, actor_id):
         if set(value['forms']) - dict(MONTHLY_FORMS).keys() or any(
                 cadence not in ('monthly', 'quarterly', 'none') for cadence in value['forms'].values()):
             raise ValueError('Nieprawidłowe formularze rozliczeń miesięcznych.')
-        if any(value['forms'].get(key) == 'quarterly' for key in ('JPKVAT', 'VATUE', 'DRA', 'RCA', 'RSA', 'RPA', 'RZA')):
+        if any(value['forms'].get(key) == 'quarterly' for key in dict(MONTHLY_FORMS) if key not in ('PIT', 'CIT')):
             raise ValueError('Raporty ZUS, VAT-UE i ewidencja JPK są miesięczne.')
     with get_conn() as conn:
         if not conn.execute('SELECT id FROM firmy WHERE id=%s', (company_id,)).fetchone():
@@ -79,5 +82,6 @@ def report_applies(company, form, month=None):
         if key in ('VAT', 'VAT7', 'VAT7K'):
             return cadence != 'quarterly' or int(month[-2:]) % 3 == 0
         key = 'JPKVAT'  # V7K ewidencja is still monthly.
-    cadence = selected.get('forms', {}).get(key, 'monthly')
+    default = 'none' if selected.get('_configured') and key in dict(MONTHLY_FORMS) else 'monthly'
+    cadence = selected.get('forms', {}).get(key, default)
     return cadence != 'none' and (cadence != 'quarterly' or int(month[-2:]) % 3 == 0)

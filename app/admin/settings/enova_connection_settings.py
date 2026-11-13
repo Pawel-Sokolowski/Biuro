@@ -75,6 +75,10 @@ class EnovaConnectionSettings(QWidget):
         from app.utils.background import TaskRunner
         self.preview_runner = TaskRunner(self)
         self.connection_runner = TaskRunner(self)
+        self.discovery_runner = TaskRunner(self)
+        self.discovery_button = QPushButton('Znajdź bazy Enovy po NIP')
+        self.discovery_button.clicked.connect(self.discover_databases)
+        layout.addWidget(self.discovery_button)
         self.connection_button = QPushButton('Sprawdź połączenie z bazą Enova')
         self.connection_button.clicked.connect(self.check_connection)
         layout.addWidget(self.connection_button)
@@ -205,3 +209,52 @@ class EnovaConnectionSettings(QWidget):
             self.schema_button.setEnabled(True)
             QMessageBox.warning(self, 'Struktura Enova', str(exc))
         self.schema_runner.submit(lambda: inspect_schema(config, database, password=password), done, failed)
+
+    def discovery_fields(self):
+        return (self.server.text().strip(), self.username.text().strip(), self.driver.currentData(),
+                self.trust_certificate.isChecked(), self.password.text())
+
+    def discover_databases(self):
+        from app.security.authorization import is_administrator
+        from app.integrations.enova.discovery import discover, propose
+        fields = self.discovery_fields()
+        config = load_connection()
+        config.update(server=fields[0],username=fields[1],driver=fields[2],trust_server_certificate=fields[3])
+        self.discovery_button.setEnabled(False)
+        self.discovery_button.setText('Wyszukiwanie baz po NIP…')
+        def reset():
+            self.discovery_button.setEnabled(True)
+            self.discovery_button.setText('Znajdź bazy Enovy po NIP')
+        def work():
+            if not is_administrator(self.actor_id):
+                raise PermissionError('Brak uprawnień do konfiguracji Enovy.')
+            return discover(config,password=fields[4])
+        def done(result):
+            reset()
+            if self.discovery_fields()!=fields or not is_administrator(self.actor_id):
+                QMessageBox.warning(self,'Enova','Ustawienia zmieniły się podczas wyszukiwania. Uruchom wyszukiwanie ponownie.')
+                return
+            current = {company['id']:self.table.item(row,2).text().strip() for row,company in enumerate(self.companies)}
+            proposals,conflicts = propose(self.companies,current,result)
+            for row,company in enumerate(self.companies):
+                if company['id'] in proposals:
+                    self.table.item(row,2).setText(proposals[company['id']])
+            details = conflicts + result['warnings'] + result['errors']
+            for nip,databases in result['matches'].items():
+                details.append(nip + ' → ' + ', '.join(databases))
+            box = QMessageBox(self)
+            box.setWindowTitle('Bazy Enovy — dopasowanie po NIP')
+            from PyQt6.QtCore import Qt
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            box.setText(f"Dostępne bazy: {result['visible']}; bazy z rozpoznaną strukturą Enovy: {result['scanned']}. "
+                        f"Uzupełniono pustych przypisań: {len(proposals)}. "
+                        'Sprawdź wynik i kliknij Zapisz połączenie Enova. '
+                        'Ręczne przypisania pozostawiono. Kopie baz i powielone NIP-y wymagają wyboru ręcznego. '
+                        'Wyszukiwanie obejmuje tylko bazy widoczne i dostępne dla podanego konta SQL.')
+            box.setDetailedText('\n'.join(details) or 'Brak odczytanych NIP-ów. Sprawdź dostęp do baz i tabeli dbo.OddzialyFirmy.')
+            box.exec()
+        def failed(error):
+            reset()
+            QMessageBox.warning(self,'Wyszukiwanie Enova',str(error) if isinstance(error,(ValueError,PermissionError)) else
+                                'Nie udało się odczytać listy baz. Sprawdź połączenie SQL i uprawnienia do master oraz baz firm.')
+        self.discovery_runner.submit(work,done,failed)

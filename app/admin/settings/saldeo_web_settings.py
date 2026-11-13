@@ -4,7 +4,7 @@ import subprocess
 import sys
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QCheckBox,
-    QComboBox, QSpinBox, QPushButton, QLabel, QTableWidget, QTableWidgetItem, QAbstractItemView)
+    QComboBox, QSpinBox, QPushButton, QLabel, QTableWidget, QTableWidgetItem, QAbstractItemView, QFileDialog)
 from app.utils.background import TaskRunner
 from app.db.dao_app_settings import get_setting
 from app.integrations.saldeo_web.settings import load, save
@@ -78,7 +78,10 @@ class SaldeoWebSettings(QWidget):
                       'Edge lub Chrome musi być zainstalowany na serwerze. Sesja przeglądarki jest lokalna '
                       'dla konta Windows workera. Po pierwszym logowaniu zamknij okno przeglądarki. '
                       'Selektory CSS muszą odpowiadać rzeczywistemu widokowi historii Saldeo; nie są zgadywane. '
-                      'Nie wskazuj listy pokazującej wyłącznie nieprzeczytane wpisy.')
+                      'Nie wskazuj listy pokazującej wyłącznie nieprzeczytane wpisy. '
+                      'Podczas ręcznego logowania rozpoznajemy jednoznaczne pola formularza, bez odczytu wpisanych haseł. '
+                      'CSS pola loginu oznacza np. input[qa-id="username"], a nie cały HTML. '
+                      'Po zamknięciu przeglądarki otwórz ustawienia ponownie, aby wczytać rozpoznane pola.')
         note.setWordWrap(True)
         layout.addWidget(note)
         config = load()
@@ -102,10 +105,19 @@ class SaldeoWebSettings(QWidget):
         self.password.setPlaceholderText('Puste zachowuje zapisane hasło; 2FA wymaga ręcznego logowania')
         form.addRow('Hasło Saldeo (opcjonalne)', self.password)
         self.channel = QComboBox()
-        for label, value in (('Microsoft Edge','msedge'), ('Google Chrome','chrome')):
+        for label, value in (('Automatycznie — Chrome / Edge','auto'), ('Microsoft Edge','msedge'), ('Google Chrome','chrome')):
             self.channel.addItem(label, value)
         self.channel.setCurrentIndex(max(0,self.channel.findData(config['channel'])))
         form.addRow('Przeglądarka', self.channel)
+        self.executable = QLineEdit(config.get('executable_path',''))
+        self.executable.setPlaceholderText('Opcjonalnie: pełna ścieżka do chrome.exe / msedge.exe')
+        form.addRow('Plik przeglądarki', self.executable)
+        browse = QPushButton('Wybierz plik przeglądarki .exe')
+        browse.clicked.connect(self.choose_browser)
+        form.addRow(browse)
+        detect = QPushButton('Sprawdź wykrywanie przeglądarki')
+        detect.clicked.connect(self.detect_browser)
+        form.addRow(detect)
         self.pages, self.pause = QSpinBox(), QSpinBox()
         self.pages.setRange(1,100)
         self.pages.setValue(config['max_pages'])
@@ -130,7 +142,7 @@ class SaldeoWebSettings(QWidget):
     def save(self):
         try:
             config = {key: field.text().strip() for key, field in self.fields.items()}
-            config.update(enabled=self.enabled.isChecked(), channel=self.channel.currentData(),
+            config.update(enabled=self.enabled.isChecked(), channel=self.channel.currentData(), executable_path=self.executable.text().strip(),
                           max_pages=self.pages.value(), pause_seconds=self.pause.value())
             save(config, self.actor_id, self.password.text())
             self.password.clear()
@@ -138,9 +150,40 @@ class SaldeoWebSettings(QWidget):
         except (ValueError, PermissionError) as error:
             self.status.setText(str(error))
 
+    def choose_browser(self):
+        path,_ = QFileDialog.getOpenFileName(self,'Wybierz Chrome lub Edge','','Program (*.exe)')
+        if path:
+            self.executable.setText(path)
+
+    def detect_browser(self):
+        from app.integrations.saldeo_web.executable import resolve
+        try:
+            path = resolve({'channel':self.channel.currentData(),'executable_path':self.executable.text()})
+            self.status.setText('Wykryto na tym komputerze: ' + path + '. Zapisz ustawienia przed otwarciem przeglądarki.')
+        except ValueError as error:
+            self.status.setText(str(error))
+
     def login(self):
         args = [sys.executable, '--saldeo-login'] if getattr(sys,'frozen',False) else [sys.executable, '-m', 'app.integrations.saldeo_web.login']
-        subprocess.Popen(args)
+        try:
+            process = subprocess.Popen(args)
+        except OSError:
+            self.status.setText('Nie udało się uruchomić okna logowania.')
+            return
+        self.login_timer = QTimer(self)
+        self.login_timer.setInterval(1000)
+        def completed():
+            if process.poll() is None:
+                return
+            self.login_timer.stop()
+            config = load()
+            for key in ('username_selector','password_selector','submit_selector'):
+                if not self.fields[key].text().strip() and config.get(key):
+                    self.fields[key].setText(config[key])
+            self.status.setText('Zamknięto okno logowania. Wczytano rozpoznane pola, jeśli formularz był jednoznaczny. '
+                                'Wykrywanie historii powiadomień nadal wymaga dopasowania widoku.')
+        self.login_timer.timeout.connect(completed)
+        self.login_timer.start()
         self.status.setText('Otwieranie przeglądarki. Sesja dotyczy tego konta Windows. Worker zaczeka, jeśli profil jest zajęty.')
 
     def check(self):

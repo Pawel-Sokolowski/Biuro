@@ -72,3 +72,25 @@ https://saldeo.brainshare.pl/biuro/operacje/lista-operacji.hta
 Jest domyślnie wpisany w ustawieniach. Jeśli lista wymaga kliknięcia dzwonka,
 można podać opcjonalny selektor „otwórz dzwonek/listę”. Sama znajomość adresu
 nie potwierdza selektorów wpisów w prywatnym widoku.
+
+## Wykrywanie przeglądarki i formularz logowania
+
+W ustawieniach można wybrać automatyczne wykrywanie, Chrome lub Edge albo wskazać
+pełną ścieżkę do istniejącego pliku EXE. Wykrywanie uwzględnia rejestr App Paths
+oraz instalacje w Program Files, Program Files (x86) i LocalAppData bieżącego
+konta Windows. „Sprawdź wykrywanie przeglądarki” pokazuje konkretną ścieżkę.
+Playwright dostaje tę ścieżkę zamiast polegać wyłącznie na domyślnym kanale.
+
+Otwarcie ręcznego logowania nie wymaga selektorów monitorowania, także jeśli
+w konfiguracji włączono wcześniej monitoring. Gdy formularz zawiera po jednym
+widocznym polu `input[qa-id="username"]`, `input[type="password"]` i przycisku
+`button:has-text("Zaloguj")`, zapamiętujemy te selektory w pustych ustawieniach.
+Nie odczytujemy wartości wpisanych do formularza ani hasła. Pozostałe mapowania
+są zachowane; po zamknięciu procesu logowania panel wczytuje rozpoznane pola do
+pustych komórek, zachowując własne wpisy użytkownika.
+
+To rozpoznanie formularza logowania, nie automatyczne rozpoznanie struktury
+historii powiadomień. Do historii nadal trzeba dopasować znacznik sesji,
+wiersze, pustą listę i paginację. Pełnego znacznika HTML nie wkleja się do pola CSS:
+z przesłanego `<input ... qa-id="username" id="mat-input-0">` selektor to
+`input[qa-id="username"]`. Dynamicznego `mat-input-0` nie utrwalamy.

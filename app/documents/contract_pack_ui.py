@@ -290,6 +290,8 @@ class ContractPackDialog(QDialog):
                        postcode='kod_pocztowy', city='miejscowosc', country='panstwo', birth_date='data_urodzenia')
         for key, widget in self.representatives[index].items():
             value = str(person.get(key) or person.get(aliases.get(key)) or '')
+            if key == 'country' and value.casefold() in ('polska', 'poland'):
+                value = 'PL'
             if isinstance(widget, QComboBox):
                 widget.setCurrentText(value)
             else:
@@ -310,6 +312,8 @@ class ContractPackDialog(QDialog):
                           building=owner.get('nr_domu') or values.get('building', ''),
                           apartment=owner.get('nr_mieszkania') or '', postcode=owner.get('kod_pocztowy') or values.get('postcode', ''),
                           city=owner.get('miejscowosc') or values.get('city', ''), country=owner.get('panstwo') or 'PL')
+            if str(values['country']).casefold() in ('polska', 'poland'):
+                values['country'] = 'PL'
             values['address'] = formatted_address(values)
         for key, widget in self.fields.items():
             if key in values:

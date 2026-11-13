@@ -50,7 +50,7 @@ def validate_server(server):
     if not server:
         raise ValueError('Uzupełnij serwer SQL.')
     if '/' in server:
-        raise ValueError(r'Adres instancji SQL wymaga ukośnika wstecznego: np. 192.168.1.16\SQLEMKA, a nie 192.168.1.16/SQLEMKA. Możesz też użyć host,port.')
+        raise ValueError(r'Adres instancji SQL wymaga ukośnika wstecznego: np. 192.168.1.16\SQLEXPRESS, a nie 192.168.1.16/SQLEXPRESS. Możesz też użyć host,port.')
     return server
 
 

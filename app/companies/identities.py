@@ -21,7 +21,7 @@ def payer_nips(company, partners=()):
 def company_recipients(company, partners=(), *, billing=False):
     from app.invoices.invoice_delivery import parse_recipients
     if is_civil(company):
-        people = [p for p in partners if p.get('imie_pierwsze') or p.get('nazwisko')]
+        people = list(partners)
         if people:
             addresses = []
             for owner in people:

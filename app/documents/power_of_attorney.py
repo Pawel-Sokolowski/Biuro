@@ -63,7 +63,7 @@ def resolve_employee(data, actor_id=None):
         raise ValueError('Wybierz aktywnego pracownika jako pełnomocnika.')
     if actor_id is not None:
         from app.employees.authority_profiles import load
-        selected = {**load(employee['id'], actor_id), **{k: v for k, v in selected.items() if v not in (None, '')}}
+        selected = {**load(employee['id'], actor_id), **selected}
     office = office_address()
     if not office['street'] or not office['postcode'] or not office['city']:
         raise ValueError('Uzupełnij firmowy adres, kod i miejscowość w ustawieniach danych sprzedawcy.')

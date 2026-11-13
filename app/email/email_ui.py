@@ -473,6 +473,7 @@ class EmailPage(QWidget):
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
+        self._office_folder_prefix = str(get_setting('email_folder_prefix') or '')
         self._list_jobs = TaskRunner(self)
         self._message_jobs = TaskRunner(self)
         self._command_jobs = CommandRunner(self)

@@ -188,7 +188,7 @@ class CompanyForm(QDialog):
             nazwa_saldeo = QLineEdit()
             nazwa_saldeo.setPlaceholderText("Nazwa kontrahenta z Saldeo (eksport faktur)")
             nazwa_saldeo_firmy = QLineEdit()
-            nazwa_saldeo_firmy.setPlaceholderText("Nazwa firmy w Saldeo, np. EMKASP (rozpoznawanie maili)")
+            nazwa_saldeo_firmy.setPlaceholderText("Nazwa firmy w Saldeo, np. DEMOCO (rozpoznawanie maili)")
             add_row(["Nazwa skrócona w Saldeo:", "Nazwa firmy w Saldeo (maile):"],
                     [nazwa_saldeo, nazwa_saldeo_firmy])
             self.inputs["nazwa_saldeo"] = nazwa_saldeo

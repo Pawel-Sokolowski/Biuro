@@ -169,8 +169,8 @@ class PowerOfAttorneyXmlTests(unittest.TestCase):
             self.assertEqual(len(result.pages), 3)
             self.assertIn('NOWAK', result.pages[0].extract_text())
             self.assertIn('REPREZENTANTA', result.pages[0].extract_text())
-            self.assertNotIn('CHOPINA', result.pages[0].extract_text())
-            self.assertIn('CHOPINA', result.pages[1].extract_text())
+            self.assertNotIn('PRZYKŁADOWA', result.pages[0].extract_text())
+            self.assertIn('PRZYKŁADOWA', result.pages[1].extract_text())
             self.assertIn('PRZYKŁADOWA SPÓŁKA', ' '.join(result.pages[1].extract_text().split()))
             self.assertIn('579/26', result.pages[2].extract_text())
         with patch.object(pel_paper, 'TEMPLATE_SHA256', 'other'):

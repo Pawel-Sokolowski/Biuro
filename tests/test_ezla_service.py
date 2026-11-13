@@ -7,7 +7,7 @@ import pyzipper
 from lxml import etree
 import requests
 from app.integrations.ezla.service import (fetch_reports, parse_response, decode_archive, request_body,
-    ServiceError, SOAP_NS, ZUS_NS, ENDPOINT, TRANSPORT_LOGIN)
+    ServiceError, SOAP_NS, ZUS_NS, ENDPOINT, TRANSPORT_LOGIN, SOAP_ACTION)
 from app.integrations.ezla.sync import since_date
 from tests.test_ezla_report import report, certificate
 
@@ -78,6 +78,8 @@ class EzlaSoapTests(TestCase):
         args, kwargs = post.call_args
         self.assertEqual(args, (ENDPOINT,))
         self.assertEqual(kwargs['auth'], (TRANSPORT_LOGIN, TRANSPORT_LOGIN))
+        self.assertEqual(SOAP_ACTION, 'zus_channel_platnikRaportyZla_wsdlPlatnikRaportyZla_Binder_pobierzRaporty')
+        self.assertEqual(kwargs['headers']['SOAPAction'], '"' + SOAP_ACTION + '"')
         self.assertFalse(kwargs['allow_redirects'])
         self.assertNotIn('verify', kwargs)  # Requests verifies TLS by default.
         self.assertNotIn('payer-secret', repr(kwargs['headers']))

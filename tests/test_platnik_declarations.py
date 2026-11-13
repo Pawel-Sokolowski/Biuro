@@ -121,7 +121,10 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
             after = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
                                  (f'platnik_declarations_{self.company}_2026-11',)).fetchone()[0]
         self.assertEqual(before, after)
-        self.make_company('Duplicate NIP', nip=NIP)
+        # Normal company saves merge by NIP; model an actual legacy duplicate.
+        with get_conn() as conn:
+            conn.execute('UPDATE firmy SET nip=%s WHERE id=%s', (NIP, self.other))
+            self.assertEqual(conn.execute('SELECT count(*) FROM firmy WHERE nip=%s', (NIP,)).fetchone()[0], 2)
         with self.assertRaises(ValueError):
             self.import_rows([ROW])
 

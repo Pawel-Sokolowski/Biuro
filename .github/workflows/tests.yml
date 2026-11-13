@@ -141,6 +141,10 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile($schemaScript, [ref]$parseTokens, [ref]$parseErrors)
           if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
           $windowsPowerShell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+          & $windowsPowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $schemaScript -CheckParameters
+          if ($LASTEXITCODE) { throw 'Platnik SQL credential construction failed' }
+          & $windowsPowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $schemaScript -CheckParameters -CheckWindowsAuthentication
+          if ($LASTEXITCODE) { throw 'Platnik Windows credential construction failed' }
           Push-Location $env:RUNNER_TEMP
           try {
             # Exercise the user's real host and default binding, not just pwsh parsing.

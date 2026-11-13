@@ -1,37 +1,60 @@
 [CmdletBinding()]
-param()
+param([switch]$CheckParameters, [switch]$CheckWindowsAuthentication)
 $ErrorActionPreference = 'Stop'
 $connection = $null
 $securePassword = $null
+$stage = 'Inicjalizacja'
+$exitCode = 0
 try {
     if ($PSVersionTable.PSVersion -lt [version]'5.1') { throw 'PowerShell 5.1 required' }
     Add-Type -AssemblyName System.Data
     Write-Host 'PLATNIK - eksport struktury SQL (bez rekordow i bez zmian w bazie)'
     Write-Host 'Podaj dane Microsoft SQL Server PLATNIKA, nie PostgreSQL ani login Biuro.'
-    $sqlServer = Read-Host 'Serwer / instancja (np. SERWER\PLATNIK lub IP,port)'
-    $database = Read-Host 'Nazwa bazy Platnika'
-    if (-not $sqlServer.Trim() -or -not $database.Trim()) { throw 'Server and database required' }
-    $windowsAuth = (Read-Host 'Uzyc konta Windows? T/N [N]') -match '^(t|tak|y|yes)$'
-    $trustCertificate = (Read-Host 'Zaufac wlasnemu certyfikatowi SQL? T/N [N]') -match '^(t|tak|y|yes)$'
-    $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
-    $builder.DataSource = $sqlServer.Trim()
-    $builder.InitialCatalog = $database.Trim()
-    $builder.ApplicationName = 'Biuro - metadata-only Platnik export'
-    $builder.ConnectTimeout = 15
-    $builder.Encrypt = $true
-    $builder.TrustServerCertificate = $trustCertificate
-    $builder.ApplicationIntent = [System.Data.SqlClient.ApplicationIntent]::ReadOnly
-    if ($windowsAuth) {
-        $builder.IntegratedSecurity = $true
-        $connection = [System.Data.SqlClient.SqlConnection]::new($builder.ConnectionString)
+    if ($CheckParameters) {
+        $sqlServer = 'localhost'
+        $database = 'platnik_parameter_check'
+        $windowsAuth = [bool]$CheckWindowsAuthentication
+        $trustCertificate = $true
     } else {
-        $sqlLogin = Read-Host 'Uzytkownik SQL (nie login do programu Platnik)'
-        $securePassword = Read-Host 'Haslo SQL (nie zostanie zapisane)' -AsSecureString
-        $securePassword.MakeReadOnly()
-        $credential = [System.Data.SqlClient.SqlCredential]::new($sqlLogin, $securePassword)
-        $connection = [System.Data.SqlClient.SqlConnection]::new($builder.ConnectionString, $credential)
+        $sqlServer = Read-Host 'Serwer / instancja (np. SERWER\PLATNIK lub IP,port)'
+        $database = Read-Host 'Nazwa bazy Platnika'
+        if (-not $sqlServer.Trim() -or -not $database.Trim()) { throw 'Server and database required' }
+        $windowsAuth = (Read-Host 'Uzyc konta Windows? T/N [N]') -match '^(t|tak|y|yes)$'
+        $trustCertificate = (Read-Host 'Zaufac wlasnemu certyfikatowi SQL? T/N [N]') -match '^(t|tak|y|yes)$'
     }
+    $stage = 'Pobieranie danych logowania'
+    if (-not $windowsAuth) {
+        $sqlLogin = if ($CheckParameters) { 'test_only' } else { Read-Host 'Uzytkownik SQL (np. sa; nie login do programu Platnik)' }
+        if ([string]::IsNullOrWhiteSpace($sqlLogin)) { throw 'SQL login required' }
+        $securePassword = if ($CheckParameters) { ConvertTo-SecureString 'parameter-test-only' -AsPlainText -Force } else { Read-Host 'Haslo SQL (nie zostanie zapisane)' -AsSecureString }
+        $securePassword.MakeReadOnly()
+    }
+    $stage = 'Budowanie parametrow SQL'
+    $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+    # PowerShell treats this builder as a dictionary. Use SQL keyword names,
+    # not CLR property names such as DataSource/InitialCatalog.
+    $builder['Data Source'] = $sqlServer.Trim()
+    $builder['Initial Catalog'] = $database.Trim()
+    $builder['Application Name'] = 'Biuro - metadata-only Platnik export'
+    $builder['Connect Timeout'] = 15
+    $builder['Encrypt'] = $true
+    $builder['TrustServerCertificate'] = $trustCertificate
+    $builder['ApplicationIntent'] = 'ReadOnly'
+    $stage = 'Tworzenie polaczenia SQL'
+    if ($windowsAuth) {
+        $builder['Integrated Security'] = $true
+        $connection = [System.Data.SqlClient.SqlConnection]::new($builder.get_ConnectionString())
+    } else {
+        $credential = [System.Data.SqlClient.SqlCredential]::new($sqlLogin.Trim(), $securePassword)
+        $connection = [System.Data.SqlClient.SqlConnection]::new($builder.get_ConnectionString(), $credential)
+    }
+    if ($CheckParameters) {
+        Write-Output 'SQL parameters and credential object constructed; no connection opened.'
+        return
+    }
+    $stage = 'Laczenie z SQL Server'
     $connection.Open()
+    $stage = 'Odczyt metadanych'
     function Read-Metadata([string]$Query) {
         $command = $connection.CreateCommand()
         $command.CommandTimeout = 60
@@ -95,13 +118,16 @@ ORDER BY ps.name,p.name,fk.name,f.constraint_column_id
     $payload = [ordered]@{ format_version=1; database=$database.Trim(); sql_version=$version[0].sql_version;
         exported_at=(Get-Date -Format o); columns=@($columns); indexes=@($keys); foreign_keys=@($relations) }
     $json = ConvertTo-Json -InputObject $payload -Depth 8
+    $stage = 'Zapisywanie JSON'
     [IO.File]::WriteAllText($outputPath, $json, [Text.UTF8Encoding]::new($false))
     Write-Host "Gotowe: $outputPath" -ForegroundColor Green
     Write-Host 'Przeslij plik JSON. Zawiera tylko nazwy obiektow, kolumn, typy i relacje.'
     Write-Host 'Nazwy baz i obiektow sa metadanymi; sprawdz plik przed udostepnieniem.'
 } catch {
+    $exitCode = 1
     Write-Host 'Eksport nie powiodl sie. Nie zmieniono bazy.' -ForegroundColor Red
     $reason = $_.Exception.GetBaseException()
+    Write-Host ("Etap: " + $stage + "; typ: " + $reason.GetType().FullName + "; linia: " + $_.InvocationInfo.ScriptLineNumber)
     if ($reason -is [System.Data.SqlClient.SqlException]) {
         Write-Host ("Numer bledu SQL: " + $reason.Number)
         Write-Host 'Sprawdz serwer, baze, konto SQL/Windows, siec i certyfikat. Metadane wymagaja widocznosci obiektow (VIEW DEFINITION).'
@@ -111,5 +137,9 @@ ORDER BY ps.name,p.name,fk.name,f.constraint_column_id
 } finally {
     if ($connection) { $connection.Dispose() }
     if ($securePassword) { $securePassword.Dispose() }
-    [void](Read-Host 'Nacisnij Enter, aby zakonczyc')
+    if ($CheckParameters) {
+        if ($exitCode -ne 0) { exit $exitCode }
+    } else {
+        [void](Read-Host 'Nacisnij Enter, aby zakonczyc')
+    }
 }

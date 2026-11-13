@@ -299,6 +299,14 @@ class ContractPackDialog(QDialog):
 
     def _principal_owner_changed(self):
         owner = self.principal_owner.currentData()
+        for index, choice in enumerate(self.representative_choices):
+            selected = 0
+            if owner and index == 0:
+                selected = next((i for i in range(1, choice.count())
+                                 if (choice.itemData(i) or {}).get('id') == owner.get('id')), 0)
+            elif not owner and self.context.get('civil_partnership') and choice.count() > index + 1:
+                selected = index + 1
+            choice.setCurrentIndex(selected)
         values = dict(self.context, principal_first_name=self.context.get('principal_first_name', ''),
                       principal_surname=self.context.get('principal_surname', ''), principal_birth_date=self.context.get('principal_birth_date', ''))
         if owner:
@@ -394,13 +402,14 @@ class ContractPackDialog(QDialog):
 
     def _generate_pel(self):
         selected = ['12_pel']
+        values = self.values()
 
         reps = [
-            r for r in self.values()['representatives']
+            r for r in values['representatives']
             if r.get('imie_pierwsze') or r.get('nazwisko')
         ]
 
-        if len(reps) > 1:
+        if values['principal_kind'] != 'person' and len(reps) > 1:
             selected.append('13_pel_z')
 
         self._generate_documents(selected)

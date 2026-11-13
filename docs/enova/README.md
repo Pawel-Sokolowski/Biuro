@@ -482,3 +482,18 @@ Gdy działa stoper firmy (księgowość lub kadry), główny przycisk ma etykiet
 uruchamiania ogólnego i bez otwierania wyboru zadania. Dopiero następne kliknięcie,
 przy braku aktywnego stopera, pozwala uruchomić ogólny. Działający stoper ogólny
 jest zatrzymywany tak jak dotychczas. Błąd zapisu nie uruchamia kolejnego stopera.
+
+## Automatyczne przypisanie baz po NIP
+
+W ustawieniach połączenia (także w panelu workera) przycisk **Znajdź bazy Enovy
+po NIP** odczytuje listę dostępnych baz SQL Server i pole
+`dbo.OddzialyFirmy.DeklaracjeNIP`, którego używają istniejące zapytania importera.
+Nie wyszukuje NIP w kontrahentach, bo każda baza może zawierać wielu kontrahentów.
+Nie zapisuje danych do Enovy i nie uruchamia importu.
+
+Przycisk uzupełnia tylko puste komórki przy jednoznacznym NIP w Biuro i jednej
+rozpoznanej bazie. Ręczne przypisania są zachowane. Kopie/archiwalne bazy o tym
+samym NIP są pokazane w szczegółach, bez wybierania pierwszej. Przy błędach odczytu
+baz automatyczne uzupełnianie jest wstrzymane. Zmiany trzeba zapisać przyciskiem
+**Zapisz połączenie Enova**. Wynik obejmuje tylko bazy widoczne dla konta SQL;
+brak dostępu do metadanych lub inna struktura Enovy wymaga ręcznego mapowania.

@@ -13,7 +13,8 @@ def registry_candidates(browser):
     for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
         for view in (winreg.KEY_WOW64_64KEY,winreg.KEY_WOW64_32KEY):
             try:
-                with winreg.OpenKey(hive,r'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\'+executable,
+                key_path = r'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths' + '\\' + executable
+                with winreg.OpenKey(hive,key_path,
                                     0,winreg.KEY_READ|view) as key:
                     value,_ = winreg.QueryValueEx(key,None)
                     result.append(Path(str(value).strip('"')))

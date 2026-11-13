@@ -28,7 +28,7 @@ class PlatnikSettings(QWidget):
         note = QLabel('Osobne połączenie Microsoft SQL Server programu Płatnik. '
                       'Podaj instancję, np. platnik-srv\\SQLEXPRESS, bazę platnik i użytkownika SQL z prawem SELECT. '
                       'To nie konto PostgreSQL ani login użytkownika Płatnika. '
-                      'Adapter korzysta ze standardowej tabeli wakacji składkowych z Waszego eksportu; nie wymaga własnego pliku SQL.')
+                      'Wbudowane adaptery odczytują wakacje składkowe oraz dokumenty RCA/DRA ze standardowej bazy Płatnika; nie wymagają wybierania plików SQL.')
         note.setWordWrap(True)
         layout.addWidget(note)
         driver_note = QLabel('Sterownik ODBC 17 lub 18 musi być zainstalowany na komputerze workera. '
@@ -61,9 +61,15 @@ class PlatnikSettings(QWidget):
         self.trust = QCheckBox('Ufaj własnemu certyfikatowi serwera (połączenie pozostaje szyfrowane)')
         self.trust.setChecked(config['trust_server_certificate'])
         form.addRow(self.trust)
-        self.enabled = QCheckBox('Włącz odczyt wakacji składkowych z Płatnika')
+        self.enabled = QCheckBox('Włącz odczyt Płatnika przez worker')
         self.enabled.setChecked(config['enabled'])
         form.addRow(self.enabled)
+        self.declarations_enabled = QCheckBox('Odczytuj również dokumenty RCA/DRA (bez zgadywania statusu wysyłki/UPO)')
+        self.declarations_enabled.setChecked(config['declarations_enabled'])
+        form.addRow(self.declarations_enabled)
+        self.declarations_query = QLineEdit(config['declarations_query'])
+        self.declarations_query.setPlaceholderText('Automatycznie: adapter wbudowany. Opcjonalnie pełna ścieżka własnego SQL')
+        form.addRow('RCA/DRA — zamiennik SQL (opcjonalnie)', self.declarations_query)
         self.year = QSpinBox()
         self.year.setRange(2024,2100)
         self.year.setValue(datetime.now(ZoneInfo('Europe/Warsaw')).year)
@@ -98,11 +104,12 @@ class PlatnikSettings(QWidget):
         value = dict(load())
         value.update({key:field.text().strip() for key,field in self.fields.items()})
         value.update(driver=self.driver.currentData(),enabled=self.enabled.isChecked(),
+                     declarations_enabled=self.declarations_enabled.isChecked(),declarations_query=self.declarations_query.text().strip(),
                      trust_server_certificate=self.trust.isChecked(),query_timeout=self.query_timeout.value())
         return value
 
     def form_state(self):
-        keys = ('server','database','username','driver','trust_server_certificate','enabled','query_timeout')
+        keys = ('server','database','username','driver','trust_server_certificate','enabled','query_timeout','declarations_enabled','declarations_query')
         config = self.config()
         return tuple(config.get(key) for key in keys),bool(self.password.text())
 
@@ -126,6 +133,8 @@ class PlatnikSettings(QWidget):
         self.driver.setCurrentIndex(max(0,self.driver.findData(config['driver'])))
         self.trust.setChecked(config['trust_server_certificate'])
         self.enabled.setChecked(config['enabled'])
+        self.declarations_enabled.setChecked(config['declarations_enabled'])
+        self.declarations_query.setText(config['declarations_query'])
         self.query_timeout.setValue(config['query_timeout'])
         self._saved_state = self.form_state()
 

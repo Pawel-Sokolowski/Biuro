@@ -1,5 +1,8 @@
 # Konfiguracja i aktualizacja workera — 1.4.6
 
+Zakres raportów firmy ustaw w [rozliczeniach miesięcznych i kwartalnych](monthly-obligations.md).
+Odczyt RCA/DRA jest opisany w [instrukcji Płatnika](platnik/README.md).
+
 Połączenia Enovy/Płatnika i ustawienia zadań są zapisane w PostgreSQL Biuro.
 Są wspólne dla panelu workera i aplikacji pracowników. Przed instalacją autostartu
 panel zapisuje zmiany z otwartych zakładek **Odczyt z Enovy**, **Płatnik** i **Zadania**.

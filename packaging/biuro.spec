@@ -53,6 +53,7 @@ if sys.platform == "win32":
 
 datas = [
     (str(ROOT / 'docs' / 'enova'), 'docs/enova'),
+    (str(ROOT / 'docs' / 'platnik'), 'docs/platnik'),
     (str(APP / "icons"), "app/icons"),
     (str(APP / "documents" / "templates"), "app/documents/templates"),
     (str(APP / "db" / "migrations"), "app/db/migrations"),

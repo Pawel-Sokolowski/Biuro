@@ -38,7 +38,7 @@ class ConnectionAndJpkTests(DbTestCase):
         super().setUp()
         with get_conn() as conn:
             self.admin = conn.execute('SELECT id FROM pracownicy WHERE is_admin=1').fetchone()[0]
-        self.company = self.make_company(nip='1234567890', forma_opodatkowania='Księgi rachunkowe')
+        self.company = self.make_company(nip='1234567890', forma_opodatkowania='Księgi rachunkowe', status_vat='Czynny')
 
     def test_connection_encryption_and_blank_password_preserves_secret(self):
         config = {'server': r'10.0.0.1\ENOVA', 'database':'Biuro_rachunkowe', 'discovery_query_timeout':300,

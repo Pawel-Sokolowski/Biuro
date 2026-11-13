@@ -126,8 +126,17 @@ def saldeo_job(stop=None):
 
 
 def platnik_job():
-    from app.integrations.platnik.holidays import worker_job
-    return worker_job()
+    from app.integrations.platnik.holidays import worker_job as holidays_job, PlatnikSqlError
+    from app.integrations.platnik.declarations import worker_job as declarations_job
+    results, failed = {}, []
+    for name, job in (('holidays', holidays_job), ('declarations', declarations_job)):
+        try:
+            results[name] = job()
+        except Exception as error:
+            failed.append(name + ': ' + (str(error) if isinstance(error, (PlatnikSqlError, ValueError)) else 'Odczyt nie powiódł się'))
+    if failed:
+        raise RuntimeError('Nieukończone odczyty Płatnika: ' + ', '.join(failed))
+    return results
 
 
 def checking_refresh_job(stop=None):

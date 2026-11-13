@@ -53,7 +53,7 @@ class EnovaDiscoveryTests(TestCase):
         progress = Mock()
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
-            result = discover({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader'},password='secret',progress=progress)
+            result = discover({'server':r'ENOVA\SQLEXPRESS','database':'Biuro_rachunkowe','username':'reader'},password='secret',progress=progress)
         self.assertEqual(result['visible'],122)
         self.assertEqual(result['scanned'],122)
         self.assertEqual(len(result['matches']),122)
@@ -91,7 +91,7 @@ class EnovaDiscoveryTests(TestCase):
         driver.connect.side_effect = [root,company]
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
-            result = discover({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader'},password='secret')
+            result = discover({'server':r'ENOVA\SQLEXPRESS','database':'Biuro_rachunkowe','username':'reader'},password='secret')
         self.assertEqual(result['matches'],{'1112223344':['ALFA']})
         company.cursor.return_value.execute.assert_any_call('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
         root.close.assert_called_once()
@@ -106,7 +106,7 @@ class EnovaDiscoveryTests(TestCase):
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'), \
              self.assertRaises(SqlOperationError) as caught:
-            discover({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader'},password='secret')
+            discover({'server':r'ENOVA\SQLEXPRESS','database':'Biuro_rachunkowe','username':'reader'},password='secret')
         self.assertEqual(caught.exception.diagnostic['database'],'Biuro_rachunkowe')
         self.assertEqual(driver.connect.call_count,1)
         self.assertIn('DATABASE={Biuro_rachunkowe}',driver.connect.call_args.args[0])
@@ -117,7 +117,7 @@ class EnovaDiscoveryTests(TestCase):
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'), \
              self.assertRaises(SqlOperationError) as caught:
-            discover({'server':r'ENOVA\SQLEMKA','username':'sa'},password='private;pass')
+            discover({'server':r'ENOVA\SQLEXPRESS','username':'sa'},password='private;pass')
         error = caught.exception
         self.assertEqual(error.diagnostic['sqlstate'],'08001')
         self.assertEqual(error.diagnostic['database'],'master')
@@ -132,7 +132,7 @@ class EnovaDiscoveryTests(TestCase):
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 17 for SQL Server'), \
              self.assertRaises(SqlOperationError) as caught:
-            discover({'server':r'ENOVA\SQLEMKA','username':'reader'},password='secret')
+            discover({'server':r'ENOVA\SQLEXPRESS','username':'reader'},password='secret')
         self.assertEqual(caught.exception.diagnostic['sqlstate'],'42000')
         self.assertIn('229',caught.exception.diagnostic['details'])
         root.close.assert_called_once()
@@ -145,7 +145,7 @@ class EnovaDiscoveryTests(TestCase):
         driver.connect.side_effect = [root,company]
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
-            result = discover({'server':r'ENOVA\SQLEMKA','username':'reader'},password='secret')
+            result = discover({'server':r'ENOVA\SQLEXPRESS','username':'reader'},password='secret')
         self.assertIn('42S22',result['errors'][0])
         self.assertIn('Invalid column',result['errors'][0])
         self.assertNotIn('secret',result['errors'][0])

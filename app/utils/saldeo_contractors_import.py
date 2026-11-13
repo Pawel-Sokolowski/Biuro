@@ -215,7 +215,7 @@ def import_saldeo_contractors(path: str, actor_id: int) -> dict[str, Any]:
 
 
 def read_saldeo_company_names(path: str) -> list[dict[str, str]]:
-    """Wczytuje kolumny Nazwa firmy, Nazwa skrócona i Login (wzór emka-NIP)."""
+    """Wczytuje kolumny Nazwa firmy, Nazwa skrócona i Login (wzór demo-NIP)."""
     source = Path(path)
     extension = source.suffix.lower()
     if extension == ".csv":
@@ -251,7 +251,7 @@ def read_saldeo_company_names(path: str) -> list[dict[str, str]]:
 def import_saldeo_company_names(path: str, actor_id: int) -> dict[str, Any]:
     """Zapisuje firmy.nazwa_saldeo_firmy (nazwa używana w mailach Saldeo).
 
-    Firma jest dopasowywana po NIP z loginu (emka-[NIP]); nazwa Saldeo
+    Firma jest dopasowywana po NIP z loginu (demo-[NIP]); nazwa Saldeo
     kontrahenta używana w eksporcie faktur pozostaje bez zmian.
     """
     if not is_administrator(actor_id):

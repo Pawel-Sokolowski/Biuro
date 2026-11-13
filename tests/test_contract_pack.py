@@ -73,6 +73,21 @@ class ContractTemplateTests(unittest.TestCase):
         self.assertIn('01.10.2026 r.', text)
         self.assertNotIn('09.02.2026 r.', text)
 
+    def test_office_identity_and_privacy_contact_are_loaded_from_configuration(self):
+        configured = {'faktury_sprzedawca_nazwa': 'Testowe Biuro',
+                      'faktury_sprzedawca_kontakt_rodo': 'Anna Testowa',
+                      'faktury_sprzedawca_stopka_prawna': 'KRS TEST',
+                      'faktury_sprzedawca_email': 'office@example.test'}
+        with patch('app.db.dao_app_settings.get_setting', side_effect=configured.get):
+            self.data.update(pack.office_context())
+        result = self.fill('03_processing')
+        self.assertIn('Anna Testowa', '\n'.join(p.text for p in result.paragraphs))
+        footer = '\n'.join(p.text for section in result.sections
+                           for part in (section.footer, section.even_page_footer, section.first_page_footer)
+                           for p in part.paragraphs)
+        self.assertIn('KRS TEST', footer)
+        self.assertNotIn('{{', footer)
+
     def test_representative_role_is_printed_in_both_agreements_and_pesel_is_optional(self):
         self.data['representatives'] = [dict(imie_pierwsze='Anna', nazwisko='Nowak', stanowisko='Prezes zarządu', pesel='')]
         for key in ('00_framework', '03_processing'):

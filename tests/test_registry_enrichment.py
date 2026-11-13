@@ -22,14 +22,14 @@ class RegistryUpdatePlanTests(unittest.TestCase):
         registry = {
             "nazwa": "Inna nazwa", "nip": "9240000010",
             "dz_miasto": "Szczecin", "dz_ulica": "Nowa 23/1",
-            "regon": "321442130", "krs": "0000000001",
+            "regon": "123456785", "krs": "0000000001",
             "koresp_ulica": "Korespondencyjna 4/3",
             "status_vat": "Zwolniony", "konto_bankowe": "Inny rachunek",
             "uop_ilosc": 99, "limit_dokumentow": 100,
             "adres_zam_miasto": "Obcy adres",
         }
         updates = build_missing_registry_updates(company, registry)
-        self.assertEqual(updates["regon"], "321442130")
+        self.assertEqual(updates["regon"], "123456785")
         self.assertEqual(updates["adres_budynek"], "23")
         self.assertEqual(updates["adres_lokal"], "1")
         self.assertEqual(updates["adres_koresp_ulica"], "Korespondencyjna")
@@ -105,7 +105,7 @@ class RegistryBatchTests(DbTestCase):
         def fake_lookup(nip, forma_dzialalnosci):
             called.append((nip, forma_dzialalnosci))
             return {
-                "nip": nip, "regon": "321442130", "nazwa": "Zmieniona",
+                "nip": nip, "regon": "123456785", "nazwa": "Zmieniona",
                 "dz_miasto": "Szczecin", "dz_ulica": "Zapisana ulica 23/1",
                 "koresp_ulica": "Szkolna 5/2", "status_vat": "Czynny",
                 "konto_bankowe": "Nowy rachunek", "krs": "0000000001",
@@ -121,7 +121,7 @@ class RegistryBatchTests(DbTestCase):
         self.assertEqual(result["errors"], [])
         self.assertEqual(progress[-1][0], result["total"])
         company = get_company(firma)
-        self.assertEqual(company["regon"], "321442130")
+        self.assertEqual(company["regon"], "123456785")
         self.assertEqual(company["nazwa"], "Moja Spółka Cywilna")
         self.assertEqual(company["miasto"], "Szczecin")
         self.assertEqual(company["ulica"], "Zapisana ulica")
@@ -165,13 +165,13 @@ class RegistryBatchTests(DbTestCase):
         def fake_lookup(nip, forma_dzialalnosci):
             if nip == "1234563218":
                 raise RuntimeError("Brak połączenia")
-            return {"nip": nip, "regon": "321442130"}
+            return {"nip": nip, "regon": "123456785"}
 
         result = enrich_all_companies(lookup=fake_lookup)
         self.assertEqual(len(result["errors"]), 1)
         self.assertEqual(result["updated"], 1)
         self.assertFalse(get_company(first)["regon"])
-        self.assertEqual(get_company(second)["regon"], "321442130")
+        self.assertEqual(get_company(second)["regon"], "123456785")
 
     def test_cancellation_stops_before_next_company(self):
         self.make_company("Pierwsza", nip="1234563218", forma_dzialalnosci="JDG")

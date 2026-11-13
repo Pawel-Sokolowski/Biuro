@@ -15,7 +15,7 @@ class HelperTests(unittest.TestCase):
         from app.email.email_ui import display_names, format_list_date
 
         self.assertEqual(
-            display_names("Anna Testowa <biuro@em-ka.example>"), "Anna Testowa"
+            display_names("Anna Testowa <biuro@demo.example>"), "Anna Testowa"
         )
         self.assertEqual(display_names("a@b.pl"), "a@b.pl")
         self.assertEqual(display_names('"Kowalski, Jan" <j@k.pl>, Ewa <e@k.pl>'), "Kowalski, Jan, Ewa")

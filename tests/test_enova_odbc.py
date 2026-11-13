@@ -40,10 +40,10 @@ class OdbcSupportTests(TestCase):
 
     def test_named_instance_requires_backslash(self):
         from app.integrations.enova.odbc_support import validate_server
-        self.assertEqual(validate_server(r'192.168.1.16\SQLEMKA'), r'192.168.1.16\SQLEMKA')
+        self.assertEqual(validate_server(r'192.168.1.16\SQLEXPRESS'), r'192.168.1.16\SQLEXPRESS')
         self.assertEqual(validate_server('sql.example,1433'), 'sql.example,1433')
         with self.assertRaisesRegex(ValueError, 'ukośnika wstecznego'):
-            validate_server('192.168.1.16/SQLEMKA')
+            validate_server('192.168.1.16/SQLEXPRESS')
 
     def test_sql_details_preserve_state_and_redact_password(self):
         from app.integrations.enova.odbc_support import describe_sql_error

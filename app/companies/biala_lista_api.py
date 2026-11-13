@@ -17,7 +17,7 @@ _STATUS_VAT = {"czynny": "Czynny", "zwolniony": "Zwolniony"}
 
 
 def _split_address(text: str) -> Dict[str, str]:
-    """'FRYDERYKA CHOPINA 35, 71-450 SZCZECIN' -> ulica / kod / miasto."""
+    """'TESTOWA 10, 71-450 SZCZECIN' -> ulica / kod / miasto."""
     street, _, rest = (text or "").partition(",")
     match = re.match(r"\s*(\d{2}-\d{3})\s+(.+)", rest)
     ulica, budynek, lokal = split_street_address(street.strip().title())

@@ -955,7 +955,7 @@ class CompanyForm(QDialog):
         billing_layout.addWidget(QLabel("Adres e-mail do wysyłki faktur"))
         self.inputs["email_faktury"] = QLineEdit()
         self.inputs["email_faktury"].setPlaceholderText("np. invoices@firma.com")
-        self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy.")
+        self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy. Dla spółki cywilnej odbiorcy pochodzą z adresów wszystkich wspólników.")
         billing_layout.addWidget(self.inputs["email_faktury"])
         sections_list = [
             ("Firma", [dane_box]), ("Adresy", [adresy_box]),

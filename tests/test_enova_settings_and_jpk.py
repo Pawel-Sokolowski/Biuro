@@ -173,7 +173,7 @@ class DatabaseConnectionTests(TestCase):
         root.cursor.return_value.fetchone.return_value = ('Biuro_rachunkowe',)
         company.cursor.return_value.fetchone.return_value = ('ClientA',)
         driver = SimpleNamespace(connect=Mock(side_effect=[root,company]),drivers=lambda:['ODBC Driver 18 for SQL Server'])
-        config = {'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader',
+        config = {'server':r'ENOVA\SQLEXPRESS','database':'Biuro_rachunkowe','username':'reader',
                   'sources':[{'database':'ClientA'},{'database':'Biuro_rachunkowe'}]}
         with patch.dict('sys.modules',{'pyodbc':driver}):
             result = check_connection(config,password='secret')
@@ -191,7 +191,7 @@ class DatabaseConnectionTests(TestCase):
         connection.cursor.return_value.fetchone.return_value = ('Biuro_rachunkowe',)
         driver = SimpleNamespace(connect=Mock(return_value=connection),drivers=lambda:['ODBC Driver 18 for SQL Server'])
         with patch.dict('sys.modules',{'pyodbc':driver}):
-            result = check_connection({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader','sources':[]},password='secret')
+            result = check_connection({'server':r'ENOVA\SQLEXPRESS','database':'Biuro_rachunkowe','username':'reader','sources':[]},password='secret')
         self.assertEqual(result,[{'database':'Biuro_rachunkowe','ok':True}])
         self.assertIn('DATABASE={Biuro_rachunkowe}',driver.connect.call_args.args[0])
 

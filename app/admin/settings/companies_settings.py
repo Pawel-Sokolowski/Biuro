@@ -129,7 +129,7 @@ class CompaniesSettings(QWidget):
             btn_row.addWidget(btn_saldeo)
 
             btn_saldeo_names = QPushButton("Importuj nazwy firm Saldeo (maile)")
-            btn_saldeo_names.setToolTip("Kolumny: Nazwa firmy, Nazwa skrócona, Login (emka-NIP)")
+            btn_saldeo_names.setToolTip("Kolumny: Nazwa firmy, Nazwa skrócona, Login (demo-NIP)")
             btn_saldeo_names.clicked.connect(self._import_saldeo_company_names)
             btn_row.addWidget(btn_saldeo_names)
 

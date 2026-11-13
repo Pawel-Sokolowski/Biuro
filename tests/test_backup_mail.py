@@ -19,7 +19,7 @@ LOG = """  2026-10-15 01:15 The file "E:\\backup_baz\\Alfa_S_C__20261014.BAK" ha
 
 def plain_message(body):
     msg = EmailMessage()
-    msg["From"] = "Backup <powiadomienia@em-ka.example>"
+    msg["From"] = "Backup <powiadomienia@demo.example>"
     msg.set_content(body)
     return msg
 
@@ -47,7 +47,7 @@ class MailBodyTests(unittest.TestCase):
 
     def test_log_attachment_used_when_body_empty(self):
         msg = EmailMessage()
-        msg["From"] = "powiadomienia@em-ka.example"
+        msg["From"] = "powiadomienia@demo.example"
         msg.set_content(" ")
         msg.add_attachment(LOG.encode("utf-8"), maintype="text", subtype="plain", filename="backup.log")
         self.assertIn("Alfa_S_C", backup_mail.message_log_text(msg))
@@ -64,12 +64,12 @@ class MailRefreshTests(DbTestCase):
     def setUp(self):
         super().setUp()
         conn = get_conn()
-        conn.execute("INSERT INTO konta_email (email, systemowe) VALUES ('Powiadomienia@em-ka.example', 1)")
+        conn.execute("INSERT INTO konta_email (email, systemowe) VALUES ('Powiadomienia@demo.example', 1)")
         conn.execute("INSERT INTO foldery_email (konto_id, server_name) VALUES (1, 'INBOX')")
         rows = [
             ("1", "Backup <noreply@enova.pl>", "Wed, 14 Oct 2026 09:00:00 +0200"),
-            ("2", "powiadomienia@em-ka.example", "Wed, 14 Oct 2026 02:00:00 +0200"),
-            ("3", "powiadomienia@em-ka.example", "Thu, 15 Oct 2026 02:00:00 +0200"),
+            ("2", "powiadomienia@demo.example", "Wed, 14 Oct 2026 02:00:00 +0200"),
+            ("3", "powiadomienia@demo.example", "Thu, 15 Oct 2026 02:00:00 +0200"),
         ]
         for uid, sender, date in rows:
             conn.execute(

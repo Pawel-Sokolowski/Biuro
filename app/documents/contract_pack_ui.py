@@ -102,9 +102,9 @@ class ContractPackDialog(QDialog):
             self.principal_owner.addItem(' '.join(str(person.get(k) or '') for k in ('imie_pierwsze', 'nazwisko')), person)
         powers.addRow('Dane mocodawcy', self.principal_owner)
         self._field(powers, 'short_name', 'Nazwa skrócona', self.context.get('short_name', ''))
-        self._field(powers, 'principal_first_name', 'Imię mocodawcy (osoba fizyczna)')
-        self._field(powers, 'principal_surname', 'Nazwisko mocodawcy (osoba fizyczna)')
-        self._field(powers, 'principal_birth_date', 'Data urodzenia mocodawcy, gdy brak PESEL (DD.MM.RRRR)')
+        self._field(powers, 'principal_first_name', 'Imię mocodawcy (osoba fizyczna)', self.context.get('principal_first_name', ''))
+        self._field(powers, 'principal_surname', 'Nazwisko mocodawcy (osoba fizyczna)', self.context.get('principal_surname', ''))
+        self._field(powers, 'principal_birth_date', 'Data urodzenia mocodawcy, gdy brak PESEL (DD.MM.RRRR)', self.context.get('principal_birth_date', ''))
         self._field(powers, 'principal_identity_number', 'Dokument tożsamości mocodawcy, gdy brak PESEL')
         for field, label in (('street', 'Ulica klienta'), ('building', 'Numer domu'), ('apartment', 'Numer lokalu'),
                              ('postcode', 'Kod pocztowy klienta'), ('city', 'Miejscowość klienta'), ('country', 'Kod kraju (np. PL)'),
@@ -436,9 +436,10 @@ class ContractPackDialog(QDialog):
         company_name = data.get('name', '').strip()
 
         employee_initials = ''
-        employee_id = self.employee.currentData()
+        attorneys = data.get('attorneys') or []
+        employee_id = attorneys[0]['employee_id'] if len(attorneys) == 1 else None
 
-        if len(data.get('attorneys') or []) == 1 and employee_id and employee_id in self._employees:
+        if employee_id in self._employees:
             employee = self._employees[employee_id]
 
             first_name = str(employee.get('imie') or '').strip()

@@ -9,8 +9,8 @@ ERR = {"error": True, "message": "x"}
 class LookupTests(unittest.TestCase):
     def test_parse_subject(self):
         data = parse_subject({
-            "name": "DEMO", "nip": "9240000010", "statusVat": "Czynny", "regon": "321442130",
-            "krs": "0000482087", "workingAddress": "FRYDERYKA CHOPINA 35, 71-450 SZCZECIN",
+            "name": "DEMO", "nip": "9240000010", "statusVat": "Czynny", "regon": "123456785",
+            "krs": "0000999988", "workingAddress": "TESTOWA 10, 71-450 SZCZECIN",
             "accountNumbers": ["11111111111111111111111111"],
         })
         self.assertEqual(data["status_vat"], "Czynny")
@@ -150,10 +150,10 @@ class LookupTests(unittest.TestCase):
         legal = (
             "<dane><praw_rodzajRejestruEwidencji_Nazwa>KRAJOWY REJESTR SĄDOWY"
             "</praw_rodzajRejestruEwidencji_Nazwa>"
-            "<praw_numerWrejestrzeEwidencji>482087"
+            "<praw_numerWrejestrzeEwidencji>999988"
             "</praw_numerWrejestrzeEwidencji></dane>"
         )
-        self.assertEqual(parse_legal_report(legal)["krs"], "0000482087")
+        self.assertEqual(parse_legal_report(legal)["krs"], "0000999988")
 
     def test_gus_fetches_krs_using_fallback_report_when_needed(self):
         from unittest.mock import patch
@@ -181,7 +181,7 @@ class LookupTests(unittest.TestCase):
                 "&lt;praw_rodzajRejestruEwidencji_Nazwa&gt;"
                 "KRAJOWY REJESTR SĄDOWY"
                 "&lt;/praw_rodzajRejestruEwidencji_Nazwa&gt;"
-                "&lt;praw_numerWrejestrzeEwidencji&gt;482087"
+                "&lt;praw_numerWrejestrzeEwidencji&gt;999988"
                 "&lt;/praw_numerWrejestrzeEwidencji&gt;"
                 "&lt;/dane&gt;"
                 "</a:DanePobierzPelnyRaportResult>"
@@ -192,7 +192,7 @@ class LookupTests(unittest.TestCase):
             result = get_gus_firma_by_nip("1234563218")
         self.assertEqual(result["nazwa"], "Firma")
         self.assertEqual(result["regon"], "123456789")
-        self.assertEqual(result["krs"], "0000482087")
+        self.assertEqual(result["krs"], "0000999988")
         self.assertEqual([action for action, _ in calls], [
             "Zaloguj", "DaneSzukajPodmioty",
             "DanePobierzPelnyRaport", "DanePobierzPelnyRaport", "DanePobierzPelnyRaport",
@@ -209,7 +209,7 @@ class LookupTests(unittest.TestCase):
             if action == "DaneSzukajPodmioty":
                 return (
                     "<DaneSzukajPodmiotyResult>"
-                    "&lt;dane&gt;&lt;Regon&gt;321442130&lt;/Regon&gt;"
+                    "&lt;dane&gt;&lt;Regon&gt;123456785&lt;/Regon&gt;"
                     "&lt;Nip&gt;9240000010&lt;/Nip&gt;"
                     "&lt;Typ&gt;P&lt;/Typ&gt;"
                     "&lt;Nazwa&gt;FIRMA TESTOWA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ&lt;/Nazwa&gt;"
@@ -221,7 +221,7 @@ class LookupTests(unittest.TestCase):
                 "&lt;dane&gt;"
                 "&lt;praw_rodzajRejestruEwidencji_Nazwa&gt;REJESTR PRZEDSIĘBIORCÓW"
                 "&lt;/praw_rodzajRejestruEwidencji_Nazwa&gt;"
-                "&lt;praw_numerWrejestrzeEwidencji&gt;0000482087"
+                "&lt;praw_numerWrejestrzeEwidencji&gt;0000999988"
                 "&lt;/praw_numerWrejestrzeEwidencji&gt;"
                 "&lt;/dane&gt;"
                 "</DanePobierzPelnyRaportResult>"
@@ -230,8 +230,8 @@ class LookupTests(unittest.TestCase):
         with (patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")),
               patch("app.companies.gus_api._call", side_effect=fake_call)):
             data = get_gus_firma_by_nip("9240000010")
-        self.assertEqual(data["regon"], "321442130")
-        self.assertEqual(data["krs"], "0000482087")
+        self.assertEqual(data["regon"], "123456785")
+        self.assertEqual(data["krs"], "0000999988")
         self.assertEqual(len(report_names), 1)
         self.assertIn("BIR12OsPrawna", report_names[0])
 
@@ -270,7 +270,7 @@ class LookupTests(unittest.TestCase):
                 "status_vat": "Czynny", "konto_bankowe": "12123456789",
             },
             gus=lambda nip: calls.append(("GUS", nip)) or {
-                "nip": nip, "nazwa": "GUS Firma", "regon": "321442130", "krs": "0000482087",
+                "nip": nip, "nazwa": "GUS Firma", "regon": "123456785", "krs": "0000999988",
             },
             krs=lambda number: calls.append(("KRS", number)) or {
                 "nip": "9240000010", "nazwa": "KRS Firma", "dz_miasto": "Szczecin",
@@ -278,14 +278,14 @@ class LookupTests(unittest.TestCase):
             ceidg=lambda nip: self.fail("Dla spółki z o.o. nie odpytujemy CEIDG"),
         )
         self.assertEqual(calls, [
-            ("VAT", "9240000010"), ("GUS", "9240000010"), ("KRS", "0000482087")
+            ("VAT", "9240000010"), ("GUS", "9240000010"), ("KRS", "0000999988")
         ])
         self.assertEqual(result["nazwa"], "KRS Firma")
         self.assertEqual(result["dz_miasto"], "Szczecin")
-        self.assertEqual(result["regon"], "321442130")
+        self.assertEqual(result["regon"], "123456785")
         self.assertEqual(result["status_vat"], "Czynny")
         self.assertEqual(result["konto_bankowe"], "12123456789")
-        self.assertEqual(result["krs"], "0000482087")
+        self.assertEqual(result["krs"], "0000999988")
 
     def test_jdg_goes_only_through_ceidg_and_checks_vat(self):
         calls = []
@@ -319,7 +319,7 @@ class LookupTests(unittest.TestCase):
             },
             gus=lambda nip: calls.append(("GUS", nip)) or {
                 "nip": nip, "nazwa": "Przykładowa Spółka Cywilna",
-                "regon": "321442130", "dz_miasto": "Szczecin",
+                "regon": "123456785", "dz_miasto": "Szczecin",
             },
             krs=lambda number: self.fail("Spółka cywilna nie ma KRS"),
             ceidg=lambda nip: self.fail("Nie pobieramy JDG po NIP spółki"),
@@ -333,7 +333,7 @@ class LookupTests(unittest.TestCase):
             ("WSPÓLNICY CEIDG", "9240000010"),
         ])
         self.assertEqual(result["nip"], "9240000010")
-        self.assertEqual(result["regon"], "321442130")
+        self.assertEqual(result["regon"], "123456785")
         self.assertEqual(result["nazwa"], "Przykładowa Spółka Cywilna")
         self.assertEqual(result["dz_miasto"], "Szczecin")
         self.assertEqual(result["status_vat"], "Czynny")
@@ -346,7 +346,7 @@ class LookupTests(unittest.TestCase):
             "9240000010",
             forma_dzialalnosci="Spółka cywilna",
             wl=lambda nip: {"status_vat": "Zwolniony"},
-            gus=lambda nip: {"nip": nip, "regon": "321442130", "nazwa": "S.C."},
+            gus=lambda nip: {"nip": nip, "regon": "123456785", "nazwa": "S.C."},
             krs=lambda number: self.fail("No KRS"),
             ceidg=lambda nip: self.fail("No CEIDG JDG lookup"),
             civil_partners=lambda nip: [],
@@ -396,7 +396,7 @@ class LookupTests(unittest.TestCase):
         # "REJESTR PRZEDSIĘBIORCÓW", a nie dosłownie "KRS".
         xml = (
             "<dane>"
-            "<praw_regon9>321442130</praw_regon9>"
+            "<praw_regon9>123456785</praw_regon9>"
             "<praw_nip>9240000010</praw_nip>"
             "<praw_nazwa>FIRMA TESTOWA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ</praw_nazwa>"
             "<praw_podstawowaFormaPrawna_Symbol>1</praw_podstawowaFormaPrawna_Symbol>"
@@ -405,11 +405,11 @@ class LookupTests(unittest.TestCase):
             "<praw_organRejestrowy_Nazwa>SĄD REJONOWY GDAŃSK-PÓŁNOC W GDAŃSKU, "
             "VIII WYDZIAŁ GOSPODARCZY KRAJOWEGO REJESTRU SĄDOWEGO</praw_organRejestrowy_Nazwa>"
             "<praw_rodzajRejestruEwidencji_Nazwa>REJESTR PRZEDSIĘBIORCÓW</praw_rodzajRejestruEwidencji_Nazwa>"
-            "<praw_numerWrejestrzeEwidencji>0000482087</praw_numerWrejestrzeEwidencji>"
+            "<praw_numerWrejestrzeEwidencji>0000999988</praw_numerWrejestrzeEwidencji>"
             "</dane>"
         )
         result = parse_legal_report(xml)
-        self.assertEqual(result["krs"], "0000482087")
+        self.assertEqual(result["krs"], "0000999988")
         self.assertEqual(result["gus_rodzaj_rejestru"], "REJESTR PRZEDSIĘBIORCÓW")
 
     def test_register_przedsiebiorcow_krs_flows_gus_to_krs(self):
@@ -418,13 +418,13 @@ class LookupTests(unittest.TestCase):
         report = parse_legal_report(
             "<dane>"
             "<praw_rodzajRejestruEwidencji_Nazwa>REJESTR PRZEDSIĘBIORCÓW</praw_rodzajRejestruEwidencji_Nazwa>"
-            "<praw_numerWrejestrzeEwidencji>0000482087</praw_numerWrejestrzeEwidencji>"
+            "<praw_numerWrejestrzeEwidencji>0000999988</praw_numerWrejestrzeEwidencji>"
             "</dane>"
         )
         calls = []
         result = lookup_company_by_nip(
             "9240000010", forma_dzialalnosci="Spółka z o.o.",
-            gus=lambda nip: {"nip": nip, "regon": "321442130", "nazwa": "GUS FIRMA TESTOWA", **report},
+            gus=lambda nip: {"nip": nip, "regon": "123456785", "nazwa": "GUS FIRMA TESTOWA", **report},
             wl=lambda nip: {"status_vat": "Czynny"},
             krs=lambda number: calls.append(number) or {
                 "nip": "9240000010",
@@ -433,8 +433,8 @@ class LookupTests(unittest.TestCase):
             },
             ceidg=lambda nip: self.fail("Spółka z o.o. nie powinna trafiać do CEIDG"),
         )
-        self.assertEqual(calls, ["0000482087"])
-        self.assertEqual(result["krs"], "0000482087")
+        self.assertEqual(calls, ["0000999988"])
+        self.assertEqual(result["krs"], "0000999988")
         self.assertEqual(result["dz_miasto"], "Wodnica")
         self.assertEqual(result["nip"], "9240000010")
         self.assertNotIn("_registry_warning", result)
@@ -444,14 +444,14 @@ class LookupTests(unittest.TestCase):
         result = parse_legal_report(
             "<root><dane>"
             "<praw_rodzajRejestruEwidencji_Nazwa>KRAJOWY REJESTR SĄDOWY</praw_rodzajRejestruEwidencji_Nazwa>"
-            "<praw_numerWrejestrzeEwidencji>482087</praw_numerWrejestrzeEwidencji>"
+            "<praw_numerWrejestrzeEwidencji>999988</praw_numerWrejestrzeEwidencji>"
             "</dane></root>"
         )
-        self.assertEqual(result["krs"], "0000482087")
+        self.assertEqual(result["krs"], "0000999988")
         other = parse_legal_report(
             "<root><dane>"
             "<praw_rodzajRejestruEwidencji_Nazwa>INNY REJESTR</praw_rodzajRejestruEwidencji_Nazwa>"
-            "<praw_numerWrejestrzeEwidencji>482087</praw_numerWrejestrzeEwidencji>"
+            "<praw_numerWrejestrzeEwidencji>999988</praw_numerWrejestrzeEwidencji>"
             "</dane></root>"
         )
         self.assertNotIn("krs", other)

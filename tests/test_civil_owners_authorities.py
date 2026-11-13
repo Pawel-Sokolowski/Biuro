@@ -62,12 +62,16 @@ class CivilOwnersAuthorityTests(DbTestCase):
         person = resolve_employee({'attorney': {'employee_id': employee}}, self.actor)
         self.assertEqual(person['pesel'], '90010112345')
         self.assertEqual(person['email'], 'office@example.test')
+        cleared = resolve_employee({'attorney': {'employee_id': employee, 'pesel': ''}}, self.actor)
+        self.assertEqual(cleared['pesel'], '')
 
     def test_owner_principal_selection_and_checkbox_employee_profiles(self):
         from app.documents.contract_pack_ui import ContractPackDialog
         from PyQt6.QtCore import Qt
         employee = self.make_employee('employee@example.test', 'Ewa', 'Testowa')
+        other = self.make_employee('other@example.test', 'Adam', 'Przykładowy')
         save(employee, {'pesel':'90010112345'}, self.actor)
+        save(other, {'pesel':'80010112345'}, self.actor)
         dialog = ContractPackDialog(self.company, self.actor)
         self.addCleanup(dialog.close)
         dialog.principal_owner.setCurrentIndex(1)
@@ -80,6 +84,22 @@ class CivilOwnersAuthorityTests(DbTestCase):
             if item.data(Qt.ItemDataRole.UserRole) == employee:
                 item.setCheckState(Qt.CheckState.Checked)
         self.assertEqual(dialog.values()['attorneys'][0]['pesel'], '90010112345')
+        dialog.employee.setCurrentIndex(dialog.employee.findData(employee))
+        dialog.attorney_fields['pesel'].setText('')
+        dialog.employee.setCurrentIndex(dialog.employee.findData(other))
+        self.assertEqual(dialog.attorney_fields['pesel'].text(), '80010112345')
+        self.assertEqual(dialog.values()['attorneys'][0]['pesel'], '')
+        dialog.employee.setCurrentIndex(dialog.employee.findData(employee))
+        self.assertEqual(dialog.attorney_fields['pesel'].text(), '')
+        jdg = self.make_company(nip='4445556667', forma_dzialalnosci='JDG')
+        save_partner(jdg, dict(imie_pierwsze='Anna', nazwisko='Testowa', pesel='90010112345', data_urodzenia='1990-01-01'))
+        personal = ContractPackDialog(jdg, self.actor)
+        self.addCleanup(personal.close)
+        values = personal.values()
+        self.assertEqual(values['principal_first_name'], 'Anna')
+        self.assertEqual(values['principal_surname'], 'Testowa')
+        self.assertEqual(values['pesel'], '90010112345')
+        self.assertEqual(values['principal_birth_date'], '1990-01-01')
 
     def test_multi_employee_upl_bundle_has_one_distinct_form_per_employee(self):
         from app.documents.contract_pack import generate_pack

@@ -25,11 +25,11 @@ HEADERS = [
 ]
 
 ROW = [
-    "9240000010", "321442130", "", "", "BIURO RACHUNKOWE DEMO SP. Z O.O.", "DEMO ",
+    "9240000010", "123456785", "", "", "BIURO RACHUNKOWE DEMO SP. Z O.O.", "DEMO ",
     "Osoba fizyczna (KPiR)", "Skala podatkowa", "", "Jan Kowalski", "biuro@example.com",
-    "500320800", "Drawsko Pomorskie", "78-500", "ul. Królewiecka 21", "Drawsko Pomorskie",
-    "78-500", "ul. Królewiecka 21", "Drawsko Pomorskie", "78-500", "ul. Królewiecka 21", "",
-    "2000-12-20", "", "", "", "", "", "2024-09-01", "", "", "7112Z, 6820Z",
+    "600000001", "Testowo", "00-001", "ul. Testowa 21", "Testowo",
+    "00-001", "ul. Testowa 21", "Testowo", "00-001", "ul. Testowa 21", "",
+    "2001-01-01", "", "", "", "", "", "2024-09-01", "", "", "7112Z, 6820Z",
     "Cena ponad limit 20 szt. 5,5 zł, Ryczałt 412,50 netto", "", "", "Drugi Urz\u0105d Skarbowy w Szczecinie", "12 3456 7890",
 ]
 
@@ -37,7 +37,7 @@ ROW = [
 class ParsingTests(unittest.TestCase):
     def test_leading_zeros_restored(self):
         self.assertEqual(normalize_identifier("674100628", {10}), "0674100628")
-        self.assertEqual(normalize_identifier(321442130, {9, 14}), "321442130")
+        self.assertEqual(normalize_identifier(123456785, {9, 14}), "123456785")
 
     def test_multi_value_split(self):
         self.assertEqual(split_multi_value("7112Z, 6820Z"), ["7112Z", "6820Z"])
@@ -65,28 +65,28 @@ class ExcelImportTests(DbTestCase):
         conn.close()
         self.assertIsNotNone(row)
         expected = {
-            "regon": "321442130",
+            "regon": "123456785",
             "nazwa": "BIURO RACHUNKOWE DEMO SP. Z O.O.",
             "nazwa_skrocona": "DEMO",
             "forma_dzialalnosci": "Osoba fizyczna (KPiR)",
             "forma_opodatkowania": "Skala podatkowa",
             "osoba_kontaktowa": "Jan Kowalski",
             "adres_email": "biuro@example.com",
-            "nr_telefonu": "500320800",
-            "miasto": "Drawsko Pomorskie",
-            "kod_pocztowy": "78-500",
-            "adres_zam_miasto": "Drawsko Pomorskie",
-            "adres_zam_kod_pocztowy": "78-500",
-            "adres_koresp_miasto": "Drawsko Pomorskie",
-            "adres_koresp_kod_pocztowy": "78-500",
-            "data_rozpoczecia_dg": "2000-12-20",
+            "nr_telefonu": "600000001",
+            "miasto": "Testowo",
+            "kod_pocztowy": "00-001",
+            "adres_zam_miasto": "Testowo",
+            "adres_zam_kod_pocztowy": "00-001",
+            "adres_koresp_miasto": "Testowo",
+            "adres_koresp_kod_pocztowy": "00-001",
+            "data_rozpoczecia_dg": "2001-01-01",
             "data_rozpoczecia_obslugi": "2024-09-01",
         }
         for column, value in expected.items():
             self.assertEqual(str(row[column]).strip(), value, column)
-        self.assertIn("Królewiecka", row["ulica"])
-        self.assertIn("Królewiecka", row["adres_zam_ulica"])
-        self.assertIn("Królewiecka", row["adres_koresp_ulica"])
+        self.assertIn("Testowa", row["ulica"])
+        self.assertIn("Testowa", row["adres_zam_ulica"])
+        self.assertIn("Testowa", row["adres_koresp_ulica"])
         self.assertIn("7112Z", row["kody_pkd"])
         self.assertIn("6820Z", row["kody_pkd"])
         self.assertIn("412,50", row["cennik_ksiegowy"])

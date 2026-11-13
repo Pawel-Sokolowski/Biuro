@@ -77,9 +77,9 @@ class ReportImportDatabaseTests(DbTestCase):
         first = self.make_company("Shared", nip="1234563218")
         second = self.make_company("Shared", nip="9240000010")
         rows = [HEADER,
+            ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A"),
             ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A"),
-            ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A"),
-            ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A"),
+            ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A"),
         ]
         path = self._workbook("identity.xlsx", rows)
         import_invoices_file(path, "2026-03")
@@ -131,7 +131,7 @@ class ReportImportDatabaseTests(DbTestCase):
 
     def test_late_parser_failure_rolls_back_legacy_promotion_and_flushed_rows(self):
         company = self.make_company("Shared", nip="1234563218")
-        source_row = ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A")
+        source_row = ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A")
         parsed = parse_invoice_rows([HEADER, source_row])[0]
         with get_conn() as conn:
             conn.execute(

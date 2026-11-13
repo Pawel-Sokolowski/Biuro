@@ -61,7 +61,7 @@ jobs:
           python -m ruff check app tests
           python -m mypy --follow-imports=skip app/utils/money.py app/reports/dto.py app/utils/table_records.py app/utils/import_source.py app/utils/background.py app/email/notification_types.py
       - name: Check Płatnik forms and filing setup
-        run: python -m unittest tests.test_platnik_connection tests.test_platnik_declarations tests.test_monthly_obligations tests.test_checking_refresh tests.test_enova_query_defaults tests.test_enova_checking tests.test_enova_settings_and_jpk tests.test_civil_owners_authorities tests.test_contract_pack tests.test_power_of_attorney tests.test_email_signature tests.test_monthly_delivery_sorting tests.test_worker_activity tests.test_worker_monitor tests.test_background_worker tests.test_ezla_sync
+        run: python -m unittest tests.test_platnik_connection tests.test_platnik_declarations tests.test_monthly_obligations tests.test_checking_refresh tests.test_enova_query_defaults tests.test_enova_checking tests.test_enova_settings_and_jpk tests.test_payment_parser_contractors tests.test_report_import_review_fixes tests.test_civil_owners_authorities tests.test_contract_pack tests.test_power_of_attorney tests.test_email_signature tests.test_monthly_delivery_sorting tests.test_worker_activity tests.test_worker_monitor tests.test_background_worker tests.test_ezla_sync
       - name: Run all test modules
         run: python run_tests.py
       - name: Retain test results

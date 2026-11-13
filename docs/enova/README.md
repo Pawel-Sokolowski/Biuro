@@ -485,6 +485,23 @@ jest zatrzymywany tak jak dotychczas. Błąd zapisu nie uruchamia kolejnego stop
 
 ## Automatyczne przypisanie baz po NIP
 
+W formularzu połączenia aplikacji i workera wpisz oddzielnie:
+
+- **Serwer SQL / instancja:** `ENOVA\SQLEXPRESS`;
+- **Główna baza Enovy:** `Biuro_rachunkowe`;
+- login i hasło SQL oraz opcję zaufania własnemu certyfikatowi, jeśli jest potrzebna.
+
+Główna baza jest bazą startową połączenia. Można ją sprawdzić przed uzupełnieniem
+tabeli firm. Wyszukiwanie baz rozpoczyna się w niej i odczytuje dostępny katalog
+`sys.databases`; nie wymusza połączenia do `master`, jeśli wskazano inną bazę.
+Puste pole zachowuje dotychczasowy sposób działania. Przy wskazanej bazie program
+nie próbuje potajemnie innej, jeśli logowanie lub dostęp do tej bazy zawiedzie.
+
+Główna baza nie przypisuje się automatycznie do każdej firmy. Nazwy baz klientów
+pozostają w tabeli firm i są używane przez importery. Test połączenia sprawdza
+bazę główną oraz wpisane bazy klientów. Zapamiętanie ustawienia działa również
+w panelu workera.
+
 W ustawieniach połączenia (także w panelu workera) przycisk **Znajdź bazy Enovy
 po NIP** odczytuje listę dostępnych baz SQL Server i pole
 `dbo.OddzialyFirmy.DeklaracjeNIP`, którego używają istniejące zapytania importera.

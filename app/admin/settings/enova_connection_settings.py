@@ -1,16 +1,22 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QCheckBox,
-    QSpinBox, QComboBox, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QFileDialog)
+    QSpinBox, QComboBox, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QFileDialog,QProgressBar)
+from PyQt6.QtCore import Qt,pyqtSignal
 from app.db.dao_conn import get_conn
 from app.integrations.enova.connection_settings import load_connection, save_connection
 
 
 class EnovaConnectionSettings(QWidget):
+    discovery_progress = pyqtSignal(int,int,int,str)
+
     def __init__(self, actor_id, parent=None):
         super().__init__(parent)
         from app.security.authorization import is_administrator
         if not is_administrator(actor_id):
             raise PermissionError('Brak uprawnień.')
         self.actor_id = actor_id
+        self._discovery_token = 0
+        self._discovery_running = False
+        self.discovery_progress.connect(self._show_discovery_progress)
         config = load_connection()
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -44,9 +50,15 @@ class EnovaConnectionSettings(QWidget):
         self.months = QSpinBox()
         self.months.setRange(1, 24)
         self.months.setValue(config['months_back'])
+        self.discovery_timeout = QSpinBox()
+        self.discovery_timeout.setRange(30,600)
+        self.discovery_timeout.setSuffix(' s')
+        self.discovery_timeout.setValue(config.get('discovery_query_timeout',120))
+        self.discovery_timeout.setToolTip('Limit pojedynczego zapytania przy wyszukiwaniu baz, nie całego wyszukiwania. Domyślnie 120 s.')
         for label, widget in [('Serwer SQL / instancja', self.server), ('Główna baza Enovy', self.database),
                               ('Sterownik SQL', self.driver), ('Login SQL', self.username),
                               ('Hasło SQL', self.password), ('Certyfikat TLS', self.trust_certificate),
+                              ('Limit zapytania — wyszukiwanie baz', self.discovery_timeout),
                               ('Deklaracje i UPO', self.declarations_query), ('Dokumenty kadrowe', self.payroll_query), ('Umowy, badania i BHP', self.hr_events_query), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
                               ('Import', self.enabled)]:
             form.addRow(label, widget)
@@ -82,6 +94,13 @@ class EnovaConnectionSettings(QWidget):
         self.discovery_button = QPushButton('Znajdź bazy Enovy po NIP')
         self.discovery_button.clicked.connect(self.discover_databases)
         layout.addWidget(self.discovery_button)
+        self.discovery_status = QLabel()
+        self.discovery_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.discovery_status.setWordWrap(True)
+        layout.addWidget(self.discovery_status)
+        self.discovery_bar = QProgressBar()
+        self.discovery_bar.hide()
+        layout.addWidget(self.discovery_bar)
         self.connection_button = QPushButton('Sprawdź połączenie z bazą Enova')
         self.connection_button.clicked.connect(self.check_connection)
         layout.addWidget(self.connection_button)
@@ -104,6 +123,7 @@ class EnovaConnectionSettings(QWidget):
     def save(self):
         try:
             config = dict(server=self.server.text().strip(), database=self.database.text().strip(),
+                          discovery_query_timeout=self.discovery_timeout.value(),
                           driver=self.driver.currentData(), username=self.username.text().strip(),
                           trust_server_certificate=self.trust_certificate.isChecked(),
                           hr_events_query=self.hr_events_query.text().strip(),
@@ -217,23 +237,48 @@ class EnovaConnectionSettings(QWidget):
 
     def discovery_fields(self):
         return (self.server.text().strip(), self.username.text().strip(), self.driver.currentData(),
-                self.trust_certificate.isChecked(), self.password.text(),self.database.text().strip())
+                self.trust_certificate.isChecked(), self.password.text(),self.database.text().strip(),self.discovery_timeout.value())
+
+    def _show_discovery_progress(self,token,done,total,database):
+        if token!=self._discovery_token or not self._discovery_running:
+            return
+        self.discovery_bar.setRange(0,total)
+        self.discovery_bar.setValue(done)
+        if total:
+            self.discovery_status.setText(f'Sprawdzono baz: {done}/{total}. '+(f'Odczyt: {database}' if database else ''))
+        else:
+            self.discovery_status.setText(f'Odczytywanie listy baz: {database}…')
 
     def discover_databases(self):
         from app.security.authorization import is_administrator
         from app.integrations.enova.discovery import discover, propose
         fields = self.discovery_fields()
         config = load_connection()
-        config.update(server=fields[0],username=fields[1],driver=fields[2],trust_server_certificate=fields[3],database=fields[5])
+        config.update(server=fields[0],username=fields[1],driver=fields[2],trust_server_certificate=fields[3],
+                      database=fields[5],discovery_query_timeout=fields[6])
+        self._discovery_token += 1
+        token = self._discovery_token
+        self._discovery_running = True
+        self.discovery_bar.setRange(0,0)
+        self.discovery_bar.show()
+        self.discovery_status.setText('Odczytywanie listy baz…')
         self.discovery_button.setEnabled(False)
         self.discovery_button.setText('Wyszukiwanie baz po NIP…')
         def reset():
+            self._discovery_running = False
+            self.discovery_bar.hide()
+            self.discovery_status.clear()
             self.discovery_button.setEnabled(True)
             self.discovery_button.setText('Znajdź bazy Enovy po NIP')
+        def progress(done,total,database):
+            try:
+                self.discovery_progress.emit(token,done,total,database)
+            except RuntimeError:
+                pass  # The settings page was closed while the read was running.
         def work():
             if not is_administrator(self.actor_id):
                 raise PermissionError('Brak uprawnień do konfiguracji Enovy.')
-            return discover(config,password=fields[4])
+            return discover(config,password=fields[4],progress=progress)
         def done(result):
             reset()
             if self.discovery_fields()!=fields or not is_administrator(self.actor_id):
@@ -251,7 +296,7 @@ class EnovaConnectionSettings(QWidget):
             box.setWindowTitle('Bazy Enovy — dopasowanie po NIP')
             from PyQt6.QtCore import Qt
             box.setTextFormat(Qt.TextFormat.PlainText)
-            box.setText(f"Dostępne bazy: {result['visible']}; bazy z rozpoznaną strukturą Enovy: {result['scanned']}. "
+            box.setText(f"Widoczne bazy: {result['visible']}; bazy z rozpoznaną strukturą Enovy: {result['scanned']}. "
                         f"Uzupełniono pustych przypisań: {len(proposals)}. "
                         'Sprawdź wynik i kliknij Zapisz połączenie Enova. '
                         'Ręczne przypisania pozostawiono. Kopie baz i powielone NIP-y wymagają wyboru ręcznego. '

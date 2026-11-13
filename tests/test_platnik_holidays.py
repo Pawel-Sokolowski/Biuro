@@ -107,6 +107,17 @@ class ImportTests(DbTestCase):
         with patch('app.security.authorization.is_administrator',return_value=False),self.assertRaises(PermissionError):
             import_year(2026,999)
 
+    def test_connection_query_timeout_is_saved_without_replacing_existing_password(self):
+        from app.integrations.platnik.holidays import load,save
+        save({'server':'PLATNIK-SRV,1433','database':'platnik','username':'reader','query_timeout':300},
+             self.admin,password='secret')
+        stored = load()
+        self.assertEqual(stored['query_timeout'],300)
+        save({'query_timeout':360},self.admin)
+        updated = load()
+        self.assertEqual(updated['query_timeout'],360)
+        self.assertEqual(updated['password_enc'],stored['password_enc'])
+
     def test_office_notes_survive_import_without_rws_and_do_not_leak_into_another_year(self):
         employee = self.make_employee(imie='Katarzyna',nazwisko='Cicha')
         save_field(employee,2026,self.company,'kto_wyslal','KC',0)

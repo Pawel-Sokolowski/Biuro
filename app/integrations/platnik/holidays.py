@@ -5,7 +5,8 @@ from zoneinfo import ZoneInfo
 from app.db.dao_app_settings import get_setting, set_setting
 from app.utils.crypto import encrypt_password, decrypt_password
 from app.integrations.enova.document_counts import normalize_nip, sql_connection_string
-from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server, describe_sql_error
+from app.integrations.enova.odbc_support import (load_odbc, resolve_driver, validate_server, describe_sql_error,
+    DEFAULT_QUERY_TIMEOUT,validate_query_timeout)
 from app.integrations.enova.odbc_support import SqlOperationError as PlatnikSqlError
 
 KEY = 'platnik_connection'
@@ -35,7 +36,7 @@ def sql_operation(config,operation):
 
 def load():
     return {'enabled':False,'server':'','database':'platnik','username':'','password_enc':'',
-            'driver':'auto','trust_server_certificate':False,
+            'driver':'auto','trust_server_certificate':False,'query_timeout':DEFAULT_QUERY_TIMEOUT,
             **json.loads(get_setting(KEY) or '{}')}
 
 
@@ -44,7 +45,8 @@ def save(value, actor_id, password=''):
     if not is_administrator(actor_id):
         raise PermissionError('Tylko administrator konfiguruje Płatnika.')
     current = load()
-    value = {key:value.get(key,current[key]) for key in ('enabled','server','database','username','password_enc','driver','trust_server_certificate')}
+    value = {key:value.get(key,current[key]) for key in ('enabled','server','database','username','password_enc','driver','trust_server_certificate','query_timeout')}
+    value['query_timeout'] = validate_query_timeout(value['query_timeout'])
     from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
     if value['driver'] not in ('auto',*SUPPORTED_DRIVERS):
         raise ValueError('Nieprawidłowy sterownik SQL Server.')
@@ -61,6 +63,7 @@ def save(value, actor_id, password=''):
 
 def connect(config):
     validate_server(config.get('server'))
+    timeout = validate_query_timeout(config.get('query_timeout',DEFAULT_QUERY_TIMEOUT))
     if not str(config.get('database') or '').strip() or not str(config.get('username') or '').strip():
         raise ValueError('Uzupełnij bazę i użytkownika SQL Płatnika.')
     if not config.get('password_enc'):
@@ -72,7 +75,7 @@ def connect(config):
         connection = odbc.connect(sql_connection_string(config,config['database'],config['username'],password),
                                   timeout=15,attrs_before={101:1})
         try:
-            connection.timeout = 30
+            connection.timeout = timeout
         except Exception:
             connection.close()
             raise
@@ -132,7 +135,7 @@ def normalize(rows, year):
     return result
 
 
-def _import_year(year, actor_id=None):
+def _import_year(year, actor_id=None, *, progress=None):
     if type(year) is not int or not 2024<=year<=2100:
         raise ValueError('Nieprawidłowy rok zestawienia.')
     if actor_id is not None:
@@ -144,10 +147,14 @@ def _import_year(year, actor_id=None):
         return {'mode':'disabled'}
     from .holiday_query import QUERY
     query = QUERY
+    if progress:
+        progress(f'Łączenie z SQL Płatnika — rok {year}…')
     connection = connect(config)
     with sql_operation(config,f'Odczyt wakacji składkowych ({year})'):
         try:
             cursor = connection.cursor()
+            if progress:
+                progress(f'Odczyt wpisów RWS — rok {year}…')
             cursor.execute(query,year)
             columns = [column[0].lower() for column in cursor.description or []]
             if not {'source_id','nip','rok','imiona_nazwiska'}.issubset(columns) or len(columns)!=len(set(columns)):
@@ -155,17 +162,21 @@ def _import_year(year, actor_id=None):
             values = cursor.fetchmany(10001)
             if len(values)>10000:
                 raise ValueError('Raport przekracza 10000 pozycji. Poprzednie dane pozostawiono.')
+            if progress:
+                progress(f'Walidacja {len(values)} wpisów RWS — rok {year}…')
             rows = normalize([dict(zip(columns,row)) for row in values],year)
         finally:
             connection.close()
     snapshot = {'imported_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
                 'source':'Płatnik SQL — RWS_ZWOLNIENIE','rows_enc':encrypt_password(json.dumps(rows,ensure_ascii=False))}
     # Atomic replacement only after the entire source result was read and validated.
+    if progress:
+        progress(f'Zapisywanie {len(rows)} wpisów w Biuro — rok {year}…')
     set_setting(f'platnik_holidays_{year}',json.dumps(snapshot))
     return {'year':year,'rows':len(rows)}
 
 
-def import_year(year, actor_id=None):
+def import_year(year, actor_id=None, *, progress=None):
     from app.db.dao_conn import get_coordination_conn
     from app.security.authorization import is_administrator
     if actor_id is not None and not is_administrator(actor_id):
@@ -176,7 +187,7 @@ def import_year(year, actor_id=None):
         if not lock.execute('SELECT pg_try_advisory_xact_lock(748215,%s)',(year,)).fetchone()[0]:
             return {'mode':'busy','year':year}
         try:
-            result = _import_year(year,actor_id)
+            result = _import_year(year,actor_id,progress=progress)
         except Exception:
             set_setting(f'platnik_holidays_status_{year}',json.dumps({'state':'failed',
                         'checked_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}))

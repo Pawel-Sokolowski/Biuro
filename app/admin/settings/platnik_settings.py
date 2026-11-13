@@ -2,14 +2,16 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QFormLayout,QLineEdit,QCheckBox,
-    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox)
-from PyQt6.QtCore import Qt
+    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar)
+from PyQt6.QtCore import Qt,pyqtSignal
 from app.integrations.platnik.holidays import load,save,check_connection,import_year,PlatnikSqlError
 from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
 from app.utils.background import TaskRunner
 
 
 class PlatnikSettings(QWidget):
+    import_progress = pyqtSignal(int,str)
+
     def __init__(self,actor_id,parent=None):
         super().__init__(parent)
         from app.security.authorization import is_administrator
@@ -18,6 +20,9 @@ class PlatnikSettings(QWidget):
         self.actor_id = actor_id
         self.runner = TaskRunner(self)
         self.error_diagnostic = None
+        self._import_token = 0
+        self._import_running = False
+        self.import_progress.connect(self._show_import_progress)
         config = load()
         layout = QVBoxLayout(self)
         note = QLabel('Osobne połączenie Microsoft SQL Server programu Płatnik. '
@@ -47,6 +52,12 @@ class PlatnikSettings(QWidget):
             self.driver.addItem(value,value)
         self.driver.setCurrentIndex(max(0,self.driver.findData(config['driver'])))
         form.addRow('Sterownik SQL Server',self.driver)
+        self.query_timeout = QSpinBox()
+        self.query_timeout.setRange(30,600)
+        self.query_timeout.setSuffix(' s')
+        self.query_timeout.setValue(config.get('query_timeout',120))
+        self.query_timeout.setToolTip('Limit pojedynczego zapytania SQL; logowanie ma osobny limit 15 sekund.')
+        form.addRow('Limit zapytania SQL',self.query_timeout)
         self.trust = QCheckBox('Ufaj własnemu certyfikatowi serwera (połączenie pozostaje szyfrowane)')
         self.trust.setChecked(config['trust_server_certificate'])
         form.addRow(self.trust)
@@ -64,6 +75,10 @@ class PlatnikSettings(QWidget):
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
+        self.import_bar = QProgressBar()
+        self.import_bar.setRange(0,0)
+        self.import_bar.hide()
+        layout.addWidget(self.import_bar)
         self.buttons = []
         for title,action in (('Zapisz połączenie Płatnika',self.save),
                              ('Sprawdź połączenie SQL (bez importu)',self.check),
@@ -79,10 +94,10 @@ class PlatnikSettings(QWidget):
         layout.addStretch()
 
     def config(self):
-        value = load()
+        value = dict(load())
         value.update({key:field.text().strip() for key,field in self.fields.items()})
         value.update(driver=self.driver.currentData(),enabled=self.enabled.isChecked(),
-                     trust_server_certificate=self.trust.isChecked())
+                     trust_server_certificate=self.trust.isChecked(),query_timeout=self.query_timeout.value())
         return value
 
     def save(self):
@@ -125,12 +140,33 @@ class PlatnikSettings(QWidget):
         self.status.setText('Połączenie SQL Płatnika poprawne. Test nie odczytywał ani nie importował dokumentów.')
 
     def download(self):
+        saved = load()
+        config = self.config()
+        keys = ('server','database','username','driver','trust_server_certificate','enabled','query_timeout')
+        if self.password.text() or any(config.get(key)!=saved.get(key) for key in keys):
+            self.failed(ValueError('Masz niezapisane zmiany połączenia. Kliknij „Zapisz połączenie Płatnika”, a następnie pobierz rok. Test SQL używa pól formularza; import używa ustawień zapisanych.'))
+            return
         year = self.year.value()
+        self._import_token += 1
+        token = self._import_token
+        self._import_running = True
+        self.import_bar.show()
         self.busy(True)
         self.status.setText(f'Odczyt roku {year} z Płatnika…')
-        self.runner.submit(lambda:import_year(year,self.actor_id),self.downloaded,self.failed)
+        def progress(message):
+            try:
+                self.import_progress.emit(token,message)
+            except RuntimeError:
+                pass
+        self.runner.submit(lambda:import_year(year,self.actor_id,progress=progress),self.downloaded,self.failed)
+
+    def _show_import_progress(self,token,message):
+        if self._import_running and token==self._import_token:
+            self.status.setText(message)
 
     def downloaded(self,result):
+        self._import_running = False
+        self.import_bar.hide()
         self.busy(False)
         if result.get('mode')=='disabled':
             self.status.setText('Odczyt wyłączony. Włącz i zapisz połączenie Płatnika.')
@@ -140,6 +176,8 @@ class PlatnikSettings(QWidget):
             self.status.setText(f"Zapisano rok {result['year']}; wpisy RWS: {result['rows']}. Zestawienie jest dostępne w Kadry → Sprawdzanie.")
 
     def failed(self,error):
+        self._import_running = False
+        self.import_bar.hide()
         self.busy(False)
         self.error_diagnostic = error.diagnostic if isinstance(error,PlatnikSqlError) else None
         self.error_button.setVisible(self.error_diagnostic is not None)

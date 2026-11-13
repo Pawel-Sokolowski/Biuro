@@ -9,7 +9,7 @@ class PlatnikConnectionTests(TestCase):
         self.password = 'private;p}ass'
         self.config = {'server':r'PLATNIK-SRV\SQLEXPRESS','database':'platnik','username':'sa',
                        'driver':'ODBC Driver 17 for SQL Server','password_enc':'encrypted-secret',
-                       'trust_server_certificate':True,'enabled':True}
+                       'trust_server_certificate':True,'enabled':True,'query_timeout':120}
         self.decrypt = patch('app.integrations.platnik.holidays.decrypt_password',return_value=self.password)
         self.decrypt.start()
         self.addCleanup(self.decrypt.stop)
@@ -59,6 +59,52 @@ class PlatnikConnectionTests(TestCase):
         with patch('app.integrations.platnik.holidays.load_odbc') as load_odbc,self.assertRaisesRegex(ValueError,'hasło SQL'):
             connect({**self.config,'password_enc':''})
         load_odbc.assert_not_called()
+
+    def test_query_timeout_is_configurable_and_separate_from_login_timeout(self):
+        for timeout in (120,300):
+            with self.subTest(timeout=timeout):
+                connection = Mock()
+                odbc = Mock()
+                odbc.drivers.return_value = [self.config['driver']]
+                odbc.connect.return_value = connection
+                with patch('app.integrations.platnik.holidays.load_odbc',return_value=odbc):
+                    self.assertIs(connect({**self.config,'query_timeout':timeout}),connection)
+                self.assertEqual(connection.timeout,timeout)
+                self.assertEqual(odbc.connect.call_args.kwargs['timeout'],15)
+
+    def test_invalid_query_timeout_does_not_open_sql(self):
+        with patch('app.integrations.platnik.holidays.load_odbc') as load_odbc:
+            for timeout in (0,10,601,True,'120'):
+                with self.subTest(timeout=timeout),self.assertRaises(ValueError):
+                    connect({**self.config,'query_timeout':timeout})
+        load_odbc.assert_not_called()
+
+    def test_import_requires_saved_form_and_progress_ignores_stale_updates(self):
+        from app.admin.settings.platnik_settings import PlatnikSettings
+        from tests.base import QT_APP
+        self.assertIsNotNone(QT_APP)
+        with patch('app.security.authorization.is_administrator',return_value=True), \
+             patch('app.admin.settings.platnik_settings.load',return_value=self.config):
+            panel = PlatnikSettings(1)
+            self.addCleanup(panel.close)
+            self.assertEqual(panel.query_timeout.value(),120)
+            panel.fields['server'].setText('PLATNIK-SRV,1433')
+            with patch.object(panel.runner,'submit') as submit:
+                panel.download()
+                submit.assert_not_called()
+                self.assertIn('Zapisz połączenie Płatnika',panel.status.text())
+                self.config['server'] = 'PLATNIK-SRV,1433'
+                panel.download()
+                submit.assert_called_once()
+            token = panel._import_token
+            panel.import_progress.emit(token,'Odczyt wpisów RWS…')
+            self.assertEqual(panel.status.text(),'Odczyt wpisów RWS…')
+            panel.import_progress.emit(token-1,'Stara operacja')
+            self.assertEqual(panel.status.text(),'Odczyt wpisów RWS…')
+            panel.downloaded({'year':2026,'rows':0})
+            panel.import_progress.emit(token,'Spóźniony postęp')
+            self.assertIn('Zapisano rok 2026',panel.status.text())
+            self.assertTrue(panel.import_bar.isHidden())
 
     def test_worker_panel_offers_password_redacted_details(self):
         from app.admin.settings.platnik_settings import PlatnikSettings

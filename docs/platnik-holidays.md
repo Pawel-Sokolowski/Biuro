@@ -1,4 +1,4 @@
-# Płatnik — roczne wakacje składkowe (1.5.4)
+# Płatnik — roczne wakacje składkowe (1.4.5)
 
 ## Konfiguracja
 
@@ -14,6 +14,17 @@ wskazany rok ręcznie w tym panelu. W Zadaniach workera włącz osobne zadanie
 Płatnik; domyślnie co godzinę odświeża poprzedni i bieżący rok. Starszy rok
 pobierz ręcznie. Nie ma zapisu do Płatnika ani wysyłania dokumentów do ZUS.
 Nie jest wymagany własny plik SQL ani instalacja Płatnika na workerze.
+
+Pole **Limit zapytania SQL** ma domyślnie 120 sekund i zakres 30–600 sekund.
+Dotyczy pojedynczego zapytania; logowanie ma osobny limit 15 sekund. Zapisane
+ustawienie stosuje również automatyczny worker. Podczas ręcznego odczytu widoczny
+jest wskaźnik pracy oraz etapy: łączenie, odczyt RWS, walidacja i zapis w Biuro.
+Roczny raport pobierany jest zbiorczo, więc wskaźnik nie udaje licznika firm.
+
+Test połączenia używa pól formularza; pobranie roku używa zapisanego połączenia.
+Przy niezapisanej zmianie adresu, hasła, certyfikatu lub limitu pobieranie jest
+wstrzymane z prośbą o **Zapisz połączenie Płatnika**, aby nie uruchomić importu
+na starym adresie po udanym teście nowego.
 
 ## Diagnostyka połączenia
 
@@ -38,6 +49,18 @@ wartość hasła są usuwane z diagnostyki. Nie przesyłaj haseł ani klucza.
 - Błąd SSL/certyfikatu: opcja zaufania własnemu certyfikatowi lub konfiguracja TLS.
 - Poprawny test SQL i błąd odczytu: sprawdź szczegóły zapytania, tabele/kolumny
   oraz prawo SELECT konta w bazie `platnik`.
+
+Jeżeli SSMS łączy się lokalnie przez **Shared Memory**, taki test nie sprawdza
+TCP z maszyny workera. Port nasłuchu można odczytać bez zmian w SQL Server:
+
+```sql
+EXEC sys.xp_readerrorlog 0, 1, N'Server is listening on';
+```
+
+Po potwierdzeniu portu 1433 dla wskazanej instancji można wpisać
+`PLATNIK-SRV,1433` zamiast `PLATNIK-SRV\SQLEXPRESS`, z bazą `platnik`.
+Omija to rozpoznawanie nazwanej instancji przez SQL Browser. Gdy połączenie nadal
+nie działa, sprawdź `Test-NetConnection PLATNIK-SRV -Port 1433` na komputerze workera.
 
 ## Widok
 

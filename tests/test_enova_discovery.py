@@ -5,6 +5,36 @@ from app.integrations.enova.odbc_support import SqlOperationError
 
 
 class EnovaDiscoveryTests(TestCase):
+    def test_122_databases_use_full_query_timeout_and_report_each_completed_read(self):
+        root = Mock()
+        root.cursor.return_value.fetchmany.return_value = [(f'Client{i:03d}',) for i in range(122)]
+        connections = []
+        for i in range(122):
+            connection = Mock()
+            cursor = Mock(spec_set=['execute','fetchone','fetchmany'])
+            cursor.fetchone.return_value = [20]
+            cursor.fetchmany.return_value = [(str(1112223344+i),)]
+            connection.cursor.return_value = cursor
+            connections.append(connection)
+        driver = Mock()
+        driver.connect.side_effect = [root,*connections]
+        progress = Mock()
+        with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
+             patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
+            result = discover({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader'},password='secret',progress=progress)
+        self.assertEqual(result['visible'],122)
+        self.assertEqual(result['scanned'],122)
+        self.assertEqual(len(result['matches']),122)
+        self.assertEqual(result['errors'],[])
+        self.assertEqual(driver.connect.call_count,123)
+        self.assertNotIn('HAS_DBACCESS',root.cursor.return_value.execute.call_args.args[0])
+        for connection in [root,*connections]:
+            self.assertEqual(connection.timeout,120)
+            connection.close.assert_called_once()
+        progress.assert_any_call(0,0,'Biuro_rachunkowe')
+        self.assertEqual(progress.call_args.args,(122,122,'Client121'))
+        self.assertTrue(all(call.kwargs['timeout']==15 for call in driver.connect.call_args_list))
+
     def test_only_unique_normalized_nips_fill_empty_cells(self):
         companies = [{'id':1,'nip':'PL 111-222-33-44'},{'id':2,'nip':'2223334455'},{'id':3,'nip':'3334445566'}]
         result = {'errors':[], 'matches':{'1112223344':['ALFA'],'2223334455':['BETA','BETA_BACKUP'],'3334445566':['NEW']}}

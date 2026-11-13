@@ -2,6 +2,13 @@
 import sys
 
 SUPPORTED_DRIVERS = ('ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server')
+DEFAULT_QUERY_TIMEOUT = 120
+
+
+def validate_query_timeout(value):
+    if type(value) is not int or not 30<=value<=600:
+        raise ValueError('Limit zapytania SQL musi wynosić od 30 do 600 sekund.')
+    return value
 
 
 class SqlOperationError(RuntimeError):
@@ -62,7 +69,11 @@ def describe_sql_error(exc, *, secrets=()):
     elif state == '28000' or '18456' in raw:
         hint = 'SQL Server odrzucił logowanie. Sprawdź login, hasło i włączenie uwierzytelniania SQL.'
     elif state in ('HYT00', 'HYT01'):
-        hint = 'Przekroczono czas połączenia. Sprawdź TCP/IP, port SQL Server i zaporę sieciową.'
+        if any(call in lower for call in ('sqlexecdirect','sqlexecute','sqlfetch','sqlmoreresults')):
+            hint = ('Przekroczono czas wykonania zapytania po połączeniu z SQL Server. '
+                    'Sprawdź limit zapytania, obciążenie SQL i blokady; przy wyszukiwaniu baz możesz zwiększyć limit w ustawieniach.')
+        else:
+            hint = 'Przekroczono czas połączenia. Sprawdź TCP/IP, port SQL Server i zaporę sieciową.'
     elif state in ('08001', '08004', '08S01'):
         hint = 'Nie udało się połączyć z instancją SQL. Sprawdź TCP/IP, port i zaporę; instancja nazwana wymaga SQL Browser lub adresu host,port.'
     else:

@@ -60,3 +60,12 @@ class OdbcSupportTests(TestCase):
         error = describe_sql_error(Exception('28000', 'Login failed (18456)'))
         self.assertIn('logowanie', error['hint'])
         self.assertEqual(error['sqlstate'], '28000')
+
+    def test_query_timeout_is_not_misreported_as_a_connection_timeout(self):
+        from app.integrations.enova.odbc_support import describe_sql_error
+        query = describe_sql_error(Exception('HYT00','Przekroczono limit czasu zapytania (SQLExecDirectW)'))
+        connection = describe_sql_error(Exception('HYT00','Login timeout expired (SQLDriverConnect)'))
+        self.assertIn('wykonania zapytania',query['hint'])
+        self.assertNotIn('zaporę',query['hint'])
+        self.assertIn('czas połączenia',connection['hint'])
+        self.assertIn('TCP/IP',connection['hint'])

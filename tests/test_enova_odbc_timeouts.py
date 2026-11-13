@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from app.integrations.enova.connection_settings import check_connection
 from app.integrations.enova.document_counts import fetch_counts
 from app.integrations.enova.schema_probe import inspect_schema
+from app.integrations.enova.discovery import discover
 
 
 class OdbcTimeoutTests(TestCase):
@@ -52,3 +53,17 @@ class OdbcTimeoutTests(TestCase):
         self.assertEqual(self.connection.timeout, 30)
         self.assertEqual(self.cursor.execute.call_count, 2)
         self.connection.close.assert_called_once()
+
+    def test_discovery_custom_query_timeout_is_separate_from_login_timeout(self):
+        self.cursor.fetchmany.return_value = []
+        result = discover({**self.config,'discovery_query_timeout':300},password='secret')
+        self.assertEqual(result['visible'],0)
+        self.assertEqual(self.connection.timeout,300)
+        self.assertEqual(self.driver.connect.call_args.kwargs['timeout'],15)
+        self.connection.close.assert_called_once()
+
+    def test_invalid_discovery_timeout_never_opens_sql(self):
+        for timeout in (0,10,601,True,'120'):
+            with self.subTest(timeout=timeout),self.assertRaises(ValueError):
+                discover({**self.config,'discovery_query_timeout':timeout},password='secret')
+        self.driver.connect.assert_not_called()

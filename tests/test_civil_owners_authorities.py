@@ -81,8 +81,16 @@ class CivilOwnersAuthorityTests(DbTestCase):
         dialog.principal_owner.setCurrentIndex(1)
         self.assertEqual(dialog.values()['nip'], '2223334455')
         self.assertEqual(dialog.values()['principal_kind'], 'person')
+        self.assertEqual([r['imie_pierwsze'] for r in dialog.values()['representatives']], ['Anna',''])
+        with patch.object(dialog, '_generate_documents') as generate:
+            dialog._generate_pel()
+            generate.assert_called_once_with(['12_pel'])
         dialog.principal_owner.setCurrentIndex(0)
         self.assertEqual(dialog.values()['nip'], '1112223344')
+        self.assertEqual([r['imie_pierwsze'] for r in dialog.values()['representatives']], ['Anna','Jan'])
+        with patch.object(dialog, '_generate_documents') as generate:
+            dialog._generate_pel()
+            generate.assert_called_once_with(['12_pel','13_pel_z'])
         for index in range(dialog.employee_checks.count()):
             item = dialog.employee_checks.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == employee:

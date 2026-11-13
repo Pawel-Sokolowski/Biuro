@@ -73,7 +73,7 @@ class WorkerTests(DbTestCase):
             return {'sent': 0}
         with patch('app.worker.run_job', side_effect=job) as calls:
             self.assertEqual(serve(once=True), 1)
-            self.assertEqual({call.args[0] for call in calls.call_args_list}, {'mail', 'reminders', 'ezla'})
+            self.assertEqual({call.args[0] for call in calls.call_args_list}, {'mail', 'reminders', 'ezla', 'checking_refresh'})
         with get_conn() as conn:
             status = json.loads(conn.execute("SELECT wartosc FROM app_settings WHERE klucz='background_worker_heartbeat'").fetchone()[0])
         self.assertEqual(status['jobs']['mail']['state'], 'failed')

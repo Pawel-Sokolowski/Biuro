@@ -51,6 +51,60 @@ zapisie połączenia); starsze miesiące pozostają do ręcznej obsługi. Nadal 
 etapu **Wysłane wyniki** i zachowuje ręczne wpisy, również zmienione już po imporcie.
 Roczny odczyt nie uruchamia dodatkowego workera ani nie zmienia harmonogramu.
 
+Typ KPiR / ryczałt / księgi pochodzi z **Formy opodatkowania** firmy w Biuro.
+Gdy to pole jest puste, uwzględniana jest starsza połączona etykieta z **Formy
+działalności**, np. „Osoba fizyczna (KPiR)”. Jawna forma opodatkowania ma pierwszeństwo.
+W tabeli powiązań po najechaniu na firmę widać obie formy, VAT oraz rozpoznany typ.
+Sprawdzanie i import roczny wybierają dla KPiR wpisy z `Dziennik`, a nie ogólny
+widok `DokEwidencja`. VAT nie jest przełącznikiem dostępu do dokumentów.
+Brak wierszy miesięcy nie oznacza zerowej liczby dokumentów. Pusty wynik zapytania
+wbudowanego jest dodatkowo sprawdzany pod kątem NIP-u właściciela w Enovie.
+
+Pola **Deklaracje i UPO**, **Dokumenty kadrowe**, **Umowy/BHP** i **JPK** to opcjonalne
+adaptery w plikach **`.sql`**, z zapytaniami zgodnymi z kontraktem opisanym w
+[instrukcji Enovy](enova/README.md). Nie są to pliki `.ps1`/`.cmd` instalatora.
+Repo zawiera gotowe zapytania do dokumentów; adapterów deklaracji/kadr/terminów
+jeszcze nie ma. Puste pole oznacza brak tego odczytu. Plik wskazany własną ścieżką
+musi znajdować się na serwerze workera. Eksport struktury Enovy daje metadane do
+przygotowania adaptera, ale nie tworzy działającego zapytania automatycznie.
+
+Do rozpoznania adapterów nie trzeba eksportować wszystkich firm. Zacznij od bazy
+z pełną księgowością, bazy KPiR/ryczałtu oraz bazy z używanymi kadrami i deklaracjami
+(ta sama baza może spełniać kilka warunków). Dodatkowe próbki są potrzebne, jeśli
+firmy mają różne wersje lub dodatki Enovy. Eksport nie zawiera rekordów dokumentów.
+Po wskazaniu pliku JSON widać etap połączenia, odczytu kolumn, relacji i zapisu,
+a na końcu pełną ścieżkę wyniku lub błąd. Eksport korzysta z ustawionego limitu
+zapytania do 1200 s i osobnej kolejki od długich odczytów danych. Nieudany odczyt
+nie zastępuje wcześniejszego pliku eksportu.
+
+W **Księgowość / Kadry → Sprawdzanie** są też przyciski pobrania wybranych firm:
+**Pobierz z Enovy…**, **Pobierz e-ZLA z ZUS…**, a w zestawieniu wakacji składkowych
+**Pobierz z Płatnika…**. Wybierz jedną lub kilka firm w raporcie (Ctrl / Shift)
+lub w oknie wyboru po kliknięciu przycisku. Odczyt Enovy obejmuje wybrany miesiąc
+i poprzedni miesiąc do porównania, z wykorzystaniem istniejących zapytań dokumentów,
+kadr, deklaracji/UPO, JPK i terminów. Nie zmienia licznika widoku miesięcznego.
+e-ZLA używa istniejącej usługi ZUS i skonfigurowanych w niej firm, z dotychczasowymi
+przerwami oraz deduplikacją. Usługa udostępnia wygenerowane raporty z ostatnich 30 dni;
+wybór starego miesiąca w raporcie nie oznacza pobrania archiwum ZUS za ten miesiąc.
+Płatnik odświeża dane wybranych firm za wskazany rok, zachowując dane pozostałych
+firm oraz ręczne wpisy biura.
+
+Przyciski zapisują żądanie we wspólnej kolejce PostgreSQL. W **Zadaniach** workera
+włącz **Ręczne pobrania ze Sprawdzania — wybrane firmy** (domyślnie włączone,
+sprawdzanie co 30 s) i zadania workera. Potrzebny jest nowy build również na
+serwerze workera. Odczyt odbywa się na serwerze, z jego zapisanymi połączeniami
+i kluczem; komputer pracownika nie potrzebuje sterownika SQL. Kliknięcie nie
+przełącza harmonogramów ani nie zmienia zapisanych danych połączeń.
+
+W Sprawdzaniu widać kolejkę, przebieg, wynik i błędy poszczególnych firm. Po zakończeniu
+zestawienie odświeża się automatycznie. Żądania pozostają zapisane po zamknięciu
+programu. Worker po restarcie wznawia przerwany odczyt; operacje dotyczą tylko
+pobierania danych, bez wysyłania wiadomości ani zapisu do Enovy. Uprawnienia do
+modułu i wybranych firm są sprawdzane przy zleceniu oraz ponownie przy wykonaniu.
+Ponowne kliknięcie tego samego oczekującego żądania nie tworzy duplikatu. Zajęte
+źródło jest sprawdzane ponownie w kolejnym przebiegu. „Odśwież” nadal jedynie
+pokazuje dane już zapisane w Biuro. Import e-ZLA do Enovy pozostaje niepodłączony.
+
 Otwarcie **Biuro Worker** nie uruchamia drugiego procesu. Panel odczytuje heartbeat
 workera tej bazy i pokazuje jego host, PID, identyfikator wersji, czas uruchomienia,
 ścieżkę EXE, plik konfiguracji i czas odczytu harmonogramu. Tytuł okna zawiera wersję

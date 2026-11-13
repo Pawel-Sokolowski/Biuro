@@ -1,4 +1,4 @@
-# Ręczne przypomnienia i rozliczenia MT940 (1.5.3)
+# Ręczne przypomnienia i rozliczenia MT940
 
 Widok miesięczny ma dwa niezależne filtry: **Dokumenty** (Wszystkie / Dostarczone /
 Niedostarczone) i **Etap** (Wszystkie / Brak / Zatwierdzone / Zaksięgowane /
@@ -18,6 +18,13 @@ usunięte do kosza i w pełni zapłacone faktury nie są wysyłane. Jeśli dane 
 kwota lub adres klienta zmienią się po otwarciu wiadomości, otwórz ją ponownie.
 
 Oba przyciski otwierają zwykłe okno tworzenia wiadomości z zapisanym szablonem.
+Przypomnienie o dokumentach korzysta z adresu zapisanego w **Kontaktach** firmy,
+a gdy brak zapisanych kontaktów — ze starszego pola e-mail firmy. Kilka różnych
+adresów kontaktowych wymaga wyboru odbiorcy; wiadomość nie trafia automatycznie
+do wszystkich kontaktów. Przy braku adresu otwiera się edytor z pustym polem odbiorcy.
+Przypomnienie o płatności preferuje aktualny **adres e-mail do wysyłki faktur** firmy,
+następnie adres z faktury, starszy kontakt firmy/kontrahenta lub jednoznaczny kontakt
+z tabeli kontaktów. Puste pola i same spacje nie przesłaniają dalszych adresów.
 Można poprawić odbiorców, temat, treść i wybrać przypisane konto nadawcze.
 Pracownik potrzebuje dostępu do odpowiedniego modułu i konta pocztowego;
 nie wymaga uprawnień administratora ani osobnego dostępu do finansów.

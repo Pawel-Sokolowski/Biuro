@@ -64,7 +64,7 @@ class ImportTests(DbTestCase):
         self.assertEqual(len(rows),1)
         return rows[0]
 
-    def import_mock(self,rows):
+    def import_mock(self,rows,company_ids=None):
         connection = Mock()
         cursor = connection.cursor.return_value
         columns = list(rows[0] if rows else source_row())
@@ -72,10 +72,19 @@ class ImportTests(DbTestCase):
         cursor.fetchmany.return_value = [tuple(row.get(name) for name in columns) for row in rows]
         with patch('app.integrations.platnik.holidays.load',return_value={'enabled':True}), \
              patch('app.integrations.platnik.holidays.connect',return_value=connection):
-            result = _import_year(2026,self.admin)
+            result = _import_year(2026,self.admin,company_ids=company_ids)
         connection.close.assert_called_once()
         cursor.execute.assert_called_once_with(QUERY,2026)
         return result
+
+    def test_selected_company_refresh_preserves_other_payers(self):
+        self.make_company('Other',nip='2223334455')
+        self.import_mock([source_row(),source_row(source_id=2,nip='2223334455',imiona_nazwiska='Old other')])
+        self.import_mock([source_row(imiona_nazwiska='Updated selected'),
+                          source_row(source_id=2,nip='2223334455',imiona_nazwiska='New other')],company_ids=[self.company])
+        rows = read_year(self.admin,2026)['rows']
+        self.assertEqual({row['nip']:row['imiona_nazwiska'] for row in rows},
+                         {'1112223344':'Updated selected','2223334455':'Old other'})
 
     def test_import_keeps_n_records_encrypted_and_filters_by_company_access(self):
         self.assertEqual(self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N')])['rows'],2)

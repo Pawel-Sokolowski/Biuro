@@ -10,6 +10,19 @@ from app.utils.months import previous_month, month_bounds
 DEPARTMENTS = ('accounting', 'payroll')
 
 
+class CheckingBusy(ValueError):
+    pass
+
+
+def checking_source(source, company):
+    from app.companies.cennik_keys import company_accounting_type
+    kind = company_accounting_type(company) or source.get('accounting_type')
+    # KPiR entries live in Dziennik, not the general DokEwidencja pivot.
+    query = 'kpir.sql' if kind=='KPIR' else 'checking.sql'
+    return {**source,'accounting_type':'KPIR' if kind=='KPIR' else 'KH',
+            'count_query':str(Path(__file__).resolve().parents[3] / 'docs/enova/queries' / query)}
+
+
 def import_document_year(config, year, *, actor_id, progress=None):
     """Explicit counts-only backfill, independent of billing stages and schedule.
 
@@ -30,7 +43,7 @@ def import_document_year(config, year, *, actor_id, progress=None):
     results = []
     with get_conn() as conn:
         if not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
-            raise ValueError('Import sprawdzania jest już uruchomiony. Poczekaj na jego zakończenie.')
+            raise CheckingBusy('Import sprawdzania jest już uruchomiony. Poczekaj na jego zakończenie.')
         for index, source in enumerate(sources):
             database = source['database']
             if progress:
@@ -38,8 +51,7 @@ def import_document_year(config, year, *, actor_id, progress=None):
             try:
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
-                    report_source = {**source, 'accounting_type': 'KH', 'count_query': str(
-                        Path(__file__).resolve().parents[3] / 'docs/enova/queries/checking.sql')}
+                    report_source = checking_source(source,company)
                     counts = validate_rows(fetch_counts(config, report_source, months), report_source, months)
                     if any(count.by_type is None for count in counts):
                         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
@@ -160,19 +172,25 @@ def validate_payroll(rows, source, months):
     return result
 
 
-def sync_checking(conn, config, source, company_id, day, *, apply):
+def sync_checking(conn, config, source, company_id, day, *, apply, months=None, force=False):
     requested_months(day, config.get('months_back', 3))
     month = day.strftime('%Y-%m')
     # Retain historical snapshots for period navigation; the UI compares only the previous month.
-    months = history_months(month, 12 + config.get('months_back', 3) - 1) + [month]
+    months = months if months is not None else history_months(month, 12 + config.get('months_back', 3) - 1) + [month]
+    if not months or months != sorted(set(months)) or len(months) > 36:
+        raise ValueError('Nieprawidłowy zakres sprawdzania.')
+    for period in months:
+        month_bounds(period)
     key = f'enova_checking_checked_{company_id}'
     signature = {'version': 3, 'day': day.isoformat(), 'server': config.get('server'),
                  'database': source['database'], 'months': months,
                  'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
-    if apply and checked and json.loads(checked[0]) == signature:
+    if apply and not force and checked and json.loads(checked[0]) == signature:
         return {'mode': 'skipped'}
-    report_source = {**source, 'accounting_type': 'KH', 'count_query': str(Path(__file__).resolve().parents[3] / 'docs/enova/queries/checking.sql')}
+    from app.integrations.enova.document_counts import find_company
+    company = find_company(conn,normalize_nip(source['nip']))
+    report_source = checking_source(source,company)
     counts = validate_rows(fetch_counts(config, report_source, months), report_source, months)
     if any(count.by_type is None for count in counts):
         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
@@ -188,6 +206,9 @@ def sync_checking(conn, config, source, company_id, day, *, apply):
     if source.get('hr_events_query'):
         from app.integrations.enova.hr_events import fetch_events
         events = fetch_events(config, source, day)
+    if force and source.get('jpk_query'):
+        from app.integrations.enova.jpk import import_jpk
+        import_jpk(conn, config, source, company_id, months, day, apply=apply, force=True)
     if apply:
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for count in counts:
@@ -202,13 +223,14 @@ def sync_checking(conn, config, source, company_id, day, *, apply):
         conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                      'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                      (f'enova_hr_{company_id}', json.dumps(hr_snapshot, ensure_ascii=False)))
-        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
+        if not force:
+            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                         'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
     return {'mode': 'applied' if apply else 'preview', 'months': len(months),
             'payroll_configured': payroll is not None, 'declarations_configured': declarations is not None, 'hr_configured': events is not None}
 
 
-def run_checking_import(config, *, apply=False, today=None):
+def run_checking_import(config, *, apply=False, today=None, months=None, force=False):
     from app.db.dao_conn import get_conn
     from app.integrations.enova.document_counts import find_company
     if apply and not config.get('enabled', False):
@@ -217,13 +239,13 @@ def run_checking_import(config, *, apply=False, today=None):
     results = []
     with get_conn() as conn:
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
-            raise ValueError('Import sprawdzania jest już uruchomiony.')
+            raise CheckingBusy('Import sprawdzania jest już uruchomiony.')
         for source in config['sources']:
             try:
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
-                    result = sync_checking(conn, config, source, company['id'], day, apply=apply)
-                    results.append({'database': source['database'], 'kind': 'checking', 'ok': True, **result})
+                    result = sync_checking(conn, config, source, company['id'], day, apply=apply, months=months, force=force)
+                    results.append({'database': source['database'], 'company_id':company['id'], 'kind': 'checking', 'ok': True, **result})
             except Exception as exc:
                 error = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
                 results.append({'database': source['database'], 'kind': 'checking', 'ok': False, 'error': error})

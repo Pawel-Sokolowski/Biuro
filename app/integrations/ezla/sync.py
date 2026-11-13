@@ -56,7 +56,7 @@ def progress(stage, **details):
                 'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}))
 
 
-def run_sync(*, actor_id=None, today=None, stop=None):
+def run_sync(*, actor_id=None, today=None, stop=None, company_ids=None):
     if actor_id is not None:
         from app.security.authorization import is_administrator
         if not is_administrator(actor_id):
@@ -64,12 +64,16 @@ def run_sync(*, actor_id=None, today=None, stop=None):
     with get_conn() as leader:
         if not leader.execute('SELECT pg_try_advisory_xact_lock(748212)').fetchone()[0]:
             return {'mode': 'busy', 'companies': 0, 'failed': 0}
-        return _run_sync(today=today, stop=stop)
+        return _run_sync(today=today, stop=stop, company_ids=company_ids)
 
 
-def _run_sync(*, today=None, stop=None):
+def _run_sync(*, today=None, stop=None, company_ids=None):
     config = load_settings()
-    if not config['enabled']:
+    if company_ids is not None:
+        if not company_ids or any(type(fid) is not int or fid not in config['companies'] for fid in company_ids):
+            raise ValueError('Wybrane firmy muszą być skonfigurowane w usłudze e-ZLA workera.')
+        config['companies'] = sorted(set(company_ids))
+    if not config['enabled'] and company_ids is None:
         return {'mode': 'disabled', 'companies': 0, 'failed': 0}
     today = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
     progress('Odczyt ustawień usługi')

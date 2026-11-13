@@ -23,12 +23,12 @@ def validate_jpk(rows, source, months):
     return found
 
 
-def import_jpk(conn, config, source, company_id, months, day, *, apply):
+def import_jpk(conn, config, source, company_id, months, day, *, apply, force=False):
     key = f'enova_jpk_checked_{company_id}'
     signature = {'day': day.isoformat(), 'server': config.get('server'), 'database': source['database'],
                  'query': source['jpk_query'], 'months': months}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
-    if apply and checked and json.loads(checked[0]) == signature:
+    if apply and not force and checked and json.loads(checked[0]) == signature:
         return {'mode': 'skipped'}
     query_source = {**source, 'count_query': source['jpk_query']}
     statuses = validate_jpk(fetch_counts(config, query_source, months, result_kind='jpk'), source, months)
@@ -38,6 +38,7 @@ def import_jpk(conn, config, source, company_id, months, day, *, apply):
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                          (f'enova_jpk_{company_id}_{month}', json.dumps(value)))
-        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
+        if not force:
+            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                         'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
     return {'mode': 'applied' if apply else 'preview', 'statuses': statuses}

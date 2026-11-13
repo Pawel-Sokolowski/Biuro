@@ -12,6 +12,9 @@ import threading
 import time as clock
 from zoneinfo import ZoneInfo
 
+if __name__ == '__main__':
+    os.environ['BIO_WORKER_MODE'] = '1'
+
 from app.config import get_dsn, get_schema
 from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import load_settings
@@ -204,6 +207,7 @@ def main(argv=None):
     from app.utils.env_config import load_environment, ensure_encryption_key
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--once', action='store_true', help='Wykonaj jeden przebieg włączonych zadań.')
+    parser.add_argument('--check-config', action='store_true', help='Sprawdź konfigurację bez uruchamiania zadań.')
     args = parser.parse_args(argv)
     load_environment()
     from app.diagnostics import configure_logging
@@ -212,6 +216,11 @@ def main(argv=None):
     try:
         # Configure logging before credential checks: the packaged EXE has no console.
         ensure_encryption_key()
+        if args.check_config:
+            from app.services.worker_setup import preflight
+            preflight()
+            logger.info('worker_configuration_ready')
+            return 0
         os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
         from PyQt6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(['biuro-worker'])

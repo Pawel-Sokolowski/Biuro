@@ -124,6 +124,11 @@ jobs:
           $target = "$env:RUNNER_TEMP\Installed Biuro"
           $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$target`"" -Wait -PassThru
           if ($process.ExitCode) { throw 'Installer failed' }
+          if (Test-Path (Join-Path $target 'scripts\install_background_worker.cmd')) { throw 'Worker must not be selected by default' }
+          $process = Start-Process "$target\unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+          if ($process.ExitCode) { throw 'Desktop-only uninstall failed' }
+          $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /COMPONENTS=program,worker /DIR=`"$target`"" -Wait -PassThru
+          if ($process.ExitCode) { throw 'Combined program/worker installation failed' }
           $workerScript = Join-Path $target 'scripts\install_background_worker.ps1'
           $workerLauncher = Join-Path $target 'scripts\install_background_worker.cmd'
           if (-not (Test-Path $workerLauncher)) { throw 'Worker launcher missing from installation' }
@@ -145,6 +150,8 @@ jobs:
           $process = Start-Process "$target\Biuro.exe" -ArgumentList '--smoke-test' -Wait -PassThru
           if ($process.ExitCode) { throw 'Installed smoke test failed' }
           Get-Content $env:BIO_SMOKE_OUTPUT
+          $process = Start-Process "$target\Biuro.exe" -ArgumentList '--worker --check-config' -Wait -PassThru
+          if ($process.ExitCode) { throw 'Packaged worker preflight failed' }
           $process = Start-Process "$target\unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
           if ($process.ExitCode) { throw 'Uninstall failed' }
       - name: Upload worker installation helpers

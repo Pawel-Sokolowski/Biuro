@@ -4,6 +4,8 @@ import sys
 
 from app.utils.env_config import load_environment, ensure_encryption_key
 
+if __name__ == '__main__' and any(flag in sys.argv for flag in ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task')):
+    os.environ['BIO_WORKER_MODE'] = '1'
 load_environment()
 if __name__ == '__main__' and '--worker' in sys.argv:
     from app.worker import main as worker_main
@@ -35,6 +37,20 @@ def excepthook(type, value, tb):
 sys.excepthook = excepthook
 
 if __name__ == "__main__":
+    if '--worker-install-task' in sys.argv:
+        app = QApplication(sys.argv)
+        install_polish_translations(app)
+        from app.worker_install_ui import WorkerInstallDialog
+        index = sys.argv.index('--worker-install-task')
+        if index + 1 >= len(sys.argv):
+            sys.exit(1)
+        WorkerInstallDialog(sys.argv[index + 1]).exec()
+        sys.exit(0)
+    if '--worker-setup' in sys.argv or '--worker-panel' in sys.argv:
+        app = QApplication(sys.argv)
+        install_polish_translations(app)
+        from app.worker_setup_ui import run
+        sys.exit(run(app, configure='--worker-setup' in sys.argv))
     if '--smoke-test' in sys.argv:
         from app.release_smoke import run
         app = QApplication(sys.argv)
@@ -63,28 +79,15 @@ if __name__ == "__main__":
     install_polish_translations(app)
     try:
         ensure_encryption_key()
-    except ValueError as exc:
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.warning(None, 'Wspólny klucz szyfrowania', str(exc))
+    except ValueError:
+        from app.key_setup_ui import KeySetupDialog
+        if KeySetupDialog().exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
     login_window = LoginWindow()
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id
-        if '--worker-panel' in sys.argv:
-            from app.security.authorization import is_administrator
-            if not is_administrator(pracownik_id):
-                from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(None, 'Worker', 'Panel workera wymaga uprawnień administratora.')
-                sys.exit(1)
-            from PyQt6.QtWidgets import QMainWindow
-            from app.admin.settings.worker_monitor import WorkerMonitor
-            window = QMainWindow()
-            window.setWindowTitle('Biuro — panel workera')
-            window.setCentralWidget(WorkerMonitor(pracownik_id, window))
-            window.resize(1100, 700)
-            window.show()
-        else:
-            window = OfficeManagerApp(pracownik_id)
-            window.restore_window_state()
+        window = OfficeManagerApp(pracownik_id)
+        window.restore_window_state()
         sys.exit(app.exec())
     else:
         sys.exit()

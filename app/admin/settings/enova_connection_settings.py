@@ -8,6 +8,7 @@ from app.integrations.enova.connection_settings import load_connection, save_con
 class EnovaConnectionSettings(QWidget):
     discovery_progress = pyqtSignal(int,int,int,str)
     import_progress = pyqtSignal(int,int,str)
+    schema_progress = pyqtSignal(str)
 
     def __init__(self, actor_id, parent=None):
         super().__init__(parent)
@@ -22,6 +23,8 @@ class EnovaConnectionSettings(QWidget):
         self._import_running = False
         self._discovery_result = {'databases': [], 'matches': {}, 'errors': []}
         self._mapping_server = None
+        self._schema_running = False
+        self.schema_progress.connect(self.show_schema_progress)
         config = load_connection()
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -157,10 +160,19 @@ class EnovaConnectionSettings(QWidget):
         self.import_bar = QProgressBar()
         self.import_bar.hide()
         layout.addWidget(self.import_bar)
-        self.schema_runner = TaskRunner(self)
+        from app.utils.background import metadata_pool
+        self.schema_runner = TaskRunner(self,pool=metadata_pool)
         self.schema_button = QPushButton('Eksportuj strukturę Enova — deklaracje i kadry (wybrana firma)')
         self.schema_button.clicked.connect(self.export_schema)
         layout.addWidget(self.schema_button)
+        self.schema_status = QLabel()
+        self.schema_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.schema_status.setWordWrap(True)
+        layout.addWidget(self.schema_status)
+        self.schema_bar = QProgressBar()
+        self.schema_bar.setRange(0,0)
+        self.schema_bar.hide()
+        layout.addWidget(self.schema_bar)
         save = QPushButton('Zapisz połączenie Enova')
         save.clicked.connect(self.save)
         layout.addWidget(save)
@@ -386,6 +398,10 @@ class EnovaConnectionSettings(QWidget):
             QMessageBox.warning(self, 'Połączenie Enova', str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
         self.connection_runner.submit(lambda: check_connection(config, password=password), done, failed)
 
+    def show_schema_progress(self,message):
+        if self._schema_running:
+            self.schema_status.setText(message)
+
     def export_schema(self):
         from app.integrations.enova.schema_probe import inspect_schema
         import json
@@ -403,21 +419,57 @@ class EnovaConnectionSettings(QWidget):
             return
         config = load_connection()
         config.update(server=self.server.text().strip(), username=self.username.text().strip(),
-                      driver=self.driver.currentData(), trust_server_certificate=self.trust_certificate.isChecked())
+                      driver=self.driver.currentData(), trust_server_certificate=self.trust_certificate.isChecked(),
+                      discovery_query_timeout=self.discovery_timeout.value())
         password = self.password.text()
+        actor_id = self.actor_id
+        self._schema_running = True
         self.schema_button.setEnabled(False)
-        def done(result):
+        self.schema_bar.show()
+        self.schema_status.setText(f'Oczekiwanie na odczyt struktury bazy {database}… Docelowy plik: {destination}')
+        def reset():
+            self._schema_running = False
             self.schema_button.setEnabled(True)
+            self.schema_bar.hide()
+        def progress(message):
             try:
-                Path(destination).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
-            except OSError:
-                QMessageBox.warning(self, 'Struktura Enova', 'Nie udało się zapisać pliku.')
-                return
-            QMessageBox.information(self, 'Struktura Enova', 'Zapisano nazwy tabel, kolumn i relacje. Eksport nie zawiera haseł ani treści dokumentów.')
+                self.schema_progress.emit(message)
+            except RuntimeError:
+                pass
+        def work():
+            from app.security.authorization import is_administrator
+            import os
+            import tempfile
+            if not is_administrator(actor_id):
+                raise PermissionError('Brak uprawnień do eksportu struktury Enovy.')
+            result = inspect_schema(config,database,password=password,progress=progress)
+            progress('Zapisywanie pliku: '+destination)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=Path(destination).parent,delete=False,suffix='.tmp') as handle:
+                    temporary = Path(handle.name)
+                    json.dump(result,handle,ensure_ascii=False,indent=2)
+                os.replace(temporary,destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            return result
+        def done(result):
+            reset()
+            message = f"Zapisano {len(result['columns'])} kolumn i {len(result['foreign_keys'])} relacji. Plik: {destination}"
+            self.schema_status.setText(message)
+            QMessageBox.information(self, 'Struktura Enova', message+'\nEksport nie zawiera haseł ani treści dokumentów.')
         def failed(exc):
-            self.schema_button.setEnabled(True)
-            QMessageBox.warning(self, 'Struktura Enova', str(exc))
-        self.schema_runner.submit(lambda: inspect_schema(config, database, password=password), done, failed)
+            reset()
+            message = (str(exc) if isinstance(exc,(ValueError,PermissionError)) else
+                       'Nie udało się zapisać pliku. Sprawdź wybrany folder i prawa zapisu.' if isinstance(exc,OSError) else
+                       'Nie udało się wykonać eksportu: '+type(exc).__name__)
+            self.schema_status.setText('Eksport nie powiódł się: '+message)
+            QMessageBox.warning(self, 'Struktura Enova', message)
+        try:
+            self.schema_runner.submit(work, done, failed)
+        except Exception as exc:
+            failed(exc)
 
     def discovery_fields(self):
         return (self.server.text().strip(), self.username.text().strip(), self.driver.currentData(),

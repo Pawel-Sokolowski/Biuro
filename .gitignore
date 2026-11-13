@@ -47,3 +47,6 @@ inspect_export.log
 
 # Original Microsoft redistributable downloaded and verified at Windows build time.
 /installer/prerequisites/
+
+# Local server worker credentials
+worker.env

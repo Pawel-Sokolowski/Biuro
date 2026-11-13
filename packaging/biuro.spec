@@ -33,6 +33,23 @@ def runtime_module(name):
 
 ROOT = Path(SPEC).resolve().parent.parent
 APP = ROOT / "app"
+APP_VERSION = (APP / "VERSION").read_text(encoding="utf-8").strip()
+# The installer, application and Windows EXE resource share one version source.
+version_resource = None
+import sys
+if sys.platform == "win32":
+    from PyInstaller.utils.win32.versioninfo import (VSVersionInfo, FixedFileInfo,
+        StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct)
+    version_tuple = tuple(int(part) for part in APP_VERSION.split("."))
+    version_tuple = (version_tuple + (0, 0, 0, 0))[:4]
+    version_resource = VSVersionInfo(
+        ffi=FixedFileInfo(filevers=version_tuple, prodvers=version_tuple,
+                          mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0, 0)),
+        kids=[StringFileInfo([StringTable("041504B0", [
+            StringStruct("FileDescription", "Biuro — program i worker"),
+            StringStruct("FileVersion", APP_VERSION), StringStruct("ProductVersion", APP_VERSION),
+            StringStruct("ProductName", "Biuro"), StringStruct("OriginalFilename", "Biuro.exe")])]),
+            VarFileInfo([VarStruct("Translation", [0x0415, 1200])])])
 
 datas = [
     (str(ROOT / 'docs' / 'enova'), 'docs/enova'),
@@ -74,6 +91,12 @@ a = Analysis(
     hiddenimports=[
         *collect_submodules("app", filter=runtime_module),
         *mt940_hidden,
+        # Explicit entry points for a desktop-only or worker-only installation.
+        "app.worker_setup_ui",
+        "app.worker_install_ui",
+        "app.key_setup_ui",
+        "app.services.worker_setup",
+        "app.services.worker_windows",
         "encodings.utf_8_sig",
         "encodings.cp1250",
         "encodings.iso8859_2",
@@ -134,6 +157,7 @@ exe = EXE(
     # Keep Chromium's Qt WebEngine helper process and libraries untouched.
     upx=False,
     console=False,
+    version=version_resource,
     exclude_binaries=True,
 )
 

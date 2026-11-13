@@ -40,6 +40,13 @@ def env_search_paths() -> List[Path]:
 def load_environment() -> List[Path]:
     """Wczytuje istniejące pliki .env (pierwszy ma pierwszeństwo). Zwraca użyte ścieżki."""
     loaded = []
+    if os.getenv('BIO_WORKER_MODE') == '1':
+        from app.services.worker_setup import worker_env_path
+        path = worker_env_path()
+        if path.is_file():
+            # Dedicated worker configuration must also win over inherited desktop DB_URL.
+            load_dotenv(dotenv_path=path, override=True, interpolate=False)
+            return [path]
     for path in env_search_paths():
         if path.is_file():
             load_dotenv(dotenv_path=path, override=False)

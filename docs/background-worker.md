@@ -198,3 +198,27 @@ sygnału, odczytaj wynik zadania w Harmonogramie oraz `Biuro\logs\biuro.log`
 w profilu **konta zadania**. Nowa wersja zapisuje tam także błędy startu, np. brak
 wspólnego klucza szyfrowania. Dla źródeł log i `.env` znajdują się w projekcie;
 dla EXE konfiguracja konta zadania jest w `%LOCALAPPDATA%\Biuro\.env`.
+
+## PostgreSQL działa, ale klucz nie odszyfrowuje haseł
+
+Ten komunikat pojawia się po nawiązaniu połączenia z bazą; nie oznacza złego hasła
+PostgreSQL. Identyczny klucz na PC i serwerze nie naprawia danych zapisanych wcześniej
+innym kluczem. Zapisanie/import klucza nie obraca szyfrowania istniejących sekretów.
+
+Kreator pokazuje liczbę nieczytelnych rekordów, nazwy kont/usług i odcisk sprawdzanego
+klucza (nigdy klucz ani zaszyfrowane hasła). Porównaj odcisk z działającym PC. Nie
+usuwaj plików klucza i nie generuj kolejnego, żeby naprawić stare hasła.
+
+Po poprawnym połączeniu i nieudanym odczycie sekretów można jawnie potwierdzić zapis
+konfiguracji lokalnej, zalogować się jako administrator Biuro i ponownie wpisać hasła
+wskazanych kont/usług. Zapis nowego hasła zaszyfruje je aktualnym wspólnym kluczem.
+Sekretów w bazie nie usuwamy ani nie nadpisujemy automatycznie. Certyfikaty/tokeny
+mogą wymagać ponownego importu/autoryzacji. Do tego czasu instalacja/start przez
+kreator nadal wymaga pomyślnego sprawdzenia sekretów.
+
+Edytor klucza w trybie workera zapisuje do istniejącego `worker.env`, a nie do
+nieużywanej w tym trybie `.env`. Jawny import w trybie desktopowym zapisuje znacznik
+`BIO_LOCAL_KEY_OVERRIDE=1`; wybrany w aplikacji klucz ma wtedy pierwszeństwo nad
+odziedziczoną zmienną klucza po restarcie. Inne zmienne, w tym DB_URL, zachowują
+wcześniejsze reguły pierwszeństwa. Bez jawnego wyboru znacznika nadal obowiązuje
+pierwszeństwo zmiennych środowiskowych opisane wyżej.

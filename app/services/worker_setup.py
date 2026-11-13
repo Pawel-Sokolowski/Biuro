@@ -88,24 +88,46 @@ def check_saved_credentials():
         return _check_tokens(conn, os.environ.get('BIO_ENCRYPTION_KEY', ''))
 
 
+class CredentialKeyError(ValueError):
+    """Safe, actionable diagnostics containing labels only, never ciphertext or keys."""
+    def __init__(self, failed, checked, fingerprint):
+        self.failed = tuple(failed)
+        self.checked = checked
+        self.fingerprint = fingerprint
+        labels = '; '.join(failed[:12])
+        if len(failed) > 12:
+            labels += f'; i kolejne {len(failed)-12}'
+        super().__init__(f'Klucz nie odszyfrowuje {len(failed)} z {checked} zapisanych sekretów. '
+                         f'Odcisk sprawdzanego klucza: {fingerprint}. Wymagają sprawdzenia: {labels}. '
+                         'Użyj dotychczasowego klucza lub ponownie wpisz hasła tych kont/usług. '
+                         'Zapisanie nowego klucza nie szyfruje ponownie istniejących danych.')
+
+
 def _check_tokens(conn, key):
+    import hashlib
     import json
     from cryptography.fernet import Fernet, InvalidToken
     cipher = Fernet(key.encode())
-    try:
-        tokens = [row[0] for row in conn.execute(
-            "SELECT haslo_enc FROM konta_email WHERE NULLIF(haslo_enc,'') IS NOT NULL").fetchall()]
-        for row in conn.execute("SELECT klucz,wartosc FROM app_settings WHERE klucz IN ('enova_connection','ezla_service','saldeo_web') OR wartosc LIKE 'gAAAAA%'").fetchall():
-            if row[1].startswith('gAAAAA'):
-                tokens.append(row[1])
-            else:
-                config = json.loads(row[1] or '{}')
-                tokens.extend(config[name] for name in ('password_enc', 'zip_password_enc') if config.get(name))
-        for token in tokens:
+    tokens = []
+    for row in conn.execute(
+            "SELECT id,email,haslo_enc FROM konta_email WHERE NULLIF(haslo_enc,'') IS NOT NULL").fetchall():
+        tokens.append((f'Poczta #{row[0]} ({row[1]})', row[2]))
+    for row in conn.execute("SELECT klucz,wartosc FROM app_settings WHERE klucz IN ('enova_connection','ezla_service','saldeo_web') OR wartosc LIKE 'gAAAAA%'").fetchall():
+        if row[1].startswith('gAAAAA'):
+            tokens.append((f'Ustawienie {row[0]}', row[1]))
+        else:
+            config = json.loads(row[1] or '{}')
+            for name in ('password_enc', 'zip_password_enc'):
+                if config.get(name):
+                    tokens.append((f'{row[0]} / {name}', config[name]))
+    failed = []
+    for label, token in tokens:
+        try:
             cipher.decrypt(token.encode())
-    except InvalidToken:
-        raise ValueError('Klucz nie odszyfrowuje zapisanych haseł. Wybierz klucz z działającego komputera. '
-                         'Jeśli klucze były różne na stanowiskach, ujednolić trzeba także zapisane hasła.') from None
+        except (InvalidToken, ValueError, TypeError, AttributeError):
+            failed.append(label)
+    if failed:
+        raise CredentialKeyError(failed, len(tokens), hashlib.sha256(key.encode()).hexdigest()[:16])
     return len(tokens)
 
 

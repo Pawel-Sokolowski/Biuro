@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton,
                              QMessageBox, QFileDialog)
-from app.utils.env_config import KEY_NAME, install_encryption_key, user_env_path
+from app.utils.env_config import KEY_NAME, install_encryption_key, active_env_path
 
 
 class EncryptionSettings(QWidget):
@@ -40,7 +40,7 @@ class EncryptionSettings(QWidget):
     def refresh(self):
         key = os.environ.get(KEY_NAME, '')
         fingerprint = hashlib.sha256(key.encode()).hexdigest()[:16] if key else 'brak'
-        self.status.setText(f'Odcisk klucza: {fingerprint}\nPlik ustawień: {user_env_path()}')
+        self.status.setText(f'Odcisk klucza: {fingerprint}\nPlik ustawień: {active_env_path()}')
 
     def import_key(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Importuj wspólny klucz', '', 'Klucz (*.key);;Wszystkie pliki (*)')

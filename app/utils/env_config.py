@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 KEY_NAME = "BIO_ENCRYPTION_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -37,9 +37,20 @@ def env_search_paths() -> List[Path]:
     return paths
 
 
+def active_env_path() -> Path:
+    """The key editor must write to the file the running mode actually reads."""
+    if os.getenv('BIO_WORKER_MODE') == '1':
+        from app.services.worker_setup import worker_env_path
+        path = worker_env_path()
+        if path.is_file():
+            return path
+    return user_env_path()
+
+
 def load_environment() -> List[Path]:
     """Wczytuje istniejące pliki .env (pierwszy ma pierwszeństwo). Zwraca użyte ścieżki."""
     loaded = []
+    local_key_selected = False
     if os.getenv('BIO_WORKER_MODE') == '1':
         from app.services.worker_setup import worker_env_path
         path = worker_env_path()
@@ -50,6 +61,12 @@ def load_environment() -> List[Path]:
     for path in env_search_paths():
         if path.is_file():
             load_dotenv(dotenv_path=path, override=False)
+            values = dotenv_values(path, interpolate=False)
+            if not local_key_selected and values.get('BIO_LOCAL_KEY_OVERRIDE') == '1' and values.get(KEY_NAME):
+                # An explicit key import is the user's choice of the primary local key.
+                # Preserve normal environment priority for DB_URL and unattended deployments.
+                os.environ[KEY_NAME] = values[KEY_NAME]
+                local_key_selected = True
             loaded.append(path)
     return loaded
 
@@ -73,12 +90,13 @@ def install_encryption_key(key: str) -> None:
     import tempfile
     key = key.strip()
     Fernet(key.encode())
-    path = user_env_path()
+    path = active_env_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding='utf-8') if path.exists() else ''
     import re
-    lines = [line for line in text.splitlines() if not re.match(r'^\s*(?:export\s+)?' + KEY_NAME + r'\s*=', line)]
+    lines = [line for line in text.splitlines() if not re.match(r'^\s*(?:export\s+)?(?:' + KEY_NAME + r'|BIO_LOCAL_KEY_OVERRIDE)\s*=', line)]
     lines.append(KEY_NAME + '=' + key)
+    lines.append('BIO_LOCAL_KEY_OVERRIDE=1')
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as handle:

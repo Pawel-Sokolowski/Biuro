@@ -69,7 +69,7 @@ class ImportTests(DbTestCase):
         self.assertEqual(self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N')])['rows'],2)
         snapshot = get_setting('platnik_holidays_2026')
         self.assertNotIn('Jan Testowy',snapshot)
-        self.assertNotIn('0514',snapshot)
+        self.assertNotIn('"kod_ubezpieczenia"',snapshot)
         result = read_year(self.admin,2026)
         self.assertEqual([row['status_zrodlowy'] for row in result['rows']],['A','N'])
         with patch('app.integrations.enova.accounting.require_access'), \

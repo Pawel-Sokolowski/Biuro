@@ -93,7 +93,6 @@ class EnovaConnectionSettings(QWidget):
         sources = {s['nip']: s['database'] for s in config['sources']}
         self.table = QTableWidget(len(self.companies), 3)
         self.table.setHorizontalHeaderLabels(['Firma', 'NIP', 'Baza Enova'])
-        from PyQt6.QtCore import Qt
         for row, company in enumerate(self.companies):
             for col, value in enumerate((company['nazwa'], company['nip'])):
                 item = QTableWidgetItem(str(value or ''))

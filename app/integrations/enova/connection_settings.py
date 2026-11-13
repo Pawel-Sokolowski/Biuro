@@ -47,8 +47,8 @@ def save_connection(config, *, actor_id, password=''):
             raise ValueError('Każda firma i baza muszą wystąpić dokładnie raz.')
         seen_nips.add(nip)
         seen_databases.add(database)
-    if config['enabled'] and not config['sources']:
-        raise ValueError('Dodaj mapowanie bazy przynajmniej jednej firmy.')
+    # Connection credentials can be saved before database discovery/mapping.
+    # Import execution checks that at least one company source is configured.
     saved = {key: config[key] for key in ('server', 'username', 'enabled', 'months_back', 'sources')}
     saved['database'] = str(config.get('database') or '').strip()
     from app.integrations.enova.discovery import query_timeout

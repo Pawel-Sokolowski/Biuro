@@ -109,6 +109,8 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock -r requirements-test.lock -r requirements-build.lock
           python -m pip check
           python -c "import os; from cryptography.fernet import Fernet; open(os.environ['GITHUB_ENV'],'a').write('BIO_ENCRYPTION_KEY='+Fernet.generate_key().decode()+'\n')"
+      - name: Check existing worker task upgrade without touching Scheduler
+        run: python -m unittest tests.test_worker_windows_task
       - name: Check source and build executable
         run: |
           python -m ruff check app tests

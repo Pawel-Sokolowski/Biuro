@@ -16,7 +16,8 @@ class WorkerInstallDialog(QDialog):
         account, sid = identity()
         self.status = QLabel(f'Konto Windows: {account}\nWorker uruchomi się również po restarcie serwera '
                              'i bez zalogowanego użytkownika. Podaj hasło konta Windows (nie PIN i nie hasło Biuro). '
-                             'Jeśli zadanie już istnieje dla tej instalacji, zostanie uruchomione bez zmiany konta.')
+                             'Jeśli zadanie już istnieje dla tej instalacji, działający proces zostanie zatrzymany '
+                             'i uruchomiony ponownie bez zmiany konta. Przed aktualizacją zakończ bieżące wysyłki.')
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
@@ -25,7 +26,7 @@ class WorkerInstallDialog(QDialog):
         self.password.setPlaceholderText('Hasło bieżącego konta Windows — do pierwszej instalacji')
         layout.addWidget(self.password)
         self.buttons = []
-        for mode, title in (('install', 'Zainstaluj i uruchom worker'),
+        for mode, title in (('install', 'Zainstaluj / uruchom ponownie worker'),
                             ('restart', 'Uruchom ponownie worker'), ('stop', 'Zatrzymaj worker')):
             button = QPushButton(title)
             button.clicked.connect(lambda _, action=mode: self.execute(action))

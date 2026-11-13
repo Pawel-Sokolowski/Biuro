@@ -61,6 +61,12 @@ class GlobalSettingsPage(QWidget):
         title = QLabel("Ustawienia")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         main_layout.addWidget(title)
+        from app.db.dao_conn import database_context
+        self.database_info = QLabel('Baza konfiguracji: '+database_context())
+        self.database_info.setTextFormat(Qt.TextFormat.PlainText)
+        self.database_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.database_info.setWordWrap(True)
+        main_layout.addWidget(self.database_info)
 
         perms = self.logic.get_user_permissions(self.pracownik_id)
 
@@ -161,4 +167,17 @@ class GlobalSettingsPage(QWidget):
             placeholder.deleteLater()
             self.stack.insertWidget(row, page)
             self._built[row] = page
+        else:
+            page = self._built[row]
+            content = page.widget() if isinstance(page,QScrollArea) else page
+            reload_saved = getattr(content,'reload_saved',None)
+            if callable(reload_saved):
+                try:
+                    reload_saved()
+                except Exception:
+                    content.setToolTip('Nie udało się odświeżyć ustawień z bazy Biuro. Sprawdź połączenie; zachowano bieżący formularz.')
         self.stack.setCurrentIndex(row)
+
+    def showEvent(self,event):
+        super().showEvent(event)
+        self._show_page(self.nav.currentRow())

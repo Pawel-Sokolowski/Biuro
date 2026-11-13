@@ -37,6 +37,10 @@ class CivilOwnersAuthorityTests(DbTestCase):
             reminder = _civil_recipient(conn, dict(company, email='company@example.test', contact_emails=['other@example.test']), self.company, 'email')
         self.assertEqual(reminder['email'], 'a@example.test, b@example.test')
         self.assertEqual(reminder['contact_emails'], [])
+        from app.services.manual_reminders import prepare
+        manual = prepare('documents', self.company, self.actor, '2026-10')
+        self.assertEqual(manual['recipients'], ['a@example.test','b@example.test'])
+        self.assertEqual(manual['recipient_choices'], [])
 
     def test_partial_partner_edit_does_not_erase_identifiers_or_contacts(self):
         person = get_partners(self.company)[0]

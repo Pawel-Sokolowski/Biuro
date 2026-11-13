@@ -8,6 +8,7 @@ from app.security.authorization import allowed_tabs, assigned_company_ids, can_m
 from app.email.email_storage import get_email_accounts_for_employee
 from app.invoices.invoice_delivery import parse_recipients
 from .email_reminders import FIELDS, load_settings, _candidates
+from .reminder_recipients import select_recipient
 
 
 def prepare(kind, target_id, actor_id, month=None):
@@ -25,7 +26,8 @@ def prepare(kind, target_id, actor_id, month=None):
                 raise ValueError('Wybierz konkretny miesiąc.') from None
             if period.strftime('%Y-%m')!=month:
                 raise ValueError('Wybierz konkretny miesiąc.')
-            company = conn.execute('''SELECT f.nazwa,f.adres_email,s.dokumenty_dostarczone
+            company = conn.execute('''SELECT f.nazwa,f.adres_email,s.dokumenty_dostarczone,
+                ARRAY(SELECT c.email FROM company_contacts c WHERE c.firma_id=f.id ORDER BY c.id) AS contact_emails
                 FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id=f.id AND s.miesiac=%s
                 WHERE f.id=%s''', (month,target_id)).fetchone()
             if not company:
@@ -36,6 +38,7 @@ def prepare(kind, target_id, actor_id, month=None):
             due = first.replace(day=min(settings[kind]['day'],calendar.monthrange(first.year,first.month)[1]))
             candidate = {'target':f'{target_id}:{month}','email':company['adres_email'],'due':due,
                          'firma':company['nazwa'],'miesiac':month,'numer':'','pozostalo':''}
+            candidate.update(select_recipient(company_email=company['adres_email'],contact_emails=company['contact_emails']))
         elif kind=='payments':
             if not can_manage_invoices(actor_id):
                 raise PermissionError('Brak dostępu do faktur.')
@@ -48,12 +51,15 @@ def prepare(kind, target_id, actor_id, month=None):
                 raise PermissionError('Brak dostępu do faktury.')
         else:
             raise ValueError('Nieprawidłowy rodzaj przypomnienia.')
-    recipients = parse_recipients(candidate['email'])
+    try:
+        recipients = parse_recipients(candidate['email']) if candidate['email'] else []
+    except ValueError:
+        raise ValueError(f"Firma {candidate['firma']}: nieprawidłowy adres odbiorcy przypomnienia. Popraw e-mail kontaktowy lub adres do faktur w danych firmy.") from None
     template = next(t for t in settings['templates'] if t['name']==settings[kind]['template'])
     values = {key:str(candidate.get(key,'')) for key in FIELDS}
     values['termin'] = candidate['due'].isoformat()
     return {'kind':kind,'target_id':target_id,'target':candidate['target'],'month':month,
-            'recipients':recipients,'context':values,
+            'recipients':recipients,'recipient_choices':candidate.get('recipient_choices',[]),'context':values,
             'subject':template['subject'].format(**values),'body':template['body'].format(**values)}
 
 
@@ -61,7 +67,8 @@ def send(plan, actor_id, message):
     # Eligibility, amount, contact details and sender permissions are checked again
     # after the user reviews the message. Never retry an ambiguous SMTP attempt.
     fresh = prepare(plan['kind'],plan['target_id'],actor_id,plan['month'])
-    if fresh['recipients']!=plan['recipients'] or fresh['context']!=plan['context']:
+    if (fresh['recipients']!=plan['recipients'] or fresh['context']!=plan['context']
+            or fresh.get('recipient_choices',[])!=plan.get('recipient_choices',[])):
         raise ValueError('Dane firmy lub faktury zmieniły się. Otwórz ponownie przypomnienie.')
     accounts = get_email_accounts_for_employee(actor_id)
     if message.get('account_id') not in {account['id'] for account in accounts}:

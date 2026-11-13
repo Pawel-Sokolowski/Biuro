@@ -58,6 +58,12 @@ def typ_from_forma(forma_opodatkowania: Any) -> Optional[str]:
     return None
 
 
+def company_accounting_type(company: Dict[str, Any]) -> Optional[str]:
+    """Explicit accounting form wins; old combined legal labels are a fallback."""
+    explicit = str(company.get('forma_opodatkowania') or '').strip()
+    return typ_from_forma(explicit or company.get('forma_dzialalnosci'))
+
+
 def vat_flag_from_status(status_vat: Any) -> Optional[str]:
     status = _fold(status_vat)
     if status in ("czynny", "vat czynny"):

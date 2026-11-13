@@ -4,7 +4,7 @@ from app.integrations.enova.odbc_support import load_odbc, resolve_driver, descr
 from app.integrations.enova.connection_settings import credentials
 
 
-def inspect_schema(config, database, *, password=''):
+def inspect_schema(config, database, *, password='', progress=None):
     if not database:
         raise ValueError('Wpisz bazę Enova przy wybranej firmie.')
     odbc = load_odbc()
@@ -15,6 +15,10 @@ def inspect_schema(config, database, *, password=''):
         _, password = credentials(config)
     connection = None
     try:
+        from app.integrations.enova.discovery import query_timeout
+        timeout = query_timeout(config)
+        if progress:
+            progress(f'Łączenie z {database} (limit logowania 15 s)…')
         connection = odbc.connect(sql_connection_string(config, database, config['username'], password),
                                   timeout=15, attrs_before={101: 1})
         queries = {
@@ -35,13 +39,21 @@ def inspect_schema(config, database, *, password=''):
         result = {'database': database}
         for name, query in queries.items():
             cursor = connection.cursor()
-            connection.timeout = 30
+            connection.timeout = timeout
+            if progress:
+                progress(f"{database}: odczyt {'tabel i kolumn' if name=='columns' else 'relacji'} (limit zapytania {timeout} s)…")
             cursor.execute(query)
             names = [column[0] for column in cursor.description]
-            rows = cursor.fetchmany(100001)
-            if len(rows) > 100000:
-                raise ValueError('Zbyt duży schemat do jednorazowego eksportu.')
-            result[name] = [dict(zip(names, row)) for row in rows]
+            result[name] = []
+            while True:
+                rows = cursor.fetchmany(1000)
+                if not rows:
+                    break
+                result[name].extend(dict(zip(names,row)) for row in rows)
+                if len(result[name])>100000:
+                    raise ValueError('Zbyt duży schemat do jednorazowego eksportu.')
+                if progress:
+                    progress(f'{database}: {name} — odczytano {len(result[name])} wierszy metadanych…')
         if not result['columns']:
             raise ValueError('Brak widocznych metadanych. Sprawdź uprawnienie VIEW DEFINITION do bazy.')
         return result

@@ -135,7 +135,7 @@ def normalize(rows, year):
     return result
 
 
-def _import_year(year, actor_id=None, *, progress=None):
+def _import_year(year, actor_id=None, *, progress=None, company_ids=None):
     if type(year) is not int or not 2024<=year<=2100:
         raise ValueError('Nieprawidłowy rok zestawienia.')
     if actor_id is not None:
@@ -143,7 +143,7 @@ def _import_year(year, actor_id=None, *, progress=None):
         if not is_administrator(actor_id):
             raise PermissionError('Tylko administrator uruchamia odczyt Płatnika.')
     config = load()
-    if not config['enabled']:
+    if not config['enabled'] and company_ids is None:
         return {'mode':'disabled'}
     from .holiday_query import QUERY
     query = QUERY
@@ -167,8 +167,29 @@ def _import_year(year, actor_id=None, *, progress=None):
             rows = normalize([dict(zip(columns,row)) for row in values],year)
         finally:
             connection.close()
+    if company_ids is not None:
+        from app.db.dao_conn import get_conn
+        with get_conn() as conn:
+            companies = conn.execute('SELECT id,nip FROM firmy WHERE id=ANY(%s)',(company_ids,)).fetchall()
+            all_companies = conn.execute('SELECT id,nip FROM firmy').fetchall()
+        if len(companies)!=len(set(company_ids)):
+            raise ValueError('Nieznana firma w odczycie Płatnika.')
+        nips = {normalize_nip(company['nip']) for company in companies}
+        seen = set()
+        for company in all_companies:
+            try:
+                nip = normalize_nip(company['nip'])
+            except ValueError:
+                continue
+            if nip in nips and nip in seen:
+                raise ValueError('NIP wybranej firmy występuje w Biuro kilka razy. Uporządkuj przypisania przed odczytem Płatnika.')
+            seen.add(nip)
+        old = json.loads(get_setting(f'platnik_holidays_{year}') or '{}')
+        old_rows = json.loads(decrypt_password(old['rows_enc'])) if old.get('rows_enc') else []
+        rows = [row for row in old_rows if row.get('nip') not in nips] + [row for row in rows if row.get('nip') in nips]
     snapshot = {'imported_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
                 'source':'Płatnik SQL — RWS_ZWOLNIENIE','rows_enc':encrypt_password(json.dumps(rows,ensure_ascii=False))}
+    snapshot['scope_nips'] = sorted(nips) if company_ids is not None else None
     # Atomic replacement only after the entire source result was read and validated.
     if progress:
         progress(f'Zapisywanie {len(rows)} wpisów w Biuro — rok {year}…')
@@ -176,7 +197,7 @@ def _import_year(year, actor_id=None, *, progress=None):
     return {'year':year,'rows':len(rows)}
 
 
-def import_year(year, actor_id=None, *, progress=None):
+def import_year(year, actor_id=None, *, progress=None, company_ids=None):
     from app.db.dao_conn import get_coordination_conn
     from app.security.authorization import is_administrator
     if actor_id is not None and not is_administrator(actor_id):
@@ -187,7 +208,7 @@ def import_year(year, actor_id=None, *, progress=None):
         if not lock.execute('SELECT pg_try_advisory_xact_lock(748215,%s)',(year,)).fetchone()[0]:
             return {'mode':'busy','year':year}
         try:
-            result = _import_year(year,actor_id,progress=progress)
+            result = _import_year(year,actor_id,progress=progress,company_ids=company_ids)
         except Exception:
             set_setting(f'platnik_holidays_status_{year}',json.dumps({'state':'failed',
                         'checked_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}))
@@ -224,7 +245,7 @@ def read_year(actor_id,year):
         elif is_administrator(actor_id):
             visible.append({**row,'firma':'Do przypisania: '+(row['nip'] or ('Płatnik #'+str(row.get('source_payer_id') or '—')))})
     return {'rows':visible,'companies':[dict(row) for row in companies],
-            'imported_at':value.get('imported_at'),'configured':bool(load()['enabled']),
+            'imported_at':value.get('imported_at'),'scope_nips':value.get('scope_nips'),'configured':bool(load()['enabled']),
             'status':json.loads(get_setting(f'platnik_holidays_status_{int(year)}') or '{}')}
 
 

@@ -9,7 +9,7 @@ from app.services.worker_monitor import snapshot
 from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
-JOB_LABELS = {'platnik':'Płatnik — wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
+JOB_LABELS = {'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
               'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto'}
 
@@ -76,7 +76,7 @@ class WorkerMonitor(QWidget):
         import_layout.addStretch()
         self.tabs.addTab(import_page, 'Import do Enovy')
         self.job_views = {}
-        for keys, title in ((('enova',), 'Odczyt z Enovy'),
+        for keys, title in ((('enova','checking_refresh'), 'Odczyt z Enovy'),
                             (('mail',), 'Poczta'),
                             (('invoices', 'reminders'), 'Faktury i przypomnienia'),
                             (('ksef_import',), 'KSeF'), (('platnik',), 'Płatnik')):

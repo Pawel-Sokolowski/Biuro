@@ -24,6 +24,7 @@ def postgres_query(name):
     sql = sql.replace('?', '%s').replace('dbo.', '').replace('COUNT_BIG(', 'COUNT(')
     sql = sql.replace("nip NOT LIKE N'%[^0-9]%'", "nip ~ '^[0-9]{10}$'")
     sql = sql.replace("N'", "'").replace('LEN(nip)', 'length(nip)')
+    sql = sql.replace('NCHAR(', 'CHR(')
     sql = sql.replace('DATEADD(month, 1, m.MonthStart)', "(m.MonthStart + interval '1 month')::date")
     for column in ('d.Data', 'd.DataEwidencji'):
         sql = sql.replace(f'DATEFROMPARTS(YEAR({column}), MONTH({column}), 1)',
@@ -115,6 +116,17 @@ class EnovaSourceQueryTests(DbTestCase):
         rows = self.query('kpir.sql')
         with self.assertRaises(ValueError):
             validate_rows(rows, {'nip': NIP, 'accounting_type': 'KPIR'}, ['2026-06'])
+
+    def test_owner_nip_whitespace_matches_discovery_normalization_in_all_bundled_queries(self):
+        with get_conn() as conn:
+            conn.execute('DELETE FROM OddzialyFirmy')
+            conn.execute('INSERT INTO OddzialyFirmy VALUES (%s)',('PL\t123-456-78-90\r\n\u00a0',))
+        for query in ('kpir.sql','kh.sql','ryczalt.sql','checking.sql'):
+            with self.subTest(query=query):
+                rows = self.query(query)
+                self.assertEqual(len(rows),1)
+                self.assertEqual(rows[0]['nip'],NIP)
+                self.assertEqual(rows[0]['dokumenty'],0)
 
     def test_ryczalt_counts_purchases_sales_and_cash_method_invoices_only(self):
         definitions = [('DR', 3), ('LPEW', 1), ('RKVE', 1), ('SPU', 2), ('STE', 1), ('ZR', 18)]

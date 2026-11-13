@@ -24,8 +24,12 @@ reguły są wyłączone. Najpierw skonfiguruj konto nadawcy w **Konto systemowe 
 - Szablony można dodawać, edytować i wybierać osobno dla obu reguł. Pola:
   `{firma}`, `{miesiac}`, `{termin}`, `{numer}`, `{pozostalo}`. Podgląd używa
   danych przykładowych i niczego nie wysyła. Numer i saldo dotyczą płatności.
-- Dokumenty są wysyłane na adres firmy. Dla faktur pierwszeństwo ma adres
-  z faktury, następnie adres do faktur firmy i zwykły adres firmy lub kontrahenta.
+- Dokumenty są wysyłane na jednoznaczny adres z Kontaktów firmy; starszy adres
+  firmy jest używany, gdy brak zapisanych kontaktów. Przy kilku różnych adresach
+  kontaktowych worker pomija automatyczne przypomnienie; odbiorcę można wybrać
+  przy ręcznym przypomnieniu w widoku miesięcznym. Dla płatności pierwszeństwo
+  ma aktualny adres do faktur firmy, następnie adres z faktury i zwykły adres
+  firmy/kontrahenta albo jednoznaczny zapisany kontakt. Same spacje są pomijane.
   Kilka adresów można oddzielić przecinkiem albo średnikiem (maks. 10).
 
 Aplikacja sprawdza terminy co minutę, gdy jest uruchomiona. Po przerwie wysyła
@@ -35,18 +39,11 @@ Wspólna historia w PostgreSQL zapobiega powielaniu wysyłki z kilku stanowisk.
 
 ## Wysyłka przy zamkniętej aplikacji
 
-Na komputerze lub serwerze z dostępem do tej samej bazy, ustawieniami połączenia
-`DB_URL` i zależnościami aplikacji uruchamiaj co minutę z katalogu projektu:
-
-```sh
-.venv/bin/python -m app.services.email_reminders
-```
-
-Na Windows użyj `.venv\Scripts\python.exe -m app.services.email_reminders`
-w Harmonogramie zadań. Ustaw katalog roboczy na katalog projektu. Użyj tego
-samego środowiska i klucza szyfrowania haseł co aplikacja. Przed pierwszym
-uruchomieniem zaktualizuj bazę zwykłym startem aplikacji lub `python migrate_db.py`.
-Sam moduł nie instaluje harmonogramu systemowego.
+Zainstaluj komponent **Biuro Worker** z instalatora i skonfiguruj wspólną bazę
+PostgreSQL oraz klucz szyfrowania. W **Zadaniach** włącz worker i **Przypomnienia
+e-mail**, a w ustawieniach automatycznych e-maili odpowiednie reguły oraz konto
+systemowe. Ustawienia są wspólne z programem. Nie trzeba dodawać osobnego zadania
+Windows dla przypomnień. Szczegóły w [konfiguracji workera](worker-configuration.md).
 
 Historia w ustawieniach pokazuje 100 ostatnich prób. `sent` oznacza potwierdzoną
 wysyłkę SMTP, `failed` błąd, a `sending` próbę rozpoczętą (może wymagać sprawdzenia

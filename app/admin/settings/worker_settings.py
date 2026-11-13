@@ -27,6 +27,7 @@ class WorkerSettings(QWidget):
         for key, name in [('mail', 'Sprawdzanie i pobieranie poczty'), ('reminders', 'Przypomnienia e-mail'),
                           ('invoices', 'Kolejka faktur PDF / sprawdzanie KSeF'), ('enova', 'Odczyt z Enovy do Biuro'),
                           ('ezla', 'Pobieranie raportów e-ZLA z ZUS'),
+                          ('checking_refresh', 'Ręczne pobrania ze Sprawdzania — wybrane firmy'),
                           ('saldeo', 'Historia powiadomień Saldeo — komplet dokumentów'),
                           ('platnik', 'Płatnik — wakacje składkowe (bieżący i poprzedni rok)'),
                           ('ksef_import', 'Pobieranie faktur z KSeF (bieżący i poprzedni miesiąc)')]:

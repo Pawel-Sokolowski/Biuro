@@ -9,21 +9,25 @@ from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting,set_setting
 from app.integrations.platnik.holidays import normalize,_import_year,read_year,import_year
 from app.integrations.platnik.holiday_query import QUERY
+from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
 
 
 def source_row(**changes):
     return {'source_id':1,'source_payer_id':2,'source_person_id':3,'nip':'PL 111-222-33-44',
             'imiona_nazwiska':'Jan Testowy','rok':2026,'miesiac':10,'month_year':2026,
-            'kod_ubezpieczenia':'0514','status_zrodlowy':'A','skladka_em':Decimal('100.00'),**changes}
+            'kod_ubezpieczenia':'0514','bazowy_kod_ubezpieczenia':'0510',
+            'status_zrodlowy':'A','skladka_em':Decimal('100.00'),**changes}
 
 
 class NormalizationTests(TestCase):
     def test_status_codes_are_record_state_not_refusal_or_payment(self):
         active,inactive = normalize([source_row(),source_row(source_id=2,status_zrodlowy='N')],2026)
         self.assertEqual(active['nip'],'1112223344')
-        self.assertEqual(active['kod_ubezpieczenia'],'0514')
-        self.assertEqual(active['decyzja'],'Aktualne zwolnienie (A)')
-        self.assertEqual(inactive['decyzja'],'Nieaktualny wpis (N)')
+        self.assertEqual(active['kod_ubezpieczenia'],'0510')
+        self.assertEqual(active['kod_ulgi'],'0514')
+        self.assertEqual(active['opis_statusu'],'Aktualne zwolnienie (A)')
+        self.assertEqual(inactive['opis_statusu'],'Nieaktualny wpis (N)')
+        self.assertIsNone(active['decyzja'])
         self.assertIsNone(active['platnosc'])
         self.assertIsNone(active['skladki_oplacane'])
         self.assertIsNone(active['wyslane_powiadomienie'])
@@ -95,6 +99,73 @@ class ImportTests(DbTestCase):
         with patch('app.security.authorization.is_administrator',return_value=False),self.assertRaises(PermissionError):
             import_year(2026,999)
 
+    def test_office_notes_survive_import_without_rws_and_do_not_leak_into_another_year(self):
+        employee = self.make_employee(imie='Katarzyna',nazwisko='Cicha')
+        save_field(employee,2026,self.company,'kto_wyslal','KC',0)
+        save_field(employee,2026,self.company,'decyzja','zawieszony?',0)
+        save_field(employee,2026,self.company,'miesiac','luty',0)
+        save_field(employee,2026,self.company,'skladki_oplacane','tylko zdrowotna',0)
+        before = read_tracking_year(employee,2026)
+        self.assertEqual(before['current_initials'],'KC')
+        self.assertEqual(before['rows'][0]['kto_wyslal'],'KC')
+        self.assertEqual(before['rows'][0]['sources'],[])
+        snapshot = get_setting(f'platnik_holiday_notes_2026_{self.company}')
+        self.assertNotIn('zawieszony?',snapshot)
+        self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N',bazowy_kod_ubezpieczenia='0590')])
+        row = read_tracking_year(employee,2026)['rows'][0]
+        self.assertEqual(row['kto_wyslal'],'KC')
+        self.assertEqual(row['decyzja'],'zawieszony?')
+        self.assertEqual(row['miesiac'],'luty')
+        self.assertEqual(row['source_values']['miesiac'],'10')
+        self.assertEqual(row['kod_ubezpieczenia'],'0510; 0590')
+        self.assertEqual(row['statuses'],['A','N'])
+        self.assertEqual(len(row['sources']),2)
+        self.assertEqual(row['notes']['kto_wyslal']['actor_id'],employee)
+        self.assertIsNone(read_tracking_year(employee,2025)['rows'][0]['kto_wyslal'])
+        self.import_mock([])
+        self.assertEqual(read_tracking_year(employee,2026)['rows'][0]['decyzja'],'zawieszony?')
+
+    def test_separate_field_edits_merge_but_stale_same_field_edit_is_rejected(self):
+        save_field(self.admin,2026,self.company,'wyslane_powiadomienie','Wysłano 09/11/2026',0)
+        save_field(self.admin,2026,self.company,'kto_wyslal','KC',0)
+        with self.assertRaises(WorksheetConflict):
+            save_field(self.admin,2026,self.company,'kto_wyslal','AB',0)
+        row = read_tracking_year(self.admin,2026)['rows'][0]
+        self.assertEqual(row['wyslane_powiadomienie'],'Wysłano 09/11/2026')
+        self.assertEqual(row['kto_wyslal'],'KC')
+        save_field(self.admin,2026,self.company,'kto_wyslal','',1)
+        self.assertEqual(read_tracking_year(self.admin,2026)['rows'][0]['kto_wyslal'],'')
+        save_field(self.admin,2026,self.company,'kto_wyslal',None,2)
+        self.assertIsNone(read_tracking_year(self.admin,2026)['rows'][0]['kto_wyslal'])
+
+    def test_parallel_edits_to_different_fields_are_not_lost(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from app.config import get_schema,schema_context
+        schema = get_schema()
+        def edit(field,value):
+            with schema_context(schema):
+                return save_field(self.admin,2026,self.company,field,value,0)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [pool.submit(edit,'kto_wyslal','KC'),pool.submit(edit,'oswiadczenie','sama')]
+            for future in results:
+                future.result(timeout=20)
+        row = read_tracking_year(self.admin,2026)['rows'][0]
+        self.assertEqual((row['kto_wyslal'],row['oswiadczenie']),('KC','sama'))
+
+    def test_notes_require_checking_and_company_access_and_a_readable_shared_key(self):
+        with patch('app.integrations.enova.accounting.allowed_tabs',return_value=[]),self.assertRaises(PermissionError):
+            save_field(self.admin,2026,self.company,'kto_wyslal','KC',0)
+        with patch('app.integrations.platnik.holiday_tracking.assigned_company_ids',return_value=set()),self.assertRaises(PermissionError):
+            save_field(self.admin,2026,self.company,'kto_wyslal','KC',0)
+        save_field(self.admin,2026,self.company,'kto_wyslal','KC',0)
+        original = get_setting(f'platnik_holiday_notes_2026_{self.company}')
+        with patch.dict(os.environ,{'BIO_ENCRYPTION_KEY':Fernet.generate_key().decode()}):
+            with self.assertRaises(ValueError):
+                read_tracking_year(self.admin,2026)
+            with self.assertRaises(ValueError):
+                save_field(self.admin,2026,self.company,'kto_wyslal','AB',1)
+        self.assertEqual(get_setting(f'platnik_holiday_notes_2026_{self.company}'),original)
+
 
 class YearlyPanelTests(TestCase):
     def test_payroll_selector_uses_year_and_hides_month_without_second_monthly_editor(self):
@@ -117,12 +188,13 @@ class YearlyPanelTests(TestCase):
         panel = ContributionHolidays(5)
         try:
             rows = normalize([source_row(),source_row(source_id=2,status_zrodlowy='N')],2026)
-            panel.loaded({'rows':[{**row,'firma':'Firma A'} for row in rows],
-                          'companies':[{'id':1,'nip':'1112223344','nazwa':'Firma A'},
-                                       {'id':2,'nip':'2223334455','nazwa':'Firma B'}],
+            panel.loaded({'rows':[{'firma_id':1,'firma':'Firma A','nip':'1112223344','sources':rows,'statuses':['A','N']},
+                                  {'firma_id':2,'firma':'Firma B','nip':'2223334455','sources':[],'statuses':[]}],
                           'imported_at':'2026-11-13T10:00:00+01:00','configured':True})
-            self.assertEqual(panel.table.rowCount(),3)
+            self.assertEqual(panel.table.rowCount(),2)
             self.assertEqual(panel.table.item(0,7).text(),'Brak danych')
+            self.assertEqual(panel.table.item(0,10).text(),'A, N')
+            self.assertEqual(panel.table.item(1,10).text(),'Brak wpisu RWS')
             panel.active.setChecked(True)
             self.assertEqual(panel.table.rowCount(),1)
         finally:

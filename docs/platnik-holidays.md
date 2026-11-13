@@ -18,10 +18,32 @@ Nie jest wymagany własny plik SQL ani instalacja Płatnika na workerze.
 ## Widok
 
 **Kadry → Sprawdzanie → Wakacje składkowe — Płatnik (rocznie)** ma własny wybór roku.
-Miesiąc jest kolumną wpisu ulgi, nie filtrem widoku. W tym raporcie miesięczny
+Miesiąc jest kolumną sprawy, nie filtrem widoku. W tym raporcie miesięczny
 selektor i filtry dokumentów są ukryte. Tabela pokazuje firmę oraz zamówione kolumny:
 imiona i nazwiska, kod ubezpieczenia, wysłane powiadomienie, składki opłacane,
-miesiąc ulgi, oświadczenie, płatność, kto wysłał, decyzja/status wpisu.
+miesiąc, oświadczenie, płatność, kto wysłał, decyzja. Osobna, nieedytowalna kolumna
+pokazuje status RWS z Płatnika. „Decyzja” pozostaje notatką biura, np. „zawieszony?”
+lub „przyznano zwolnienie”; nie jest automatycznym potwierdzeniem decyzji ZUS.
+
+Jeden wiersz odpowiada firmie w wybranym roku, także gdy nie ma jeszcze RWS.
+Imiona, bazowe kody ubezpieczenia i miesiące są zbierane z dostępnych wpisów RWS.
+Przy kilku osobach/kodach/miesiącach widoczne są wszystkie unikalne wartości;
+przycisk **Wpisy źródłowe** pokazuje poszczególne rekordy wraz z rokiem, miesiącem,
+kodem bazowym, kodem ulgi i A/N. To również miejsce na sprawdzenie nieprzypisanych
+wpisów przez administratora. Nie zastępujemy wpisu N automatycznie innym A.
+
+Dwuklik w jednej z dziewięciu kolumn otwiera edycję. Wpisz np. „Wysłano 09/11/2026”,
+„tylko zdrowotna”, „z chorobową”, „bez chorobowej”, „luty”, „sam/sama” lub „KC”.
+„Kto wysłał” oznacza inicjały pracownika biura; **Wstaw moje inicjały** uzupełnia
+tekst na podstawie imienia i nazwiska zalogowanego pracownika. Samo uzupełnienie
+komórki nie wysyła wiadomości. Można wpisać inicjały innej osoby.
+
+Wpisy biura są wyróżnione; szczegóły komórki pokazują autora i czas edycji.
+Pozostają zapisane w PostgreSQL oddzielnie dla firmy i roku, także po odczycie
+nowego lub pustego RWS. Import nigdy ich nie nadpisuje. Pusty tekst jest świadomym
+wyczyszczeniem komórki; **Przywróć dane źródłowe / usuń wpis biura** oddaje pierwszeństwo
+danym źródłowym. Edycje różnych komórek z kilku komputerów są łączone. Równoczesna
+zmiana tej samej komórki wymaga odświeżenia, zamiast nadpisania cudzej zmiany.
 
 Brak wpisu RWS w odczycie nie oznacza odmowy ani braku uprawnienia. Takie firmy
 pozostają widoczne. Bez poprawnego importu wyświetlamy „Nie odczytano roku”.
@@ -43,23 +65,27 @@ Znaczenie A/N przyjęto zgodnie z informacją użytkownika:
 - A: aktualne zwolnienie;
 - N: nieaktualny wpis, nie decyzja odmowna.
 
-Zachowujemy kod oraz wszystkie wpisy, w tym N. Opcjonalny filtr pokazuje tylko A.
+Zachowujemy kod oraz wszystkie wpisy, w tym N. Opcjonalny filtr pokazuje firmy z wpisem A.
 Nieznane kody nie są mapowane na zgodę/odmowę. Sam wpis RWS nie jest dowodem
 pobrania formalnej decyzji/UPO. Kwoty składek RWS są w szczegółach komórki,
 wyraźnie jako kwoty źródłowe, nie potwierdzenie zapłaty.
 
 **Obecny adapter nie odczytuje jeszcze powiadomień do klientów, oświadczeń,
 faktycznych płatności, nadawcy ani formalnej decyzji/UPO z innych tabel.**
-Odpowiednie kolumny pokazują „Brak danych”, nigdy automatyczne Tak/Nie. Mimo że
+Odpowiednie kolumny są uzupełniane przez biuro; bez wpisu pokazują „Brak danych”.
+„Składki opłacane” to opis do wpisania przez biuro, nie wniosek wyciągany z kwot
+zwolnienia RWS ani dowód faktycznej zapłaty. Kod bazowy, np. 0510/0590, jest
+oddzielony od kodu ulgi, np. 0514/0594. Mimo że
 baza ma tabele ZESTAW/ZESTAW_DOKUM i potwierdzenia, ich powiązanie ze zdarzeniami
 RWS wymaga osobnego adaptera i weryfikacji znaczenia dokumentów. Nie wywodzimy
 nadawcy RWS z użytkownika, który jedynie utworzył kartotekę płatnika.
 
 Kompletne, zweryfikowane dane roczne są atomowo zapisywane jako zaszyfrowany
-snapshot w PostgreSQL Biuro. Pracownicy potrzebują dostępu do Sprawdzania oraz
+snapshot w PostgreSQL Biuro. Wpisy biura i informacje o ich autorach również są
+szyfrowane wspólnym kluczem. Pracownicy potrzebują dostępu do Sprawdzania oraz
 firmy według istniejących reguł. Nieprzypisane NIP-y widzi wyłącznie administrator.
 Instalacja nie wymaga zmiany schematu PostgreSQL — używa istniejącego app_settings.
 
 Weryfikację testów i budowy EXE wykonuje GitHub CI. Po wdrożeniu sprawdź test
 połączenia, wykonaj odczyt 2026 i porównaj liczbę wpisów źródłowych z podanym
-wynikiem (9 × A), bez wyciągania wniosków z liczby dopasowanych firm lub nazwisk.
+wynikiem (9 × A) w szczegółach źródłowych, bez wyciągania wniosków z liczby firm.

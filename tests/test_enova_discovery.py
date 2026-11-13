@@ -1,10 +1,42 @@
 from unittest import TestCase
 from unittest.mock import Mock, patch
-from app.integrations.enova.discovery import propose, discover
+from app.integrations.enova.discovery import propose, discover, mapping_review
 from app.integrations.enova.odbc_support import SqlOperationError
 
 
 class EnovaDiscoveryTests(TestCase):
+    def test_unrecognized_metadata_and_owner_nips_remain_visible_for_manual_mapping(self):
+        root, no_schema, no_nip, unknown_company = Mock(), Mock(), Mock(), Mock()
+        root.cursor.return_value.fetchmany.return_value = [('NoSchema',), ('NoNip',), ('UnknownCompany',)]
+        no_schema.cursor.return_value.fetchone.return_value = [None]
+        no_nip.cursor.return_value.fetchone.return_value = [20]
+        no_nip.cursor.return_value.fetchmany.return_value = [(None,)]
+        unknown_company.cursor.return_value.fetchone.return_value = [20]
+        unknown_company.cursor.return_value.fetchmany.return_value = [('9999999999',)]
+        driver = Mock()
+        driver.connect.side_effect = [root, no_schema, no_nip, unknown_company]
+        with patch('app.integrations.enova.discovery.load_odbc', return_value=driver), \
+             patch('app.integrations.enova.discovery.resolve_driver', return_value='ODBC Driver 18 for SQL Server'):
+            result = discover({'server': 'ENOVA,49848', 'username': 'reader'}, password='secret')
+        review = mapping_review([{'id': 1, 'nip': '1112223344'}], {}, result)
+        self.assertEqual([row['database'] for row in review], ['NoSchema', 'NoNip', 'UnknownCompany'])
+        self.assertTrue(all(row['reason'] and row['company_id'] is None for row in review))
+        self.assertIn('struktur', review[0]['reason'])
+        self.assertIn('NIP', review[1]['reason'])
+        self.assertIn('Brak firmy', review[2]['reason'])
+        self.assertEqual(review[2]['nips'], ['9999999999'])
+
+    def test_review_explains_duplicate_nips_and_keeps_existing_manual_links(self):
+        companies = [{'id': 1, 'nip': '1112223344'}, {'id': 2, 'nip': '2223334455'},
+                     {'id': 3, 'nip': '2223334455'}]
+        result = {'errors': [], 'matches': {'1112223344': ['A', 'COPY'], '2223334455': ['DUP']},
+                  'databases': [{'database': name, 'nips': [nip], 'reason': ''}
+                                for name, nip in [('A', '1112223344'), ('COPY', '1112223344'), ('DUP', '2223334455')]]}
+        review = mapping_review(companies, {1: 'a'}, result)
+        self.assertEqual(review[0]['company_id'], 1)
+        self.assertIn('Kilka baz', review[1]['reason'])
+        self.assertIn('powielony', review[2]['reason'])
+
     def test_122_databases_use_full_query_timeout_and_report_each_completed_read(self):
         root = Mock()
         root.cursor.return_value.fetchmany.return_value = [(f'Client{i:03d}',) for i in range(122)]

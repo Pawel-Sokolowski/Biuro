@@ -47,12 +47,14 @@ class ConnectionAndJpkTests(DbTestCase):
         with patch.dict('os.environ', {'BIO_ENCRYPTION_KEY': Fernet.generate_key().decode()}):
             save_connection(config, actor_id=self.admin, password='secret')
             stored = load_connection()
+            first_month = stored['monthly_counts_from']
             self.assertEqual(stored['database'],'Biuro_rachunkowe')
             self.assertEqual(stored['discovery_query_timeout'],300)
             self.assertEqual(stored['sources'][0]['database'],'ClientA')
             self.assertNotIn('secret', json.dumps({k: v for k, v in stored.items() if k != '_directory'}))
             self.assertEqual(credentials(stored), ('reader', 'secret'))
             save_connection({**config, 'server': 'new-server'}, actor_id=self.admin)
+            self.assertEqual(load_connection()['monthly_counts_from'], first_month)
             self.assertEqual(credentials(load_connection()), ('reader', 'secret'))
             from app.admin.settings.enova_connection_settings import EnovaConnectionSettings
             page = EnovaConnectionSettings(self.admin)

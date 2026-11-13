@@ -12,9 +12,10 @@ from app.admin.global_settings_logic import GlobalSettingsLogic
 class UsersSettings(QWidget):
     """Użytkownicy: podgląd, dodawanie, edycja, reset hasła, aktywacja."""
 
-    def __init__(self, parent=None):
+    def __init__(self, actor_id=None, parent=None):
         super().__init__(parent)
 
+        self.actor_id = actor_id
         self.logic = GlobalSettingsLogic()
 
         layout = QVBoxLayout(self)
@@ -103,6 +104,9 @@ class UsersSettings(QWidget):
             btn_toggle
         )
 
+        profile = QPushButton('Dane do PEL / UPL')
+        profile.clicked.connect(self._authority_profile)
+        btn_row.addWidget(profile)
         btn_row.addStretch()
 
         layout.addLayout(
@@ -110,6 +114,13 @@ class UsersSettings(QWidget):
         )
 
         self._refresh()
+
+    def _authority_profile(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        from app.employees.authority_profile_ui import AuthorityProfileDialog
+        AuthorityProfileDialog(int(self.table.item(row, 0).text()), self.actor_id, self).exec()
 
     def _refresh(self):
         rows = self.logic.get_users()

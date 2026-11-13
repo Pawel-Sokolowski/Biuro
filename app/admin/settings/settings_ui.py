@@ -90,7 +90,7 @@ class GlobalSettingsPage(QWidget):
         can_view_invoices = perms.get("can_view_invoices") or perms.get("can_access_admin_settings")
         sections: List[Tuple[str, List[Tuple[str, Callable[[], QWidget], bool]]]] = [
             ("Użytkownicy i dostęp", [
-                ("Użytkownicy", UsersSettings, bool(perms.get("can_manage_users"))),
+                ("Użytkownicy", lambda: UsersSettings(self.pracownik_id), bool(perms.get("can_manage_users"))),
                 ("Role i uprawnienia", RolesSettings, bool(perms.get("can_manage_users"))),
             ]),
             ("Poczta i powiadomienia", [

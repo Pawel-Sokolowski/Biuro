@@ -578,7 +578,7 @@ class FakturyPage(QWidget):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         ksef_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        ksef_width = QFontMetrics(ksef_font).horizontalAdvance("8522605060-20261028-9B6112C00016-4F") + 18
+        ksef_width = QFontMetrics(ksef_font).horizontalAdvance("9240000010-20261028-9B6112C00016-4F") + 18
         widths = {
             0: 52, 1: 76, 3: 72, 4: 132, self.ISSUED_PREVIEW_COLUMN: 82,
             6: 78, 7: 78, 8: 88, 9: 88, self.ISSUED_PAID_COLUMN: 100, 11: 142,

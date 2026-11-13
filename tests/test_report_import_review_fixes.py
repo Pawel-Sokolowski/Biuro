@@ -37,7 +37,7 @@ class InvoiceSourceIdentityTests(unittest.TestCase):
 
     def test_identity_preserves_clients_line_codes_and_repeated_lines_when_reordered(self):
         a = ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A")
-        b = ("FV/1/01/2026", "Shared", "8522605060", "Usługa księgowa", 350, "A")
+        b = ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A")
         c = ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "B")
         first = parse_invoice_rows([HEADER, a, b, c, a])
         second = parse_invoice_rows([HEADER, c, a, a, b])
@@ -57,12 +57,12 @@ class ReportImportDatabaseTests(DbTestCase):
 
     def test_conflicting_and_ambiguous_names_remain_unmatched(self):
         first = self.make_company("Shared", nip="1234563218", nazwa_skrocona="Ambiguous")
-        second = self.make_company("Other", nip="8522605060", nazwa_skrocona="Ambiguous")
+        second = self.make_company("Other", nip="9240000010", nazwa_skrocona="Ambiguous")
         legacy = self.make_company("Legacy without NIP")
         with get_conn() as conn:
             index = _company_index(conn)
         self.assertEqual(_match_company(index, "123-456-32-18", "Other"), first)
-        self.assertEqual(_match_company(index, "8522605060", "Shared"), second)
+        self.assertEqual(_match_company(index, "9240000010", "Shared"), second)
         self.assertIsNone(_match_company(index, "9876543210", "Shared"))
         self.assertIsNone(_match_company(index, "", "Ambiguous"))
         self.assertEqual(_match_company(index, "9876543210", "Legacy without NIP"), legacy)
@@ -75,11 +75,11 @@ class ReportImportDatabaseTests(DbTestCase):
 
     def test_new_identity_reimports_without_losing_clients_or_duplicate_lines(self):
         first = self.make_company("Shared", nip="1234563218")
-        second = self.make_company("Shared", nip="8522605060")
+        second = self.make_company("Shared", nip="9240000010")
         rows = [HEADER,
-            ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A"),
-            ("FV/1/01/2026", "Shared", "8522605060", "Usługa księgowa", 350, "A"),
-            ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A"),
+            ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A"),
+            ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A"),
+            ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A"),
         ]
         path = self._workbook("identity.xlsx", rows)
         import_invoices_file(path, "2026-03")
@@ -114,8 +114,8 @@ class ReportImportDatabaseTests(DbTestCase):
 
     def test_legacy_collision_with_different_nip_is_not_reassigned(self):
         first = self.make_company("Shared", nip="1234563218")
-        second = self.make_company("Shared", nip="8522605060")
-        source_row = ("FV/1/01/2026", "Shared", "8522605060", "Usługa księgowa", 350, "A")
+        second = self.make_company("Shared", nip="9240000010")
+        source_row = ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A")
         parsed = parse_invoice_rows([HEADER, source_row])[0]
         with get_conn() as conn:
             conn.execute(
@@ -127,11 +127,11 @@ class ReportImportDatabaseTests(DbTestCase):
         with get_conn() as conn:
             actual = {(r['firma_id'], r['nip']) for r in conn.execute(
                 "SELECT firma_id,nip FROM import_faktury_pozycje").fetchall()}
-        self.assertEqual(actual, {(first, '1234563218'), (second, '8522605060')})
+        self.assertEqual(actual, {(first, '1234563218'), (second, '9240000010')})
 
     def test_late_parser_failure_rolls_back_legacy_promotion_and_flushed_rows(self):
         company = self.make_company("Shared", nip="1234563218")
-        source_row = ("FV/1/01/2026", "Shared", "1234563218", "Usługa księgowa", 350, "A")
+        source_row = ("FV/1/01/2026", "Shared", "9240000010", "Usługa księgowa", 350, "A")
         parsed = parse_invoice_rows([HEADER, source_row])[0]
         with get_conn() as conn:
             conn.execute(

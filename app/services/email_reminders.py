@@ -124,12 +124,30 @@ def scheduled_slot(due, rule, now):
     return max(eligible) if eligible else None
 
 
+def _civil_recipient(conn, row, company_id, email_field):
+    from app.companies.identities import is_civil, company_recipients
+    row = dict(row)
+    if company_id and is_civil(row):
+        owners = conn.execute('SELECT imie_pierwsze,nazwisko,email FROM udzialowcy WHERE firma_id=%s ORDER BY id', (company_id,)).fetchall()
+        try:
+            row[email_field] = ', '.join(company_recipients(row, owners))
+        except ValueError:
+            row[email_field] = ''
+        # These are explicitly linked owners, not arbitrary address-book contacts.
+        row['contact_emails'] = []
+        if 'billing_email' in row:
+            row['billing_email'] = row[email_field]
+            row['invoice_email'] = ''
+            row['contractor_email'] = ''
+    return row
+
+
 def _candidates(conn, kind, now, rule, target_id=None):
     if kind == 'documents':
         first = now.date().replace(day=1)
         month = (first - timedelta(days=1)).strftime('%Y-%m')
         due = first.replace(day=min(rule['day'], calendar.monthrange(first.year, first.month)[1]))
-        rows = conn.execute("""SELECT f.id, f.nazwa AS firma, f.adres_email AS email,
+        rows = conn.execute("""SELECT f.id, f.nazwa AS firma, f.adres_email AS email, f.forma_dzialalnosci,
             ARRAY(SELECT c.email FROM company_contacts c WHERE c.firma_id=f.id ORDER BY c.id) AS contact_emails
             FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id = f.id AND s.miesiac = %s
             WHERE COALESCE(s.dokumenty_dostarczone, 0) = 0 AND f.status = 'Aktywne'
@@ -139,10 +157,11 @@ def _candidates(conn, kind, now, rule, target_id=None):
               AND (NULLIF(f.data_zakonczenia_obslugi, '') IS NULL OR f.data_zakonczenia_obslugi >= %s)""",
             (month, target_id, target_id, (first - timedelta(days=1)).isoformat(), first.isoformat())).fetchall()
         for row in rows:
+            row = _civil_recipient(conn, row, row['id'], 'email')
             yield {'target': f"{row['id']}:{month}", **select_recipient(company_email=row['email'],contact_emails=row['contact_emails']), 'due': due,
                    'firma': row['firma'], 'miesiac': month, 'numer': '', 'pozostalo': ''}
     else:
-        rows = conn.execute("""SELECT i.id, i.numer, i.miesiac, i.termin_platnosci,
+        rows = conn.execute("""SELECT i.id, i.numer, i.miesiac, i.termin_platnosci, f.id AS firma_id, f.forma_dzialalnosci,
             COALESCE(NULLIF(i.nabywca_pelna, ''), f.nazwa, k.nazwa, '') AS firma,
             i.nabywca_email AS invoice_email, f.email_faktury AS billing_email,
             f.adres_email AS company_email, k.email AS contractor_email,
@@ -159,6 +178,7 @@ def _candidates(conn, kind, now, rule, target_id=None):
               AND NOT EXISTS (SELECT 1 FROM faktury_kosz t WHERE t.faktura_id = i.id AND t.restored_at IS NULL)""",
             (target_id, target_id)).fetchall()
         for row in rows:
+            row = _civil_recipient(conn, row, row['firma_id'], 'company_email')
             try:
                 due = date.fromisoformat(str(row['termin_platnosci']))
             except (ValueError, TypeError):

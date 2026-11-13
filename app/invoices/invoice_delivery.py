@@ -26,7 +26,12 @@ def delivery_plan(invoice_ids, actor_id):
         invoice = _authorized_invoice(invoice_id, actor_id)
         buyer = get_company(invoice['firma_id']) if invoice.get('firma_id') else get_kontrahent(invoice['kontrahent_id']) if invoice.get('kontrahent_id') else {}
         buyer = buyer or {}
-        address = buyer.get('email_faktury') or invoice.get('nabywca_email') or buyer.get('adres_email') or buyer.get('email')
+        from app.companies.identities import is_civil, company_recipients
+        from app.db.dao_companies import get_partners
+        if invoice.get('firma_id') and is_civil(buyer):
+            address = ', '.join(company_recipients(buyer, get_partners(invoice['firma_id']), billing=True))
+        else:
+            address = buyer.get('email_faktury') or invoice.get('nabywca_email') or buyer.get('adres_email') or buyer.get('email')
         try:
             recipients = parse_recipients(address)
         except ValueError as exc:

@@ -11,10 +11,10 @@ from app.db.dao_conn import get_conn
 DEFAULT_TEMPLATE: Dict[str, str] = {
     "stopka_szablon_html": "",
     "stopka_szablon_pozdrowienie": "Pozdrawiam,",
-    "stopka_szablon_firma": "Biuro Rachunkowe EM-KA Sp. z o.o.",
-    "stopka_szablon_adres": "ul. Chopina 35\n71-450 Szczecin",
-    "stopka_szablon_telefon": "123456789",
-    "stopka_szablon_email": "biuro@szczecin-ksiegowosc.pl",
+    "stopka_szablon_firma": "",
+    "stopka_szablon_adres": "",
+    "stopka_szablon_telefon": "",
+    "stopka_szablon_email": "",
     "stopka_szablon_zastrzezenie": (
         "Wiadomość, której częścią są również załączniki jest przeznaczona tylko dla jej "
         "adresata. Dostęp osób trzecich do tej wiadomości jest zabroniony. Jeśli nie jest "

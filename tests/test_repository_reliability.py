@@ -249,7 +249,7 @@ class LibraryAndCacheTests(TestCase):
 
     def test_identifiers_warn_without_rejecting_legacy_rows(self):
         from app.utils.identifiers import identifier_warnings
-        self.assertEqual(identifier_warnings({'nip':'8522605060'}), [])
+        self.assertEqual(identifier_warnings({'nip':'9240000010'}), [])
         self.assertEqual(len(identifier_warnings({'nip':'1234567890'})), 1)
 
 
@@ -291,12 +291,12 @@ class ImportBoundaryTests(TestCase):
         from app.utils.request_cache import request_scope
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'source.csv'
-            path.write_text('Nazwa Firmy;NIP\nExample;8522605060\nOther;123\n', encoding='utf-8')
+            path.write_text('Nazwa Firmy;NIP\nExample;9240000010\nOther;123\n', encoding='utf-8')
             with request_scope():
                 headers, rows = _load_rows_from_file(str(path))
                 self.assertEqual(headers, ['Nazwa Firmy', 'NIP'])
                 self.assertIs(iter(rows), rows)
-                self.assertEqual(next(rows), ['Example', '8522605060'])
+                self.assertEqual(next(rows), ['Example', '9240000010'])
             self.assertEqual(list(rows), [])
 
 
@@ -306,12 +306,12 @@ class ImportPreviewTests(DbTestCase):
         from pathlib import Path
         from app.utils.importers import preview_company_import
         from app.db.dao_conn import get_conn
-        self.make_company('Existing', nip='8522605060')
+        self.make_company('Existing', nip='9240000010')
         with get_conn() as conn:
             before = conn.execute('SELECT count(*) FROM firmy').fetchone()[0]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'companies.csv'
-            path.write_text('Nazwa Firmy;NIP;Rachunki walutowe\nExisting;8522605060;EUR\nNew;;\nNew;;\n', encoding='utf-8')
+            path.write_text('Nazwa Firmy;NIP;Rachunki walutowe\nExisting;9240000010;EUR\nNew;;\nNew;;\n', encoding='utf-8')
             plan = preview_company_import(str(path))
         self.assertEqual((plan['created'], plan['updated'], plan['conflicts']), (1, 1, 1))
         self.assertTrue(any('Rachunki walutowe' in warning for warning in plan['warnings']))

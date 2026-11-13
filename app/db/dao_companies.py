@@ -148,12 +148,20 @@ def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
         return []
     conn = get_conn()
     try:
-        return [dict(row) for row in conn.execute(
+        rows = [dict(row) for row in conn.execute(
             "SELECT id, nazwa, nazwa_skrocona, nip, adres_email, forma_dzialalnosci, "
             "typ_rozliczenia, forma_opodatkowania, status FROM firmy "
             "WHERE id = ANY(%s) ORDER BY LOWER(COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)), id",
             (ids,),
         ).fetchall()]
+        from app.companies.identities import is_civil, company_recipients
+        for row in rows:
+            if is_civil(row):
+                try:
+                    row['adres_email'] = ', '.join(company_recipients(row, get_partners(row['id'])))
+                except ValueError:
+                    row['adres_email'] = ''
+        return rows
     finally:
         conn.close()
 
@@ -1165,6 +1173,12 @@ def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
     conn = get_conn()
     cur = conn.cursor()
 
+    if data.get('id'):
+        existing = cur.execute('SELECT * FROM udzialowcy WHERE id=%s AND firma_id=%s', (data['id'], firma_id)).fetchone()
+        if not existing:
+            conn.close()
+            raise ValueError('Wspólnik nie należy do tej firmy.')
+        data = {**dict(existing), **data}
     values = [data.get(f) for f in PARTNER_FIELDS]
 
     if data.get("id"):

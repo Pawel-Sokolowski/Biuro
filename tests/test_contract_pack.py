@@ -27,7 +27,7 @@ class ContractTemplateTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.data = dict(name='PPHU Jan Kowalski & Synowie', address='Długa 5/2, 71-450 Szczecin',
-                         nip='8522605060', krs='0000123456', phone='123456789', email='jan@example.test',
+                         nip='9240000010', krs='0000123456', phone='123456789', email='jan@example.test',
                          agreement_date='06.11.2026', main_agreement_date='01.10.2026', accounting='kpir',
                          payroll='kadry', invoicing=True, representatives=[dict(imie_pierwsze='Jan', nazwisko='Kowalski',
                          pesel='12345678901', nr_telefonu='987654321')], document_limit='50', insured_limit='7',
@@ -171,15 +171,17 @@ class ContractPackTests(DbTestCase):
             pack.generate_pack(self.company_id, 1, self.data, ['../secret'], out)
         self.assertFalse(out.exists())
 
-    def test_unchanged_terms_use_the_supplied_pdf_without_word_repagination(self):
+    def test_terms_are_rendered_from_configurable_template_instead_of_private_static_pdf(self):
         out = self.root / 'terms.pdf'
-        with patch.object(pack, 'convert_to_pdf') as convert:
+        def convert(paths, directory):
+            directory.mkdir(exist_ok=True)
+            result = directory / '01_terms.pdf'
+            pdf(result, [595])
+            return [result]
+        with patch.object(pack, 'convert_to_pdf', side_effect=convert) as conversion:
             pack.generate_pack(self.company_id, 1, self.data, ['01_terms'], out)
-        convert.assert_not_called()
-        original = PdfReader(pack.STATIC_PDFS['01_terms'])
-        generated = PdfReader(out)
-        self.assertEqual(len(generated.pages), 9)
-        self.assertEqual([p.extract_text() for p in generated.pages], [p.extract_text() for p in original.pages])
+        conversion.assert_called_once()
+        self.assertTrue(out.is_file())
 
     def test_dialog_defaults_to_onboarding_pack_and_can_save_without_pdf_converter(self):
         from PyQt6.QtCore import QDate

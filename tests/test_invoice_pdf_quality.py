@@ -10,13 +10,13 @@ from app.invoices.invoice_preview import invoice_html, write_invoice_pdf
 from app.invoices.ksef import ksef_url
 
 _app = QApplication.instance() or QApplication(['invoice-pdf-quality'])
-SETTINGS = {'faktury_sprzedawca_nazwa': 'Biuro Łódź', 'faktury_sprzedawca_nip': '8522605060',
+SETTINGS = {'faktury_sprzedawca_nazwa': 'Biuro Łódź', 'faktury_sprzedawca_nip': '9240000010',
             'faktury_sprzedawca_regon': '123456789', 'faktury_sprzedawca_email': 'biuro@example.com',
             'faktury_sprzedawca_kraj': 'PL', 'faktury_sprzedawca_adres': 'Testowa 1'}
 INVOICE = {'numer': 'FV/0001/11/2026', 'data_wystawienia': '2026-11-05',
            'seller_snapshot': {key.replace('faktury_', ''): value for key, value in SETTINGS.items()},
-           'ksef_numer': '8522605060-20261105-4DCCB6C0000A-25',
-           'ksef_nip_wysylki': '8522605060', 'ksef_hash_faktury': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+           'ksef_numer': '9240000010-20261105-4DCCB6C0000A-25',
+           'ksef_nip_wysylki': '9240000010', 'ksef_hash_faktury': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
            'nabywca_pelna': 'Nabywca Żółć', 'nabywca_nip': '1234567890',
            'nabywca_adres': 'Przykładowa 15', 'nabywca_kod': '71-450', 'nabywca_miasto': 'Szczecin',
            'nabywca_regon': '987654321', 'nabywca_kraj': 'PL', 'nabywca_email': 'faktury@example.com',

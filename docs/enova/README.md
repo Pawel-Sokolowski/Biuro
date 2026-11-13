@@ -551,7 +551,7 @@ obciążenia SQL i blokad. Samo zwiększenie czasu nie usuwa blokad na serwerze.
 
 W formularzu połączenia aplikacji i workera wpisz oddzielnie:
 
-- **Serwer SQL / instancja:** `ENOVA\SQLEMKA`;
+- **Serwer SQL / instancja:** `ENOVA\SQLEXPRESS`;
 - **Główna baza Enovy:** `Biuro_rachunkowe`;
 - login i hasło SQL oraz opcję zaufania własnemu certyfikatowi, jeśli jest potrzebna.
 

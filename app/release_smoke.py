@@ -62,7 +62,7 @@ def run():
         from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
         from stdnum.pl import nip
-        if not nip.is_valid('8522605060') or not Credentials or not InstalledAppFlow or not TEMPLATES.is_dir():
+        if not nip.is_valid('9240000010') or not Credentials or not InstalledAppFlow or not TEMPLATES.is_dir():
             raise RuntimeError('Missing bundled dependencies')
         if os.name == 'nt':
             from winrt.windows.ui.notifications import ToastNotificationManager

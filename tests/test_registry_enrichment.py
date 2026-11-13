@@ -20,7 +20,7 @@ class RegistryUpdatePlanTests(unittest.TestCase):
             "adres_zam_miasto": "Własny adres",
         }
         registry = {
-            "nazwa": "Inna nazwa", "nip": "8522605060",
+            "nazwa": "Inna nazwa", "nip": "9240000010",
             "dz_miasto": "Szczecin", "dz_ulica": "Nowa 23/1",
             "regon": "321442130", "krs": "0000000001",
             "koresp_ulica": "Korespondencyjna 4/3",
@@ -94,7 +94,7 @@ class RegistryBatchTests(DbTestCase):
     def test_global_enrichment_preserves_existing_data_and_is_repeatable(self):
         firma = self.make_company(
             "Moja Spółka Cywilna",
-            nip="8522605060", forma_dzialalnosci="Spółka cywilna",
+            nip="9240000010", forma_dzialalnosci="Spółka cywilna",
             miasto="Szczecin", ulica="Zapisana ulica",
             uop_ilosc=22, uz_ilosc=4, uod_ilosc=2,
             limit_dokumentow=300, konto_bankowe="PL123",
@@ -116,7 +116,7 @@ class RegistryBatchTests(DbTestCase):
             progress=lambda done, total, name: progress.append((done, total, name)),
             lookup=fake_lookup,
         )
-        self.assertIn(("8522605060", "Spółka cywilna"), called)
+        self.assertIn(("9240000010", "Spółka cywilna"), called)
         self.assertEqual(result["updated"], 1)
         self.assertEqual(result["errors"], [])
         self.assertEqual(progress[-1][0], result["total"])
@@ -161,7 +161,7 @@ class RegistryBatchTests(DbTestCase):
 
     def test_one_registry_failure_does_not_stop_other_companies(self):
         first = self.make_company("Awaria", nip="1234563218", forma_dzialalnosci="JDG")
-        second = self.make_company("Działa", nip="8522605060", forma_dzialalnosci="Spółka cywilna")
+        second = self.make_company("Działa", nip="9240000010", forma_dzialalnosci="Spółka cywilna")
         def fake_lookup(nip, forma_dzialalnosci):
             if nip == "1234563218":
                 raise RuntimeError("Brak połączenia")
@@ -175,7 +175,7 @@ class RegistryBatchTests(DbTestCase):
 
     def test_cancellation_stops_before_next_company(self):
         self.make_company("Pierwsza", nip="1234563218", forma_dzialalnosci="JDG")
-        self.make_company("Druga", nip="8522605060", forma_dzialalnosci="Spółka cywilna")
+        self.make_company("Druga", nip="9240000010", forma_dzialalnosci="Spółka cywilna")
         seen = []
         result = enrich_all_companies(
             should_cancel=lambda: len(seen) > 0,

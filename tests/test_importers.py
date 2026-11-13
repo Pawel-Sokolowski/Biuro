@@ -25,7 +25,7 @@ HEADERS = [
 ]
 
 ROW = [
-    "8522605060", "321442130", "", "", "BIURO RACHUNKOWE EM-KA SP. Z O.O.", "EM-KA ",
+    "9240000010", "321442130", "", "", "BIURO RACHUNKOWE DEMO SP. Z O.O.", "DEMO ",
     "Osoba fizyczna (KPiR)", "Skala podatkowa", "", "Jan Kowalski", "biuro@example.com",
     "500320800", "Drawsko Pomorskie", "78-500", "ul. Królewiecka 21", "Drawsko Pomorskie",
     "78-500", "ul. Królewiecka 21", "Drawsko Pomorskie", "78-500", "ul. Królewiecka 21", "",
@@ -61,13 +61,13 @@ class ExcelImportTests(DbTestCase):
         import_companies_from_excel_file(path, self.db_path)
 
         conn = get_conn()
-        row = conn.execute("SELECT * FROM firmy WHERE nip = '8522605060'").fetchone()
+        row = conn.execute("SELECT * FROM firmy WHERE nip = '9240000010'").fetchone()
         conn.close()
         self.assertIsNotNone(row)
         expected = {
             "regon": "321442130",
-            "nazwa": "BIURO RACHUNKOWE EM-KA SP. Z O.O.",
-            "nazwa_skrocona": "EM-KA",
+            "nazwa": "BIURO RACHUNKOWE DEMO SP. Z O.O.",
+            "nazwa_skrocona": "DEMO",
             "forma_dzialalnosci": "Osoba fizyczna (KPiR)",
             "forma_opodatkowania": "Skala podatkowa",
             "osoba_kontaktowa": "Jan Kowalski",
@@ -98,7 +98,7 @@ class ExcelImportTests(DbTestCase):
         import_companies_from_excel_file(path, self.db_path)
         import_companies_from_excel_file(path, self.db_path)
         conn = get_conn()
-        count = conn.execute("SELECT COUNT(*) FROM firmy WHERE nip = '8522605060'").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM firmy WHERE nip = '9240000010'").fetchone()[0]
         conn.close()
         self.assertEqual(count, 1)
 
@@ -111,7 +111,7 @@ class ExcelImportTests(DbTestCase):
         self.assertEqual((original['nip'], original['adres_email']), ('1234563218', 'original@example.test'))
 
     def test_blank_company_name_is_skipped_not_counted_as_an_update(self):
-        wb = Workbook(); wb.active.append(['NIP', 'Nazwa Firmy']); wb.active.append(['8522605060', ''])
+        wb = Workbook(); wb.active.append(['NIP', 'Nazwa Firmy']); wb.active.append(['9240000010', ''])
         path = os.path.join(self._tmp, 'empty-name.xlsx'); wb.save(path)
         result = import_companies_from_excel_file(path)
         self.assertEqual((result['created'], result['updated']), (0, 0))
@@ -159,7 +159,7 @@ class ImportDetailsTests(DbTestCase):
         path = os.path.join(self._tmp, "firmy.csv")
         with open(path, "w", encoding="cp1250", newline="") as f:
             f.write("NIP;Nazwa Firmy;Cenniki usług księgowych;VAT\n")
-            f.write("8522605060;Test;Ryczałt 230,00 netto, Cena ponad limit 5 szt. 5,5 zł;Tak\n")
+            f.write("9240000010;Test;Ryczałt 230,00 netto, Cena ponad limit 5 szt. 5,5 zł;Tak\n")
         payloads, warnings = import_companies_from_excel_file_payloads(path)
         self.assertEqual(len(payloads), 1)
         parsed = payloads[0]["cennik_ksiegowy_parsed"]
@@ -174,7 +174,7 @@ class ImportDetailsTests(DbTestCase):
 
         path = os.path.join(self._tmp, "firmy2.csv")
         with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write("NIP;Nazwa Firmy;Coś nowego\n8522605060;Test;x\n")
+            f.write("NIP;Nazwa Firmy;Coś nowego\n9240000010;Test;x\n")
         _, warnings = import_companies_from_excel_file_payloads(path)
         self.assertTrue(any("Coś nowego" in w for w in warnings))
 
@@ -182,7 +182,7 @@ class ImportDetailsTests(DbTestCase):
         from app.utils.importers import save_imported_payload
 
         payload = {
-            "nazwa": "Wizard Sp.", "nip": "8522605060",
+            "nazwa": "Wizard Sp.", "nip": "9240000010",
             "dz_miasto": "Szczecin", "dz_kod": "70-001", "dz_ulica": "Długa",
             "status_vat": "Czynny", "forma_opodatkowania": "Podatek liniowy",
             "forma_dzialalnosci": "Osoba fizyczna (KPiR)",
@@ -196,7 +196,7 @@ class ImportDetailsTests(DbTestCase):
         }
         save_imported_payload(payload, self.db_path)
         conn = get_conn()
-        firm = conn.execute("SELECT * FROM firmy WHERE nip = '8522605060'").fetchone()
+        firm = conn.execute("SELECT * FROM firmy WHERE nip = '9240000010'").fetchone()
         contacts = conn.execute("SELECT * FROM company_contacts WHERE firma_id = %s", (firm["id"],)).fetchall()
         price = conn.execute("SELECT * FROM cenniki WHERE klucz = 'KPIR_T_10_350'").fetchone()
         conn.close()

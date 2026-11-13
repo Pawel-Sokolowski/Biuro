@@ -188,11 +188,11 @@ class UiSmokeTests(DbTestCase):
         selected_lookup = fetch.call_args.kwargs["fetch"]
         with mock.patch(
             "app.companies.company_form.lookup_company_by_nip",
-            return_value={"nip": "8522605060"},
+            return_value={"nip": "9240000010"},
         ) as lookup:
-            selected_lookup("8522605060")
+            selected_lookup("9240000010")
         lookup.assert_called_once_with(
-            "8522605060", forma_dzialalnosci="Spółka cywilna"
+            "9240000010", forma_dzialalnosci="Spółka cywilna"
         )
 
     def test_month_picker_switches_year_and_month(self):

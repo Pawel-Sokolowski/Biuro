@@ -56,7 +56,7 @@ class CompanyBatchTests(DbTestCase):
         self.assertEqual(r["dz_kod"], "78-500")
         old = os.environ.pop("GUS_API_KEY", None)
         try:
-            self.assertTrue(gus_api.get_gus_firma_by_nip("8522605060")["error"])
+            self.assertTrue(gus_api.get_gus_firma_by_nip("9240000010")["error"])
         finally:
             if old is not None:
                 os.environ["GUS_API_KEY"] = old

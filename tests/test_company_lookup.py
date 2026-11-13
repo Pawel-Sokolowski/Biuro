@@ -9,7 +9,7 @@ ERR = {"error": True, "message": "x"}
 class LookupTests(unittest.TestCase):
     def test_parse_subject(self):
         data = parse_subject({
-            "name": "EM-KA", "nip": "8522605060", "statusVat": "Czynny", "regon": "321442130",
+            "name": "DEMO", "nip": "9240000010", "statusVat": "Czynny", "regon": "321442130",
             "krs": "0000482087", "workingAddress": "FRYDERYKA CHOPINA 35, 71-450 SZCZECIN",
             "accountNumbers": ["11111111111111111111111111"],
         })
@@ -168,7 +168,7 @@ class LookupTests(unittest.TestCase):
                 return (
                     "<a:DaneSzukajPodmiotyResult>"
                     "&lt;dane&gt;&lt;Regon&gt;123456789&lt;/Regon&gt;"
-                    "&lt;Nip&gt;1234563218&lt;/Nip&gt;"
+                    "&lt;Nip&gt;9240000010&lt;/Nip&gt;"
                     "&lt;Typ&gt;P&lt;/Typ&gt;&lt;Nazwa&gt;Firma&lt;/Nazwa&gt;&lt;/dane&gt;"
                     "</a:DaneSzukajPodmiotyResult>"
                 )
@@ -210,7 +210,7 @@ class LookupTests(unittest.TestCase):
                 return (
                     "<DaneSzukajPodmiotyResult>"
                     "&lt;dane&gt;&lt;Regon&gt;321442130&lt;/Regon&gt;"
-                    "&lt;Nip&gt;8522605060&lt;/Nip&gt;"
+                    "&lt;Nip&gt;9240000010&lt;/Nip&gt;"
                     "&lt;Typ&gt;P&lt;/Typ&gt;"
                     "&lt;Nazwa&gt;FIRMA TESTOWA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ&lt;/Nazwa&gt;"
                     "&lt;/dane&gt;</DaneSzukajPodmiotyResult>"
@@ -229,7 +229,7 @@ class LookupTests(unittest.TestCase):
 
         with (patch("app.companies.gus_api._config", return_value=("key", "https://example.invalid")),
               patch("app.companies.gus_api._call", side_effect=fake_call)):
-            data = get_gus_firma_by_nip("8522605060")
+            data = get_gus_firma_by_nip("9240000010")
         self.assertEqual(data["regon"], "321442130")
         self.assertEqual(data["krs"], "0000482087")
         self.assertEqual(len(report_names), 1)
@@ -237,14 +237,14 @@ class LookupTests(unittest.TestCase):
 
     def test_missing_gus_data_with_available_vat_is_explained(self):
         result = lookup_company_by_nip(
-            "1234563218",
+            "9240000010",
             forma_dzialalnosci="Spółka z o.o.",
             gus=lambda nip: {"error": True, "message": "GUS: testowa awaria"},
             wl=lambda nip: {"status_vat": "Czynny", "konto_bankowe": "PL_TEST"},
             krs=lambda n: self.fail("Brak numeru KRS, nie wywołujemy KRS"),
             ceidg=lambda n: self.fail("Spółka z o.o. nie jest JDG"),
         )
-        self.assertEqual(result["nip"], "1234563218")
+        self.assertEqual(result["nip"], "9240000010")
         self.assertEqual(result["status_vat"], "Czynny")
         self.assertEqual(result["konto_bankowe"], "PL_TEST")
         self.assertIn("testowa awaria", result["_registry_warning"])
@@ -252,7 +252,7 @@ class LookupTests(unittest.TestCase):
 
     def test_gus_without_krs_still_returns_name_and_warning(self):
         result = lookup_company_by_nip(
-            "1234563218", forma_dzialalnosci="Spółka z o.o.",
+            "9240000010", forma_dzialalnosci="Spółka z o.o.",
             gus=lambda nip: {"nip": nip, "nazwa": "Firma z GUS", "regon": "123456789"},
             wl=lambda nip: {"status_vat": "Zwolniony"},
             krs=lambda n: self.fail("Brak numeru KRS"),
@@ -263,7 +263,7 @@ class LookupTests(unittest.TestCase):
     def test_company_goes_through_gus_and_krs(self):
         calls = []
         result = lookup_company_by_nip(
-            "8522605060",
+            "9240000010",
             forma_dzialalnosci="Spółka z o.o.",
             wl=lambda nip: calls.append(("VAT", nip)) or {
                 "nazwa": "Z BIAŁEJ LISTY", "krs": "987654321", "dz_miasto": "Nie używać",
@@ -273,12 +273,12 @@ class LookupTests(unittest.TestCase):
                 "nip": nip, "nazwa": "GUS Firma", "regon": "321442130", "krs": "0000482087",
             },
             krs=lambda number: calls.append(("KRS", number)) or {
-                "nip": "8522605060", "nazwa": "KRS Firma", "dz_miasto": "Szczecin",
+                "nip": "9240000010", "nazwa": "KRS Firma", "dz_miasto": "Szczecin",
             },
             ceidg=lambda nip: self.fail("Dla spółki z o.o. nie odpytujemy CEIDG"),
         )
         self.assertEqual(calls, [
-            ("VAT", "8522605060"), ("GUS", "8522605060"), ("KRS", "0000482087")
+            ("VAT", "9240000010"), ("GUS", "9240000010"), ("KRS", "0000482087")
         ])
         self.assertEqual(result["nazwa"], "KRS Firma")
         self.assertEqual(result["dz_miasto"], "Szczecin")
@@ -290,7 +290,7 @@ class LookupTests(unittest.TestCase):
     def test_jdg_goes_only_through_ceidg_and_checks_vat(self):
         calls = []
         result = lookup_company_by_nip(
-            "8522605060",
+            "9240000010",
             forma_dzialalnosci="Osoba fizyczna (KPiR)",
             wl=lambda nip: calls.append(("VAT", nip)) or {
                 "nazwa": "Z Białej Listy", "dz_ulica": "Nie używać", "status_vat": "Zwolniony",
@@ -301,7 +301,7 @@ class LookupTests(unittest.TestCase):
             },
             gus=lambda nip: self.fail("JDG: bez GUS"),
         )
-        self.assertEqual(calls, [("VAT", "8522605060"), ("CEIDG", "8522605060")])
+        self.assertEqual(calls, [("VAT", "9240000010"), ("CEIDG", "9240000010")])
         self.assertEqual(result["nazwa"], "JDG")
         self.assertEqual(result["dz_miasto"], "Drawsko")
         self.assertNotIn("dz_ulica", result)
@@ -310,7 +310,7 @@ class LookupTests(unittest.TestCase):
     def test_civil_partnership_uses_own_nip_gus_and_vat_not_partners_nips(self):
         calls = []
         result = lookup_company_by_nip(
-            "8522605060",
+            "9240000010",
             forma_dzialalnosci="Spółka cywilna",
             wl=lambda nip: calls.append(("VAT", nip)) or {
                 "nazwa": "Nazwa z MF", "nip": "NIP WSPÓLNIKA",
@@ -329,10 +329,10 @@ class LookupTests(unittest.TestCase):
             ],
         )
         self.assertEqual(calls, [
-            ("VAT", "8522605060"), ("GUS", "8522605060"),
-            ("WSPÓLNICY CEIDG", "8522605060"),
+            ("VAT", "9240000010"), ("GUS", "9240000010"),
+            ("WSPÓLNICY CEIDG", "9240000010"),
         ])
-        self.assertEqual(result["nip"], "8522605060")
+        self.assertEqual(result["nip"], "9240000010")
         self.assertEqual(result["regon"], "321442130")
         self.assertEqual(result["nazwa"], "Przykładowa Spółka Cywilna")
         self.assertEqual(result["dz_miasto"], "Szczecin")
@@ -343,7 +343,7 @@ class LookupTests(unittest.TestCase):
 
     def test_civil_partnership_without_ceidg_partners_still_loads_gus(self):
         result = lookup_company_by_nip(
-            "8522605060",
+            "9240000010",
             forma_dzialalnosci="Spółka cywilna",
             wl=lambda nip: {"status_vat": "Zwolniony"},
             gus=lambda nip: {"nip": nip, "regon": "321442130", "nazwa": "S.C."},
@@ -351,14 +351,14 @@ class LookupTests(unittest.TestCase):
             ceidg=lambda nip: self.fail("No CEIDG JDG lookup"),
             civil_partners=lambda nip: [],
         )
-        self.assertEqual(result["nip"], "8522605060")
+        self.assertEqual(result["nip"], "9240000010")
         self.assertEqual(result["nazwa"], "S.C.")
         self.assertEqual(result["wspolnicy_ceidg"], [])
         self.assertEqual(result["status_vat"], "Zwolniony")
 
     def test_incomplete_registry_does_not_use_white_list_identity_or_address(self):
         result = lookup_company_by_nip(
-            "8522605060",
+            "9240000010",
             forma_dzialalnosci="Spółka jawna",
             wl=lambda nip: {
                 "nazwa": "Nie przejmować", "krs": "0000011111",
@@ -370,14 +370,14 @@ class LookupTests(unittest.TestCase):
             ceidg=lambda nip: self.fail("Bez CEIDG"),
         )
         self.assertEqual(result, {
-            "nip": "8522605060", "status_vat": "Czynny",
+            "nip": "9240000010", "status_vat": "Czynny",
             "konto_bankowe": "12121212",
             "_registry_warning": "GUS: Niedostępny GUS",
         })
 
     def test_wrong_nip_from_krs_is_not_applied(self):
         result = lookup_company_by_nip(
-            "8522605060",
+            "9240000010",
             forma_dzialalnosci="Spółka jawna",
             wl=lambda nip: {"status_vat": "Czynny"},
             gus=lambda nip: {"nip": nip, "nazwa": "GUS", "krs": "0000123456"},
@@ -397,7 +397,7 @@ class LookupTests(unittest.TestCase):
         xml = (
             "<dane>"
             "<praw_regon9>321442130</praw_regon9>"
-            "<praw_nip>8522605060</praw_nip>"
+            "<praw_nip>9240000010</praw_nip>"
             "<praw_nazwa>FIRMA TESTOWA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ</praw_nazwa>"
             "<praw_podstawowaFormaPrawna_Symbol>1</praw_podstawowaFormaPrawna_Symbol>"
             "<praw_szczegolnaFormaPrawna_Symbol>117</praw_szczegolnaFormaPrawna_Symbol>"
@@ -423,11 +423,11 @@ class LookupTests(unittest.TestCase):
         )
         calls = []
         result = lookup_company_by_nip(
-            "8522605060", forma_dzialalnosci="Spółka z o.o.",
+            "9240000010", forma_dzialalnosci="Spółka z o.o.",
             gus=lambda nip: {"nip": nip, "regon": "321442130", "nazwa": "GUS FIRMA TESTOWA", **report},
             wl=lambda nip: {"status_vat": "Czynny"},
             krs=lambda number: calls.append(number) or {
-                "nip": "8522605060",
+                "nip": "9240000010",
                 "nazwa": "FIRMA TESTOWA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
                 "dz_miasto": "Wodnica",
             },
@@ -436,7 +436,7 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(calls, ["0000482087"])
         self.assertEqual(result["krs"], "0000482087")
         self.assertEqual(result["dz_miasto"], "Wodnica")
-        self.assertEqual(result["nip"], "8522605060")
+        self.assertEqual(result["nip"], "9240000010")
         self.assertNotIn("_registry_warning", result)
 
     def test_gus_krs_number_requires_explicit_krs_register(self):

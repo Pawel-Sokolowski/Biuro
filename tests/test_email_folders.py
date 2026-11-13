@@ -282,7 +282,7 @@ class EmailPageTests(DbTestCase):
 
         self.assertEqual(clean_folder_label("3 Pracownicy"), "Pracownicy")
         emps = [{"imie": "Jan", "nazwisko": "Kołodziej"}]
-        self.assertEqual(employee_label(clean_folder_label("EM-KA Kolodziej Jan"), emps), "Jan Kołodziej")
+        self.assertEqual(employee_label(clean_folder_label("DEMO Kolodziej Jan", "DEMO"), emps), "Jan Kołodziej")
 
         class FakeImap:
             calls = []

@@ -198,7 +198,7 @@ class PreparedImportTests(DbTestCase):
 
         with TemporaryDirectory() as directory:
             path = Path(directory) / "companies.csv"
-            path.write_text("Nazwa Firmy;NIP\nFixture;8522605060\n", encoding="utf-8")
+            path.write_text("Nazwa Firmy;NIP\nFixture;9240000010\n", encoding="utf-8")
             plan, prepared = importers.prepare_company_import(str(path))
             self.addCleanup(prepared.close)
             self.assertEqual(plan["created"], 1)
@@ -216,7 +216,7 @@ class PreparedImportTests(DbTestCase):
                     str(path), prepared=prepared
                 )
             self.assertEqual(result["created"], 1)
-            path.write_text("Nazwa Firmy;NIP\nChanged;8522605060\n", encoding="utf-8")
+            path.write_text("Nazwa Firmy;NIP\nChanged;9240000010\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "zmienił"):
                 list(prepared.rows(str(path)))
 

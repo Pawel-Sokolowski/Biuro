@@ -212,7 +212,7 @@ class MailingCompanyQueryTests(DbTestCase):
         workbook = Workbook()
         workbook.active.append(['NIP', 'Nazwa Firmy', 'Nazwa skrócona', 'Adres email', 'Osoba kontaktowa',
                                  'Forma działalności', 'Forma opodatkowania'])
-        workbook.active.append(['8522605060', 'Imported company', 'Imported', 'client@example.com', 'Jan Kowalski',
+        workbook.active.append(['9240000010', 'Imported company', 'Imported', 'client@example.com', 'Jan Kowalski',
                                  'Spółka z o.o.', 'CIT'])
         path = str(Path(self._tmp) / 'contacts.xlsx')
         workbook.save(path)

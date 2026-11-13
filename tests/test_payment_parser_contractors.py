@@ -36,7 +36,7 @@ def invoice(invoice_id, company_id, number, buyer, **kwargs):
 class IngContractorParserTests(unittest.TestCase):
     def test_name_continued_in_field_33_is_joined(self):
         cases = (("Usługi transportowo spedycyjne", "Jan Kowalski", "Usługi transportowo spedycyjne Jan Kowalski"),
-                 ("Biuro Rachunkowe EM-", "KA Spółka z o.o.", "Biuro Rachunkowe EM-KA Spółka z o.o."))
+                 ("Biuro Rachunkowe EM-", "KA Spółka z o.o.", "Biuro Rachunkowe DEMO Spółka z o.o."))
         for first, second, expected in cases:
             with self.subTest(expected=expected):
                 text = ing_statement(name=first).replace("UL. PRZYKŁADOWA 1", second)
@@ -90,7 +90,7 @@ class ContractorMatchingTests(unittest.TestCase):
     def test_bank_name_matches_short_or_full_name_by_fragments(self):
         rows = [invoice(1, 10, "FV/1/10/2026", "Jan Kowalski"), invoice(2, 20, "FV/2/10/2026", "INNA FIRMA")]
         rows[0]["buyer_full_name"] = "Usługi transportowo spedycyjne i inne Jan Kowalski"
-        match = match_invoice_contractor({"tytul": "Zaplata", "kontrahent": "Biuro EM-KA Jan Kowalski"}, rows)
+        match = match_invoice_contractor({"tytul": "Zaplata", "kontrahent": "Biuro DEMO Jan Kowalski"}, rows)
         self.assertTrue(match["confident"])
         self.assertEqual(match["company_key"], ("firma", 10))
         match = match_invoice_contractor({"tytul": "Zaplata", "kontrahent": "Usługi transportowo spedycyjne"}, rows[:1])

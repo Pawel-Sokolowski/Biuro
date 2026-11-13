@@ -26,10 +26,10 @@ class KsefDownloadScopeTests(DbTestCase):
             page._download_from_ksef()
 
     def test_selected_company_limits_download_to_its_nip(self):
-        firma = self.make_company("Firma KSeF", nip="8522605060")
+        firma = self.make_company("Firma KSeF", nip="9240000010")
         page = self._page(firma)
         self._run(page)
-        page._start_ksef_download.assert_called_once_with("2026-10", buyer_nip="8522605060")
+        page._start_ksef_download.assert_called_once_with("2026-10", buyer_nip="9240000010")
 
     def test_no_company_downloads_for_all(self):
         page = self._page(None)

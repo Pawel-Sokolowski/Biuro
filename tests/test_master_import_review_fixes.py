@@ -23,11 +23,11 @@ def sheet_payload(values):
 
 class MasterImportPresenceTests(DbTestCase):
     def test_partial_sheet_keeps_existing_contract_counts_and_health_flag(self):
-        company = self.make_company('Existing', nip='8522605060', uop_ilosc=7,
+        company = self.make_company('Existing', nip='9240000010', uop_ilosc=7,
                                     uz_ilosc=3, uod_ilosc=2, wliczac_zdrowotna=1)
         wb = Workbook()
         wb.active.append(['Nazwa Firmy', 'NIP'])
-        wb.active.append(['Existing', '8522605060'])
+        wb.active.append(['Existing', '9240000010'])
         path = os.path.join(self._tmp, 'partial.xlsx')
         wb.save(path)
         result = import_companies_from_excel_file(path)
@@ -37,9 +37,9 @@ class MasterImportPresenceTests(DbTestCase):
                          [7, 3, 2, 1])
 
     def test_explicit_empty_pricing_and_zero_payload_remain_updates(self):
-        company = self.make_company('Existing', nip='8522605060', uop_ilosc=7,
+        company = self.make_company('Existing', nip='9240000010', uop_ilosc=7,
                                     uz_ilosc=3, uod_ilosc=2, wliczac_zdrowotna=1)
-        payload = sheet_payload({'Nazwa Firmy': 'Existing', 'NIP': '8522605060',
+        payload = sheet_payload({'Nazwa Firmy': 'Existing', 'NIP': '9240000010',
                                  'Cenniki usług kadrowych': '', 'Cenniki usług księgowych': ''})
         save_imported_payload(payload)
         actual = get_company(company)
@@ -47,7 +47,7 @@ class MasterImportPresenceTests(DbTestCase):
                          [0, 0, 0, 0])
 
     def test_enriched_aliases_fill_empty_canonical_fields_but_keep_source_address(self):
-        payload = sheet_payload({'Nazwa Firmy': 'Enriched', 'NIP': '8522605060',
+        payload = sheet_payload({'Nazwa Firmy': 'Enriched', 'NIP': '9240000010',
                                  'Ulica': 'Źródłowa 12', 'Adres korespondencyjny - miasto': 'Z pliku'})
         self.assertIsNone(enrich_payload(payload, lambda _: {
             'dz_miasto': 'Lublin', 'dz_ulica': 'Rejestrowa', 'dz_budynek': '99',
@@ -55,7 +55,7 @@ class MasterImportPresenceTests(DbTestCase):
         }))
         save_imported_payload(payload)
         with get_conn() as conn:
-            actual = conn.execute('SELECT * FROM firmy WHERE nip=%s', ('8522605060',)).fetchone()
+            actual = conn.execute('SELECT * FROM firmy WHERE nip=%s', ('9240000010',)).fetchone()
         self.assertEqual((actual['miasto'], actual['kod_pocztowy']), ('Lublin', '20-001'))
         self.assertEqual((actual['ulica'], actual['adres_budynek']), ('Źródłowa', '12'))
         self.assertEqual((actual['adres_koresp_miasto'], actual['adres_koresp_ulica']),

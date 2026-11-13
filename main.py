@@ -4,9 +4,11 @@ import sys
 
 from app.utils.env_config import load_environment, ensure_encryption_key
 
-if __name__ == '__main__' and any(flag in sys.argv for flag in ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task')):
+if __name__ == '__main__' and any(flag in sys.argv for flag in ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task', '--saldeo-login', '--worker-migrate')):
     os.environ['BIO_WORKER_MODE'] = '1'
 load_environment()
+if __name__ == '__main__' and '--worker-migrate' in sys.argv:
+    sys.argv[sys.argv.index('--worker-migrate')] = '--migrate'
 if __name__ == '__main__' and '--worker' in sys.argv:
     from app.worker import main as worker_main
     sys.exit(worker_main([arg for arg in sys.argv[1:] if arg != '--worker']))
@@ -37,6 +39,9 @@ def excepthook(type, value, tb):
 sys.excepthook = excepthook
 
 if __name__ == "__main__":
+    if '--saldeo-login' in sys.argv:
+        from app.integrations.saldeo_web.login import main as saldeo_login
+        sys.exit(saldeo_login())
     if '--worker-install-task' in sys.argv:
         app = QApplication(sys.argv)
         install_polish_translations(app)

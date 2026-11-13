@@ -63,9 +63,15 @@ wbudowanego jest dodatkowo sprawdzany pod kątem NIP-u właściciela w Enovie.
 Pola **Deklaracje i UPO**, **Dokumenty kadrowe**, **Umowy/BHP** i **JPK** to opcjonalne
 adaptery w plikach **`.sql`**, z zapytaniami zgodnymi z kontraktem opisanym w
 [instrukcji Enovy](enova/README.md). Nie są to pliki `.ps1`/`.cmd` instalatora.
-Repo zawiera gotowe zapytania do dokumentów; adapterów deklaracji/kadr/terminów
-jeszcze nie ma. Puste pole oznacza brak tego odczytu. Plik wskazany własną ścieżką
-musi znajdować się na serwerze workera. Eksport struktury Enovy daje metadane do
+Instalacja zawiera gotowe zapytania do dokumentów księgowych, list płac i wypłat.
+Worker wybiera je automatycznie, również po aktualizacji istniejących ustawień.
+Nie trzeba kopiować ani wskazywać plików SQL. Puste pole **Dokumenty kadrowe**
+oznacza adapter wbudowany; opcjonalna ścieżka zastępuje go własnym zapytaniem.
+Trzy pozostałe puste pola oznaczają brak danego adaptera. Deklaracje/UPO i terminy
+nadal wymagają potwierdzonego mapowania; pomaga `docs/enova/profile-declarations.sql`.
+Plik wskazany własną ścieżką musi znajdować się na serwerze workera, najlepiej
+poza katalogiem instalacyjnym (aby aktualizacja go nie nadpisała).
+Eksport struktury Enovy daje metadane do
 przygotowania adaptera, ale nie tworzy działającego zapytania automatycznie.
 
 Do rozpoznania adapterów nie trzeba eksportować wszystkich firm. Zacznij od bazy

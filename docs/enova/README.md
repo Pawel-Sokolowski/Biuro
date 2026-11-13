@@ -368,13 +368,46 @@ Brak danych nie oznacza „Niewysłany” ani „Nie dotyczy”. Przyjęcie wyma
 statusu i potwierdzenia UPO; data pobrania nigdy nie zastępuje daty wysyłki/UPO.
 Starszy odczyt JPK bez dat nadal jest obsługiwany, z pustymi datami.
 
-**Do rzeczywistego odczytu kadr i deklaracji potrzebne jest potwierdzone mapowanie
-schematu danej instalacji Enova.** Repozytorium nie zawiera zweryfikowanych tabel
-ani znaczenia kodów tych modułów. Nie ma zapytań zgadujących numery statusów.
+**Listy płac i wypłaty mają wbudowany adapter `queries/payroll.sql`.** Jest
+dołączony do aplikacji i workera przez instalator oraz automatycznie wybierany
+przy odczycie zapisanych ustawień i konfiguracji JSON. Nie trzeba wskazywać pliku.
+Istniejące ustawienia również otrzymują ten adapter po aktualizacji workera.
+Liczy nagłówki `ListyPlac` i osobne dokumenty `Wyplaty` według ich pola `Data`,
+grupując je według symbolu definicji. Bufor wypłat jest pokazywany jako osobny
+rodzaj, a nie odrzucany. Lista płac i wypłaty to osobne rodzaje dokumentów,
+nie liczba osób; ich suma nie oznacza liczby pracowników. Okres nie jest
+wyznaczany przez datę zapłaty, miesiąc ZUS ani okres naliczenia.
+Pusty miesiąc ma jawne zero. Brak lub wiele NIP-ów właściciela powoduje błąd.
+Schemat tabel i połączeń jest wspólny dla dostarczonych wariantów księgowości;
+wynik należy porównać z Enovą dla wybranego miesiąca.
+
+Własny plik `payroll_query` jest opcjonalnym zamiennikiem. Pole w ustawieniach
+może pozostać puste — wtedy działa adapter wbudowany. Zamiennik konkretnej firmy
+w `sources` ma pierwszeństwo przed zamiennikiem globalnym. Względne ścieżki
+zamienników są liczone od konfiguracji JSON (albo `docs/enova` dla ustawień
+zapisanych w aplikacji). Wbudowany plik jest wyszukiwany w instalacji, niezależnie
+od położenia JSON. Własny SQL przechowuj poza katalogiem instalacyjnym, aby
+aktualizacja go nie nadpisała. Księgowość nadal dobiera wbudowane zapytanie do formy
+opodatkowania.
+
+**Deklaracje/UPO i terminy kadrowe nadal wymagają mapowania znaczenia danych.**
+Metadane potwierdzają relację `EDeklaracje.Deklaracja → Deklaracje.ID`, ale nie
+znaczenie `StatusEDeklaracji`, formę potwierdzenia ani datę wysłania.
+`Stamp` jest SQL `timestamp` (wersja wiersza), nie datą wysyłki/UPO.
+Nie ma zapytań zgadujących numery statusów.
 W ustawieniach wybierz firmę z wpisaną bazą i kliknij **Eksportuj strukturę Enova —
 deklaracje i kadry**. Plik JSON zawiera wyłącznie nazwy tabel, kolumn, typy i relacje
 (bez haseł i danych dokumentów). Ułatwia przygotowanie właściwych zapytań.
 Konto SQL musi widzieć metadane wymaganych obiektów (`VIEW DEFINITION`).
+
+Do dokończenia deklaracji uruchom w SSMS `profile-declarations.sql` w bazie
+z rzeczywistymi deklaracjami i potwierdzeniami. Ustaw zakres `@From`/`@To`
+według daty dokumentów. Zwraca agregaty definicji/statusów i nazwy elementów XML
+potwierdzenia, bez ich wartości, nazw pracowników, NIP-ów czy treści dokumentów.
+Porównaj kody z widokiem Enovy, podając, które oznaczają przygotowanie, wysłanie,
+przyjęcie i odrzucenie, oraz do jakiego miesiąca przypisywać deklaracje roczne.
+Sam eksport schematu nie pozwala rozstrzygnąć tych reguł. Pliki eksportów
+instalacji pozostają poza repozytorium.
 
 Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze workera:
 
@@ -393,7 +426,7 @@ Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze worker
   kwartalnych do okresu miesięcznego musi być jawne w zapytaniu, zgodne z zasadami
   biura. Brak wiersza pozostawia „Brak danych”, nie tworzy fałszywego statusu.
 
-Oba zapytania mogą być globalne w ustawieniach albo osobne przy `sources` w JSON.
+Zamienniki zapytań mogą być globalne w ustawieniach albo osobne przy `sources` w JSON.
 Wszystkie wyniki muszą zawierać NIP zgodny z mapowaniem firmy. Błąd walidacji
 zachowuje dotychczasowy odczyt firmy; pozostałe firmy są przetwarzane dalej.
 Odczyt księgowości i kadr do Sprawdzania ma własną transakcję i blokadę, niezależną

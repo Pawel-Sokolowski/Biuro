@@ -145,6 +145,8 @@ jobs:
           $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /COMPONENTS=program,worker /DIR=`"$target`"" -Wait -PassThru
           if ($process.ExitCode) { throw 'Combined program/worker installation failed' }
           $workerScript = Join-Path $target 'scripts\install_background_worker.ps1'
+          $payrollSql = Join-Path $target '_internal\docs\enova\queries\payroll.sql'
+          if (-not (Test-Path $payrollSql)) { throw 'Bundled Enova payroll adapter missing from worker installation' }
           $workerLauncher = Join-Path $target 'scripts\install_background_worker.cmd'
           if (-not (Test-Path $workerLauncher)) { throw 'Worker launcher missing from installation' }
           $parseTokens = $null

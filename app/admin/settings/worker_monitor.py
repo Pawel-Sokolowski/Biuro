@@ -9,7 +9,7 @@ from app.services.worker_monitor import snapshot
 from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
-JOB_LABELS = {'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
+JOB_LABELS = {'platnik':'Płatnik — wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
               'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto'}
 
@@ -74,7 +74,7 @@ class WorkerMonitor(QWidget):
         for keys, title in ((('enova',), 'Odczyt z Enovy'),
                             (('mail',), 'Poczta'),
                             (('invoices', 'reminders'), 'Faktury i przypomnienia'),
-                            (('ksef_import',), 'KSeF')):
+                            (('ksef_import',), 'KSeF'), (('platnik',), 'Płatnik')):
             page = QWidget()
             page_layout = QVBoxLayout(page)
             note = QLabel('Ostatni zapisany stan zadań. Brak wpisu oznacza, że worker nie zgłosił jeszcze przebiegu.')

@@ -129,6 +129,9 @@ class AccountingPage(QWidget):
                 from app.accounting.ezla_ui import EzlaPreviewPanel
                 self.ezla_panel = EzlaPreviewPanel(actor_id, self)
                 self._add_report(department, 'e-ZLA', 'ezla', self.ezla_panel)
+                from app.accounting.holiday_ui import ContributionHolidays
+                self.holiday_panel = ContributionHolidays(actor_id,self)
+                self._add_report(department,'Wakacje składkowe — Płatnik (rocznie)','holidays',self.holiday_panel)
             self.tabs.addTab(sections, label)
             report_selector.currentIndexChanged.connect(self.filter_rows)
         self.table = self.tables['accounting']
@@ -136,6 +139,7 @@ class AccountingPage(QWidget):
         self.source_note = QLabel()
         self.source_note.setWordWrap(True)
         layout.addWidget(self.source_note)
+        self.tabs.currentChanged.connect(self.update_period_controls)
         self.month.dateChanged.connect(self.refresh_async)
         self.apply_department_default()
         if self._fixed_department:
@@ -184,7 +188,18 @@ class AccountingPage(QWidget):
         department = self._fixed_department or default_department(self.actor_id)
         self.tabs.setCurrentIndex(1 if department == 'payroll' else 0)
 
+    def yearly_selected(self):
+        return (self.tabs.currentIndex()==1 and self.report_selectors['payroll'].currentData()=='holidays')
+
+    def update_period_controls(self,*_):
+        annual = self.yearly_selected()
+        for widget in (self.month,self.tax_filter,self.attention,self.message,self.source_note):
+            widget.setVisible(not annual)
+
     def refresh_async(self, *_):
+        if self.yearly_selected():
+            self.holiday_panel.refresh()
+            return
         month = self.month.date().toString('yyyy-MM')
         def read():
             rows = list_accounting(self.actor_id, month)
@@ -223,6 +238,11 @@ class AccountingPage(QWidget):
         return needs_attention(row, department, today, horizon or 90, self.period)
 
     def filter_rows(self, *_):
+        self.update_period_controls()
+        if self.yearly_selected():
+            self._update_report_choices('payroll')
+            self.holiday_panel.set_company_filter(self.search.text().strip())
+            return
         query, selected = self.search.text().strip().casefold(), self.tax_filter.currentData()
         rows = [row for row in self.rows
                 if (not selected or (typ_from_forma(row.get('forma_opodatkowania')) or 'OTHER') == selected)

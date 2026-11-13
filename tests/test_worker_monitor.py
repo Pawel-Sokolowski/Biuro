@@ -16,7 +16,7 @@ class WorkerMonitorTests(TestCase):
         with patch('app.security.authorization.is_administrator', return_value=True):
             panel = WorkerMonitor(1)
         try:
-            self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())], ['Status', 'e-ZLA', 'Import do Enovy', 'Odczyt z Enovy', 'Poczta', 'Faktury i przypomnienia', 'KSeF', 'Saldeo', 'Logi'])
+            self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())], ['Status', 'e-ZLA', 'Import do Enovy', 'Odczyt z Enovy', 'Poczta', 'Faktury i przypomnienia', 'KSeF', 'Płatnik', 'Saldeo', 'Logi'])
             panel.render({'heartbeat': {'checked_at': now.isoformat(), 'enabled': True, 'jobs': {
                 'ezla': {'state': 'running', 'started_at': now.isoformat()}}},
                 'events': [{'at': now.isoformat(), 'job': 'ezla', 'state': 'started'}],

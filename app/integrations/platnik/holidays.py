@@ -10,7 +10,7 @@ KEY = 'platnik_connection'
 FIELDS = ('imiona_nazwiska','kod_ubezpieczenia','wyslane_powiadomienie','skladki_oplacane',
           'miesiac','oswiadczenie','platnosc','kto_wyslal','decyzja')
 LABELS = ('Imiona i nazwiska','Kod ubezpieczenia','Wysłane powiadomienie','Składki opłacane',
-          'Miesiąc ulgi','Oświadczenie','Płatność','Kto wysłał','Decyzja')
+          'Miesiąc','Oświadczenie','Płatność','Kto wysłał','Decyzja')
 
 
 def load():
@@ -87,7 +87,11 @@ def normalize(rows, year):
             record[key] = value
         status = (record['status_zrodlowy'] or '').strip()
         record['status_zrodlowy'] = status
-        record['decyzja'] = {'A':'Aktualne zwolnienie (A)','N':'Nieaktualny wpis (N)'}.get(status,'Nieznany status: '+(status or 'brak'))
+        record['opis_statusu'] = {'A':'Aktualne zwolnienie (A)','N':'Nieaktualny wpis (N)'}.get(status,'Nieznany status: '+(status or 'brak'))
+        # The holiday insurance code is not the ordinary/base insurance code.
+        record['kod_ulgi'] = record['kod_ubezpieczenia']
+        record['kod_ubezpieczenia'] = record['bazowy_kod_ubezpieczenia']
+        record['decyzja'] = None
         if status not in ('A','N'):
             issues.append('Nieznany status zwolnienia Płatnika')
         month = record['miesiac']
@@ -155,6 +159,8 @@ def read_year(actor_id,year):
     from app.integrations.enova.accounting import require_access
     from app.security.authorization import assigned_company_ids,is_administrator
     from app.db.dao_conn import get_conn
+    if type(year) is not int or not 2024<=year<=2100:
+        raise ValueError('Nieprawidłowy rok zestawienia.')
     require_access(actor_id)
     value = json.loads(get_setting(f'platnik_holidays_{int(year)}') or '{}')
     ids = list(assigned_company_ids(actor_id))
@@ -171,7 +177,7 @@ def read_year(actor_id,year):
     for row in rows:
         matches = mapping.get(row['nip'],[])
         if len(matches)==1:
-            visible.append({**row,'firma':matches[0]['nazwa']})
+            visible.append({**row,'firma':matches[0]['nazwa'],'firma_id':matches[0]['id']})
         elif is_administrator(actor_id):
             visible.append({**row,'firma':'Do przypisania: '+(row['nip'] or ('Płatnik #'+str(row.get('source_payer_id') or '—')))})
     return {'rows':visible,'companies':[dict(row) for row in companies],

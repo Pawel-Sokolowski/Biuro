@@ -84,7 +84,9 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
     progress('Odczyt ustawień usługi')
     login, password, zip_password = credentials(config)
     with get_conn() as conn:
-        companies = conn.execute('SELECT id,nip FROM firmy WHERE id=ANY(%s) ORDER BY id', (config['companies'],)).fetchall()
+        companies = conn.execute('SELECT id,nip,forma_dzialalnosci FROM firmy WHERE id=ANY(%s) ORDER BY id', (config['companies'],)).fetchall()
+    from app.db.dao_companies import get_partners
+    from app.companies.identities import payer_nips
     results = []
     stop = stop or threading.Event()
     for index, company in enumerate(companies):
@@ -100,28 +102,52 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                     continue
                 old = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (f'ezla_sync_{fid}',)).fetchone()
                 previous = json.loads(old[0]) if old else {}
-                nip = normalize_nip(company['nip'])
-                progress('Pobieranie i odczyt ZIP', company_id=fid, position=index + 1, total=len(companies))
-                reports = fetch_reports(nip, login, password, zip_password, since_date(previous, today), today=today)
-                progress('Zapisywanie raportów', company_id=fid, position=index + 1, total=len(companies))
-                added = 0
-                for report in reports:
-                    parsed = parse_report(report.xml)
-                    if parsed.nip != nip:
-                        raise ServiceError('payer')
-                    key = f'ezla_report_{fid}_' + hashlib.sha256(report.xml).hexdigest()
-                    if conn.execute('SELECT 1 FROM app_settings WHERE klucz=%s', (key,)).fetchone():
-                        continue
-                    months, review = _metadata(parsed)
-                    value = {'nip': nip, 'generated_at': report.generated_at, 'fetched_at': stamp,
-                             'months': months, 'needs_review': review,
-                             'xml_enc': encrypt_password(base64.b64encode(report.xml).decode('ascii'))}
-                    _write(conn, key, value)
-                    added += 1
-                _write(conn, f'ezla_sync_{fid}', {'state': 'ok', 'last_success': stamp,
-                       'checked_at': stamp, 'report_count': len(reports), 'new_reports': added})
-                results.append({'company_id': fid, 'state': 'ok', 'new_reports': added})
-            record('ezla', 'downloaded', company_id=fid, count=len(reports))
+                identities = payer_nips(company, get_partners(fid))
+                payer_states = dict(previous.get('payers') or {})
+                added, report_count, failures = 0, 0, []
+                for nip in identities:
+                    if stop.is_set():
+                        break
+                    prior = payer_states.get(nip, previous if nip == normalize_nip(company['nip']) else {})
+                    try:
+                        with conn.transaction():
+                            progress('Pobieranie i odczyt ZIP', company_id=fid, position=index + 1, total=len(companies))
+                            reports = fetch_reports(nip, login, password, zip_password, since_date(prior, today), today=today)
+                            progress('Zapisywanie raportów', company_id=fid, position=index + 1, total=len(companies))
+                            payer_added = 0
+                            for report in reports:
+                                parsed = parse_report(report.xml)
+                                if parsed.nip != nip:
+                                    raise ServiceError('payer')
+                                key = f'ezla_report_{fid}_' + hashlib.sha256(report.xml).hexdigest()
+                                if conn.execute('SELECT 1 FROM app_settings WHERE klucz=%s', (key,)).fetchone():
+                                    continue
+                                months, review = _metadata(parsed)
+                                value = {'nip': nip, 'generated_at': report.generated_at, 'fetched_at': stamp,
+                                         'months': months, 'needs_review': review,
+                                         'xml_enc': encrypt_password(base64.b64encode(report.xml).decode('ascii'))}
+                                _write(conn, key, value)
+                                payer_added += 1
+                        added += payer_added
+                        report_count += len(reports)
+                        payer_states[nip] = {'state': 'ok', 'last_success': stamp, 'checked_at': stamp}
+                    except Exception as error:
+                        code = error.code if isinstance(error, ServiceError) else 'read_failed'
+                        status = error.http_status if isinstance(error, ServiceError) else None
+                        payer_states[nip] = {**prior, 'state': 'failed', 'checked_at': stamp, 'error_code': code, 'http_status': status}
+                        failures.append((code, status))
+                state = 'cancelled' if stop.is_set() else 'failed' if failures else 'ok'
+                value = {**previous, 'state': state, 'checked_at': stamp, 'payers': payer_states,
+                         'report_count': report_count, 'new_reports': added}
+                if failures:
+                    value.update(error_code=failures[0][0], http_status=failures[0][1])
+                elif not stop.is_set():
+                    value['last_success'] = stamp
+                    value.pop('error_code', None)
+                    value.pop('http_status', None)
+                _write(conn, f'ezla_sync_{fid}', value)
+                results.append({'company_id': fid, 'state': state, 'new_reports': added})
+            record('ezla', 'failed' if failures else 'downloaded', company_id=fid, count=report_count)
         except Exception as error:
             # Keep the cursor and previous reports after any transport/decryption/validation failure.
             code = error.code if isinstance(error, ServiceError) else 'read_failed'
@@ -152,7 +178,7 @@ def load_reports(actor_id, month):
         # app_settings contains plain text too. Materialize the authorized report
         # subset before JSON casts; a JOIN/WHERE alone does not fix evaluation order.
         rows = conn.execute('''WITH selected_reports AS MATERIALIZED (
-            SELECT f.id,f.nazwa,f.nip,a.klucz AS report_key,a.wartosc
+            SELECT f.id,f.nazwa,f.nip,f.forma_dzialalnosci,a.klucz AS report_key,a.wartosc
             FROM firmy f JOIN app_settings a
               ON a.klucz='ezla_report_' || f.id::text || '_' || right(a.klucz,64)
             WHERE f.id=ANY(%s)
@@ -167,9 +193,11 @@ def load_reports(actor_id, month):
             metadata = json.loads(row['wartosc'])
             xml = base64.b64decode(decrypt_password(metadata['xml_enc']), validate=True)
             parsed = parse_report(xml)
-            if parsed.nip != normalize_nip(row['nip']):
+            from app.companies.identities import payer_nips
+            from app.db.dao_companies import get_partners
+            if parsed.nip not in payer_nips(row, get_partners(row['id'])):
                 raise ServiceError('payer')
-            databases = [source['database'] for source in sources if normalize_nip(source['nip']) == parsed.nip]
+            databases = [source['database'] for source in sources if normalize_nip(source['nip']) == normalize_nip(row['nip'])]
             reports.append({'report': parsed, 'company': {'id': row['id'], 'nazwa': row['nazwa'], 'nip': row['nip']},
                             'database': databases[0] if len(databases) == 1 else ''})
         except Exception:

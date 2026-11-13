@@ -4,7 +4,7 @@ from unittest import mock
 
 from app.invoices import ksef_sync
 
-EMKA_NIP = "9240000010"
+SELLER_NIP = "9240000010"
 
 
 class YearSyncTests(unittest.TestCase):
@@ -27,11 +27,11 @@ class YearSyncTests(unittest.TestCase):
         with mock.patch.object(ksef_sync, "sync_issued_invoices", side_effect=fake_sync), \
                 mock.patch.object(ksef_sync, "client_from_settings", return_value=object()), \
                 mock.patch.object(ksef_sync, "months_of_period", return_value=["2025-01", "2025-02", "2025-03"]):
-            result = ksef_sync.sync_month("2025", buyer_nip=EMKA_NIP)
+            result = ksef_sync.sync_month("2025", buyer_nip=SELLER_NIP)
         self.assertEqual(len(calls), 3)
         for start, end, nip in calls:
             self.assertEqual((start.year, start.month), (end.year, end.month))
-            self.assertEqual(nip, EMKA_NIP)
+            self.assertEqual(nip, SELLER_NIP)
         self.assertEqual(result["znalezione"], 6)
         self.assertEqual(result["dopasowane"], ["01", "02", "03"])
 

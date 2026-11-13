@@ -188,7 +188,7 @@ class CompanyForm(QDialog):
             nazwa_saldeo = QLineEdit()
             nazwa_saldeo.setPlaceholderText("Nazwa kontrahenta z Saldeo (eksport faktur)")
             nazwa_saldeo_firmy = QLineEdit()
-            nazwa_saldeo_firmy.setPlaceholderText("Nazwa firmy w Saldeo, np. EMKASP (rozpoznawanie maili)")
+            nazwa_saldeo_firmy.setPlaceholderText("Nazwa firmy w Saldeo, np. DEMOCO (rozpoznawanie maili)")
             add_row(["Nazwa skrócona w Saldeo:", "Nazwa firmy w Saldeo (maile):"],
                     [nazwa_saldeo, nazwa_saldeo_firmy])
             self.inputs["nazwa_saldeo"] = nazwa_saldeo
@@ -854,6 +854,16 @@ class CompanyForm(QDialog):
         wsp_form.addLayout(wsp_left)
         wsp_form.addLayout(wsp_right)
         wsp_layout.addLayout(wsp_form)
+        self.partner_details = {}
+        for key, label in (('nip', 'Indywidualny NIP wspólnika (nie NIP spółki)'), ('pesel', 'PESEL'),
+                           ('email', 'E-mail wspólnika'), ('telefon', 'Telefon'), ('data_urodzenia', 'Data urodzenia (RRRR-MM-DD)'),
+                           ('ulica', 'Ulica'), ('nr_domu', 'Numer domu'), ('nr_mieszkania', 'Numer lokalu'),
+                           ('kod_pocztowy', 'Kod pocztowy'), ('miejscowosc', 'Miejscowość'), ('panstwo', 'Kraj (np. PL)')):
+            widget = QLineEdit()
+            self.partner_details[key] = widget
+            wsp_layout.addWidget(QLabel(label))
+            wsp_layout.addWidget(widget)
+
 
         btn_add_partner = QPushButton("Dodaj wspólnika")
         btn_del_partner = QPushButton("Usuń wspólnika")
@@ -945,7 +955,7 @@ class CompanyForm(QDialog):
         billing_layout.addWidget(QLabel("Adres e-mail do wysyłki faktur"))
         self.inputs["email_faktury"] = QLineEdit()
         self.inputs["email_faktury"].setPlaceholderText("np. invoices@firma.com")
-        self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy.")
+        self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy. Dla spółki cywilnej odbiorcy pochodzą z adresów wszystkich wspólników.")
         billing_layout.addWidget(self.inputs["email_faktury"])
         sections_list = [
             ("Firma", [dane_box]), ("Adresy", [adresy_box]),
@@ -1603,12 +1613,20 @@ class CompanyForm(QDialog):
             QMessageBox.information(self, "Wspólnicy", "Podaj imię lub nazwisko wspólnika.")
             return
 
+        payload.update({key: w.text().strip() for key, w in self.partner_details.items()})
+        try:
+            self._validate_partner_identity(payload)
+        except ValueError as error:
+            QMessageBox.warning(self, 'Wspólnik', str(error))
+            return
         save_partner(self.firma_id, payload)
 
         self.partner_imie1.clear()
         self.partner_imie2.clear()
         self.partner_nazwisko.clear()
         self.partner_procent.setValue(0)
+        for widget in self.partner_details.values():
+            widget.clear()
 
         self._load_partners()
 
@@ -1648,6 +1666,12 @@ class CompanyForm(QDialog):
             "procent": self.partner_procent.value(),
         }
 
+        payload.update({key: w.text().strip() for key, w in self.partner_details.items()})
+        try:
+            self._validate_partner_identity(payload)
+        except ValueError as error:
+            QMessageBox.warning(self, 'Wspólnik', str(error))
+            return
         save_partner(self.firma_id, payload)
 
         self._load_partners()
@@ -1660,6 +1684,10 @@ class CompanyForm(QDialog):
             return
 
         self.edited_partner_id = self.partners_table.item(row,0).data(Qt.ItemDataRole.UserRole)
+        person = next((p for p in get_partners(self.firma_id) if p['id'] == self.edited_partner_id), {})
+        for key, widget in self.partner_details.items():
+            widget.setText(str(person.get(key) or ''))
+
 
         self.partner_imie1.setText(
             self.partners_table.item(row,0).text())
@@ -1675,6 +1703,17 @@ class CompanyForm(QDialog):
                 float(self.partners_table.item(row,3).text()))
         except Exception:
             self.partner_procent.setValue(0)
+
+    def _validate_partner_identity(self, payload):
+        from app.companies.identities import is_civil
+        from app.db.dao_companies import get_company
+        import re
+        civil = is_civil(get_company(self.firma_id) or {})
+        for key, size in (('nip', 10), ('pesel', 11)):
+            value = re.sub(r'[-\s]', '', str(payload.get(key) or ''))
+            if (civil or value) and not re.fullmatch('[0-9]{' + str(size) + '}', value):
+                raise ValueError(f'Uzupełnij {key.upper()} wspólnika ({size} cyfr).')
+            payload[key] = value
 
     def _validate_partner_percent(
             self,

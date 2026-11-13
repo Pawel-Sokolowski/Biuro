@@ -168,7 +168,7 @@ class LookupTests(unittest.TestCase):
                 return (
                     "<a:DaneSzukajPodmiotyResult>"
                     "&lt;dane&gt;&lt;Regon&gt;123456789&lt;/Regon&gt;"
-                    "&lt;Nip&gt;1234563218&lt;/Nip&gt;"
+                    "&lt;Nip&gt;9240000010&lt;/Nip&gt;"
                     "&lt;Typ&gt;P&lt;/Typ&gt;&lt;Nazwa&gt;Firma&lt;/Nazwa&gt;&lt;/dane&gt;"
                     "</a:DaneSzukajPodmiotyResult>"
                 )
@@ -237,14 +237,14 @@ class LookupTests(unittest.TestCase):
 
     def test_missing_gus_data_with_available_vat_is_explained(self):
         result = lookup_company_by_nip(
-            "1234563218",
+            "9240000010",
             forma_dzialalnosci="Spółka z o.o.",
             gus=lambda nip: {"error": True, "message": "GUS: testowa awaria"},
             wl=lambda nip: {"status_vat": "Czynny", "konto_bankowe": "PL_TEST"},
             krs=lambda n: self.fail("Brak numeru KRS, nie wywołujemy KRS"),
             ceidg=lambda n: self.fail("Spółka z o.o. nie jest JDG"),
         )
-        self.assertEqual(result["nip"], "1234563218")
+        self.assertEqual(result["nip"], "9240000010")
         self.assertEqual(result["status_vat"], "Czynny")
         self.assertEqual(result["konto_bankowe"], "PL_TEST")
         self.assertIn("testowa awaria", result["_registry_warning"])
@@ -252,7 +252,7 @@ class LookupTests(unittest.TestCase):
 
     def test_gus_without_krs_still_returns_name_and_warning(self):
         result = lookup_company_by_nip(
-            "1234563218", forma_dzialalnosci="Spółka z o.o.",
+            "9240000010", forma_dzialalnosci="Spółka z o.o.",
             gus=lambda nip: {"nip": nip, "nazwa": "Firma z GUS", "regon": "123456789"},
             wl=lambda nip: {"status_vat": "Zwolniony"},
             krs=lambda n: self.fail("Brak numeru KRS"),

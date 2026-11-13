@@ -36,7 +36,7 @@ def invoice(invoice_id, company_id, number, buyer, **kwargs):
 class IngContractorParserTests(unittest.TestCase):
     def test_name_continued_in_field_33_is_joined(self):
         cases = (("Usługi transportowo spedycyjne", "Jan Kowalski", "Usługi transportowo spedycyjne Jan Kowalski"),
-                 ("Biuro Rachunkowe EM-", "KA Spółka z o.o.", "Biuro Rachunkowe DEMO Spółka z o.o."))
+                 ("Biuro Rachunkowe TEST-", "BIURO Spółka z o.o.", "Biuro Rachunkowe TEST-BIURO Spółka z o.o."))
         for first, second, expected in cases:
             with self.subTest(expected=expected):
                 text = ing_statement(name=first).replace("UL. PRZYKŁADOWA 1", second)

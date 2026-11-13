@@ -17,7 +17,10 @@ NS = dict(adr='http://crd.gov.pl/xml/schematy/adres/2009/11/09/',
           inst='http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/',
           meta='http://crd.gov.pl/xml/schematy/meta/2009/11/16/',
           str='http://crd.gov.pl/xml/schematy/struktura/2009/11/16/')
-OFFICE_EMAIL = 'office@example.test'
+def office_email():
+    from app.db.dao_app_settings import get_setting
+    return str(get_setting('faktury_sprzedawca_email') or get_setting('stopka_szablon_email') or '').strip()
+
 
 
 def formatted_address(data):
@@ -47,17 +50,20 @@ def office_address():
                   region=get_setting('faktury_sprzedawca_wojewodztwo') or '',
                   county=get_setting('faktury_sprzedawca_powiat') or '',
                   municipality=get_setting('faktury_sprzedawca_gmina') or '',
-                  email=OFFICE_EMAIL)
+                  email=office_email())
     return result
 
 
-def resolve_employee(data):
+def resolve_employee(data, actor_id=None):
     """Names come from the selected employee; correspondence is always the office's."""
     from app.db.dao_employees import get_employee_info
     selected = data.get('attorney') or {}
     employee = get_employee_info(selected.get('employee_id')) if selected.get('employee_id') else None
     if not employee or not employee.get('aktywny'):
         raise ValueError('Wybierz aktywnego pracownika jako pełnomocnika.')
+    if actor_id is not None:
+        from app.employees.authority_profiles import load
+        selected = {**load(employee['id'], actor_id), **selected}
     office = office_address()
     if not office['street'] or not office['postcode'] or not office['city']:
         raise ValueError('Uzupełnij firmowy adres, kod i miejscowość w ustawieniach danych sprzedawcy.')
@@ -109,7 +115,7 @@ def principal_kind_for_company(company):
 
 def reviewed_data(data, kind):
     attorney = dict(data.get('attorney') or {})
-    attorney['email'] = OFFICE_EMAIL
+    attorney['email'] = office_email()
     attorney['electronic_address'] = ''
     for key in ('imie_pierwsze', 'nazwisko'):
         if not str(attorney.get(key) or '').strip():

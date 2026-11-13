@@ -49,6 +49,11 @@ class InvoiceSettings(QWidget):
         for label, key in (
             ("Nazwa sprzedawcy:", "faktury_sprzedawca_nazwa"),
             ("NIP sprzedawcy:", "faktury_sprzedawca_nip"),
+            ("Reprezentant biura do umów:", "faktury_sprzedawca_reprezentant"),
+            ("Osoba kontaktowa ds. danych osobowych:", "faktury_sprzedawca_kontakt_rodo"),
+            ("Stopka prawna biura (sąd, KRS, kapitał):", "faktury_sprzedawca_stopka_prawna"),
+            ("Telefon biura:", "faktury_sprzedawca_telefon"),
+            ("Prefiks biura w folderach poczty:", "email_folder_prefix"),
             ("REGON sprzedawcy:", "faktury_sprzedawca_regon"),
             ("E-mail sprzedawcy:", "faktury_sprzedawca_email"),
             ("Adres sprzedawcy:", "faktury_sprzedawca_adres"),

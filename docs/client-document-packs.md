@@ -26,13 +26,12 @@ aktualizacją linków. Nie zmienia globalnych ustawień polityki PowerShell;
 polityka organizacji może zablokować automatyzację. Wtedy można użyć
 LibreOffice lub zapisać **Komplet DOCX + PDF (ZIP)** bez konwertera PDF.
 Różne programy i brakujące czcionki mogą wpływać na podział stron.
-Niezmieniane OWU są wstawiane z dostarczonego przez użytkownika PDF, dzięki
-czemu zachowują jego oryginalny dziewięciostronicowy układ. DOCX OWU jest
-dostępny w edytowalnym komplecie ZIP.
+OWU są generowane z DOCX z danymi biura z konfiguracji. Edytowalny DOCX jest
+również dostępny w komplecie ZIP.
 
 Podpisy, zgody i oświadczenia klienta, w tym status PEP, pozostają puste do
-jego wypełnienia. Generator nie uznaje udziałowca automatycznie za osobę
-uprawnioną do reprezentacji. Dane udziałowców z kartoteki są używane w
+jego wypełnienia. W spółce cywilnej generator podpowiada zapisanych wspólników
+jako reprezentantów; ich uprawnienia trzeba potwierdzić. Dane udziałowców są używane w
 części listy kontrolnej dotyczącej wspólników. Pole podstawowego
 wynagrodzenia w cenniku uzupełnia się przed generowaniem; pozostałe stawki
 pochodzą z przesłanego wzoru i nie są zastępowane cennikami aplikacji.
@@ -40,20 +39,20 @@ pochodzą z przesłanego wzoru i nie są zastępowane cennikami aplikacji.
 Wzory w `app/documents/templates/` pochodzą z plików przekazanych przez
 użytkownika 6 listopada 2026. Zachowano ich treść poza polami przeznaczonymi
 do uzupełnienia. W szczególności cennik jest oznaczony jako obowiązujący od
-stycznia 2026, OWU zawierają zapis o rozliczeniu grudnia 2025, a wzór
-wypowiedzenia zawiera adres biura z kodem 96-515. Te postanowienia/dane
-źródłowe wymagają weryfikacji przez właściciela wzorów przed użyciem;
-generator nie poprawia ich samodzielnie. Daty zawarcia powierzenia i umowy
+stycznia 2026, a OWU zawierają zapis o rozliczeniu grudnia 2025. Te postanowienia
+wymagają weryfikacji przez właściciela wzorów przed użyciem. Dane identyfikacyjne
+biura i metadane autora zastąpiono pustymi polami konfiguracyjnymi.
+Daty zawarcia powierzenia i umowy
 głównej są zastępowane datami wybranymi w formularzu.
 
 ## UPL-1, PEL i PEL-Z
 
-W zakładce **UPL / PEL** wybierz pracownika jako pełnomocnika. Imię i nazwisko
-pochodzą z jego konta; nie można podstawić innej osoby przez edycję danych
+W zakładce **UPL / PEL** zaznacz pracowników jako pełnomocników. Imiona i nazwiska
+pochodzą z ich kont; nie można podstawić innej osoby przez edycję danych
 wydruku. Pracownik jest ponownie sprawdzany przy generowaniu i musi być aktywny.
 Jego adres do korespondencji pochodzi z danych biura w **Ustawienia → Faktury
-i KSeF**, a e-mail jest zawsze `office@example.test`, niezależnie od
-prywatnego e-maila pracownika i e-maila sprzedawcy na fakturach. Można tam
+i KSeF**, a e-mail pochodzi z konfiguracji sprzedawcy (lub stopki),
+nie z prywatnego e-maila pracownika. W repozytorium nie ma domyślnego adresu biura. Można tam
 uzupełnić również województwo, powiat i gminę biura. Prywatnego adresu
 pracownika nie używa się w formularzach.
 
@@ -63,11 +62,12 @@ do odpowiednich ról eZUS, zgodnie z opisem poniżej.
 Pełnomocnictwa są zawsze bezterminowe / do odwołania: data „ważne do”
 pozostaje pusta, także gdy starszy formularz przekazuje datę końcową.
 Pole „Adres elektroniczny” w UPL pozostaje puste; nie jest to pole kontaktowego
-e-maila, w którym nadal widnieje stały adres biura.
+e-maila, który jest pobierany z konfiguracji biura.
 Przesłany XSD UPL wymaga daty urodzenia pełnomocnika; można ją wyliczyć z PESEL
 albo wpisać, gdy używany jest inny identyfikator. Przy zmianie pracownika
-poprzednie identyfikatory są czyszczone. Dane identyfikacyjne wpisane w oknie
-nie są zapisywane do kartoteki pracownika. PESEL przedstawiciela klienta nadal
+wyświetlane są jego zapisane dane i poprawki z bieżącego okna. Dane wpisane w oknie
+nie są zapisywane do kartoteki pracownika; trwałe dane ustaw w Ustawienia →
+Użytkownicy → Dane do PEL / UPL. PESEL przedstawiciela klienta nadal
 pozostaje opcjonalny. Adres klienta ma jeden zestaw pól wspólny dla umów i
 pełnomocnictw.
 
@@ -142,6 +142,40 @@ Zmiana nie wymaga migracji bazy danych.
 Testy obejmują uzupełnienie rzeczywistych wzorów, zachowanie tabel i grafiki,
 stany checkboxów Worda, osobne daty umów, kolejność plików, strony separujące,
 autoryzację, brak powtórnego eksportu podczas generowania i zachowanie
-istniejącego pliku przy błędzie. Wszystkie dziesięć DOCX przekonwertowano
-rzeczywiście w LibreOffice w izolowanym kontenerze. Ścieżka automatyzacji
-Microsoft Word wymaga jeszcze sprawdzenia na Windows z zainstalowanym Wordem.
+istniejącego pliku przy błędzie. Bieżąca walidacja odbywa się w GitHub CI.
+Układ zmienionych wzorów wymaga podglądu przed podpisaniem. Ścieżka automatyzacji
+Microsoft Word wymaga sprawdzenia na Windows z zainstalowanym Wordem.
+
+
+## Wielu pełnomocników i dane lokalne
+
+W Ustawienia → Użytkownicy → Dane do PEL / UPL zapisz PESEL/NIP, datę urodzenia
+lub dane dokumentu pracownika. Dane identyfikacyjne są szyfrowane we wspólnej
+bazie biura i nie trafiają do repozytorium. Nazwisko i aktywność pracownika są
+ponownie sprawdzane przy generowaniu. W komplecie dokumentów zaznacz pracowników
+checkboxami: każdy otrzyma osobny UPL/PEL, w jednym PDF albo ZIP. Poprawki
+w dialogu dotyczą konkretnej osoby i danego wydruku.
+
+Dane biura, reprezentanta umowy, kontakt ds. danych osobowych i stopkę prawną
+(sąd, KRS, kapitał) ustaw w Faktury i KSeF; stopkę poczty ustaw osobno.
+Szablony mają neutralne pola, bez logo, danych biura i metadanych autora.
+Warunki umowy są teraz renderowane z DOCX z aktualną konfiguracją, zamiast
+z wcześniej wypełnionego, stałego PDF. Wymaga to Word/LibreOffice jak inne umowy.
+
+Wspólnicy spółki cywilnej mają osobne NIP, PESEL, adresy i e-maile w kartotece
+firmy. W pełnomocnictwach wybór mocodawcy „Firma” zachowuje NIP spółki; wybór
+konkretnego wspólnika używa jego indywidualnych danych. Dane wspólników wypełniają
+przedstawicieli spółki; każdą osobę i zakres trzeba sprawdzić przed podpisem.
+Powiązanie wspólnika nie tworzy ani nie scala kartotek JDG i spółki.
+
+Worker e-ZLA odczytuje NIP spółki i zapisane NIP-y jej wspólników. Nowy NIP
+ma własny zakres początkowy i kursor; błąd jednego płatnika nie kasuje raportów
+pobranych dla pozostałych. Raport nadal zachowuje rzeczywisty NIP płatnika.
+Ten sam właściciel może być jawnie powiązany z kilkoma firmami; raport może być
+wtedy widoczny w tych firmach, bez zgadywania relacji po nazwisku.
+
+Domyślni adresaci poczty do spółki cywilnej to wszyscy zapisani wspólnicy:
+faktury, przypomnienia i lista firm do poczty masowej. Nie obejmuje to wszystkich
+kontaktów z książki adresowej. Brak adresu któregoś wspólnika blokuje domyślną
+wysyłkę zamiast po cichu wysyłać tylko do jednej osoby. Odbiorcy pozostają
+widoczni do sprawdzenia przed ręczną wysyłką.

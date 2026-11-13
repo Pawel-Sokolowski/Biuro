@@ -11,8 +11,10 @@ from PyQt6.QtWidgets import QApplication
 from pypdf import PdfReader, PdfWriter
 
 from app.documents.crd_forms import validate_xml, render_xml_to_html, render_xml_to_print_html, VERSIONS
-from app.documents.power_of_attorney import build_xml, reviewed_data, pesel_birth_date, resolve_employee, OFFICE_EMAIL
+from app.documents.power_of_attorney import build_xml, reviewed_data, pesel_birth_date, resolve_employee
 from tests.base import DbTestCase
+
+OFFICE_EMAIL = 'office@example.test'
 
 _app = QApplication.instance() or QApplication(['authority-tests'])
 
@@ -22,11 +24,16 @@ def data():
                 tax_office='Pierwszy Urząd Skarbowy w Szczecinie', country='PL', street='Długa', building='5',
                 postcode='71-450', city='Szczecin', pel_scope='all',
                 attorney=dict(imie_pierwsze='Jan', nazwisko='Testowy', pesel='90010112345', country='PL',
-                              street='Chopina', building='35', postcode='71-450', city='Szczecin'),
+                              street='Przykładowa', building='35', postcode='71-450', city='Szczecin'),
                 representatives=[dict(imie_pierwsze='Anna', nazwisko='Nowak', stanowisko='Prezes zarządu')])
 
 
 class PowerOfAttorneyXmlTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch('app.documents.power_of_attorney.office_email', return_value=OFFICE_EMAIL)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_company_and_individual_documents_validate_against_both_full_schemas(self):
         for kind in ('UPL', 'PEL'):
             for principal in ('legal', 'person', 'other'):
@@ -162,8 +169,8 @@ class PowerOfAttorneyXmlTests(unittest.TestCase):
             self.assertEqual(len(result.pages), 3)
             self.assertIn('NOWAK', result.pages[0].extract_text())
             self.assertIn('REPREZENTANTA', result.pages[0].extract_text())
-            self.assertNotIn('CHOPINA', result.pages[0].extract_text())
-            self.assertIn('CHOPINA', result.pages[1].extract_text())
+            self.assertNotIn('PRZYKŁADOWA', result.pages[0].extract_text())
+            self.assertIn('PRZYKŁADOWA', result.pages[1].extract_text())
             self.assertIn('PRZYKŁADOWA SPÓŁKA', ' '.join(result.pages[1].extract_text().split()))
             self.assertIn('579/26', result.pages[2].extract_text())
         with patch.object(pel_paper, 'TEMPLATE_SHA256', 'other'):
@@ -242,10 +249,10 @@ class EmployeeAuthorityTests(DbTestCase):
     def setUp(self):
         super().setUp()
         from app.db.dao_app_settings import set_setting
-        for key, value in (('adres', 'Chopina 35'), ('kod', '71-450'), ('miasto', 'Szczecin'), ('kraj', 'Polska')):
+        for key, value in (('adres', 'Przykładowa 35'), ('kod', '71-450'), ('miasto', 'Szczecin'), ('kraj', 'Polska')):
             set_setting('faktury_sprzedawca_' + key, value)
         set_setting('faktury_sprzedawca_gmina', 'Szczecin')
-        set_setting('faktury_sprzedawca_email', 'inny@example.test')
+        set_setting('faktury_sprzedawca_email', OFFICE_EMAIL)
         self.employee = self.make_employee('private@example.test', 'Jan', 'Pracownik')
         self.company = self.make_company('PRZYKŁADOWA SPÓŁKA', nip='1234563218', ulica='Długa 5', miasto='Szczecin', kod_pocztowy='71-450')
 
@@ -258,7 +265,7 @@ class EmployeeAuthorityTests(DbTestCase):
         values = self.values()
         resolved = resolve_employee(values)
         self.assertEqual((resolved['imie_pierwsze'], resolved['nazwisko']), ('Jan', 'Pracownik'))
-        self.assertEqual((resolved['street'], resolved['building'], resolved['city']), ('Chopina', '35', 'Szczecin'))
+        self.assertEqual((resolved['street'], resolved['building'], resolved['city']), ('Przykładowa', '35', 'Szczecin'))
         self.assertEqual(resolved['email'], OFFICE_EMAIL)
         self.assertEqual(resolved['municipality'], 'Szczecin')
         self.assertNotIn('private', repr(resolved))
@@ -289,7 +296,7 @@ class EmployeeAuthorityTests(DbTestCase):
             archive = Path(directory) / 'forms.zip'
             generate_pack(self.company, 1, values, ['11_upl'], archive, form_renderer=render, docx_only=True)
             with ZipFile(archive) as bundle:
-                self.assertEqual(bundle.namelist(), ['11_upl.pdf'])
+                self.assertEqual(bundle.namelist(), [f'11_upl_pracownik_{self.employee}.pdf'])
             annex = Path(directory) / 'annex.pdf'
             generate_pack(self.company, 1, values, ['13_pel_z'], annex, form_renderer=render)
             self.assertEqual(len(PdfReader(annex).pages), 3)

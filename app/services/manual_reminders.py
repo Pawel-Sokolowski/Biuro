@@ -7,7 +7,7 @@ from app.db.dao_conn import get_conn
 from app.security.authorization import allowed_tabs, assigned_company_ids, can_manage_invoices
 from app.email.email_storage import get_email_accounts_for_employee
 from app.invoices.invoice_delivery import parse_recipients
-from .email_reminders import FIELDS, load_settings, _candidates
+from .email_reminders import FIELDS, load_settings, _candidates, _civil_recipient
 from .reminder_recipients import select_recipient
 
 
@@ -26,12 +26,13 @@ def prepare(kind, target_id, actor_id, month=None):
                 raise ValueError('Wybierz konkretny miesiąc.') from None
             if period.strftime('%Y-%m')!=month:
                 raise ValueError('Wybierz konkretny miesiąc.')
-            company = conn.execute('''SELECT f.nazwa,f.adres_email,s.dokumenty_dostarczone,
+            company = conn.execute('''SELECT f.nazwa,f.adres_email,f.forma_dzialalnosci,s.dokumenty_dostarczone,
                 ARRAY(SELECT c.email FROM company_contacts c WHERE c.firma_id=f.id ORDER BY c.id) AS contact_emails
                 FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id=f.id AND s.miesiac=%s
                 WHERE f.id=%s''', (month,target_id)).fetchone()
             if not company:
                 raise ValueError('Firma nie istnieje.')
+            company = _civil_recipient(conn, company, target_id, 'adres_email')
             if company['dokumenty_dostarczone']:
                 raise ValueError('Komplet dokumentów za wybrany miesiąc jest już oznaczony jako dostarczony.')
             first = date(period.year+int(period.month==12),period.month%12+1,1)

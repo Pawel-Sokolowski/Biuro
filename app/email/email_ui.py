@@ -167,15 +167,16 @@ def _fold(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c)).casefold()
 
 
-def clean_folder_label(label: str) -> str:
-    """Usuwa numer porządkowy ("3 Pracownicy") i prefiks "DEMO " z nazwy folderu."""
+def clean_folder_label(label: str, prefix: str = '') -> str:
+    """Remove numbering and the locally configured office prefix."""
     label = re.sub(r"^\d+\s+", "", label.strip())
-    label = re.sub(r"^DEMO\s+", "", label, flags=re.IGNORECASE)
+    if prefix.strip():
+        label = re.sub(r"^" + re.escape(prefix.strip()) + r"\s+", "", label, flags=re.IGNORECASE)
     return label.strip()
 
 
 def employee_label(label: str, employees: List[Dict[str, Any]]) -> str:
-    """Zamienia np. "Sokolowski Paweł" na "Paweł Sokołowski" (niezależnie od kolejności i ogonków)."""
+    """Zamienia np. "Kowalski Jan" na "Jan Kowalski" (niezależnie od kolejności i ogonków)."""
     key = sorted(_fold(label).split())
     for emp in employees:
         full = f"{emp.get('imie') or ''} {emp.get('nazwisko') or ''}".strip()
@@ -459,6 +460,9 @@ class FolderTree(QTreeWidget):
 
 
 class EmailPage(QWidget):
+    def _clean_folder_label(self, label):
+        return clean_folder_label(label, getattr(self, '_office_folder_prefix', ''))
+
     folder_visibility_changed = pyqtSignal()
     sync_finished = pyqtSignal(bool)
     sync_failed = pyqtSignal(str)
@@ -469,6 +473,7 @@ class EmailPage(QWidget):
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
+        self._office_folder_prefix = str(get_setting('email_folder_prefix') or '')
         self._list_jobs = TaskRunner(self)
         self._message_jobs = TaskRunner(self)
         self._command_jobs = CommandRunner(self)
@@ -655,7 +660,7 @@ class EmailPage(QWidget):
     def _on_sync_progress(self, data) -> None:
         label, done, total, folder, headers = data
         elapsed = int(time.monotonic() - getattr(self, "_sync_started_at", time.monotonic()))
-        where = f" – {clean_folder_label(decode_mailbox_utf7(folder))}" if folder else ""
+        where = f" – {self._clean_folder_label(decode_mailbox_utf7(folder))}" if folder else ""
         self.sync_status.setToolTip(
             f"Foldery {done}/{total}, pobrano {headers} nagłówków{where} · czas {elapsed//60}:{elapsed%60:02d}"
         )
@@ -1052,7 +1057,7 @@ class EmailPage(QWidget):
             label = SPECIAL_FOLDER_LABELS.get(role) if role else None
 
             if label is None:
-                label = clean_folder_label(node["label"])
+                label = self._clean_folder_label(node["label"])
 
                 if under_staff:
                     label = employee_label(label, employees)
@@ -1138,7 +1143,7 @@ class EmailPage(QWidget):
 
             if not flatten:
                 staff = (
-                        clean_folder_label(node["label"])
+                        self._clean_folder_label(node["label"])
                         .casefold()
                         == "pracownicy"
                 )
@@ -2046,7 +2051,7 @@ class EmailPage(QWidget):
     def _folder_menu_label(self, node: Dict[str, Any], under_staff: bool) -> str:
         label = SPECIAL_FOLDER_LABELS.get(node["role"]) if node["role"] else None
         if label is None:
-            label = clean_folder_label(node["label"])
+            label = self._clean_folder_label(node["label"])
             if under_staff:
                 label = employee_label(label, self.employees)
         return label
@@ -2062,7 +2067,7 @@ class EmailPage(QWidget):
             folder = node["folder"]
             selectable = folder is not None and "\\noselect" not in (folder.get("attributes") or "").lower()
             label = self._folder_menu_label(node, under_staff)
-            staff = clean_folder_label(node["label"]).casefold() == "pracownicy"
+            staff = self._clean_folder_label(node["label"]).casefold() == "pracownicy"
             children = node["children"]
             if node["role"] == "inbox":
                 if selectable and node["path"] not in exclude:
@@ -3182,7 +3187,7 @@ class EmailPage(QWidget):
             QMessageBox.information(self, "Folder", "Folderów systemowych nie można przenosić.")
             return
         leaf = decode_mailbox_utf7(self._leaf_of(src, delimiter))
-        label = clean_folder_label(decode_mailbox_utf7(dst))
+        label = self._clean_folder_label(decode_mailbox_utf7(dst))
         if QMessageBox.question(self, "Przenieś folder", f"Przenieść folder „{leaf}” do „{label}”?") \
                 != QMessageBox.StandardButton.Yes:
             return
@@ -3222,7 +3227,7 @@ class EmailPage(QWidget):
         return self.current_folder_local or "INBOX"
 
     def _update_apply_filters_action(self) -> None:
-        label = clean_folder_label(decode_mailbox_utf7(self._filter_target_folder()))
+        label = self._clean_folder_label(decode_mailbox_utf7(self._filter_target_folder()))
         self.apply_filters_action.setText(f"Zastosuj filtry do folderu: {label}")
 
     def on_apply_filters(self) -> None:

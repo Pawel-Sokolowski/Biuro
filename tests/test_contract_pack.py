@@ -73,6 +73,21 @@ class ContractTemplateTests(unittest.TestCase):
         self.assertIn('01.10.2026 r.', text)
         self.assertNotIn('09.02.2026 r.', text)
 
+    def test_office_identity_and_privacy_contact_are_loaded_from_configuration(self):
+        configured = {'faktury_sprzedawca_nazwa': 'Testowe Biuro',
+                      'faktury_sprzedawca_kontakt_rodo': 'Anna Testowa',
+                      'faktury_sprzedawca_stopka_prawna': 'KRS TEST',
+                      'faktury_sprzedawca_email': 'office@example.test'}
+        with patch('app.db.dao_app_settings.get_setting', side_effect=configured.get):
+            self.data.update(pack.office_context())
+        result = self.fill('03_processing')
+        self.assertIn('Anna Testowa', '\n'.join(p.text for p in result.paragraphs))
+        footer = '\n'.join(p.text for section in result.sections
+                           for part in (section.footer, section.even_page_footer, section.first_page_footer)
+                           for p in part.paragraphs)
+        self.assertIn('KRS TEST', footer)
+        self.assertNotIn('{{', footer)
+
     def test_representative_role_is_printed_in_both_agreements_and_pesel_is_optional(self):
         self.data['representatives'] = [dict(imie_pierwsze='Anna', nazwisko='Nowak', stanowisko='Prezes zarządu', pesel='')]
         for key in ('00_framework', '03_processing'):
@@ -171,15 +186,17 @@ class ContractPackTests(DbTestCase):
             pack.generate_pack(self.company_id, 1, self.data, ['../secret'], out)
         self.assertFalse(out.exists())
 
-    def test_unchanged_terms_use_the_supplied_pdf_without_word_repagination(self):
+    def test_terms_are_rendered_from_configurable_template_instead_of_private_static_pdf(self):
         out = self.root / 'terms.pdf'
-        with patch.object(pack, 'convert_to_pdf') as convert:
+        def convert(paths, directory):
+            directory.mkdir(exist_ok=True)
+            result = directory / '01_terms.pdf'
+            pdf(result, [595])
+            return [result]
+        with patch.object(pack, 'convert_to_pdf', side_effect=convert) as conversion:
             pack.generate_pack(self.company_id, 1, self.data, ['01_terms'], out)
-        convert.assert_not_called()
-        original = PdfReader(pack.STATIC_PDFS['01_terms'])
-        generated = PdfReader(out)
-        self.assertEqual(len(generated.pages), 9)
-        self.assertEqual([p.extract_text() for p in generated.pages], [p.extract_text() for p in original.pages])
+        conversion.assert_called_once()
+        self.assertTrue(out.is_file())
 
     def test_dialog_defaults_to_onboarding_pack_and_can_save_without_pdf_converter(self):
         from PyQt6.QtCore import QDate

@@ -19,8 +19,8 @@ class SignatureTests(DbTestCase):
     def test_default_template(self):
         text, html = sig.build_default_signature("Anna", "Nowak")
         self.assertTrue(text.startswith("--\nPozdrawiam,\nAnna Nowak\n"))
-        self.assertIn("Przykładowe Biuro\nul. Chopina 35\n71-450 Szczecin\ntel: 123456789", text)
-        self.assertIn("office@example.test", text)
+        for key in ('stopka_szablon_firma', 'stopka_szablon_adres', 'stopka_szablon_telefon', 'stopka_szablon_email'):
+            self.assertEqual(sig.DEFAULT_TEMPLATE[key], '')
         self.assertIn("Prosimy o poinformowanie nadawcy", text)
         self.assertIn("Anna Nowak", html)
 

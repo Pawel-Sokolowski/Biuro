@@ -24,7 +24,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import load_settings
 
 logger = logging.getLogger(__name__)
-JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik')
+JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh')
 
 
 def mail_job(stop=None):
@@ -130,11 +130,20 @@ def platnik_job():
     return worker_job()
 
 
+def checking_refresh_job(stop=None):
+    from app.services.checking_refresh import process_next
+    result = process_next(stop)
+    if result.get('state') in ('failed','partial'):
+        raise RuntimeError('Ręczny odczyt nieukończony. Sprawdź wynik pobierania w Sprawdzaniu.')
+    return result
+
+
 def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
         return {'mail': lambda: mail_job(stop), 'reminders': reminders_job,
-                'invoices': invoices_job, 'enova': enova_job, 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job}[name]()
+                'invoices': invoices_job, 'enova': enova_job, 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
+                'checking_refresh':lambda:checking_refresh_job(stop)}[name]()
 
 
 @contextmanager
@@ -168,6 +177,8 @@ def serve(*, once=False, stop=None):
     running, last_started, statuses = {}, {}, {}
     events = json.loads(get_setting('background_worker_events') or '[]')[-200:]
     with leadership() as leader, ThreadPoolExecutor(max_workers=len(JOBS)) as pool:
+        from app.services.checking_refresh import recover_interrupted
+        recover_interrupted()
         from app.version import __version__
         from app.services.worker_setup import worker_env_path
         instance = {'id':uuid.uuid4().hex,'host':socket.gethostname(),'pid':os.getpid(),

@@ -7,7 +7,8 @@ KEY = 'background_worker'
 DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
             'enova': True, 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
             'reminders_interval': 60, 'invoices_interval': 60, 'enova_interval': 900,
-            'ezla_interval': 3600, 'ksef_import_interval': 3600, 'saldeo': False, 'saldeo_interval': 300, 'platnik': False, 'platnik_interval': 3600, 'enova_time': '02:00'}
+            'ezla_interval': 3600, 'ksef_import_interval': 3600, 'saldeo': False, 'saldeo_interval': 300, 'platnik': False, 'platnik_interval': 3600,
+            'checking_refresh': True, 'checking_refresh_interval':30,'enova_time': '02:00'}
 
 
 def load_settings():
@@ -20,10 +21,10 @@ def load_settings():
 def validate(value):
     from datetime import time
     time.fromisoformat(value['enova_time'])
-    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik'):
+    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
         if type(value[key]) is not bool:
             raise ValueError('Nieprawidłowy przełącznik workera.')
-    for key in ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik'):
+    for key in ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
         interval = value[key + '_interval']
         if type(interval) is not int or not 30 <= interval <= 86400:
             raise ValueError('Odstęp workera musi wynosić 30–86400 sekund.')

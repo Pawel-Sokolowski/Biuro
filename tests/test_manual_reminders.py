@@ -36,6 +36,50 @@ class ManualReminderTests(DbTestCase):
                 VALUES (%s,1,'2026-10',100,123,'[]','wystawiona','FV/test','2026-11-09') RETURNING id''',
                 (self.company,)).fetchone()[0]
 
+    def test_documents_use_saved_contact_table_even_when_legacy_email_is_empty_or_stale(self):
+        from app.db.dao_companies import save_contact
+        save_contact(self.company,{'email':'my-address@example.com','imie':'Kontakt'})
+        for legacy in ('', 'stale@example.com'):
+            with get_conn() as conn:
+                conn.execute('UPDATE firmy SET adres_email=%s WHERE id=%s',(legacy,self.company))
+            plan = prepare('documents',self.company,self.admin,'2026-10')
+            self.assertEqual(plan['recipients'],['my-address@example.com'])
+        self.assertTrue(send(plan,self.admin,self.message(plan))['ok'])
+        self.assertEqual(self.sender.call_args.args[1],['my-address@example.com'])
+
+    def test_payment_prefers_current_billing_email_over_old_invoice_snapshot_and_ignores_blank_spaces(self):
+        invoice = self.invoice()
+        with get_conn() as conn:
+            conn.execute("UPDATE faktury SET nabywca_email='old@example.com' WHERE id=%s",(invoice,))
+        self.assertEqual(prepare('payments',invoice,self.admin)['recipients'],['billing@example.com'])
+        with get_conn() as conn:
+            conn.execute("UPDATE faktury SET nabywca_email='  ' WHERE id=%s",(invoice,))
+            conn.execute("UPDATE firmy SET email_faktury='  ' WHERE id=%s",(self.company,))
+        self.assertEqual(prepare('payments',invoice,self.admin)['recipients'],['client@example.com'])
+
+    def test_multiple_contacts_require_manual_recipient_choice_and_are_not_mailed_together(self):
+        from app.db.dao_companies import save_contact
+        with get_conn() as conn:
+            conn.execute("UPDATE firmy SET adres_email='' WHERE id=%s",(self.company,))
+        for email in ('first@example.com','second@example.com'):
+            save_contact(self.company,{'email':email})
+        plan = prepare('documents',self.company,self.admin,'2026-10')
+        self.assertEqual(plan['recipients'],[])
+        self.assertEqual(plan['recipient_choices'],['first@example.com','second@example.com'])
+        message = {**self.message(plan),'to':['second@example.com']}
+        self.assertTrue(send(plan,self.admin,message)['ok'])
+        self.assertEqual(self.sender.call_args.args[1],['second@example.com'])
+
+    def test_changed_contact_table_after_review_stops_sending(self):
+        from app.db.dao_companies import save_contact
+        save_contact(self.company,{'email':'current@example.com'})
+        plan = prepare('documents',self.company,self.admin,'2026-10')
+        with get_conn() as conn:
+            conn.execute("UPDATE company_contacts SET email='changed@example.com' WHERE firma_id=%s",(self.company,))
+        with self.assertRaisesRegex(ValueError,'zmieniły się'):
+            send(plan,self.admin,self.message(plan))
+        self.sender.assert_not_called()
+
     def test_documents_use_selected_month_and_manual_send_does_not_require_enabled_schedule(self):
         plan = prepare('documents',self.company,self.admin,'2025-02')
         self.assertEqual(plan['context']['miesiac'],'2025-02')

@@ -57,6 +57,17 @@ class OdbcTimeoutTests(TestCase):
         self.assertEqual(self.connection.timeout, 1200)
         self.assertEqual(self.driver.connect.call_args.kwargs['timeout'], 15)
 
+    def test_empty_bundled_result_identifies_missing_owner_nip_instead_of_claiming_zero_documents(self):
+        self.cursor.description = [('nip',), ('miesiac',), ('dokumenty',), ('pozycje_bankowe',), ('rodzaje',)]
+        self.cursor.fetchmany.side_effect = [[], [(None,), ('',)]]
+        source = {'database':'ClientA','nip':'1234567890','count_query':str(Path(__file__).resolve().parents[1]/'docs/enova/queries/checking.sql')}
+        with patch('app.integrations.enova.document_counts.sql_credentials',return_value=('reader','secret')):
+            with self.assertRaisesRegex(ValueError,'OddzialyFirmy.DeklaracjeNIP') as caught:
+                fetch_counts(self.config,source,['2026-11'])
+        self.assertIn('1234567890',str(caught.exception))
+        self.assertNotIn('secret',str(caught.exception))
+        self.connection.close.assert_called_once()
+
     def test_metadata_export_uses_connection_query_timeout(self):
         self.cursor.description = [('schema_name',), ('object_name',), ('column_name',), ('data_type',)]
         self.cursor.fetchmany.side_effect = [[('dbo', 'Deklaracje', 'Status', 'int')], []]

@@ -19,7 +19,7 @@ def list_accounting(actor_id, month):
     prior = history_months(month)
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,s.ilosc_dok,
+        rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,s.ilosc_dok,
             a.wartosc AS snapshot,j.wartosc AS jpk,c.wartosc AS checking,h.wartosc AS hr,z.wartosc AS ezla_sync,
             trim(COALESCE(pk.imie,'') || ' ' || COALESCE(pk.nazwisko,'')) AS ksiegowa,
             trim(COALESCE(ph.imie,'') || ' ' || COALESCE(ph.nazwisko,'')) AS kadrowa

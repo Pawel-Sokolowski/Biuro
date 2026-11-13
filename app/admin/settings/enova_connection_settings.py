@@ -43,13 +43,13 @@ class EnovaConnectionSettings(QWidget):
         self.trust_certificate.setChecked(config.get('trust_server_certificate', False))
         self.trust_certificate.setToolTip('Połączenie pozostaje szyfrowane. Ta opcja pomija weryfikację certyfikatu i nazwy serwera.')
         self.declarations_query = QLineEdit(config.get('declarations_query', ''))
-        self.declarations_query.setPlaceholderText('Plik SQL odczytu deklaracji i UPO na serwerze workera')
+        self.declarations_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql deklaracji i UPO na serwerze workera')
         self.payroll_query = QLineEdit(config.get('payroll_query', ''))
-        self.payroll_query.setPlaceholderText('Plik SQL rodzajów dokumentów kadrowych')
+        self.payroll_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql dokumentów kadrowych')
         self.hr_events_query = QLineEdit(config.get('hr_events_query', ''))
-        self.hr_events_query.setPlaceholderText('Plik SQL terminów umów, badań i BHP')
+        self.hr_events_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql umów, badań i BHP')
         self.jpk_query = QLineEdit(config.get('jpk_query', ''))
-        self.jpk_query.setPlaceholderText(r'C:\BiuroConfig\jpk.sql (ścieżka na serwerze importu)')
+        self.jpk_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql statusów JPK na serwerze workera')
         self.enabled = QCheckBox('Włącz codzienny import')
         self.enabled.setChecked(config['enabled'])
         self.months = QSpinBox()
@@ -68,6 +68,13 @@ class EnovaConnectionSettings(QWidget):
                               ('Import', self.enabled)]:
             form.addRow(label, widget)
         layout.addLayout(form)
+        self.adapter_status = QLabel()
+        self.adapter_status.setWordWrap(True)
+        self.adapter_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.adapter_status)
+        for field in (self.declarations_query,self.payroll_query,self.hr_events_query,self.jpk_query):
+            field.textChanged.connect(self.update_adapter_status)
+        self.update_adapter_status()
         local_note = QLabel('Test połączenia działa z tego komputera, bez uruchamiania workera. '
                             'Wpisz główną bazę Enovy, aby sprawdzić ją przed przypisaniem baz firm. '
                             'Sterownik musi być zainstalowany na tym komputerze; Enova może używać innego dostawcy SQL.')
@@ -79,7 +86,7 @@ class EnovaConnectionSettings(QWidget):
         note.setWordWrap(True)
         layout.addWidget(note)
         with get_conn() as conn:
-            self.companies = conn.execute('SELECT id,nazwa,nip FROM firmy ORDER BY nazwa').fetchall()
+            self.companies = conn.execute('SELECT id,nazwa,nip,forma_dzialalnosci,forma_opodatkowania,status_vat FROM firmy ORDER BY nazwa').fetchall()
         sources = {s['nip']: s['database'] for s in config['sources']}
         self.table = QTableWidget(len(self.companies), 3)
         self.table.setHorizontalHeaderLabels(['Firma', 'NIP', 'Baza Enova'])
@@ -88,6 +95,10 @@ class EnovaConnectionSettings(QWidget):
             for col, value in enumerate((company['nazwa'], company['nip'])):
                 item = QTableWidgetItem(str(value or ''))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                from app.companies.cennik_keys import company_accounting_type
+                item.setToolTip(f"Forma działalności: {company['forma_dzialalnosci'] or '—'}\n"
+                                f"Forma opodatkowania: {company['forma_opodatkowania'] or '—'}\n"
+                                f"VAT: {company['status_vat'] or '—'}\nTyp odczytu: {company_accounting_type(company) or 'nieokreślony'}")
                 self.table.setItem(row, col, item)
             self.table.setItem(row, 2, QTableWidgetItem(sources.get(company['nip'], '')))
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -160,6 +171,15 @@ class EnovaConnectionSettings(QWidget):
         layout.addWidget(note)
         self._saved_state = self.form_state()
         self.update_mapping_status()
+
+    def update_adapter_status(self,*_):
+        missing = [label for label,field in (('deklaracje i UPO',self.declarations_query),
+                   ('dokumenty kadrowe',self.payroll_query),('umowy/BHP',self.hr_events_query),('JPK',self.jpk_query))
+                   if not field.text().strip()]
+        self.adapter_status.setText('Liczby dokumentów: zapytania wbudowane, bez wskazywania pliku. '+
+            ('Bez adaptera SQL: '+', '.join(missing)+'. ' if missing else 'Podano ścieżki adapterów; pliki muszą istnieć na serwerze workera. ')+
+            'Pola powyżej przyjmują pliki .sql, nie skrypty instalacji .ps1/.cmd. '
+            'Eksport struktury Enovy służy przygotowaniu adapterów; sam nie jest zapytaniem importującym.')
 
     def review_mappings(self):
         from app.admin.settings.enova_mapping_dialog import EnovaMappingDialog

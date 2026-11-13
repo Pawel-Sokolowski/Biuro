@@ -11,7 +11,8 @@ Months AS (
     WHERE DATEADD(month, 1, m.MonthStart) < p.DateTo
 ),
 RawNips AS (
-    SELECT REPLACE(REPLACE(UPPER(LTRIM(RTRIM(DeklaracjeNIP))), N'-', N''), N' ', N'') AS Value
+    SELECT REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(DeklaracjeNIP))),
+           N'-', N''), N' ', N''), NCHAR(9), N''), NCHAR(10), N''), NCHAR(13), N''), NCHAR(160), N'') AS Value
     FROM dbo.OddzialyFirmy
 ),
 NormalizedNips AS (

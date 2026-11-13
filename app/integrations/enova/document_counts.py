@@ -91,7 +91,10 @@ def validate_rows(rows, source, months, bank_divisor=3):
         found[month] = MonthlyCount(month, documents, bank,
                                    calculate_total(source['accounting_type'], documents, bank, bank_divisor), breakdown)
     if set(found) != set(months):
-        raise ValueError('Zapytanie nie zwróciło wszystkich miesięcy. Brak wiersza nie oznacza zera.')
+        missing = ', '.join(month for month in months if month not in found)
+        raise ValueError(f"Baza {source.get('database','Enova')}: odczytano {len(found)}/{len(months)} miesięcy. "
+                         f'Brak okresów: {missing}. Brak wiersza nie oznacza zera. '
+                         'Sprawdź NIP właściciela w bazie Enovy oraz zapytanie źródłowe; forma KPiR/VAT w Biuro nie uzupełnia tych wierszy.')
     return [found[month] for month in months]
 
 
@@ -193,13 +196,30 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         rows = cursor.fetchmany(limit + 1)
         if len(rows) > limit:
             raise ValueError('Zapytanie zwróciło za wiele wierszy.')
+        if not rows and result_kind=='counts' and query_path.resolve().parent == (Path(__file__).resolve().parents[3] / 'docs/enova/queries').resolve():
+            cursor.execute('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
+            identities = cursor.fetchmany(1001)
+            nips = set()
+            for identity in identities:
+                try:
+                    nips.add(normalize_nip(identity[0]))
+                except ValueError:
+                    pass
+            expected = normalize_nip(source['nip'])
+            if not nips:
+                raise ValueError(f"Baza {source['database']}: zapytanie nie zwróciło żadnych miesięcy, ponieważ nie odczytano "
+                                 f'poprawnego NIP-u z dbo.OddzialyFirmy.DeklaracjeNIP. NIP firmy w Biuro: {expected}. '
+                                 'Sprawdź dane właściciela tej bazy w Enovie i ręczne powiązanie bazy z firmą. Nie zapisano zer.')
+            if nips!={expected}:
+                raise ValueError(f"Baza {source['database']}: NIP-y właściciela ({', '.join(sorted(nips))}) "
+                                 f'nie odpowiadają jednej firmie Biuro ({expected}). Sprawdź powiązanie bazy.')
         return [dict(zip(columns, row)) for row in rows]
     finally:
         connection.close()
 
 
 def find_company(conn, nip):
-    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
+    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania, forma_dzialalnosci, status_vat FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
                         "IN (%s, %s)", (nip, 'PL' + nip)).fetchall()
     if len(rows) != 1:
         raise ValueError('NIP musi wskazywać dokładnie jedną firmę w Biuro.')
@@ -208,9 +228,9 @@ def find_company(conn, nip):
 
 def resolve_source(source, company):
     """Use Biuro's accounting classification; legacy explicit types remain a fallback."""
-    from app.companies.cennik_keys import typ_from_forma
+    from app.companies.cennik_keys import company_accounting_type
     resolved = dict(source)
-    kind = typ_from_forma(company.get('forma_opodatkowania'))
+    kind = company_accounting_type(company)
     if company.get('forma_opodatkowania') and not kind:
         raise ValueError('Nieobsługiwana forma opodatkowania firmy w Biuro.')
     kind = kind or source.get('accounting_type')

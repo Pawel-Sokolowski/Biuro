@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_conn import get_conn
+from .reminder_recipients import select_recipient
 
 logger = logging.getLogger(__name__)
 SETTINGS_KEY = 'automatic_email_reminders'
@@ -128,7 +129,8 @@ def _candidates(conn, kind, now, rule, target_id=None):
         first = now.date().replace(day=1)
         month = (first - timedelta(days=1)).strftime('%Y-%m')
         due = first.replace(day=min(rule['day'], calendar.monthrange(first.year, first.month)[1]))
-        rows = conn.execute("""SELECT f.id, f.nazwa AS firma, f.adres_email AS email
+        rows = conn.execute("""SELECT f.id, f.nazwa AS firma, f.adres_email AS email,
+            ARRAY(SELECT c.email FROM company_contacts c WHERE c.firma_id=f.id ORDER BY c.id) AS contact_emails
             FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id = f.id AND s.miesiac = %s
             WHERE COALESCE(s.dokumenty_dostarczone, 0) = 0 AND f.status = 'Aktywne'
               AND f.ksiegowa_id IS NOT NULL
@@ -137,12 +139,14 @@ def _candidates(conn, kind, now, rule, target_id=None):
               AND (NULLIF(f.data_zakonczenia_obslugi, '') IS NULL OR f.data_zakonczenia_obslugi >= %s)""",
             (month, target_id, target_id, (first - timedelta(days=1)).isoformat(), first.isoformat())).fetchall()
         for row in rows:
-            yield {'target': f"{row['id']}:{month}", 'email': row['email'], 'due': due,
+            yield {'target': f"{row['id']}:{month}", **select_recipient(company_email=row['email'],contact_emails=row['contact_emails']), 'due': due,
                    'firma': row['firma'], 'miesiac': month, 'numer': '', 'pozostalo': ''}
     else:
         rows = conn.execute("""SELECT i.id, i.numer, i.miesiac, i.termin_platnosci,
             COALESCE(NULLIF(i.nabywca_pelna, ''), f.nazwa, k.nazwa, '') AS firma,
-            COALESCE(NULLIF(i.nabywca_email, ''), NULLIF(f.email_faktury, ''), f.adres_email, k.email) AS email,
+            i.nabywca_email AS invoice_email, f.email_faktury AS billing_email,
+            f.adres_email AS company_email, k.email AS contractor_email,
+            ARRAY(SELECT c.email FROM company_contacts c WHERE c.firma_id=f.id ORDER BY c.id) AS contact_emails,
             CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i LEFT JOIN firmy f ON f.id = i.firma_id
             LEFT JOIN kontrahenci k ON k.id = i.kontrahent_id
@@ -159,7 +163,9 @@ def _candidates(conn, kind, now, rule, target_id=None):
                 due = date.fromisoformat(str(row['termin_platnosci']))
             except (ValueError, TypeError):
                 continue
-            yield {'target': str(row['id']), 'email': row['email'], 'due': due,
+            yield {'target': str(row['id']), **select_recipient(payments=True,
+                       company_email=row['company_email'],billing_email=row['billing_email'],
+                       invoice_email=row['invoice_email'],contractor_email=row['contractor_email'],contact_emails=row['contact_emails']), 'due': due,
                    'firma': row['firma'], 'miesiac': row['miesiac'], 'numer': row['numer'] or '',
                    'pozostalo': f"{Decimal(str(row['balance'])):.2f}"}
 

@@ -173,6 +173,15 @@ class EnovaImportTests(DbTestCase):
 
 
 class AutomaticAccountingTypeTests(TestCase):
+    def test_combined_legal_form_is_a_fallback_but_explicit_accounting_form_has_priority(self):
+        from app.integrations.enova.document_counts import resolve_source
+        from app.integrations.enova.checking import checking_source
+        company = {'forma_dzialalnosci':'Osoba fizyczna (KPiR)','forma_opodatkowania':''}
+        self.assertEqual(resolve_source(SOURCE,company)['accounting_type'],'KPIR')
+        self.assertTrue(checking_source(SOURCE,company)['count_query'].endswith('kpir.sql'))
+        company['forma_opodatkowania'] = 'Księgi rachunkowe'
+        self.assertTrue(checking_source(SOURCE,company)['count_query'].endswith('checking.sql'))
+
     def test_saved_type_selects_bundled_query_without_repeating_configuration(self):
         from app.integrations.enova.document_counts import resolve_source
         for label, kind in [('KPiR', 'KPIR'), ('Księgi rachunkowe', 'KH'), ('Ryczałt', 'RYCZALT')]:

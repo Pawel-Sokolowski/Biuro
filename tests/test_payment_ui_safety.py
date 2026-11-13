@@ -32,6 +32,9 @@ class BankReviewSafetyTests(unittest.TestCase):
         ]
         self.choices_patch = patch("app.invoices.payments_ui.list_invoice_choices", return_value=self.invoices)
         self.transfers_patch = patch("app.invoices.payments_ui.list_unsettled_transfers", return_value=self.transfers)
+        companies_patch = patch("app.invoices.payments_ui.list_company_choices", return_value=[])
+        companies_patch.start()
+        self.addCleanup(companies_patch.stop)
         summary_patch = patch("app.invoices.payments_ui.bank_import_summary", return_value={"total": 2, "database": "test", "schema": "public"})
         summary_patch.start()
         self.addCleanup(summary_patch.stop)
@@ -389,7 +392,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertEqual(texts(page.tab_wystawione), [
             "Podgląd faktury", "JPK_V7M", "Wystaw korektę", "Anuluj fakturę", "Pobierz z KSeF",
             "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Status wysyłki KSeF", "Rozlicz MT940", "Zapłacono",
-            "Wyślij pdf e-mailem", "Przenieś do kosza", "Kosz…"])
+            "Wyślij pdf e-mailem", "Przypomnij o płatności…", "Przenieś do kosza", "Kosz…"])
         drafts = texts(page.tab_robocze)
         self.assertEqual(drafts[:2], ["Generuj faktury", "Wystaw faktury"])
         general = [page.btn_manual.text(), page.btn_contractors.text()]

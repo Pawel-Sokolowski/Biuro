@@ -55,6 +55,14 @@ class ImportTests(DbTestCase):
         self.company = self.make_company(nip='1112223344')
         with get_conn() as conn:
             self.admin = conn.execute('SELECT id FROM pracownicy WHERE is_admin=1').fetchone()[0]
+            self.company_ids = {row[0] for row in conn.execute('SELECT id FROM firmy').fetchall()}
+
+    def company_row(self,payload):
+        # init_db also seeds "Domyślna firma", which sorts before the test client.
+        # Verify the intended company's notes, independently of display ordering.
+        rows = [row for row in payload['rows'] if row['firma_id']==self.company]
+        self.assertEqual(len(rows),1)
+        return rows[0]
 
     def import_mock(self,rows):
         connection = Mock()
@@ -93,7 +101,7 @@ class ImportTests(DbTestCase):
         result = read_year(self.admin,2026)
         self.assertTrue(result['imported_at'])
         self.assertEqual(result['rows'],[])
-        self.assertEqual(len(result['companies']),1)
+        self.assertEqual({company['id'] for company in result['companies']},self.company_ids)
 
     def test_non_admin_cannot_import(self):
         with patch('app.security.authorization.is_administrator',return_value=False),self.assertRaises(PermissionError):
@@ -107,12 +115,16 @@ class ImportTests(DbTestCase):
         save_field(employee,2026,self.company,'skladki_oplacane','tylko zdrowotna',0)
         before = read_tracking_year(employee,2026)
         self.assertEqual(before['current_initials'],'KC')
-        self.assertEqual(before['rows'][0]['kto_wyslal'],'KC')
-        self.assertEqual(before['rows'][0]['sources'],[])
+        self.assertEqual(self.company_row(before)['kto_wyslal'],'KC')
+        self.assertEqual(self.company_row(before)['sources'],[])
+        for row in before['rows']:
+            if row['firma_id']!=self.company:
+                self.assertIsNone(row['kto_wyslal'])
+                self.assertEqual(row['notes'],{})
         snapshot = get_setting(f'platnik_holiday_notes_2026_{self.company}')
         self.assertNotIn('zawieszony?',snapshot)
         self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N',bazowy_kod_ubezpieczenia='0590')])
-        row = read_tracking_year(employee,2026)['rows'][0]
+        row = self.company_row(read_tracking_year(employee,2026))
         self.assertEqual(row['kto_wyslal'],'KC')
         self.assertEqual(row['decyzja'],'zawieszony?')
         self.assertEqual(row['miesiac'],'luty')
@@ -121,22 +133,22 @@ class ImportTests(DbTestCase):
         self.assertEqual(row['statuses'],['A','N'])
         self.assertEqual(len(row['sources']),2)
         self.assertEqual(row['notes']['kto_wyslal']['actor_id'],employee)
-        self.assertIsNone(read_tracking_year(employee,2025)['rows'][0]['kto_wyslal'])
+        self.assertIsNone(self.company_row(read_tracking_year(employee,2025))['kto_wyslal'])
         self.import_mock([])
-        self.assertEqual(read_tracking_year(employee,2026)['rows'][0]['decyzja'],'zawieszony?')
+        self.assertEqual(self.company_row(read_tracking_year(employee,2026))['decyzja'],'zawieszony?')
 
     def test_separate_field_edits_merge_but_stale_same_field_edit_is_rejected(self):
         save_field(self.admin,2026,self.company,'wyslane_powiadomienie','Wysłano 09/11/2026',0)
         save_field(self.admin,2026,self.company,'kto_wyslal','KC',0)
         with self.assertRaises(WorksheetConflict):
             save_field(self.admin,2026,self.company,'kto_wyslal','AB',0)
-        row = read_tracking_year(self.admin,2026)['rows'][0]
+        row = self.company_row(read_tracking_year(self.admin,2026))
         self.assertEqual(row['wyslane_powiadomienie'],'Wysłano 09/11/2026')
         self.assertEqual(row['kto_wyslal'],'KC')
         save_field(self.admin,2026,self.company,'kto_wyslal','',1)
-        self.assertEqual(read_tracking_year(self.admin,2026)['rows'][0]['kto_wyslal'],'')
+        self.assertEqual(self.company_row(read_tracking_year(self.admin,2026))['kto_wyslal'],'')
         save_field(self.admin,2026,self.company,'kto_wyslal',None,2)
-        self.assertIsNone(read_tracking_year(self.admin,2026)['rows'][0]['kto_wyslal'])
+        self.assertIsNone(self.company_row(read_tracking_year(self.admin,2026))['kto_wyslal'])
 
     def test_parallel_edits_to_different_fields_are_not_lost(self):
         from concurrent.futures import ThreadPoolExecutor
@@ -149,7 +161,7 @@ class ImportTests(DbTestCase):
             results = [pool.submit(edit,'kto_wyslal','KC'),pool.submit(edit,'oswiadczenie','sama')]
             for future in results:
                 future.result(timeout=20)
-        row = read_tracking_year(self.admin,2026)['rows'][0]
+        row = self.company_row(read_tracking_year(self.admin,2026))
         self.assertEqual((row['kto_wyslal'],row['oswiadczenie']),('KC','sama'))
 
     def test_notes_require_checking_and_company_access_and_a_readable_shared_key(self):

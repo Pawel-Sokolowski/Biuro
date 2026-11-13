@@ -48,6 +48,10 @@ stycznia. Odczyt nie oznacza ręcznych pozycji Zakończenia roku jako wykonanych
 
 NIP dokumentu musi jednoznacznie odpowiadać firmie Biuro. Powtórne kartoteki
 z tym samym NIP-em lub uszkodzone powiązania nie są łączone po nazwie.
+Pozycje imienne muszą mieć także własny rekord `DOKUMENT` wskazujący tego samego
+płatnika i ten sam dokument nadrzędny (`ID_DOK_NAD`). Brak rekordu lub sprzeczne
+powiązanie kończy odczyt błędem i zachowuje poprzedni snapshot. Surowy STATUSPT
+pozycji pochodzi z jej własnego rekordu DOKUMENT; nie jest kopiowany z nagłówka.
 Snapshoty pracowników są szyfrowane wspólnym kluczem aplikacji i workera.
 Nie zmieniają danych Enovy, miesięcznych liczników ani odczytów innych firm.
 Nieudany odczyt zachowuje wcześniejsze snapshoty.
@@ -82,3 +86,11 @@ Nagłówki nie mają pracownika, pozycja imienna wymaga ID i nazwy. Brak wiersza
 oznacza brak dokumentu w tym odczycie, a nie status „niewysłany”.
 
 Instalator zawiera SQL automatycznie. Wersja aplikacji i workera pozostaje 1.5.0.
+
+
+Workflow **Import SQL Server** wykonuje również wygenerowane zapytania Płatnika
+na SQL Server 2022 przez konto SELECT-only. Syntetyczne fixture obejmują wszystkie
+miesięczne formularze i zgłoszenia, granice dat, IWA/ZSWA, pozycje imienne,
+brakujące i sprzeczne powiązania, niepoprawne okresy, własne kody pozycji oraz
+warianty klucza ID/ID_DOKUMENT i brak opcjonalnego STATUSPT. Dane ani eksporty
+baz klientów nie są używane. Słownik kodów wysyłki/UPO pozostaje osobnym ograniczeniem.

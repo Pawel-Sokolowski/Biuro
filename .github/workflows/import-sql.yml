@@ -40,5 +40,5 @@ jobs:
           sudo env ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
       - name: Install locked import dependencies
         run: python -m pip install --require-hashes -r requirements-enova.lock
-      - name: Execute shipped tax and payroll SQL as a SELECT-only user
-        run: python -m unittest -v tests.sqlserver.test_enova_sql
+      - name: Execute shipped Enova and Platnik SQL as a SELECT-only user
+        run: python -m unittest -v tests.sqlserver.test_enova_sql tests.sqlserver.test_platnik_sql

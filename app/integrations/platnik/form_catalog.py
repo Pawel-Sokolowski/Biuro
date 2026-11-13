@@ -21,6 +21,8 @@ ANNUAL = {
 
 def requirements(specs):
     result = {'DOKUMENT': {'ID_PLATNIK'}}
+    if any(spec.get('child') for spec in specs.values()):
+        result['DOKUMENT'].add('ID_DOK_NAD')
     for spec in specs.values():
         result[spec['table']] = {'ID_DOKUMENT', 'ID_PLATNIK', 'II_1_NIP', spec['period']}
         if spec.get('report'):
@@ -54,12 +56,15 @@ def records_sql(specs, document_key, has_status):
             N'{spec.get('kind', 'month')}' AS period_kind
             FROM dbo.{spec['table']} a LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT""")
         if spec.get('child'):
+            child_status = 'CONVERT(nvarchar(32),child_d.STATUSPT)' if has_status else 'CAST(NULL AS nvarchar(32))'
             result.append(f"""SELECT N'ZUS {code}', u.ID_DOKUMENT, a.ID_PLATNIK, a.II_1_NIP,
                 {period}, {report}, u.ID_UBEZPIECZONY,
                 LTRIM(RTRIM(COALESCE(u.{spec['first']},N'') + N' ' + COALESCE(u.{spec['last']},N''))),
-                {status}, CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK
-                    AND u.ID_PLATNIK=a.ID_PLATNIK THEN 1 ELSE 0 END,
+                {child_status}, CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK
+                    AND u.ID_PLATNIK=a.ID_PLATNIK AND child_d.{document_key} IS NOT NULL
+                    AND child_d.ID_PLATNIK=a.ID_PLATNIK AND child_d.ID_DOK_NAD=a.ID_DOKUMENT THEN 1 ELSE 0 END,
                 N'{spec.get('kind', 'month')}'
                 FROM dbo.{spec['child']} u LEFT JOIN dbo.{spec['table']} a ON a.ID_DOKUMENT=u.ID_DOK_NAD
-                LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT""")
+                LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT
+                LEFT JOIN dbo.DOKUMENT child_d ON child_d.{document_key} = u.ID_DOKUMENT""")
     return '\nUNION ALL\n'.join(result)

@@ -179,7 +179,7 @@ class PlatnikSourceSqlTests(DbTestCase):
         # The conversion helper rejects malformed dates just like TRY_CONVERT.
         conn.execute("""CREATE OR REPLACE FUNCTION pg_temp.try_date(value text, fmt text) RETURNS date
             LANGUAGE plpgsql AS $$ BEGIN RETURN to_date(value,fmt); EXCEPTION WHEN others THEN RETURN NULL; END $$""")
-        sql = re.sub(r'CONVERT\(nvarchar\(\d+\),\s*(a\.[A-Z0-9_]+|d\.STATUSPT)(?:,23)?\)', r'CAST(\1 AS varchar)', sql)
+        sql = re.sub(r'CONVERT\(nvarchar\(\d+\),\s*(a\.[A-Z0-9_]+|d\.STATUSPT|child_d\.STATUSPT)(?:,23)?\)', r'CAST(\1 AS varchar)', sql)
         sql = sql.replace('CONVERT(char(7),r.reporting_date,120)', "to_char(r.reporting_date,'YYYY-MM')")
         sql = sql.replace('CONVERT(char(4),r.reporting_date,112)', "to_char(r.reporting_date,'YYYY')")
         sql = sql.replace('TRY_CONVERT(date,r.source_period,23)', "pg_temp.try_date(r.source_period,'YYYY-MM-DD')")
@@ -195,6 +195,7 @@ class PlatnikSourceSqlTests(DbTestCase):
     def test_monthly_and_registration_joins_use_correct_period_and_exclusive_end(self):
         with get_conn() as conn:
             conn.execute("INSERT INTO DOKUMENT(ID_DOKUMENT,ID_PLATNIK,STATUSPT) VALUES (1,7,'P'),(10,7,'N'),(11,7,'N')")
+            conn.execute("INSERT INTO DOKUMENT(ID_DOKUMENT,ID_PLATNIK,ID_DOK_NAD,STATUSPT) VALUES (2,7,1,'N'),(3,7,1,'P')")
             conn.execute("INSERT INTO ZUSRSA(ID_DOKUMENT,ID_PLATNIK,II_1_NIP,I_1_2OKRROZL,I_1_1IDRAPS) VALUES (1,7,%s,'06/2026','02')", (NIP,))
             conn.execute("INSERT INTO UBEZP_ZUSRSA(ID_DOKUMENT,ID_DOK_NAD,ID_PLATNIK,ID_UBEZPIECZONY,III_A_2_IMIEPIERW,III_A_1_NAZWISKO) "
                          "VALUES (2,1,7,20,'Anna','A'),(3,1,7,21,'Jan','B')")
@@ -208,6 +209,7 @@ class PlatnikSourceSqlTests(DbTestCase):
         self.assertEqual({row['miesiac'] for row in rows}, {'2026-06'})
         entries = normalize(rows, ['2026-06'], [NIP])[NIP]['2026-06']
         self.assertEqual({entry['employee_id'] for entry in entries if entry['employee_id']}, {'20', '21'})
+        self.assertEqual(next(entry['raw_status'] for entry in entries if entry['form'] == 'ZUS RSA' and entry['employee_id'] == '20'), 'N')
 
     def test_annual_query_uses_declared_year_and_rejects_cross_payer_child(self):
         with get_conn() as conn:

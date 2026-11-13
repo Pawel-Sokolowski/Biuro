@@ -1,7 +1,7 @@
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
-from PyQt6.QtWidgets import QApplication, QWidget, QTabWidget
-from app.accounting.department_ui import DepartmentPage, navigation_tabs, department_sections
+from PyQt6.QtWidgets import QApplication, QWidget, QTabWidget, QVBoxLayout, QStackedWidget
+from app.accounting.department_ui import DepartmentPage, navigation_tabs, department_sections, park_monthly_editor
 from app.accounting.accounting_ui import AccountingPage
 from app.monthly_view.monthly_view_ui import MonthlyViewPage
 from app.integrations.ezla.report import Report, Certificate
@@ -24,6 +24,50 @@ class MonthlyEditor(QWidget):
 
 
 class DepartmentNavigationTests(TestCase):
+    def test_shared_monthly_editor_never_overlays_dashboard_or_other_pages(self):
+        shell = QWidget()
+        layout = QVBoxLayout(shell)
+        stack = QStackedWidget()
+        layout.addWidget(stack)
+        editor = MonthlyEditor()
+        parking = park_monthly_editor(editor, shell)
+        checking = QWidget()
+        checking.refresh_async = MagicMock()
+        with patch('app.accounting.department_ui.allowed_tabs', return_value=['Widok miesięczny', 'Sprawdzanie']):
+            accounting = DepartmentPage(5, 'accounting', editor, checking_factory=lambda *_: checking)
+            payroll = DepartmentPage(5, 'payroll', editor)
+            for page in (QWidget(), accounting, payroll, QWidget()):
+                stack.addWidget(page)
+            stack.currentChanged.connect(lambda index: getattr(stack.widget(index), 'refresh_async', lambda: None)())
+            try:
+                shell.show()
+                _app.processEvents()
+                self.assertIs(editor.parentWidget(), parking)
+                self.assertTrue(parking.isHidden())
+                self.assertFalse(editor.isVisible())
+                stack.setCurrentIndex(1)
+                self.assertIs(editor.parentWidget(), accounting.tabs.widget(0))
+                self.assertTrue(editor.isVisible())
+                self.assertTrue(editor.tabs.tabBar().isHidden())
+                accounting.tabs.setCurrentIndex(1)
+                self.assertFalse(editor.isVisible())
+                stack.setCurrentIndex(2)
+                self.assertIs(editor.parentWidget(), payroll.tabs.widget(0))
+                self.assertEqual(editor.tabs.currentIndex(), 1)
+                self.assertTrue(editor.isVisible())
+                stack.setCurrentIndex(3)  # Tasks/calendar/chat must not display the monthly editor.
+                self.assertFalse(editor.isVisible())
+                stack.setCurrentIndex(0)
+                self.assertFalse(editor.isVisible())
+                stack.setCurrentIndex(1)
+                self.assertFalse(editor.isVisible())  # Accounting still has its Checking subtab selected.
+                accounting.tabs.setCurrentIndex(0)
+                self.assertIs(editor.parentWidget(), accounting.tabs.widget(0))
+                self.assertEqual(editor.tabs.currentIndex(), 0)
+                self.assertTrue(editor.isVisible())
+            finally:
+                shell.close()
+
     def test_monthly_editor_and_timer_logic_are_shared_when_changing_departments(self):
         editor = MonthlyEditor()
         logic = editor.logic

@@ -7,7 +7,7 @@ from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
 
-SCHEMA_VERSION = "2026-11-09.2"
+SCHEMA_VERSION = "2026-11-13.1"
 
 
 def init_db():
@@ -30,6 +30,8 @@ def init_db():
         apply_reminders(conn)
         from app.db.monthly_counts_schema import apply as apply_monthly_counts
         apply_monthly_counts(conn)
+        from app.db.saldeo_web_schema import apply as apply_saldeo_web
+        apply_saldeo_web(conn)
 
 
 def schema_is_current():

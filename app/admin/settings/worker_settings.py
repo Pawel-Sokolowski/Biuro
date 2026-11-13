@@ -27,6 +27,7 @@ class WorkerSettings(QWidget):
         for key, name in [('mail', 'Sprawdzanie i pobieranie poczty'), ('reminders', 'Przypomnienia e-mail'),
                           ('invoices', 'Kolejka faktur PDF / sprawdzanie KSeF'), ('enova', 'Odczyt z Enovy do Biuro'),
                           ('ezla', 'Pobieranie raportów e-ZLA z ZUS'),
+                          ('saldeo', 'Historia powiadomień Saldeo — komplet dokumentów'),
                           ('ksef_import', 'Pobieranie faktur z KSeF (bieżący i poprzedni miesiąc)')]:
             toggle = QCheckBox(name)
             toggle.setChecked(settings[key])

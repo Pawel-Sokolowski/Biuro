@@ -636,6 +636,12 @@ class MonthlyViewPage(QWidget):
 
         self.btn_refresh = QPushButton("Odśwież")
         filters_layout.addWidget(self.btn_refresh)
+        self.btn_remind_documents = QPushButton('Przypomnij o dokumentach…')
+        self.btn_remind_documents.setToolTip('Zaznacz jedną firmę. Sprawdź adres i treść przed wysłaniem przypomnienia za wybrany miesiąc.')
+        self.btn_remind_documents.clicked.connect(self._remind_documents)
+        filters_layout.addWidget(self.btn_remind_documents)
+        from app.email.reminder_ui import ManualReminderController
+        self._document_reminders = ManualReminderController(self,self.pracownik_id,self.btn_remind_documents)
         recover = QPushButton('Odzyskaj stoper…')
         recover.clicked.connect(self._recover_timer)
         filters_layout.addWidget(recover)
@@ -838,9 +844,22 @@ class MonthlyViewPage(QWidget):
     def _current_month(self) -> str:
         return self.month_combo.monthText()
 
+    def _remind_documents(self):
+        if self.month_combo.isWholeYear():
+            return
+        table = self.table_kadry if self.tabs.currentIndex()==1 else self.table_ks
+        indexes = table.selectionModel().selectedRows()
+        if len(indexes)!=1:
+            QMessageBox.information(self,'Przypomnienie','Zaznacz jedną firmę w widoku miesięcznym.')
+            return
+        row = table.model().get_row(indexes[0].row())
+        if row:
+            self._document_reminders.open('documents',row['id'],self._current_month())
+
     def _apply_year_mode(self) -> bool:
         """Cały rok = widok zakończenia roku zamiast tabeli miesięcznej."""
         whole = self.month_combo.isWholeYear()
+        self.btn_remind_documents.setVisible(not whole)
         self.tabs.setVisible(not whole)
         self.activity_label.setVisible(not whole)
         self.year_end_page.setVisible(whole)

@@ -26,7 +26,9 @@ def run():
         from app.key_setup_ui import KeySetupDialog
         from app.admin.settings.platnik_settings import PlatnikSettings
         from app.accounting.holiday_ui import ContributionHolidays
-        if not all((ConnectionDialog, WorkerSetupWindow, WorkerInstallDialog, KeySetupDialog, PlatnikSettings, ContributionHolidays)):
+        from app.email.reminder_ui import ManualReminderController
+        from app.integrations.platnik.holiday_tracking import save_field
+        if not all((ConnectionDialog, WorkerSetupWindow, WorkerInstallDialog, KeySetupDialog, PlatnikSettings, ContributionHolidays, ManualReminderController, save_field)):
             raise RuntimeError('Missing worker setup modules')
         result['checks'].append('worker_setup_modules')
         if sys.platform == 'win32':

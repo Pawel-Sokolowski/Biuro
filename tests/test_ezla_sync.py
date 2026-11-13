@@ -139,6 +139,23 @@ class EzlaSyncTests(DbTestCase):
             with self.assertRaises(RuntimeError):
                 run_job('ezla')
 
+    def test_unattended_worker_downloads_commits_and_exposes_live_company_log(self):
+        from app.worker import JOBS, serve
+        from app.services.worker_settings import DEFAULTS, save_settings as save_worker
+        from app.db.dao_app_settings import get_setting
+        from app.services.worker_activity import KEY
+        settings = {**DEFAULTS, **{name: False for name in JOBS}, 'enabled': True, 'ezla': True}
+        save_worker(settings, actor_id=self.admin)
+        with patch('app.integrations.ezla.sync.fetch_reports', return_value=[Download('2018-08-01', report(certificate()))]) as download:
+            self.assertEqual(serve(once=True), 0)
+        download.assert_called_once()
+        heartbeat = json.loads(get_setting('background_worker_heartbeat'))
+        self.assertEqual(heartbeat['jobs']['ezla']['state'], 'ok')
+        self.assertEqual(heartbeat['jobs']['ezla']['result']['companies'], 1)
+        self.assertEqual(self.status()['new_reports'], 1)
+        event = json.loads(get_setting(KEY))[-1]
+        self.assertEqual((event['company_id'], event['stage'], event['count']), (self.company, 'downloaded', 1))
+
     def test_batch_lock_prevents_manual_download_from_overlapping_runner(self):
         with get_conn() as connection:
             self.assertTrue(connection.execute('SELECT pg_try_advisory_xact_lock(748212)').fetchone()[0])

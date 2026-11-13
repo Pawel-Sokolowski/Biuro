@@ -485,7 +485,7 @@ jest zatrzymywany tak jak dotychczas. Błąd zapisu nie uruchamia kolejnego stop
 
 ## Automatyczne przypisanie baz po NIP
 
-W wersji 1.5.5 wyszukiwanie ma domyślnie **120 sekund na pojedyncze zapytanie**,
+W wersji 1.4.5 wyszukiwanie ma domyślnie **120 sekund na pojedyncze zapytanie**,
 z możliwością ustawienia 30–600 sekund w polu **Limit zapytania — wyszukiwanie baz**.
 Ustawienie jest dostępne w aplikacji i panelu workera; działa także przed zapisaniem
 formularza. Nie jest to limit całej operacji: odczyt 122 baz może potrwać dłużej.

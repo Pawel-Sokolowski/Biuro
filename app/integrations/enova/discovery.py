@@ -1,16 +1,12 @@
 """Read-only discovery using the same company identity as the document importer."""
 from collections import defaultdict
 from app.integrations.enova.document_counts import normalize_nip, sql_connection_string
-from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server, describe_sql_error, SqlOperationError
-
-DEFAULT_QUERY_TIMEOUT = 120
+from app.integrations.enova.odbc_support import (load_odbc, resolve_driver, validate_server, describe_sql_error,
+    SqlOperationError,DEFAULT_QUERY_TIMEOUT,validate_query_timeout)
 
 
 def query_timeout(config):
-    value = config.get('discovery_query_timeout',DEFAULT_QUERY_TIMEOUT)
-    if type(value) is not int or not 30<=value<=600:
-        raise ValueError('Limit zapytania wyszukiwania baz musi wynosić od 30 do 600 sekund.')
-    return value
+    return validate_query_timeout(config.get('discovery_query_timeout',DEFAULT_QUERY_TIMEOUT))
 
 
 def discover(config, *, password='', progress=None):

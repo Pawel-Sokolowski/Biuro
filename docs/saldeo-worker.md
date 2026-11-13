@@ -107,3 +107,24 @@ dokumentów. Selektor pojedynczego wpisu musi obejmować cały komunikat z nazw�
 firmy i okresem, np. „MERIT. informuje o dostarczeniu dokumentów za 10/2026”.
 Nie konfigurujemy automatycznie selektora historii na podstawie samych tych
 komórek ani nie zmieniamy reguły oznaczania kompletu na podstawie słowa „Zakończone”.
+
+## Potwierdzony format karty dzwonka
+
+Nowy fragment użytkownika to pełna karta:
+`div[qa-id^="row-bo-id-"]`, z tytułem `.content-col .font-14`
+„BWSERVIC - Komplet dokumentów” i okresem `.content-col .font-12-grey`
+„Październik 2026”. Używamy tych struktur, rozpoznajemy polskie nazwy miesięcy.
+Samo „done”/„Zakończone” nadal niczego nie potwierdza.
+
+Preset formularza i dzwonka jest teraz dostępny domyślnie (uzupełnia także puste
+stare ustawienia bez nadpisywania własnego selektora wpisów). Brak selektora pustej
+listy nie blokuje odczytu widocznych kart, ale pusta lista nie jest wtedy uznawana
+za potwierdzony brak zdarzeń. Brak paginacji nadal daje wynik **niepełny**:
+dzwonek może pokazywać tylko ostatnie wpisy, nie udajemy nadrobienia pełnej historii.
+Potrzebne są jeszcze szczegóły pełnej listy/stronicowania oraz przycisku logowania.
+
+Numer row-bo-id-0 opisuje pozycję, a nie tożsamość zdarzenia. Etykieta godziny
+może zmienić się przy kolejnym odczycie, więc potwierdzenia kompletu deduplikujemy
+po firmie i okresie w obrębie źródła. Powtórne zgłoszenie tego samego kompletu
+w tym samym miesiącu nie tworzy nowego powiadomienia w Biuro. Godziny „09:13”
+nie zamieniamy na wymyśloną pełną datę źródłową.

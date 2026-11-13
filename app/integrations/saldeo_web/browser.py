@@ -69,11 +69,13 @@ def read_history(config, stop=None):
                 # Require a positive page marker, never treat a failed selector as an empty success.
                 page.locator(config['logged_in_selector']).first.wait_for(state='visible')
                 page.wait_for_function('''s => Array.from(document.querySelectorAll(s.items)).some(e=>e.getClientRects().length)
-                    || Array.from(document.querySelectorAll(s.empty)).some(e=>e.getClientRects().length)''',
+                    || (s.empty && Array.from(document.querySelectorAll(s.empty)).some(e=>e.getClientRects().length))''',
                     arg={'items': config['item_selector'], 'empty': config['empty_selector']})
                 batch = page.locator(config['item_selector']).evaluate_all('''nodes => nodes.slice(0,1000).map(e => ({
                     id: e.getAttribute('data-notification-id') || e.getAttribute('data-id') || '',
-                    text: e.innerText, time: e.querySelector('time')?.getAttribute('datetime') || ''}))''')
+                    text: e.innerText, time: e.querySelector('time')?.getAttribute('datetime') || '',
+                    title: e.querySelector('.content-col .font-14')?.innerText || '',
+                    period: e.querySelector('.content-col .font-12-grey')?.innerText || ''}))''')
                 items.extend(batch)
                 if len(items) >= 5000:
                     return {'state': 'partial', 'items': items[:5000]}

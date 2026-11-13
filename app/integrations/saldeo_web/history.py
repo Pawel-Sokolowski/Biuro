@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.db.dao_conn import get_conn
+from app.utils.saldeo_status import MONTHS
 
 COMPLETE = re.compile(r'(?:Klient\s*\((?P<wrapped>[^)]+)\)|(?P<plain>[^\n]+?))\s+informuje\s+o\s+dostarczeniu\s+(?:kompletu\s+)?dokument\w*\s+za\s+(?P<month>\d{1,2})\s*[/.-]\s*(?P<year>\d{4})', re.I)
 
@@ -14,9 +15,17 @@ def fold(text):
 
 def parse(text):
     match = COMPLETE.search(text)
-    if not match or not 1 <= int(match['month']) <= 12 or not 2000 <= int(match['year']) <= 2100:
+    if match:
+        if not 1 <= int(match['month']) <= 12 or not 2000 <= int(match['year']) <= 2100:
+            return None
+        return (match['wrapped'] or match['plain']).strip(), f"{match['year']}-{int(match['month']):02d}"
+    card = re.search(r'(?m)^[ \t]*(?P<name>[^\n]+?)[ \t]+[-–—][ \t]+Komplet[ \t]+dokumentów\s+(?P<month>[^\W\d_]+)[ \t]+(?P<year>20[0-9]{2})\b',text,re.I)
+    if not card:
         return None
-    return (match['wrapped'] or match['plain']).strip(), f"{match['year']}-{int(match['month']):02d}"
+    month = MONTHS.get(card['month'].casefold())
+    if not month:
+        return None
+    return card['name'].strip(), f"{card['year']}-{month:02d}"
 
 
 def ingest(items, source):
@@ -28,9 +37,13 @@ def ingest(items, source):
             if not body:
                 continue
             stamp = str(item.get('time') or '')[:100]
-            identity = str(item.get('id') or '') + '\n' + fold(body) + '\n' + stamp
+            card = str(item.get('title') or '').strip() + '\n' + str(item.get('period') or '').strip()
+            parsed = parse(card) or parse(body)
+            # Popup qa-id row-bo-id-N is a position, not a stable event ID.
+            # Human clock labels may change across reloads; deduplicate this completion by payer/period.
+            identity = ('complete:' + fold(parsed[0]) + ':' + parsed[1]) if parsed else (
+                str(item.get('id') or '') + '\n' + fold(body) + '\n' + stamp)
             key = hashlib.sha256((source + '\n' + identity).encode()).hexdigest()
-            parsed = parse(body)
             result = conn.execute('''INSERT INTO saldeo_web_events
                 (event_key,body,source_time,company_name,miesiac,state) VALUES (%s,%s,%s,%s,%s,%s)
                 ON CONFLICT(event_key) DO NOTHING''',

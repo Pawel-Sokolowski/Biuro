@@ -93,7 +93,7 @@ class SaldeoWebSettings(QWidget):
         for key, label in (('login_url','Adres logowania HTTPS'), ('history_url','Adres pełnej historii powiadomień'),
                            ('username','Login (opcjonalne automatyczne logowanie)'),
                            ('logged_in_selector','CSS: element widoczny po zalogowaniu'),
-                           ('item_selector','CSS: pojedynczy wpis historii'), ('empty_selector','CSS: potwierdzenie pustej historii'),
+                           ('item_selector','CSS: pojedynczy wpis historii'), ('empty_selector','CSS: pusta historia (opcjonalny, potwierdzony)'),
                            ('next_selector','CSS: przycisk następnej strony'), ('open_selector','CSS: otwórz dzwonek/listę (opcjonalne)'),
                            ('username_selector','CSS: pole loginu'), ('password_selector','CSS: pole hasła'),
                            ('submit_selector','CSS: przycisk logowania')):

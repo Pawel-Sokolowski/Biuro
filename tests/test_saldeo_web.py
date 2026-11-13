@@ -67,3 +67,20 @@ class HistoryTests(DbTestCase):
         self.assertEqual(len(notification_batches(self.admin)),1)
         self.assertIn('2 zgłoszeń',notification_batches(self.admin)[0]['title'])
         self.assertEqual(list_history(None),[])
+
+
+class SaldeoPopupFormatTests(TestCase):
+    def test_complete_card_with_polish_month_is_distinct_from_operation_status(self):
+        self.assertEqual(parse('done\nBWSERVIC - Komplet dokumentów\nPaździernik 2026\n09:13'),('BWSERVIC','2026-10'))
+        self.assertIsNone(parse('BWSERVIC\nZakończone\nPaździernik 2026'))
+        self.assertIsNone(parse('BWSERVIC - Komplet dokumentów\nNieznany 2026'))
+        self.assertEqual(parse('ABC - XYZ - Komplet dokumentów\nGrudzień 2026'),('ABC - XYZ','2026-12'))
+
+
+class SaldeoPopupReplayTests(DbTestCase):
+    def test_position_and_clock_changes_do_not_repeat_completion(self):
+        first = {'id':'','title':'BWSERVIC - Komplet dokumentów','period':'Październik 2026',
+                 'text':'done\nBWSERVIC - Komplet dokumentów\nPaździernik 2026\n09:13'}
+        second = {**first,'text':first['text'].replace('09:13','Wczoraj')}
+        self.assertEqual(ingest([first],'source'),1)
+        self.assertEqual(ingest([second],'source'),0)

@@ -45,6 +45,8 @@ def save_connection(config, *, actor_id, password=''):
     # Connection credentials can be saved before database discovery/mapping.
     # Import execution checks that at least one company source is configured.
     saved = {key: config[key] for key in ('server', 'username', 'enabled', 'months_back', 'sources')}
+    from app.integrations.enova.query_defaults import saved_source
+    saved['sources'] = [saved_source(source) for source in config['sources']]
     saved['database'] = str(config.get('database') or '').strip()
     from app.integrations.enova.discovery import query_timeout
     saved['discovery_query_timeout'] = query_timeout(config)

@@ -76,7 +76,8 @@ def enova_job(now=None):
     settings = load_settings()
     config = load_connection()
     day = now.date().isoformat()
-    checking_signature = json.dumps({'day': day, 'version': 4, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
+    from app.integrations.enova.query_defaults import ADAPTER_REVISION
+    checking_signature = json.dumps({'day': day, 'version': 4, 'adapter_revision': ADAPTER_REVISION, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
         'sources': [{key: source.get(key) for key in ('database', 'nip', 'payroll_query', 'declarations_query', 'hr_events_query', 'jpk_query')}
                     for source in config.get('sources', [])]}, sort_keys=True, default=str)
     # Checking adapters/configuration changes invalidate the daily marker.

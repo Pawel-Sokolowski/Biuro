@@ -48,3 +48,24 @@ class QueryDefaultsTests(TestCase):
         self.assertEqual(resolved[1]['jpk_query'], 'shared-jpk.sql')
         self.assertEqual(resolved[1]['declarations_query'], 'shared-tax.sql')
         self.assertEqual(config['sources'][1], {})
+
+    def test_desktop_resolved_bundle_is_rebased_on_worker_and_never_saved_as_override(self):
+        from app.integrations.enova.query_defaults import saved_source
+        raw = {'sources': [{'nip': '1234567890', 'database': 'ClientA'}]}
+        with patch('app.integrations.enova.query_defaults.bundled_directory', return_value=Path('/desktop/install/queries')):
+            desktop = with_query_defaults(raw)
+        self.assertEqual(saved_source(desktop['sources'][0]), raw['sources'][0])
+        with patch('app.integrations.enova.query_defaults.bundled_directory', return_value=Path('/worker/install/queries')):
+            worker = with_query_defaults(desktop)
+        self.assertEqual(Path(worker['sources'][0]['jpk_query']), Path('/worker/install/queries/jpk.sql'))
+        self.assertEqual(Path(worker['sources'][0]['declarations_query']), Path('/worker/install/queries/declarations.sql'))
+
+    def test_shared_override_keeps_inheriting_after_reload_but_real_company_override_survives(self):
+        from app.integrations.enova.query_defaults import saved_source
+        config = with_query_defaults({'jpk_query': 'first.sql', 'sources': [{}, {'jpk_query': 'client.sql'}]})
+        config['jpk_query'] = 'second.sql'
+        reloaded = with_query_defaults(config)
+        self.assertEqual([row['jpk_query'] for row in reloaded['sources']], ['second.sql', 'client.sql'])
+        self.assertNotIn('jpk_query', saved_source(reloaded['sources'][0]))
+        reloaded['sources'][0]['jpk_query'] = 'edited-client.sql'
+        self.assertEqual(saved_source(reloaded['sources'][0])['jpk_query'], 'edited-client.sql')

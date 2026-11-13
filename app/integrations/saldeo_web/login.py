@@ -13,8 +13,11 @@ def main():
         return 1
     try:
         from .browser import login_window
-        login_window()
+        login_window(actor_id=login.pracownik_id)
         return 0
+    except ValueError as error:
+        QMessageBox.warning(None, 'Saldeo', str(error))
+        return 1
     except Exception:
         QMessageBox.warning(None, 'Saldeo', 'Nie otwarto sesji. Sprawdź zapisane ustawienia, zainstalowaną przeglądarkę Edge/Chrome i czy worker nie używa obecnie profilu.')
         return 1

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from urllib.parse import urlsplit
 from app.db.dao_conn import get_coordination_conn
 from app.config import get_data_dir
+from .executable import resolve as resolve_browser
 
 
 @contextmanager
@@ -36,7 +37,7 @@ def read_history(config, stop=None):
     validate(config)
     items = []
     with sync_playwright() as pw:
-        context = pw.chromium.launch_persistent_context(profile_path(), channel=config['channel'], headless=True,
+        context = pw.chromium.launch_persistent_context(profile_path(), executable_path=resolve_browser(config), headless=True,
                                                        accept_downloads=False, service_workers='allow')
         try:
             page = context.pages[0] if context.pages else context.new_page()
@@ -96,24 +97,28 @@ def read_history(config, stop=None):
             context.close()
 
 
-def login_window():
+def login_window(actor_id=None):
     """Interactive login under the same Windows account as the worker, max 15 minutes."""
     from playwright.sync_api import sync_playwright
     from app.integrations.saldeo_web.settings import load, validate
     config = load()
-    validate(config)
+    # Opening a manual login window must not depend on configured monitoring CSS.
+    validate({**config, 'enabled':False})
     with browser_lock() as acquired:
         if not acquired:
             raise ValueError('Przeglądarka jest używana przez worker. Spróbuj po zakończeniu sprawdzenia.')
         with sync_playwright() as pw:
-            context = pw.chromium.launch_persistent_context(profile_path(), channel=config['channel'], headless=False,
+            context = pw.chromium.launch_persistent_context(profile_path(), executable_path=resolve_browser(config), headless=False,
                                                            accept_downloads=False)
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto(config['login_url'], wait_until='domcontentloaded', timeout=45000)
                 deadline = time.monotonic() + 900
+                learned = False
                 while context.pages and time.monotonic() < deadline:
                     try:
+                        if actor_id and not learned and same_origin(context.pages[0],config):
+                            learned = remember_login_fields(context.pages[0],actor_id)
                         context.pages[0].wait_for_timeout(500)
                     except Exception:
                         break
@@ -122,3 +127,30 @@ def login_window():
                     context.close()
                 except Exception:
                     pass  # Closing the browser manually already closes its context.
+
+
+def remember_login_fields(page, actor_id):
+    """Learn verified, unique visible controls. Never read values entered by the user."""
+    candidates = {
+        'username_selector':'input[qa-id="username"]',
+        'password_selector':'input[type="password"]',
+        'submit_selector':'button:has-text("Zaloguj")',
+    }
+    if not all(page.locator(selector + ':visible').count()==1 for selector in candidates.values()):
+        return False
+    from app.security.authorization import is_administrator
+    if not is_administrator(actor_id):
+        return False
+    import json
+    from app.db.dao_app_settings import set_setting
+    from app.integrations.saldeo_web.settings import load, KEY
+    config = load()
+    # Preserve existing user mappings and every setting, including enabled state.
+    changed = False
+    for key,selector in candidates.items():
+        if not config.get(key):
+            config[key] = selector
+            changed = True
+    if changed:
+        set_setting(KEY,json.dumps(config,ensure_ascii=False))
+    return True

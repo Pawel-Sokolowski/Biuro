@@ -6,7 +6,7 @@ KEY = 'saldeo_web'
 DEFAULTS = dict(enabled=False, login_url='https://saldeo.brainshare.pl/', history_url='https://saldeo.brainshare.pl/biuro/operacje/lista-operacji.hta',
                 username='', password_enc='', logged_in_selector='', item_selector='',
                 empty_selector='', open_selector='', next_selector='', username_selector='', password_selector='',
-                submit_selector='', channel='msedge', max_pages=20, pause_seconds=2)
+                submit_selector='', channel='auto', executable_path='', max_pages=20, pause_seconds=2)
 
 
 def load():
@@ -26,7 +26,7 @@ def validate(config):
         if origin is not None and current != origin:
             raise ValueError('Logowanie i historia muszą być na tym samym serwerze Saldeo.')
         origin = current
-    if config['channel'] not in ('msedge', 'chrome'):
+    if config['channel'] not in ('auto', 'msedge', 'chrome'):
         raise ValueError('Wybierz Edge lub Chrome zainstalowany na serwerze.')
     if type(config['enabled']) is not bool or not 1 <= config['max_pages'] <= 100 or not 1 <= config['pause_seconds'] <= 60:
         raise ValueError('Nieprawidłowe limity monitorowania.')

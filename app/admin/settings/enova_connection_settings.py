@@ -255,6 +255,19 @@ class EnovaConnectionSettings(QWidget):
             box.exec()
         def failed(error):
             reset()
+            from app.integrations.enova.odbc_support import SqlOperationError
+            if isinstance(error,SqlOperationError):
+                detail = error.diagnostic
+                from PyQt6.QtCore import Qt
+                box = QMessageBox(self)
+                box.setWindowTitle('Wyszukiwanie Enova — błąd SQL')
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setTextFormat(Qt.TextFormat.PlainText)
+                box.setText(str(error))
+                box.setDetailedText(f"Serwer: {detail['server']}\nBaza: {detail['database']}\n"
+                                    f"Sterownik: {detail['driver']}\n\n{detail['details']}")
+                box.exec()
+                return
             QMessageBox.warning(self,'Wyszukiwanie Enova',str(error) if isinstance(error,(ValueError,PermissionError)) else
                                 'Nie udało się odczytać listy baz. Sprawdź połączenie SQL i uprawnienia do master oraz baz firm.')
         self.discovery_runner.submit(work,done,failed)

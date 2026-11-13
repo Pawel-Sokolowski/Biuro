@@ -1,7 +1,7 @@
 """Read-only discovery using the same company identity as the document importer."""
 from collections import defaultdict
 from app.integrations.enova.document_counts import normalize_nip, sql_connection_string
-from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server
+from app.integrations.enova.odbc_support import load_odbc, resolve_driver, validate_server, describe_sql_error, SqlOperationError
 
 
 def discover(config, *, password=''):
@@ -18,16 +18,25 @@ def discover(config, *, password=''):
     def connect(database):
         conn = odbc.connect(sql_connection_string(config,database,config['username'],password),
                             timeout=10,attrs_before={101:1})
-        conn.timeout = 10
+        try:
+            conn.timeout = 10
+        except Exception:
+            conn.close()
+            raise
         return conn
-    root = connect('master')
+    root = None
     try:
+        root = connect('master')
         cursor = root.cursor()
         cursor.execute('''SELECT name FROM sys.databases
             WHERE database_id>4 AND state=0 AND HAS_DBACCESS(name)=1 ORDER BY name''')
         databases = [str(row[0]) for row in cursor.fetchmany(501)]
+    except Exception as error:
+        diagnostic = describe_sql_error(error,secrets=(password,config.get('password_enc')))
+        raise SqlOperationError(diagnostic,{**config,'database':'master'},'Enova — odczyt listy baz') from None
     finally:
-        root.close()
+        if root is not None:
+            root.close()
     if len(databases)>500:
         raise ValueError('Serwer ma ponad 500 dostępnych baz. Ogranicz widoczność baz dla konta integracji lub przypisz je ręcznie.')
     matches = defaultdict(list)
@@ -60,9 +69,11 @@ def discover(config, *, password=''):
                 matches[next(iter(nips))].append(database)
             else:
                 warnings.append(database + ': brak jednego poprawnego NIP właściciela bazy')
-        except Exception:
+        except Exception as error:
             # Incomplete scans cannot establish uniqueness; never autofill from partial results.
-            errors.append(database + ': nie udało się odczytać bazy (dostęp, limit czasu lub schemat)')
+            diagnostic = describe_sql_error(error,secrets=(password,config.get('password_enc')))
+            errors.append(f"{database} [{diagnostic['sqlstate'] or 'brak SQLSTATE'}]: "
+                          f"{diagnostic['hint']}\n{diagnostic['details']}")
         finally:
             if conn is not None:
                 conn.close()

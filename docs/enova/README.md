@@ -497,3 +497,15 @@ samym NIP są pokazane w szczegółach, bez wybierania pierwszej. Przy błędach
 baz automatyczne uzupełnianie jest wstrzymane. Zmiany trzeba zapisać przyciskiem
 **Zapisz połączenie Enova**. Wynik obejmuje tylko bazy widoczne dla konta SQL;
 brak dostępu do metadanych lub inna struktura Enovy wymaga ręcznego mapowania.
+
+Przy błędzie połączenia z `master` lub odczytu listy baz okno pokazuje SQLSTATE,
+wskazówkę i rozwijane szczegóły sterownika. Błędy pojedynczych baz są dostępne
+w szczegółach wyniku, a automatyczne przypisania nadal pozostają wstrzymane przy
+niepełnym odczycie. Diagnostyka usuwa hasło i jego postać zakodowaną dla ODBC.
+Połączenie w SSMS może używać innego dostawcy SQL lub ustawień TLS niż ODBC;
+sam ogólny komunikat nie rozstrzyga, czy chodzi o logowanie, sieć czy metadane.
+
+Sterowniki Microsoft ODBC 17 i 18 obsługują SQL Server 2017, 2019 i 2022.
+Nie dobieraj numeru sterownika do rocznika SQL Server ani wersji SSMS.
+Jeden zainstalowany ODBC Driver 18 i wybór Automatycznie może obsłużyć oba
+połączenia workera — Enovę i Płatnika.

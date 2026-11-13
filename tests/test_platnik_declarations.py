@@ -15,14 +15,18 @@ ROW = {'form': 'ZUS DRA', 'source_id': 1, 'payer_id': 7, 'nip': NIP, 'report_id'
 class PlatnikDeclarationRulesTests(TestCase):
     def test_source_metadata_validation_and_optional_status_do_not_guess_columns(self):
         cursor = Mock()
-        metadata = [(table, col) for table, cols in REQUIRED.items() for col in cols]
+        metadata = [(table, col) for table, cols in REQUIRED.items() for col in cols] + [('DOKUMENT', 'ID_DOKUMENT')]
         cursor.fetchmany.return_value = metadata
         query = source_query(cursor, {})
         self.assertNotIn('d.STATUSPT', query)
         self.assertNotIn('__DRA_STATUS__', query)
         self.assertEqual(query.count('?'), 2)
+        self.assertNotIn('__DOCUMENT_KEY__', query)
+        self.assertIn('d.ID_DOKUMENT', query)
         cursor.fetchmany.return_value = metadata + [('DOKUMENT', 'STATUSPT')]
         self.assertIn('d.STATUSPT', source_query(cursor, {}))
+        cursor.fetchmany.return_value = [(table, col) for table, col in metadata if (table, col) != ('DOKUMENT', 'ID_DOKUMENT')] + [('DOKUMENT', 'ID')]
+        self.assertIn('d.ID = a.ID_DOKUMENT', source_query(cursor, {}))
         cursor.fetchmany.return_value = []
         with self.assertRaises(ValueError):
             source_query(cursor, {})

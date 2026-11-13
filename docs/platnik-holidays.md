@@ -1,4 +1,4 @@
-# Płatnik — roczne wakacje składkowe (1.5.3)
+# Płatnik — roczne wakacje składkowe (1.5.4)
 
 ## Konfiguracja
 
@@ -14,6 +14,30 @@ wskazany rok ręcznie w tym panelu. W Zadaniach workera włącz osobne zadanie
 Płatnik; domyślnie co godzinę odświeża poprzedni i bieżący rok. Starszy rok
 pobierz ręcznie. Nie ma zapisu do Płatnika ani wysyłania dokumentów do ZUS.
 Nie jest wymagany własny plik SQL ani instalacja Płatnika na workerze.
+
+## Diagnostyka połączenia
+
+Microsoft ODBC Driver 17 i 18 obsługują SQL Server 2017, 2019 i 2022.
+Numer sterownika nie musi odpowiadać numerowi wersji serwera. Sterownik musi być
+zainstalowany na komputerze uruchamiającym worker, w architekturze aplikacji
+(zwykle x64). Opcja Automatycznie wybiera zainstalowany sterownik 18 lub 17.
+
+**Sprawdź połączenie SQL** sprawdza bieżące pola formularza; nie trzeba najpierw
+włączać importu. Puste hasło wymaga wcześniej zapisanego hasła Płatnika.
+**Pobierz wybrany rok** używa zapisanej konfiguracji, więc po zmianie pól zapisz ją.
+
+Przy błędzie w statusie widoczne są etap operacji, SQLSTATE oraz wskazówka.
+Kliknij **Pokaż szczegóły błędu SQL**, a w oknie rozwiń szczegóły, aby skopiować
+komunikat sterownika. Hasło (również zapisane z escapowaniem ODBC) i zaszyfrowana
+wartość hasła są usuwane z diagnostyki. Nie przesyłaj haseł ani klucza.
+
+- `28000` / `18456`: login/hasło lub tryb uwierzytelniania SQL Server.
+- `08001` lub przekroczenie czasu: nazwa hosta, instancja, dostęp TCP/IP, zapora.
+  Dla instancji nazwanej potrzebny jest dostęp do SQL Browser albo adres
+  `host,port` z rzeczywistym portem tej instancji (nie zakładaj portu 1433).
+- Błąd SSL/certyfikatu: opcja zaufania własnemu certyfikatowi lub konfiguracja TLS.
+- Poprawny test SQL i błąd odczytu: sprawdź szczegóły zapytania, tabele/kolumny
+  oraz prawo SELECT konta w bazie `platnik`.
 
 ## Widok
 

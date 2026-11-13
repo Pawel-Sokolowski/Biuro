@@ -16,6 +16,8 @@ class EnovaConnectionSettings(QWidget):
         form = QFormLayout()
         self.server = QLineEdit(config.get('server', ''))
         self.server.setPlaceholderText(r'192.168.1.10\ENOVA lub sql.firma.local,1433')
+        self.database = QLineEdit(config.get('database',''))
+        self.database.setPlaceholderText('Np. Biuro_rachunkowe — baza do testu połączenia i wyszukiwania baz firm')
         from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
         self.driver = QComboBox()
         self.driver.addItem('Automatycznie — wykryj na tym komputerze', 'auto')
@@ -42,14 +44,15 @@ class EnovaConnectionSettings(QWidget):
         self.months = QSpinBox()
         self.months.setRange(1, 24)
         self.months.setValue(config['months_back'])
-        for label, widget in [('Serwer SQL / instancja', self.server), ('Sterownik SQL', self.driver), ('Login SQL', self.username),
+        for label, widget in [('Serwer SQL / instancja', self.server), ('Główna baza Enovy', self.database),
+                              ('Sterownik SQL', self.driver), ('Login SQL', self.username),
                               ('Hasło SQL', self.password), ('Certyfikat TLS', self.trust_certificate),
                               ('Deklaracje i UPO', self.declarations_query), ('Dokumenty kadrowe', self.payroll_query), ('Umowy, badania i BHP', self.hr_events_query), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
                               ('Import', self.enabled)]:
             form.addRow(label, widget)
         layout.addLayout(form)
         local_note = QLabel('Test połączenia działa z tego komputera, bez uruchamiania workera. '
-                            'Możesz sprawdzić sam serwer przed wpisaniem baz firm. '
+                            'Wpisz główną bazę Enovy, aby sprawdzić ją przed przypisaniem baz firm. '
                             'Sterownik musi być zainstalowany na tym komputerze; Enova może używać innego dostawcy SQL.')
         local_note.setWordWrap(True)
         layout.addWidget(local_note)
@@ -100,7 +103,8 @@ class EnovaConnectionSettings(QWidget):
 
     def save(self):
         try:
-            config = dict(server=self.server.text().strip(), driver=self.driver.currentData(), username=self.username.text().strip(),
+            config = dict(server=self.server.text().strip(), database=self.database.text().strip(),
+                          driver=self.driver.currentData(), username=self.username.text().strip(),
                           trust_server_certificate=self.trust_certificate.isChecked(),
                           hr_events_query=self.hr_events_query.text().strip(),
                           declarations_query=self.declarations_query.text().strip(), payroll_query=self.payroll_query.text().strip(),
@@ -144,7 +148,8 @@ class EnovaConnectionSettings(QWidget):
         from app.integrations.enova.connection_settings import check_connection
         # Use the fields currently on screen; saving and enabling import are unnecessary.
         config = load_connection()
-        config.update(trust_server_certificate=self.trust_certificate.isChecked(), server=self.server.text().strip(), driver=self.driver.currentData(), username=self.username.text().strip(), sources=[])
+        config.update(trust_server_certificate=self.trust_certificate.isChecked(), server=self.server.text().strip(),
+                      database=self.database.text().strip(),driver=self.driver.currentData(), username=self.username.text().strip(), sources=[])
         for row in range(self.table.rowCount()):
             database = self.table.item(row, 2).text().strip()
             if database:
@@ -212,14 +217,14 @@ class EnovaConnectionSettings(QWidget):
 
     def discovery_fields(self):
         return (self.server.text().strip(), self.username.text().strip(), self.driver.currentData(),
-                self.trust_certificate.isChecked(), self.password.text())
+                self.trust_certificate.isChecked(), self.password.text(),self.database.text().strip())
 
     def discover_databases(self):
         from app.security.authorization import is_administrator
         from app.integrations.enova.discovery import discover, propose
         fields = self.discovery_fields()
         config = load_connection()
-        config.update(server=fields[0],username=fields[1],driver=fields[2],trust_server_certificate=fields[3])
+        config.update(server=fields[0],username=fields[1],driver=fields[2],trust_server_certificate=fields[3],database=fields[5])
         self.discovery_button.setEnabled(False)
         self.discovery_button.setText('Wyszukiwanie baz po NIP…')
         def reset():
@@ -255,6 +260,19 @@ class EnovaConnectionSettings(QWidget):
             box.exec()
         def failed(error):
             reset()
+            from app.integrations.enova.odbc_support import SqlOperationError
+            if isinstance(error,SqlOperationError):
+                detail = error.diagnostic
+                from PyQt6.QtCore import Qt
+                box = QMessageBox(self)
+                box.setWindowTitle('Wyszukiwanie Enova — błąd SQL')
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setTextFormat(Qt.TextFormat.PlainText)
+                box.setText(str(error))
+                box.setDetailedText(f"Serwer: {detail['server']}\nBaza: {detail['database']}\n"
+                                    f"Sterownik: {detail['driver']}\n\n{detail['details']}")
+                box.exec()
+                return
             QMessageBox.warning(self,'Wyszukiwanie Enova',str(error) if isinstance(error,(ValueError,PermissionError)) else
-                                'Nie udało się odczytać listy baz. Sprawdź połączenie SQL i uprawnienia do master oraz baz firm.')
+                                'Nie udało się odczytać listy baz. Sprawdź połączenie SQL i uprawnienia do bazy startowej oraz baz firm.')
         self.discovery_runner.submit(work,done,failed)

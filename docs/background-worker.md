@@ -35,6 +35,54 @@ Blokada PostgreSQL uniemożliwia uruchomienie dwóch workerów tej samej bazy/sc
 Istniejące blokady IMAP i rezerwacje wysyłek zabezpieczają współpracę z otwartymi
 stanowiskami. Ustawienia „Worker w tle” nie instalują procesu na zdalnym serwerze.
 
+## Instalacja z okna aplikacji — wersja 1.5.0
+
+Użyj jednej instalacji **Biuro-Setup**. Domyślnie zaznaczony jest tylko
+**Program Biuro**. Na serwerze zaznacz **Worker**; możesz wybrać oba składniki
+albo sam worker. Wspólne pliki EXE są potrzebne obu składnikom, ale skróty
+stanowiska i workera instalują się według wyboru. Python ani `.venv` nie są wymagane.
+
+1. Otwórz **Biuro – konfiguracja workera** z menu Start lub po instalacji.
+2. Podaj adres PostgreSQL, port, bazę, użytkownika i hasło. Wybierz istniejący
+   wspólny klucz z pliku albo wygeneruj klucz **tylko dla nowego biura**.
+   Zapisz prywatną kopię nowego klucza i przekaż go wszystkim stanowiskom.
+   Kreator sprawdza wersję bazy i odszyfrowanie zapisanych haseł przed zapisem.
+   Nie aktualizuje automatycznie schematu i nie uruchamia wysyłek podczas testu.
+3. Zaloguj się jako administrator Biuro. W zakładkach skonfiguruj i zapisz usługi:
+   pocztę, konto systemowe, przypomnienia, e-ZLA, odczyt z Enovy i KSeF.
+   Wszystkie korzystają z tych samych ustawień PostgreSQL co stanowiska pracowników.
+   Dla Enovy przypisz bazy firm; ścieżki zapytań SQL muszą istnieć na serwerze.
+4. W **Zadania** włącz worker i potrzebne zadania, ustaw odstępy i zapisz.
+5. W **Instalacja** wybierz **Zainstaluj autostart i uruchom worker**. UAC musi
+   użyć tego samego konta Windows co kreator. W oknie Biuro podaj hasło konta
+   Windows (nie PIN ani hasło Biuro) i kliknij instalację. Nie otwierasz skryptów.
+6. Sprawdź świeży sygnał w **Panel i logi**. Skrót **Biuro Worker** otwiera panel
+   i konfigurację po zalogowaniu administratora. Możesz zamknąć wszystkie okna;
+   zadanie `Biuro-Background-Worker` działa po restarcie i bez zalogowania Windows.
+
+Okno autostartu ma również przyciski restartu i zatrzymania. Istniejące zadanie
+tej samej instalacji/konta można uruchomić ponownie; obce zadanie nie jest
+nadpisywane. Po zmianie lokalnego połączenia lub klucza uruchom worker ponownie.
+Przed zmianą bazy zatrzymaj stary worker, żeby nie pozostawić go na starej bazie.
+Przy aktualizacji plików działającego workera zatrzymaj go i po instalacji uruchom ponownie.
+
+Lokalna konfiguracja workera jest oddzielna od desktopowej `.env`:
+`%LOCALAPPDATA%\Biuro\worker.env`. Ma pierwszeństwo nad odziedziczonymi
+`DB_URL` i `BIO_ENCRYPTION_KEY` przy uruchomieniu workera/panelu. Plik jest
+ograniczony uprawnieniami NTFS do konta i SYSTEM. Hasło Windows jest przekazywane
+Harmonogramowi przez anonimowy stdin ukrytego procesu PowerShell; nie trafia do
+argumentów procesu ani do pliku. Rejestracja/żądanie startu nie oznaczają jeszcze
+poprawnego działania — potwierdzeniem jest aktualny sygnał i wyniki zadań.
+
+**Zakres:** pobieranie e-ZLA z usługi ZUS do Biuro, poczta, zatwierdzone wysyłki,
+przypomnienia, odczyt Enovy i skonfigurowany KSeF. Import **e-ZLA do Enovy**
+pozostaje niepodłączony. Deklaracje/UPO/zdarzenia kadrowe wymagają zapytań
+pasujących do Waszej bazy Enovy. Konektor SQL Płatnika i automatyzacja podpisu
+nie są częścią instalatora. ZUS wymaga dostępu HTTPS do portu 8500; poczta,
+PostgreSQL, Enova SQL i KSeF muszą być dostępne z serwera.
+
+Poniższe instrukcje źródłowe i skryptowe są alternatywą dla administratorów.
+
 ## Uruchomienie na Windows Server ze źródeł
 
 1. Skopiuj aktualne źródła do np. `C:\BiuroWorker`. Zainstaluj Python 3.14+

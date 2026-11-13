@@ -37,10 +37,18 @@ CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
+[Types]
+Name: "program"; Description: "Program Biuro"
+Name: "custom"; Description: "Wybór programu i workera"; Flags: iscustom
+
+[Components]
+Name: "program"; Description: "Program Biuro — stanowisko użytkownika"; Types: program
+Name: "worker"; Description: "Worker na tym serwerze — zadania w tle i panel konfiguracji"
+
 [Files]
-Source: "..\scripts\install_background_worker.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
-Source: "..\scripts\install_background_worker.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion
-Source: "..\scripts\WORKER-SETUP.txt"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\install_background_worker.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
+Source: "..\scripts\install_background_worker.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
+Source: "..\scripts\WORKER-SETUP.txt"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 ; Original signed Microsoft MSI, extracted only for the selected prerequisite.
 Source: "{#MyOdbcMsi}"; Flags: dontcopy
 Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -48,21 +56,34 @@ Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.example"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName} - instalacja workera"; Filename: "{app}\scripts\install_background_worker.cmd"; WorkingDir: "{app}"
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "Biuro.OfficeManager"
+Name: "{autoprograms}\{#MyAppName} - konfiguracja workera"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-setup"; WorkingDir: "{app}"; Components: worker
+Name: "{autoprograms}\{#MyAppName} Worker"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-panel"; WorkingDir: "{app}"; Components: worker
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "Biuro.OfficeManager"; Components: program
 Name: "{autoprograms}\{#MyAppName} - aktualizacja bazy"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--migrate"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Components: program
 
 [Tasks]
 Name: "odbcdriver"; Description: "Zainstaluj Microsoft ODBC Driver 18 dla połączenia Enova (wymaga uprawnień administratora)"; GroupDescription: "Połączenie Enova:"; Check: NeedsOdbcDriver
-Name: "desktopicon"; Description: "Utwórz skrót na pulpicie"; GroupDescription: "Dodatkowe skróty:"
+Name: "desktopicon"; Components: program; Description: "Utwórz skrót na pulpicie"; GroupDescription: "Dodatkowe skróty:"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Uruchom {#MyAppName}"; Flags: nowait postinstall skipifsilent; Check: CanLaunchBiuro
+Filename: "{app}\{#MyAppExeName}"; Description: "Uruchom {#MyAppName}"; Flags: nowait postinstall skipifsilent; Components: program; Check: CanLaunchBiuro
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-setup"; Description: "Skonfiguruj i zainstaluj worker"; Flags: nowait postinstall skipifsilent; Components: worker; Check: CanLaunchBiuro
 
 [Code]
 var
   OdbcRestartRequired: Boolean;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpSelectComponents) and
+     not WizardIsComponentSelected('program') and not WizardIsComponentSelected('worker') then
+  begin
+    MsgBox('Wybierz program Biuro, worker lub oba składniki.', mbError, MB_OK);
+    Result := False;
+  end;
+end;
 
 function DriverInstalled(const DriverName: String): Boolean;
 var

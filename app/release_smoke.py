@@ -21,6 +21,12 @@ def run():
     output.parent.mkdir(parents=True, exist_ok=True)
     result = {'version': __version__, 'checks': []}
     try:
+        from app.worker_setup_ui import ConnectionDialog, WorkerSetupWindow
+        from app.worker_install_ui import WorkerInstallDialog
+        from app.key_setup_ui import KeySetupDialog
+        if not all((ConnectionDialog, WorkerSetupWindow, WorkerInstallDialog, KeySetupDialog)):
+            raise RuntimeError('Missing worker setup modules')
+        result['checks'].append('worker_setup_modules')
         if sys.platform == 'win32':
             from app.integrations.enova.odbc_support import load_odbc
             load_odbc()

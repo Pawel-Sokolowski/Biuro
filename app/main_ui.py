@@ -480,8 +480,8 @@ class OfficeManagerApp(QMainWindow):
         main_layout.addWidget(content)
 
         self.page_monthly = MonthlyViewPage(self.pracownik_id)
-        self.page_monthly.setParent(self)
-        from app.accounting.department_ui import DepartmentPage
+        from app.accounting.department_ui import DepartmentPage, park_monthly_editor
+        self._monthly_parking = park_monthly_editor(self.page_monthly, self)
         self.page_ksiegowosc = DepartmentPage(self.pracownik_id, 'accounting', self.page_monthly)
         self.page_kadry = DepartmentPage(self.pracownik_id, 'payroll', self.page_monthly)
         self.page_dashboard = DashboardPage(self.pracownik_id)

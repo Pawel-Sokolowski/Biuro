@@ -72,3 +72,59 @@ https://saldeo.brainshare.pl/biuro/operacje/lista-operacji.hta
 Jest domyślnie wpisany w ustawieniach. Jeśli lista wymaga kliknięcia dzwonka,
 można podać opcjonalny selektor „otwórz dzwonek/listę”. Sama znajomość adresu
 nie potwierdza selektorów wpisów w prywatnym widoku.
+
+## Wykrywanie przeglądarki i formularz logowania
+
+W ustawieniach można wybrać automatyczne wykrywanie, Chrome lub Edge albo wskazać
+pełną ścieżkę do istniejącego pliku EXE. Wykrywanie uwzględnia rejestr App Paths
+oraz instalacje w Program Files, Program Files (x86) i LocalAppData bieżącego
+konta Windows. „Sprawdź wykrywanie przeglądarki” pokazuje konkretną ścieżkę.
+Playwright dostaje tę ścieżkę zamiast polegać wyłącznie na domyślnym kanale.
+
+Otwarcie ręcznego logowania nie wymaga selektorów monitorowania, także jeśli
+w konfiguracji włączono wcześniej monitoring. Gdy formularz zawiera po jednym
+widocznym polu `input[qa-id="username"]`, `input[qa-id="password"]` i przycisku
+`button:has-text("Zaloguj")`, zapamiętujemy te selektory w pustych ustawieniach.
+Nie odczytujemy wartości wpisanych do formularza ani hasła. Pozostałe mapowania
+są zachowane; po zamknięciu procesu logowania panel wczytuje rozpoznane pola do
+pustych komórek, zachowując własne wpisy użytkownika.
+
+To rozpoznanie formularza logowania, nie automatyczne rozpoznanie struktury
+historii powiadomień. Do historii nadal trzeba dopasować znacznik sesji,
+wiersze, pustą listę i paginację. Pełnego znacznika HTML nie wkleja się do pola CSS:
+z przesłanego `<input ... qa-id="username" id="mat-input-0">` selektor to
+`input[qa-id="username"]`. Dynamicznego `mat-input-0` nie utrwalamy.
+
+
+Zweryfikowane fragmenty formularza przesłane przez użytkownika:
+- pole loginu: `input[qa-id="username"]`;
+- pole hasła: `input[qa-id="password"]`;
+- ikona dzwonka: `[qa-id="bo-counter"]` (kliknięcie, jeśli potrzebne do otwarcia listy).
+
+Elementy `bs-mat-cell` ze statusem `background-operation-list-table__status` /
+„Zakończone” opisują komórki operacji w tle. Nie są potwierdzeniem kompletu
+dokumentów. Selektor pojedynczego wpisu musi obejmować cały komunikat z nazwą
+firmy i okresem, np. „MERIT. informuje o dostarczeniu dokumentów za 10/2026”.
+Nie konfigurujemy automatycznie selektora historii na podstawie samych tych
+komórek ani nie zmieniamy reguły oznaczania kompletu na podstawie słowa „Zakończone”.
+
+## Potwierdzony format karty dzwonka
+
+Nowy fragment użytkownika to pełna karta:
+`div[qa-id^="row-bo-id-"]`, z tytułem `.content-col .font-14`
+„BWSERVIC - Komplet dokumentów” i okresem `.content-col .font-12-grey`
+„Październik 2026”. Używamy tych struktur, rozpoznajemy polskie nazwy miesięcy.
+Samo „done”/„Zakończone” nadal niczego nie potwierdza.
+
+Preset formularza i dzwonka jest teraz dostępny domyślnie (uzupełnia także puste
+stare ustawienia bez nadpisywania własnego selektora wpisów). Brak selektora pustej
+listy nie blokuje odczytu widocznych kart, ale pusta lista nie jest wtedy uznawana
+za potwierdzony brak zdarzeń. Brak paginacji nadal daje wynik **niepełny**:
+dzwonek może pokazywać tylko ostatnie wpisy, nie udajemy nadrobienia pełnej historii.
+Potrzebne są jeszcze szczegóły pełnej listy/stronicowania oraz przycisku logowania.
+
+Numer row-bo-id-0 opisuje pozycję, a nie tożsamość zdarzenia. Etykieta godziny
+może zmienić się przy kolejnym odczycie, więc potwierdzenia kompletu deduplikujemy
+po firmie i okresie w obrębie źródła. Powtórne zgłoszenie tego samego kompletu
+w tym samym miesiącu nie tworzy nowego powiadomienia w Biuro. Godziny „09:13”
+nie zamieniamy na wymyśloną pełną datę źródłową.

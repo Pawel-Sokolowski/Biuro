@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QDialog, QWidget, QMainWindow, QVBoxLayout, QFormLa
     QLabel, QLineEdit, QSpinBox, QComboBox, QPushButton, QFileDialog, QMessageBox,
     QDialogButtonBox, QTabWidget, QScrollArea)
 from app.utils.background import TaskRunner
-from app.services.worker_setup import database_url, probe_database, save_local_config, preflight, worker_env_path
+from app.services.worker_setup import CredentialKeyError, database_url, probe_database, save_local_config, preflight, worker_env_path
 
 
 class ConnectionDialog(QDialog):
@@ -18,6 +18,7 @@ class ConnectionDialog(QDialog):
         self.resize(640, 500)
         self.runner = TaskRunner(self)
         self.tested = None
+        self.key_error = None
         layout = QVBoxLayout(self)
         note = QLabel('Połącz worker z istniejącą bazą Biuro. Zaimportuj wspólny klucz z działającego '
                       'komputera: Ustawienia → Klucz szyfrowania → Eksportuj. '
@@ -116,15 +117,23 @@ class ConnectionDialog(QDialog):
             return
         self.test_button.setEnabled(False)
         self.tested = None
+        self.key_error = None
         self.status.setText('Sprawdzanie PostgreSQL…')
         def done(_):
             self.tested = values
             self.test_button.setEnabled(True)
             self.status.setText('Połączenie i wersja bazy poprawne. Zapisz i zaloguj się jako administrator Biuro.')
-        self.runner.submit(lambda: probe_database(*values), done, self.failed)
+        self.runner.submit(lambda: probe_database(*values), done, lambda error: self.failed(error, values))
 
-    def failed(self, error):
+    def failed(self, error, values=None):
         self.test_button.setEnabled(True)
+        if isinstance(error, CredentialKeyError):
+            self.tested = values
+            self.key_error = error
+            self.status.setText('Połączenie z bazą działa. ' + str(error) +
+                                ' Możesz zapisać konfigurację i zalogować się do naprawy haseł; '
+                                'uruchomienie workera pozostanie zablokowane do poprawienia odczytu.')
+            return
         self.status.setText(str(error) if isinstance(error, ValueError) and not isinstance(error, UnicodeError) else
                             'Brak połączenia. Sprawdź adres, bazę, hasło, TLS i dostęp sieciowy PostgreSQL.')
 
@@ -133,6 +142,12 @@ class ConnectionDialog(QDialog):
             values = self.values()
             if values != self.tested:
                 self.status.setText('Sprawdź połączenie dla aktualnie wpisanych danych przed zapisaniem.')
+                return
+            if self.key_error and QMessageBox.question(self, 'Naprawa zapisanych haseł',
+                    str(self.key_error) + '\nZapisać konfigurację lokalną i przejść do naprawy? '
+                    'Żadne hasło w bazie nie zostanie usunięte ani zmienione.',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
                 return
             save_local_config(*values)
             self.password.clear()
@@ -219,6 +234,9 @@ class WorkerSetupWindow(QMainWindow):
 
     def failed(self, error):
         self.install_button.setEnabled(True)
+        if isinstance(error, CredentialKeyError):
+            self.status.setText(str(error))
+            return
         self.status.setText('Konfiguracja nie jest gotowa. Sprawdź dostęp do bazy, jej wersję i wspólny klucz. '
                             'Jeżeli klucz jest zgodny, ponownie zapisz niedziałające hasła w ustawieniach usług.')
 

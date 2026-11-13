@@ -11,7 +11,7 @@ from app.utils.crypto import encrypt_password, decrypt_password
 from app.utils.months import month_bounds, previous_month
 
 REQUIRED = {
-    'DOKUMENT': {'ID_DOKUMENT', 'ID_PLATNIK'},
+    'DOKUMENT': {'ID_PLATNIK'},
     'ZUSDRA': {'ID_DOKUMENT', 'ID_PLATNIK', 'II_1_NIP', 'I_2_2OKRESDEKLAR', 'I_2_1IDDEKLS'},
     'ZUSRCA': {'ID_DOKUMENT', 'ID_PLATNIK', 'II_1_NIP', 'I_1_2OKRROZL', 'I_1_1IDRAPS'},
     'UBEZP_ZUSRCA': {'ID_DOKUMENT', 'ID_DOK_NAD', 'ID_PLATNIK', 'ID_UBEZPIECZONY',
@@ -39,12 +39,15 @@ def source_query(cursor, config):
         columns.setdefault(table.upper(), set()).add(column.upper())
     missing = [table + '.' + name for table, names in REQUIRED.items()
                for name in sorted(names - columns.get(table, set()))]
+    document_key = next((name for name in ('ID_DOKUMENT', 'ID') if name in columns.get('DOKUMENT', set())), None)
+    if document_key is None:
+        missing.append('DOKUMENT: ID_DOKUMENT lub ID')
     if missing:
         raise ValueError('Niekompletny standardowy schemat lub brak widoczności metadanych Płatnika: ' + ', '.join(missing))
     path = Path(__file__).resolve().parents[3] / 'docs/platnik/queries/declarations.sql'
     query = path.read_text(encoding='utf-8-sig')
     status = 'CONVERT(nvarchar(32),d.STATUSPT)' if 'STATUSPT' in columns['DOKUMENT'] else 'CAST(NULL AS nvarchar(32))'
-    return query.replace('__DRA_STATUS__', status).replace('__RCA_STATUS__', status)
+    return query.replace('__DRA_STATUS__', status).replace('__RCA_STATUS__', status).replace('__DOCUMENT_KEY__', document_key)
 
 
 def fetch(config, months):

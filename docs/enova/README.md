@@ -262,20 +262,17 @@ raz dziennie również dla miesięcy bez etapu „Wysłane wyniki”; podgląd n
 Błąd źródła zachowuje dotychczasowe dane. Data odczytu i referencja UPO są
 widoczne w podpowiedzi statusu.
 
-Repozytorium nie zawiera potwierdzonego schematu JPK danej instalacji Enova.
-Uruchom `inspect-jpk-schema.sql` w SSMS. Po potwierdzeniu znaczenia pól przygotuj
-zapytanie SELECT wybierające ostateczny/najnowszy status danego okresu
-(z uwzględnieniem korekt). Nie zgaduj statusu na podstawie numeru kodu.
-Ścieżkę do pliku SQL na serwerze importu wpisz w polu „Zapytanie statusu JPK”.
-Dla konfiguracji JSON obsługiwane jest `jpk_query` w każdym wpisie `sources`.
-Bez skonfigurowanego zapytania dokumenty są importowane normalnie, JPK pozostaje
-niesprawdzony.
+Domyślny odczyt `queries/jpk.sql` jest dołączony do workera i wybierany
+automatycznie, bez wskazywania pliku. Obejmuje JPK VAT/V7M/V7K z `JednolitePK`;
+szczegóły odczytu i ograniczenia opisano poniżej. Pole „Zapytanie statusu JPK”
+pozwala go zastąpić własnym SQL. JSON obsługuje `jpk_query` globalnie i w `sources`.
 
 Zapytanie JPK ma dwa parametry ODBC `?`: początek zakresu włącznie i koniec
 wyłącznie. Zwraca dokładnie jeden wiersz na miesiąc z kolumnami `nip`, `miesiac`
 (`YYYY-MM`), `status` oraz `upo` (referencja potwierdzenia, NULL dopuszczalny poza
 `accepted`). Dozwolone statusy: `not_sent`, `sent`, `accepted`, `rejected`,
-`not_applicable`. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
+`not_applicable`, `prepared`, `processing`, `unknown`. Opcjonalne `raw_status`
+zachowuje kod źródła. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
 nie są zamieniane na „niewysłany”. Bez prawdziwego źródła nie można potwierdzić
 połączenia z JPK ani przetestować go w tej sesji.
 
@@ -390,26 +387,41 @@ od położenia JSON. Własny SQL przechowuj poza katalogiem instalacyjnym, aby
 aktualizacja go nie nadpisała. Księgowość nadal dobiera wbudowane zapytanie do formy
 opodatkowania.
 
-**Deklaracje/UPO i terminy kadrowe nadal wymagają mapowania znaczenia danych.**
-Metadane potwierdzają relację `EDeklaracje.Deklaracja → Deklaracje.ID`, ale nie
-znaczenie `StatusEDeklaracji`, formę potwierdzenia ani datę wysłania.
-`Stamp` jest SQL `timestamp` (wersja wiersza), nie datą wysyłki/UPO.
-Nie ma zapytań zgadujących numery statusów.
-W ustawieniach wybierz firmę z wpisaną bazą i kliknij **Eksportuj strukturę Enova —
-deklaracje i kadry**. Plik JSON zawiera wyłącznie nazwy tabel, kolumn, typy i relacje
-(bez haseł i danych dokumentów). Ułatwia przygotowanie właściwych zapytań.
-Konto SQL musi widzieć metadane wymaganych obiektów (`VIEW DEFINITION`).
+**Deklaracje podatkowe i JPK VAT mają teraz wbudowane zapytania.**
+`queries/declarations.sql` czyta VAT-7/7K/7D (wspólny raport VAT), VAT-UE/UEK,
+VAT-8, VAT-9M, VAT-12, VAT-27, zaliczki PIT/CIT i CIT-8 z `Deklaracje`,
+`EDeklaracje` i `ETransmisje`. Kod formularza XML ma pierwszeństwo przed symbolem
+w definicji. Formularze kwartalne/roczne należą do miesiąca końca okresu.
+Najnowszy numer deklaracji i ID wygrywają w obrębie formularza/miesiąca,
+także gdy starsza deklaracja miała UPO, a nowa korekta jeszcze go nie ma.
 
-Do dokończenia deklaracji uruchom w SSMS `profile-declarations.sql` w bazie
-z rzeczywistymi deklaracjami i potwierdzeniami. Ustaw zakres `@From`/`@To`
-według daty dokumentów. Zwraca agregaty definicji/statusów i nazwy elementów XML
-potwierdzenia, bez ich wartości, nazw pracowników, NIP-ów czy treści dokumentów.
-Porównaj kody z widokiem Enovy, podając, które oznaczają przygotowanie, wysłanie,
-przyjęcie i odrzucenie, oraz do jakiego miesiąca przypisywać deklaracje roczne.
-Sam eksport schematu nie pozwala rozstrzygnąć tych reguł. Pliki eksportów
-instalacji pozostają poza repozytorium.
+Znaczenie relacji i pól transmisji potwierdza opublikowana przez producenta
+[definicja bazy Soneta](https://github.com/soneta/EnovaDB/blob/master/EnovaDB/Generator/Deklaracje.business.xml).
+Odczyt używa kodów odpowiedzi MF: 200 z pobraną referencją UPO oznacza przyjęcie,
+301–304 przetwarzanie, 400–499 odrzucenie. Kody wewnętrzne Enovy pozostają surowe,
+bez zgadywania wartości enumów. [Opis kodów MF](https://podatki.gov.pl/e-deklaracje-zloz-deklaracje-podatkowa-online/informacje-podstawowe).
+Brak elektronicznej wersji deklaracji oznacza przygotowanie; pozostałe nierozpoznane
+stany są jawnie nieustalone. Data UPO pochodzi wyłącznie z elementu
+`DataWytworzeniaPotwierdzenia`; data wysyłki pozostaje pusta, ponieważ data próby
+transmisji nie potwierdza złożenia. `Stamp` to wersja wiersza, nie data.
 
-Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze workera:
+`queries/jpk.sql` odczytuje JPK VAT/V7M/V7K z `JednolitePK` (nazwy i typy kolumn
+potwierdzone we wszystkich czterech lokalnych eksportach). Wybiera najwyższy numer
+korekty, następnie ID. Pobiera tylko referencję z kolumny UPO, bez treści dokumentów
+ani kwot. Niepusty numer referencyjny w poprawnym XML UPO potwierdza przyjęcie;
+brak pliku lub UPO oznacza stan nieustalony. `StatusJPK` jest zachowany surowo.
+Nie obejmuje JPK CIT/KR/FA/MAG ani plików zewnętrznych nieobecnych w tej bazie.
+
+SQL jest instalowany razem z workerem i działa także dla zapisanych wcześniej
+konfiguracji. Puste pola deklaracji/JPK przywracają domyślne odczyty. Własny plik
+SQL można podać globalnie lub dla źródła; zastępuje odpowiedni odczyt wbudowany.
+Dla firm ze zmienionymi symbolami, niestandardowym XML UPO lub inną kolejnością
+korekt służy `profile-declarations.sql` i opcjonalny zamiennik SQL. Schematy JSON
+pozostają poza repozytorium. Zapytania nie były uruchamiane na bazach klientów.
+Terminy umów/badań/BHP i indywidualne deklaracje podatkowe pracowników nadal
+wymagają osobnego adaptera; nie są zastępowane dokumentami księgowymi.
+
+Kontrakty opcjonalnych zamienników SQL:
 
 - `payroll_query` / „Dokumenty kadrowe”: dwa parametry dat (początek włącznie,
   koniec wyłącznie), kolumny `nip`, `miesiac` (`YYYY-MM`), `rodzaj`, `liczba`.
@@ -419,7 +431,7 @@ Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze worker
   `nip`, `miesiac`, `department` (`accounting` albo `payroll`), `form` (np. JPK_VAT,
   CIT-8, PIT-11, ZUS DRA), `status`, `sent_at`, `upo` (referencja potwierdzenia),
   `upo_at`. Statusy: `prepared`, `processing`, `not_sent`, `sent`, `accepted`,
-  `rejected`, `not_applicable`. Dla `accepted` UPO nie może być puste. Daty mogą
+  `rejected`, `not_applicable`, `unknown`. Opcjonalne `raw_status` zachowuje kod źródła. Dla `accepted` UPO nie może być puste. Daty mogą
   być NULL, datą ISO lub znacznikiem czasu ISO; nie są dopowiadane przez importer.
   Zapytanie musi wybierać aktualny stan formularza, uwzględniając korekty; duplikat
   formularza/działu/miesiąca/pracownika jest błędem. Przypisanie formularzy rocznych lub

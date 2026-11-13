@@ -189,8 +189,9 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         }
         required = contracts[result_kind]
         optional = ({'rodzaje'} if result_kind == 'counts' else
-                    {'employee_id', 'employee_name', 'source_system'} if result_kind == 'declarations' else
-                    {'document_number'} if result_kind == 'hr_events' else set())
+                    {'employee_id', 'employee_name', 'source_system', 'raw_status'} if result_kind == 'declarations' else
+                    {'document_number'} if result_kind == 'hr_events' else
+                    {'raw_status'} if result_kind == 'jpk' else set())
         if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
             raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))
         limit = len(months) if result_kind in ('counts', 'jpk') else 20000

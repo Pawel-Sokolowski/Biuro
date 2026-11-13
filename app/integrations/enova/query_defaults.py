@@ -12,7 +12,7 @@ def with_query_defaults(config):
             override = str(source.get(name) or '').strip() or str(config.get(name) or '').strip()
             if override:
                 source[name] = override
-            elif name == 'payroll_query':
-                source[name] = str(bundled / 'payroll.sql')
+            elif name in ('payroll_query', 'declarations_query', 'jpk_query'):
+                source[name] = str(bundled / (name.removesuffix('_query') + '.sql'))
         sources.append(source)
     return {**config, 'sources': sources}

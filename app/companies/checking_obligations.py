@@ -9,6 +9,7 @@ from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
 
 MONTHLY_FORMS = (('JPKVAT', 'JPK VAT — ewidencja miesięczna'), ('VATUE', 'VAT-UE'),
+                 ('VAT8', 'VAT-8'), ('VAT9M', 'VAT-9M'), ('VAT12', 'VAT-12'), ('VAT27', 'VAT-27'),
                  ('PIT', 'Zaliczka PIT'), ('CIT', 'Zaliczka CIT'),
                  ('DRA', 'ZUS DRA'), ('RCA', 'ZUS RCA'), ('RSA', 'ZUS RSA'),
                  ('RPA', 'ZUS RPA'), ('RZA', 'ZUS RZA'),

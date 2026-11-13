@@ -454,6 +454,7 @@ class AccountingPage(QWidget):
                                 _date(entry.get('sent_at')), 'Tak' if entry.get('upo') else '—',
                                 _date(entry.get('upo_at')), entry.get('source_system', 'enova'),
                                 (declaration_issue(entry) or 'OK') +
+                                (f"; {entry['raw_status']}" if entry.get('raw_status') else '') +
                                 (f"; dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
                                  if entry.get('source_system') == 'platnik' and entry.get('source_id') else '')])
                 receipts.append(str(entry.get('upo') or 'Brak potwierdzenia UPO.'))

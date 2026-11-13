@@ -148,6 +148,8 @@ def validate_declarations(rows, source, months):
                               'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
                               'sent_at': _timestamp(row['sent_at']), 'upo': upo,
                               'upo_at': _timestamp(row['upo_at'])})
+        if row.get('raw_status'):
+            result[month][-1]['raw_status'] = str(row['raw_status'])[:256]
     return result
 
 

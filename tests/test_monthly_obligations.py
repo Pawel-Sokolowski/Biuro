@@ -21,6 +21,14 @@ class MonthlyScopeRulesTests(TestCase):
         self.assertEqual([entry['form'] for entry in declaration_entries(row, 'payroll')], ['ZUS DRA'])
         self.assertTrue(report_applies(row, 'RCA', '2026-10'))
 
+    def test_non_vat_company_can_have_eu_vat_and_special_vat_without_domestic_jpk(self):
+        row = {'status_vat': 'Zwolniony', 'checking_obligations': {'periods': {
+            '2026-01': {'vat_period': 'none', 'forms': {'VATUE': 'monthly', 'VAT9M': 'monthly'}}}}}
+        self.assertFalse(report_applies(row, 'JPK_VAT', '2026-11'))
+        self.assertTrue(report_applies(row, 'VAT-UE', '2026-11'))
+        self.assertTrue(report_applies(row, 'VAT-9M', '2026-11'))
+        self.assertFalse(report_applies(row, 'VAT-8', '2026-11'))
+
     def test_quarterly_vat_keeps_monthly_jpk_and_unknown_status_visible(self):
         row = {'status_vat': 'Czynny', 'vat_czynny': 0, 'checking_obligations': {'periods': {
             '2026-01': {'vat_period': 'quarterly', 'forms': {'JPKVAT': 'monthly', 'PIT': 'quarterly'}}}}}

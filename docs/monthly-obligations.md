@@ -30,3 +30,9 @@ Konfiguracja obowiązuje od wybranego miesiąca do następnej zmiany. Zmiany są
 przechowywane we wspólnej bazie, z kontrolą uprawnień edycji firmy i audytem.
 Otwieranie formularza bez zmiany ustawień niczego nie zapisuje. Roczna lista
 obowiązków jest odrębna i pozostaje bez zmian.
+
+VAT-UE oraz VAT-8/9M/12/27 mają oddzielne pola zakresu. Mogą dotyczyć firmy
+zwolnionej z krajowego VAT: brak krajowego VAT wyklucza JPK VAT/VAT-7, lecz
+nie usuwa zaznaczonych obowiązków VAT-UE lub szczególnych deklaracji VAT.
+Nowe formularze są domyślnie wyłączone w już skonfigurowanych profilach;
+trzeba zaznaczyć właściwy zakres od wybranego miesiąca.

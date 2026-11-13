@@ -5,6 +5,8 @@ param(
     [string]$TaskName = 'Biuro-Background-Worker',
     [switch]$CheckOnly,
     [switch]$NonInteractive,
+    [switch]$UseWorkerConfig,
+    [string]$ExpectedUserSid,
     [switch]$NoStart
 )
 $ErrorActionPreference = 'Stop'
@@ -87,6 +89,9 @@ try {
     }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($ExpectedUserSid -and $identity.User.Value -ne $ExpectedUserSid) {
+        throw 'UAC selected a different Windows account. Run worker setup and elevation under the same Windows account so the configuration remains available.'
+    }
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Run PowerShell or install_background_worker.cmd as Administrator to register a startup task for a Windows account.'
     }
@@ -94,10 +99,21 @@ try {
         throw "Task '$TaskName' already exists. Edit it in Task Scheduler or choose another -TaskName. It was not replaced."
     }
     Write-Output 'The task account needs access to the executable, PostgreSQL and its own Biuro configuration.'
-    Write-Output 'For the EXE, configure DB_URL and the shared BIO_ENCRYPTION_KEY in that Windows account''s %LOCALAPPDATA%\Biuro\.env (or its environment).'
+    Write-Output 'Use Biuro - konfiguracja workera to save PostgreSQL and shared key in this Windows account''s Biuro\worker.env.'
     Write-Output 'For sources, configure the project .env. Passwords are requested locally and are not written to the installer log.'
+    if ($UseWorkerConfig) {
+        $configPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Biuro\worker.env'
+        if (-not (Test-Path -LiteralPath $configPath)) { throw 'Worker configuration not found for this Windows account. Open Biuro - konfiguracja workera under the same account used for UAC.' }
+        $check = Start-Process -FilePath $program -ArgumentList '--worker --check-config' -WorkingDirectory $workingDirectory -Wait -PassThru
+        if ($check.ExitCode -ne 0) { throw 'Worker preflight failed. Open worker setup and check database, schema and shared encryption key. No task was registered.' }
+    }
     $credential = Get-Credential -UserName $identity.Name -Message 'Windows account for Biuro worker (same shared DB_URL and encryption key as Biuro)'
     if ($null -eq $credential) { throw 'Windows credential prompt was cancelled.' }
+    if ($UseWorkerConfig) {
+        $account = New-Object Security.Principal.NTAccount($credential.UserName)
+        $accountSid = $account.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($accountSid -ne $identity.User.Value) { throw 'Select the same Windows account that configured the worker. Another account has a different profile and configuration.' }
+    }
     $action = New-ScheduledTaskAction -Execute $program -Argument $arguments -WorkingDirectory $workingDirectory
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)

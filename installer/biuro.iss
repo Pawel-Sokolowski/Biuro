@@ -46,6 +46,8 @@ Name: "program"; Description: "Program Biuro — stanowisko użytkownika"; Types
 Name: "worker"; Description: "Worker na tym serwerze — zadania w tle i panel konfiguracji"
 
 [Files]
+Source: "..\scripts\export_platnik_schema.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
+Source: "..\scripts\export_platnik_schema.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 Source: "..\scripts\install_background_worker.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 Source: "..\scripts\install_background_worker.cmd"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 Source: "..\scripts\WORKER-SETUP.txt"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
@@ -56,6 +58,7 @@ Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.example"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
+Name: "{autoprograms}\Biuro - eksport struktury Płatnika"; Filename: "{app}\scripts\export_platnik_schema.cmd"; WorkingDir: "{app}"; Components: worker
 Name: "{autoprograms}\{#MyAppName} - konfiguracja workera"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-setup"; WorkingDir: "{app}"; Components: worker
 Name: "{autoprograms}\{#MyAppName} Worker"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-panel"; WorkingDir: "{app}"; Components: worker
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "Biuro.OfficeManager"; Components: program

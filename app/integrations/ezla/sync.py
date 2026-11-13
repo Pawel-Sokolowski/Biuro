@@ -24,7 +24,7 @@ def since_date(previous, today):
 
 
 def _metadata(report):
-    months, review = set(), False
+    months, review = set(), bool(report.issues)
     for item in report.certificates:
         if item.issues:
             review = True
@@ -115,7 +115,8 @@ def _run_sync(*, today=None, stop=None):
             # Keep the cursor and previous reports after any transport/decryption/validation failure.
             code = error.code if isinstance(error, ServiceError) else 'read_failed'
             set_setting(f'ezla_sync_{fid}', json.dumps({**previous, 'state': 'failed',
-                        'checked_at': stamp, 'error_code': code}))
+                        'checked_at': stamp, 'error_code': code,
+                        'http_status': error.http_status if isinstance(error,ServiceError) else None}))
             results.append({'company_id': fid, 'state': 'failed', 'error_code': code})
         finally:
             if index + 1 < len(companies) and not stop.is_set():

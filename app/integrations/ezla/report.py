@@ -53,6 +53,7 @@ class Report:
     payer_name: str
     generated_at: str
     certificates: list[Certificate]
+    issues: list[str] = field(default_factory=list)
 
 
 def _node(parent, tag, required=True):
@@ -105,6 +106,19 @@ def parse_report(data: bytes) -> Report:
     declared = _text(header, 'liczbaDokumentowEzla')
     if not re.fullmatch(r'[0-9]{1,6}', declared) or int(declared) != len(rows) or len(rows) > MAX_DOCUMENTS:
         raise ValueError('Liczba dokumentów e-ZLA nie zgadza się z zawartością raportu lub przekracza limit.')
+    correction_rows = root.findall('dokumentyEzlaK')
+    declared_k = _text(header, 'liczbaDokumentowEzlaK', False)
+    correction_count = int(declared_k) if re.fullmatch(r'[0-9]{1,6}', declared_k) else 0
+    if (_node(header, 'liczbaDokumentowEzlaK', False) is not None and not re.fullmatch(r'[0-9]{1,6}', declared_k)):
+        raise ValueError('Nieprawidłowa liczba dokumentów e-ZLA/K.')
+    if correction_count > MAX_DOCUMENTS or len(rows) + len(correction_rows) > MAX_DOCUMENTS:
+        raise ValueError('Liczba dokumentów e-ZLA/K przekracza limit.')
+    if correction_rows and correction_count != len(correction_rows):
+        raise ValueError('Liczba dokumentów e-ZLA/K nie zgadza się z zawartością raportu.')
+    report_issues = []
+    if correction_count and not correction_rows:
+        report_issues.append(f'ZUS wykazał {correction_count} dokumentów e-ZLA/K bez szczegółów. '
+                             'W raporcie cyklicznym PUE/eZUS włącz dołączanie ZLA/K w formie XML.')
     certificates, identities = [], {}
     for row in rows:
         person = _node(row, 'daneUbezpieczonego')
@@ -147,8 +161,30 @@ def parse_report(data: bytes) -> Report:
                 previous.issues.append('Powtórzony identyfikator dokumentu w raporcie')
         identities[identity] = certificate
         certificates.append(certificate)
+    for row in correction_rows:
+        person = _node(row, 'daneUbezpieczonego')
+        identifier = _node(person, 'identyfikator')
+        document = _node(row, 'daneDokumentu')
+        kind, value = _text(identifier, 'typ'), _text(identifier, 'wartosc', False)
+        issues = ['e-ZLA/K: skrócenie istniejącego zwolnienia — dopasuj dokument pierwotny; nie jest nową nieobecnością']
+        if kind.upper() != 'PESEL' or not re.fullmatch(r'[0-9]{11}', value):
+            issues.append('Brak poprawnego PESEL — wymaga osobnego dopasowania')
+        end = _text(document, 'dataZwolnieniaDo')
+        try:
+            end = _date(end)
+        except ValueError:
+            issues.append('Nieprawidłowa data skrócenia zwolnienia')
+        item = Certificate(employee_name=_text(person, 'imie') + ' ' + _text(person, 'nazwisko'),
+            employee_id=value, identifier_type=kind, series=_text(document, 'seria'), number=_text(document, 'numer'),
+            status='Skrócenie e-ZLA/K', issued_at='', start='', end=end, issues=issues)
+        identity = ('K', kind.upper(), value, item.series, item.number)
+        if identity in identities:
+            item.issues.append('Powtórzony dokument e-ZLA/K w raporcie')
+            identities[identity].issues.append('Powtórzony dokument e-ZLA/K w raporcie')
+        identities[identity] = item
+        certificates.append(item)
     return Report(nip=nip, payer_name=_text(payer, 'nazwaSkrocona', False), generated_at=generated,
-                  certificates=certificates)
+                  certificates=certificates, issues=report_issues)
 
 
 def read_report(path) -> Report:

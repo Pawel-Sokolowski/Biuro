@@ -99,7 +99,7 @@ class EzlaPreviewPanel(QWidget):
             reports = list(self.remote_reports.get(company_id, [])) + list(self.reports.get(company_id, {}).values())
             sync = decoded(company.get('ezla_sync'))
             failed = sync.get('state') == 'failed'
-            failure = str(ServiceError(sync.get('error_code'))) if failed else ''
+            failure = str(ServiceError(sync.get('error_code'), http_status=sync.get('http_status'))) if failed else ''
             if not reports:
                 status = 'Błąd pobierania ZUS' if failed else ('Brak raportów dla miesiąca' if sync.get('last_success') else 'Nie wczytano raportu XML')
                 review = failure or ('Brak dokumentów w pobranych raportach; nie potwierdza kompletności ZUS' if sync.get('last_success') else 'Brak danych z ZUS')
@@ -107,6 +107,7 @@ class EzlaPreviewPanel(QWidget):
                 records.append((company, None, status, review, info))
                 continue
             loaded += 1
+            report_notes = '; '.join(dict.fromkeys(note for result in reports for note in result['report'].issues))
             seen, visible = {}, []
             for result in reports:
                 for certificate in result['report'].certificates:
@@ -122,17 +123,17 @@ class EzlaPreviewPanel(QWidget):
                             continue
                     visible.append((certificate, result))
             if not visible:
-                if not self.only_attention:
+                if not self.only_attention or report_notes:
                     stamp = max(result['report'].generated_at for result in reports)
-                    records.append((company, None, 'Brak pozycji w raporcie dla miesiąca',
-                                    'Nie oznacza potwierdzenia kompletności danych ZUS', f'Ostatni wczytany raport: {stamp}'))
+                    records.append((company, None, 'Raport wymaga sprawdzenia' if report_notes else 'Brak pozycji w raporcie dla miesiąca',
+                                    report_notes or 'Nie oznacza potwierdzenia kompletności danych ZUS', f'Ostatni wczytany raport: {stamp}'))
                 continue
             for certificate, result in visible:
-                if self.only_attention and not failed and not certificate.issues and certificate.status == 'Wystawione':
+                if self.only_attention and not failed and not certificate.issues and certificate.status == 'Wystawione' and not report_notes:
                     continue
                 database = result.get('database') or 'Brak mapowania bazy Enovy'
                 info = f"NIP: {result['report'].nip}; baza Enovy: {database}; raport: {result['report'].generated_at}"
-                records.append((company, certificate, '', certificate.review + ('; ' + failure if failed else ''), info))
+                records.append((company, certificate, '', certificate.review + ('; ' + report_notes if report_notes else '') + ('; ' + failure if failed else ''), info))
         self.table.setRowCount(len(records))
         for row, (company, certificate, status, review, info) in enumerate(records):
             if certificate:

@@ -15,6 +15,7 @@ def discover(config, *, password=''):
         _, password = credentials(config)
     odbc = load_odbc()
     config = {**config, 'driver': resolve_driver(config, odbc)}
+    main_database = str(config.get('database') or '').strip() or 'master'
     def connect(database):
         conn = odbc.connect(sql_connection_string(config,database,config['username'],password),
                             timeout=10,attrs_before={101:1})
@@ -26,14 +27,14 @@ def discover(config, *, password=''):
         return conn
     root = None
     try:
-        root = connect('master')
+        root = connect(main_database)
         cursor = root.cursor()
         cursor.execute('''SELECT name FROM sys.databases
             WHERE database_id>4 AND state=0 AND HAS_DBACCESS(name)=1 ORDER BY name''')
         databases = [str(row[0]) for row in cursor.fetchmany(501)]
     except Exception as error:
         diagnostic = describe_sql_error(error,secrets=(password,config.get('password_enc')))
-        raise SqlOperationError(diagnostic,{**config,'database':'master'},'Enova — odczyt listy baz') from None
+        raise SqlOperationError(diagnostic,{**config,'database':main_database},'Enova — odczyt listy baz') from None
     finally:
         if root is not None:
             root.close()

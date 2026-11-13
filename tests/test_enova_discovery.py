@@ -29,12 +29,25 @@ class EnovaDiscoveryTests(TestCase):
         driver.connect.side_effect = [root,company]
         with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
-            result = discover({'server':r'192.168.1.16\SQLEMKA','username':'reader'},password='secret')
+            result = discover({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader'},password='secret')
         self.assertEqual(result['matches'],{'1112223344':['ALFA']})
         company.cursor.return_value.execute.assert_any_call('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
         root.close.assert_called_once()
         company.close.assert_called_once()
         self.assertEqual(driver.connect.call_args.kwargs['attrs_before'],{101:1})
+        self.assertIn('DATABASE={Biuro_rachunkowe}',driver.connect.call_args_list[0].args[0])
+        self.assertIn('DATABASE={ALFA}',driver.connect.call_args_list[1].args[0])
+
+    def test_selected_main_database_failure_is_reported_without_falling_back_to_master(self):
+        driver = Mock()
+        driver.connect.side_effect = Exception('42000','Cannot open database (4060)')
+        with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
+             patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'), \
+             self.assertRaises(SqlOperationError) as caught:
+            discover({'server':r'ENOVA\SQLEMKA','database':'Biuro_rachunkowe','username':'reader'},password='secret')
+        self.assertEqual(caught.exception.diagnostic['database'],'Biuro_rachunkowe')
+        self.assertEqual(driver.connect.call_count,1)
+        self.assertIn('DATABASE={Biuro_rachunkowe}',driver.connect.call_args.args[0])
 
     def test_master_connection_error_keeps_actual_state_and_redacts_password(self):
         driver = Mock()

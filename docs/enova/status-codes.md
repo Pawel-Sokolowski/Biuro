@@ -48,7 +48,7 @@ XML odczytujemy z kolumn Unicode `ntext`; deklarację kodowania XML usuwamy prze
 konwersją na typ SQL `xml`, ponieważ zawartość jest już tekstem Unicode, a
 nagłówek może deklarować UTF-8. Niepoprawne XML nie daje potwierdzenia UPO.
 Data potwierdzenia jest zwracana jako ISO 8601, co omija nieobsługiwany przez
-standardowy odczyt pyodbc typ SQL `datetimeoffset` i zachowuje strefę czasową.
+standardowy odczyt pyodbc typ SQL `datetimeoffset` i zachowuje moment z uwzględnieniem strefy czasowej (SQL może zwrócić UTC).
 
 Workflow **Import SQL Server** uruchamia dołączone zapytania przez ODBC na
 SQL Server 2022 z syntetycznymi danymi i użytkownikiem posiadającym wyłącznie

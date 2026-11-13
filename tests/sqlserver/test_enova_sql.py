@@ -1,5 +1,5 @@
 """Execute real shipped T-SQL on SQL Server, using entirely synthetic records."""
-from datetime import date
+from datetime import date, datetime
 import os
 from pathlib import Path
 import unittest
@@ -83,7 +83,7 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         self.writer.execute("INSERT INTO dbo.ETransmisje VALUES (1, 1, 2, '2026-11-05', 200)")
         row, = self.query('declarations.sql')
         self.assertEqual((row['nip'], row['form'], row['status'], row['upo']), ('1112223344', 'VAT-UE', 'accepted', 'REF-CI'))
-        self.assertIn('2026-11-05T12:30:00', row['upo_at'])
+        self.assertEqual(datetime.fromisoformat(row['upo_at']), datetime.fromisoformat('2026-11-05T12:30:00+01:00'))
         self.assertIsNone(row['sent_at'])
         self.assertNotIn('<Potwierdzenie', str(row))
 
@@ -104,6 +104,21 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         self.assertEqual(self.query('declarations.sql')[0]['status'], 'sent')
         self.writer.execute("INSERT INTO dbo.ETransmisje VALUES (2, 1, 2, '2026-11-06', 400)")
         self.assertEqual(self.query('declarations.sql')[0]['status'], 'rejected')
+
+    def test_electronic_declaration_codes_and_old_receipts_cannot_fabricate_acceptance(self):
+        for status, expected in ((0, 'unknown'), (1, 'prepared'), (2, 'not_sent'),
+                                 (3, 'sent'), (4, 'unknown'), (99, 'failed'),
+                                 (100, 'cancelled'), (200, 'unknown'), (999, 'unknown')):
+            with self.subTest(status=status):
+                self.writer.execute('DELETE FROM dbo.EDeklaracje')
+                self.writer.execute('DELETE FROM dbo.Deklaracje')
+                self.declaration(status=status)
+                self.assertEqual(self.query('declarations.sql')[0]['status'], expected)
+        self.writer.execute('DELETE FROM dbo.EDeklaracje')
+        self.writer.execute('DELETE FROM dbo.Deklaracje')
+        self.declaration(status=99, confirmation=receipt())
+        self.writer.execute("INSERT INTO dbo.ETransmisje VALUES (1, 1, 2, '2026-11-05', 200)")
+        self.assertEqual(self.query('declarations.sql')[0]['status'], 'failed')
 
     def test_jpk_prepared_processing_and_failed_states_require_no_guessing(self):
         for status, expected in ((10, 'prepared'), (15, 'prepared'), (20, 'not_sent'),

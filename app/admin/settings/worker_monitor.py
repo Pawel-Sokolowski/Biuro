@@ -169,7 +169,7 @@ class WorkerMonitor(QWidget):
         rows = []
         for row in data['companies']:
             sync = row['sync']
-            error = str(ServiceError(sync.get('error_code'))) if sync.get('state') == 'failed' else ''
+            error = str(ServiceError(sync.get('error_code'), http_status=sync.get('http_status'))) if sync.get('state') == 'failed' else ''
             rows.append([row['nazwa'], row['nip'], 'Tak' if row['id'] in data['ezla_companies'] else 'Nie',
                          STATES.get(sync.get('state'), 'Nie sprawdzono'), sync.get('checked_at'),
                          sync.get('last_success'), sync.get('new_reports'), error])

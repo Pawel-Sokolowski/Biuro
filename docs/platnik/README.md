@@ -81,4 +81,4 @@ katalogiem nazw, po weryfikacji metadanych. Nie uruchamiaj samego szablonu w SSM
 Nagłówki nie mają pracownika, pozycja imienna wymaga ID i nazwy. Brak wiersza
 oznacza brak dokumentu w tym odczycie, a nie status „niewysłany”.
 
-Instalator zawiera SQL automatycznie. Wersja aplikacji i workera pozostaje 1.4.6.
+Instalator zawiera SQL automatycznie. Wersja aplikacji i workera pozostaje 1.5.0.

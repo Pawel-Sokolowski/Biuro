@@ -13,6 +13,7 @@ from app.integrations.ezla.report import parse_report
 from app.integrations.enova.document_counts import normalize_nip
 from app.utils.crypto import encrypt_password, decrypt_password
 from app.utils.months import month_bounds
+from app.services.worker_activity import record
 
 
 def since_date(previous, today):
@@ -52,6 +53,10 @@ def wait_between(seconds, stop):
 
 
 def progress(stage, **details):
+    activity_stage = {'Pobieranie i odczyt ZIP': 'downloading', 'Zapisywanie raportów': 'saving',
+                      'Przerwa między firmami': 'pause', 'Przerwano': 'cancelled'}.get(stage)
+    if activity_stage:
+        record('ezla', activity_stage, company_id=details.get('company_id'))
     set_setting('ezla_progress', json.dumps({'stage': stage, **details,
                 'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}))
 
@@ -91,6 +96,7 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
             with get_conn() as conn:
                 if not conn.execute('SELECT pg_try_advisory_xact_lock(748211,%s)', (fid,)).fetchone()[0]:
                     results.append({'company_id': fid, 'state': 'busy'})
+                    record('ezla', 'busy', company_id=fid)
                     continue
                 old = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (f'ezla_sync_{fid}',)).fetchone()
                 previous = json.loads(old[0]) if old else {}
@@ -115,6 +121,7 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                 _write(conn, f'ezla_sync_{fid}', {'state': 'ok', 'last_success': stamp,
                        'checked_at': stamp, 'report_count': len(reports), 'new_reports': added})
                 results.append({'company_id': fid, 'state': 'ok', 'new_reports': added})
+            record('ezla', 'downloaded', company_id=fid, count=len(reports))
         except Exception as error:
             # Keep the cursor and previous reports after any transport/decryption/validation failure.
             code = error.code if isinstance(error, ServiceError) else 'read_failed'
@@ -122,6 +129,7 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                         'checked_at': stamp, 'error_code': code,
                         'http_status': error.http_status if isinstance(error,ServiceError) else None}))
             results.append({'company_id': fid, 'state': 'failed', 'error_code': code})
+            record('ezla', 'failed', company_id=fid, error_type=type(error).__name__)
         finally:
             if index + 1 < len(companies) and not stop.is_set():
                 delay = config['error_pause_seconds'] if results and results[-1]['state'] == 'failed' else config['pause_seconds']
@@ -129,7 +137,8 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                          resume_at=(datetime.now(ZoneInfo('Europe/Warsaw')) + timedelta(seconds=delay)).isoformat())
                 wait_between(delay, stop)
     progress('Przerwano' if stop.is_set() else 'Zakończono', processed=len(results), total=len(companies))
-    return {'companies': len(results), 'failed': sum(row['state'] == 'failed' for row in results), 'results': results}
+    return {'mode': 'cancelled' if stop.is_set() else 'completed',
+            'companies': len(results), 'failed': sum(row['state'] == 'failed' for row in results), 'results': results}
 
 
 def load_reports(actor_id, month):

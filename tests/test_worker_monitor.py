@@ -41,6 +41,34 @@ class WorkerMonitorTests(TestCase):
         finally:
             panel.close()
 
+    def test_live_log_resolves_company_filters_and_follows_new_progress(self):
+        now = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+        with patch('app.security.authorization.is_administrator', return_value=True):
+            panel = WorkerMonitor(1)
+        try:
+            data = {'heartbeat': {'checked_at': now, 'enabled': True}, 'progress': {},
+                    'ezla_enabled': True, 'ezla_companies': [7],
+                    'companies': [{'id': 7, 'nazwa': 'Firma X', 'nip': '', 'sync': {}}],
+                    'events': [{'at': now, 'job': 'ezla', 'stage': 'downloading', 'company_id': 7},
+                               {'at': now, 'job': 'enova', 'stage': 'reading', 'company_id': 7}]}
+            panel.render(data)
+            self.assertEqual(panel.logs.rowCount(), 2)
+            self.assertEqual(panel.logs.item(0, 2).text(), 'Firma X')
+            self.assertEqual(panel.logs.item(0, 3).text(), 'Pobieranie e-ZLA')
+            panel.log_filter.setCurrentIndex(panel.log_filter.findData('ezla'))
+            self.assertEqual(panel.logs.rowCount(), 1)
+            data['events'].append({'at': now, 'job': 'ezla', 'stage': 'downloaded', 'company_id': 7, 'count': 0})
+            panel.render(data)
+            self.assertEqual(panel.logs.rowCount(), 2)
+            self.assertIn('Pobrano e-ZLA', panel.logs.item(1, 3).text())
+            self.assertIn('0', panel.logs.item(1, 3).text())
+            self.assertEqual(panel.timer.interval(), 2000)
+            self.assertTrue(panel.follow_logs.isChecked())
+            from app.admin.settings.worker_monitor import state_label
+            self.assertEqual(state_label({'state': 'skipped', 'result': {'mode': 'disabled'}}), 'Wyłączono w ustawieniach usługi')
+        finally:
+            panel.close()
+
     def test_stale_heartbeat_is_not_reported_as_a_running_worker(self):
         with patch('app.security.authorization.is_administrator', return_value=True):
             panel = WorkerMonitor(1)

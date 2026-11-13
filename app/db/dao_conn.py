@@ -49,6 +49,7 @@ def _row_factory(cursor):
 _POOL_MAX = 8
 _pool: dict[tuple[str, str | None], ConnectionPool] = {}
 _coordination_pool: dict[tuple[str, str | None], ConnectionPool] = {}
+_activity_pool: dict[tuple[str, str | None], ConnectionPool] = {}
 _pool_lock = threading.Lock()
 
 
@@ -97,22 +98,28 @@ class PooledConnection:
 def close_pool(key: str | None = None) -> None:
     """Zamyka bezczynne po??czenia z puli dla danego schematu (u?ywane m.in. w testach)."""
     with _pool_lock:
-        pools = [mapping.pop(k) for mapping in (_pool, _coordination_pool) for k in list(mapping) if k[1] == key]
+        pools = [mapping.pop(k) for mapping in (_pool, _coordination_pool, _activity_pool) for k in list(mapping) if k[1] == key]
     for pool in pools:
         pool.close()
 
 
 def close_all_pools() -> None:
     with _pool_lock:
-        pools = [pool for mapping in (_pool, _coordination_pool) for pool in mapping.values()]
+        pools = [pool for mapping in (_pool, _coordination_pool, _activity_pool) for pool in mapping.values()]
         _pool.clear()
         _coordination_pool.clear()
+        _activity_pool.clear()
     for pool in pools:
         pool.close()
 
 
 def get_conn() -> PooledConnection:
     return _get_connection(_pool, _POOL_MAX)
+
+
+def get_activity_conn() -> PooledConnection:
+    """Progress writes must not wait for data slots held by the jobs they observe."""
+    return _get_connection(_activity_pool, 2)
 
 
 def get_coordination_conn() -> PooledConnection:

@@ -1,4 +1,4 @@
-# Konfiguracja i aktualizacja workera — 1.4.6
+# Konfiguracja i aktualizacja workera — 1.5.0
 
 Zakres raportów firmy ustaw w [rozliczeniach miesięcznych i kwartalnych](monthly-obligations.md).
 Odczyt RCA/DRA jest opisany w [instrukcji Płatnika](platnik/README.md).

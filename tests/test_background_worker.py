@@ -128,6 +128,22 @@ class WorkerTests(DbTestCase):
             self.assertEqual(enova_job(day(4))['mode'], 'checked_today')
             self.assertEqual(importer.call_count, 2)
 
+    def test_changing_jpk_query_invalidates_daily_worker_marker(self):
+        from app.worker import enova_job
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        config = {'enabled': True, 'checking_enabled': True, 'sources': [
+            {'nip': '1112223344', 'database': 'ClientA', 'jpk_query': 'first.sql'}]}
+        now = datetime(2026, 11, 12, 13, tzinfo=ZoneInfo('Europe/Warsaw'))
+        with patch('app.integrations.enova.connection_settings.load_connection', return_value=config), \
+                patch('app.integrations.enova.document_counts.run_import', return_value=[{'ok': True}]) as importer, \
+                patch('app.integrations.enova.checking.run_checking_import', return_value=[{'ok': True}]):
+            enova_job(now)
+            self.assertEqual(enova_job(now)['mode'], 'checked_today')
+            config['sources'][0]['jpk_query'] = 'replacement.sql'
+            enova_job(now)
+            self.assertEqual(importer.call_count, 2)
+
     def test_enova_connection_without_company_mapping_does_not_consume_daily_run(self):
         from app.worker import enova_job
         from app.db.dao_app_settings import get_setting

@@ -63,6 +63,10 @@ for pkg in CALDAV_PACKAGES:
     datas += collect_data_files(pkg)
 # psycopg 3 + wbudowana libpq (psycopg_binary) - bez tego aplikacja nie polaczy sie z PostgreSQL
 binaries = []
+# Include Playwright driver, but use the server-installed Edge/Chrome (no browser download).
+pw_datas, pw_binaries, pw_hidden = collect_all("playwright")
+datas += pw_datas
+binaries += pw_binaries
 mt940_datas, mt940_binaries, mt940_hidden = collect_all("mt940")
 datas += mt940_datas
 datas += copy_metadata("mt-940")
@@ -91,6 +95,7 @@ a = Analysis(
     hiddenimports=[
         *collect_submodules("app", filter=runtime_module),
         *mt940_hidden,
+        *pw_hidden,
         # Explicit entry points for a desktop-only or worker-only installation.
         "app.worker_setup_ui",
         "app.worker_install_ui",

@@ -59,8 +59,10 @@ Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.exam
 Name: "{autoprograms}\{#MyAppName} - konfiguracja workera"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-setup"; WorkingDir: "{app}"; Components: worker
 Name: "{autoprograms}\{#MyAppName} Worker"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-panel"; WorkingDir: "{app}"; Components: worker
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "Biuro.OfficeManager"; Components: program
-Name: "{autoprograms}\{#MyAppName} - aktualizacja bazy"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--migrate"
+Name: "{autoprograms}\{#MyAppName} - aktualizacja bazy"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--migrate"; Components: program
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Components: program
+
+Name: "{autoprograms}\{#MyAppName} - aktualizacja bazy workera"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-migrate"; Components: worker
 
 [Tasks]
 Name: "odbcdriver"; Description: "Zainstaluj Microsoft ODBC Driver 18 dla połączenia Enova (wymaga uprawnień administratora)"; GroupDescription: "Połączenie Enova:"; Check: NeedsOdbcDriver

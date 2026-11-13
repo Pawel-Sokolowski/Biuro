@@ -112,7 +112,7 @@ def _check_tokens(conn, key):
     for row in conn.execute(
             "SELECT id,email,haslo_enc FROM konta_email WHERE NULLIF(haslo_enc,'') IS NOT NULL").fetchall():
         tokens.append((f'Poczta #{row[0]} ({row[1]})', row[2]))
-    for row in conn.execute("SELECT klucz,wartosc FROM app_settings WHERE klucz IN ('enova_connection','ezla_service','saldeo_web') OR wartosc LIKE 'gAAAAA%'").fetchall():
+    for row in conn.execute("SELECT klucz,wartosc FROM app_settings WHERE klucz IN ('enova_connection','ezla_service','saldeo_web','platnik_connection') OR wartosc LIKE 'gAAAAA%'").fetchall():
         if row[1].startswith('gAAAAA'):
             tokens.append((f'Ustawienie {row[0]}', row[1]))
         else:

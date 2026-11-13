@@ -20,7 +20,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import load_settings
 
 logger = logging.getLogger(__name__)
-JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo')
+JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik')
 
 
 def mail_job(stop=None):
@@ -119,11 +119,16 @@ def saldeo_job(stop=None):
     return run(stop)
 
 
+def platnik_job():
+    from app.integrations.platnik.holidays import worker_job
+    return worker_job()
+
+
 def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
         return {'mail': lambda: mail_job(stop), 'reminders': reminders_job,
-                'invoices': invoices_job, 'enova': enova_job, 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop)}[name]()
+                'invoices': invoices_job, 'enova': enova_job, 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job}[name]()
 
 
 @contextmanager

@@ -32,6 +32,9 @@ class BankReviewSafetyTests(unittest.TestCase):
         ]
         self.choices_patch = patch("app.invoices.payments_ui.list_invoice_choices", return_value=self.invoices)
         self.transfers_patch = patch("app.invoices.payments_ui.list_unsettled_transfers", return_value=self.transfers)
+        companies_patch = patch("app.invoices.payments_ui.list_company_choices", return_value=[])
+        companies_patch.start()
+        self.addCleanup(companies_patch.stop)
         summary_patch = patch("app.invoices.payments_ui.bank_import_summary", return_value={"total": 2, "database": "test", "schema": "public"})
         summary_patch.start()
         self.addCleanup(summary_patch.stop)
@@ -44,7 +47,7 @@ class BankReviewSafetyTests(unittest.TestCase):
 
     def test_non_pln_import_is_visible_without_offering_settlement(self):
         self.transfers[0]["waluta"] = "EUR"
-        self.dialog.refresh()
+        self.dialog.all_imports.setChecked(True)
         self.assertTrue(self.dialog.all_imports.isChecked())
         self.assertEqual(self.dialog.table.rowCount(), 2)
         self.assertFalse(self.dialog.table.cellWidget(0, self.dialog.COL_INVOICE).isEnabled())
@@ -53,6 +56,14 @@ class BankReviewSafetyTests(unittest.TestCase):
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, patch.object(QMessageBox, "warning"):
             self.dialog._confirm()
         confirm.assert_not_called()
+
+    def test_default_queue_requests_only_unsettled_transfers_and_history_is_optional(self):
+        with patch('app.invoices.payments_ui.list_unsettled_transfers',return_value=[]) as read:
+            self.dialog.refresh()
+            self.assertFalse(self.dialog.all_imports.isChecked())
+            read.assert_called_once_with(1,include_all=False,limit=100)
+            self.dialog.all_imports.setChecked(True)
+            self.assertTrue(read.call_args.kwargs['include_all'])
 
     def test_editing_invoice_selects_its_transfer_and_caps_split_amount(self):
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(0)
@@ -381,7 +392,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         self.assertEqual(texts(page.tab_wystawione), [
             "Podgląd faktury", "JPK_V7M", "Wystaw korektę", "Anuluj fakturę", "Pobierz z KSeF",
             "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Status wysyłki KSeF", "Rozlicz MT940", "Zapłacono",
-            "Wyślij pdf e-mailem", "Przenieś do kosza", "Kosz…"])
+            "Wyślij pdf e-mailem", "Przypomnij o płatności…", "Przenieś do kosza", "Kosz…"])
         drafts = texts(page.tab_robocze)
         self.assertEqual(drafts[:2], ["Generuj faktury", "Wystaw faktury"])
         general = [page.btn_manual.text(), page.btn_contractors.text()]

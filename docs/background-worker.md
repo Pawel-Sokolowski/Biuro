@@ -222,3 +222,21 @@ nieużywanej w tym trybie `.env`. Jawny import w trybie desktopowym zapisuje zna
 odziedziczoną zmienną klucza po restarcie. Inne zmienne, w tym DB_URL, zachowują
 wcześniejsze reguły pierwszeństwa. Bez jawnego wyboru znacznika nadal obowiązuje
 pierwszeństwo zmiennych środowiskowych opisane wyżej.
+
+
+## Bieżące logi (1.5.0)
+
+W panelu workera otwórz **Logi**. Zdarzenia odświeżają się co dwie sekundy,
+również z innego komputera niż serwer workera. Wybierz zadanie (np. e-ZLA) i
+pozostaw włączone **Śledź nowe zdarzenia**, aby widok przewijał się na koniec.
+Wyłączenie śledzenia pozwala przeczytać starsze wpisy bez przewijania przy odświeżaniu.
+Dla e-ZLA widać firmę, rozpoczęcie pobierania, zapis, wynik z liczbą raportów,
+błąd lub przerwę; Enova i formularze Płatnika zgłaszają odczyt per firma.
+Zakończenie pobierania e-ZLA oznacza zapis w Biuro, nie import do Enovy.
+
+Historia zachowuje ostatnie 500 zdarzeń postępu. Zdarzenia zapisują się niezależnie
+od transakcji importu, więc pozostają widoczne podczas długiego pobierania i po
+błędzie. Pełniejsze logi rotacyjne są w katalogu danych workera, w `logs/biuro.log`.
+Brak aktualnego sygnału w panelu oznacza ostatni zapisany stan, nie aktywny postęp.
+Zadania wyłączone, oczekujące na godzinę lub sprawdzone dziś mają stan
+„Bez pobierania”, zamiast udawać zakończone pobranie.

@@ -21,13 +21,8 @@ def load_connection():
     config.setdefault('payroll_query', '')
     config.setdefault('hr_events_query', '')
     config['_directory'] = Path(__file__).resolve().parents[3] / 'docs' / 'enova'
-    for source in config['sources']:
-        for name in ('declarations_query', 'payroll_query', 'hr_events_query'):
-            if config.get(name):
-                source[name] = config[name]
-        if config.get('jpk_query'):
-            source['jpk_query'] = config['jpk_query']
-    return config
+    from app.integrations.enova.query_defaults import with_query_defaults
+    return with_query_defaults(config)
 
 
 def save_connection(config, *, actor_id, password=''):
@@ -50,6 +45,8 @@ def save_connection(config, *, actor_id, password=''):
     # Connection credentials can be saved before database discovery/mapping.
     # Import execution checks that at least one company source is configured.
     saved = {key: config[key] for key in ('server', 'username', 'enabled', 'months_back', 'sources')}
+    from app.integrations.enova.query_defaults import saved_source
+    saved['sources'] = [saved_source(source) for source in config['sources']]
     saved['database'] = str(config.get('database') or '').strip()
     from app.integrations.enova.discovery import query_timeout
     saved['discovery_query_timeout'] = query_timeout(config)

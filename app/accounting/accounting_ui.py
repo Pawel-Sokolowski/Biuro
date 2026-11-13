@@ -96,7 +96,7 @@ class AccountingPage(QWidget):
             selector = QComboBox()
             for title, status in [('Wszystkie deklaracje', ''), ('Do wysłania', 'to_send'),
                                   ('Wysłane', 'sent'), ('Oczekujące na UPO', 'awaiting'),
-                                  ('Przyjęte z UPO', 'accepted'), ('Odrzucone', 'rejected')]:
+                                  ('Przyjęte z UPO', 'accepted'), ('Odrzucone lub z błędem', 'rejected')]:
                 selector.addItem(title, status)
             self.declaration_filters[department] = selector
             declaration_layout.addWidget(selector)
@@ -132,13 +132,18 @@ class AccountingPage(QWidget):
                 from app.accounting.holiday_ui import ContributionHolidays
                 self.holiday_panel = ContributionHolidays(actor_id,self)
                 self._add_report(department,'Wakacje składkowe — Płatnik (rocznie)','holidays',self.holiday_panel)
+                from app.accounting.annual_zus_ui import AnnualZusPanel
+                self.annual_zus_panel = AnnualZusPanel(actor_id, self)
+                self._add_report(department, 'ZUS IWA — Płatnik (rocznie)', 'annual:IWA', self.annual_zus_panel)
+                self._add_report(department, 'ZUS ZSWA — Płatnik (rocznie)', 'annual:ZSWA', self.annual_zus_panel)
             self.tabs.addTab(sections, label)
             report_selector.currentIndexChanged.connect(self.filter_rows)
         self.table = self.tables['accounting']
         layout.addWidget(self.tabs)
         from app.accounting.refresh_ui import CheckingRefreshControls
         self.refresh_controls = CheckingRefreshControls(actor_id,self.refresh_companies,self.selected_company_ids,
-            lambda kind:self.holiday_panel.year.value() if kind=='platnik' else self.month.date().toString('yyyy-MM'),self.refresh_async,self)
+            lambda kind:self.holiday_panel.year.value() if kind=='platnik' else
+            self.annual_zus_panel.year.value() if kind=='platnik_annual' else self.month.date().toString('yyyy-MM'),self.refresh_async,self)
         layout.addWidget(self.refresh_controls)
         self.source_note = QLabel()
         self.source_note.setWordWrap(True)
@@ -197,25 +202,36 @@ class AccountingPage(QWidget):
     def yearly_selected(self):
         return (self.tabs.currentIndex()==1 and self.report_selectors['payroll'].currentData()=='holidays')
 
+    def annual_zus_selected(self):
+        return self.tabs.currentIndex() == 1 and str(self.report_selectors['payroll'].currentData()).startswith('annual:')
+
     def update_period_controls(self,*_):
-        annual = self.yearly_selected()
+        annual = self.yearly_selected() or self.annual_zus_selected()
         for widget in (self.month,self.tax_filter,self.attention,self.message,self.source_note):
             widget.setVisible(not annual)
         if hasattr(self,'refresh_controls'):
             payroll = self.tabs.currentIndex()==1
             self.refresh_controls.buttons['enova'].setVisible(not annual)
             self.refresh_controls.buttons['ezla'].setVisible(payroll and not annual)
-            self.refresh_controls.buttons['platnik'].setVisible(annual)
+            self.refresh_controls.buttons['platnik'].setVisible(self.yearly_selected())
+            self.refresh_controls.buttons['platnik_annual'].setVisible(self.annual_zus_selected())
+            self.refresh_controls.buttons['platnik_declarations'].setVisible(payroll and not annual)
 
     def refresh_companies(self):
         if self.yearly_selected():
             return self.holiday_panel.payload.get('companies',[])
-        return self.rows
+        if self.annual_zus_selected():
+            return self.annual_zus_panel.companies()
+        from app.companies.checking_obligations import report_applies
+        department = 'payroll' if self.tabs.currentIndex() == 1 else 'accounting'
+        form = self._selected_form(department)
+        return [row for row in self.rows if not form or report_applies(row, form)]
 
     def selected_company_ids(self):
         department = 'payroll' if self.tabs.currentIndex()==1 else 'accounting'
         key = self.report_selectors[department].currentData() or 'documents'
-        table = (self.holiday_panel.table if key=='holidays' else self.ezla_panel.table if key=='ezla'
+        table = (self.annual_zus_panel.table if key.startswith('annual:') else
+                 self.holiday_panel.table if key=='holidays' else self.ezla_panel.table if key=='ezla'
                  else self.hr_table if key.startswith('hr') else self.comparison_tables['accounting'] if key=='comparison'
                  else self.declaration_tables[department] if key=='declarations' or key.startswith('form:')
                  else self.tables[department])
@@ -239,6 +255,9 @@ class AccountingPage(QWidget):
         if self.yearly_selected():
             self.holiday_panel.refresh()
             return
+        if self.annual_zus_selected():
+            self.annual_zus_panel.refresh()
+            return
         month = self.month.date().toString('yyyy-MM')
         def read():
             rows = list_accounting(self.actor_id, month)
@@ -258,6 +277,7 @@ class AccountingPage(QWidget):
         self.source_note.setText('Nie udało się odczytać danych: ' + str(exc))
 
     def render(self, rows, month):
+        rows = [{**row, 'checking_period': month} for row in rows]
         self.rows, self.period = rows, month
         self.filter_rows()
 
@@ -265,6 +285,9 @@ class AccountingPage(QWidget):
         selected = self._selected_form(department)
         if selected:
             entries = [entry for entry in declaration_entries(row, department) if form_matches(entry['form'], selected)]
+            from app.accounting.report_types import EVENT_FORMS
+            if form_key(selected) in EVENT_FORMS and not entries and decoded(row.get('platnik_declarations')).get('imported_at'):
+                return False  # No registration event is not a missed monthly filing.
             return not entries or any(declaration_issue(entry) for entry in entries)
         report_key = self.report_selectors[department].currentData()
         if report_key.startswith('hr'):
@@ -282,6 +305,10 @@ class AccountingPage(QWidget):
             self._update_report_choices('payroll')
             self.holiday_panel.set_company_filter(self.search.text().strip())
             return
+        if self.annual_zus_selected():
+            form = self.report_selectors['payroll'].currentData().split(':', 1)[1]
+            self.annual_zus_panel.set_filter(form, self.search.text())
+            return
         query, selected = self.search.text().strip().casefold(), self.tax_filter.currentData()
         rows = [row for row in self.rows
                 if (not selected or (company_accounting_type(row) or 'OTHER') == selected)
@@ -290,7 +317,10 @@ class AccountingPage(QWidget):
         horizon = self.hr_range.currentData()
         for department in self.tables:
             self._update_report_choices(department)
-            visible = [row for row in rows if not self.attention.isChecked() or self._report_attention(row, department, today, horizon)]
+            from app.companies.checking_obligations import report_applies
+            form = self._selected_form(department)
+            applicable = [row for row in rows if not form or report_applies(row, form)]
+            visible = [row for row in applicable if not self.attention.isChecked() or self._report_attention(row, department, today, horizon)]
             self._render_table(visible, department)
             if department == 'accounting':
                 self._render_comparisons(visible, department)
@@ -303,7 +333,7 @@ class AccountingPage(QWidget):
         missing_declarations = sum(decoded(row.get('checking')).get('declarations') is None for row in rows)
         self.source_note.setText(f'Firmy: {len(rows)}. Brak pełnego odczytu dokumentów: {missing_reports}; '
                                  f'brak odczytu kadr: {missing_payroll}; brak odczytu deklaracji: {missing_declarations}. '
-                                 'Źródła kadrowe i deklaracje/UPO wymagają skonfigurowania w połączeniu Enova. '
+                                 'Listy płac odczytuje Enova, formularze ZUS — Płatnik. Brak potwierdzenia nie oznacza przyjęcia. '
                                  'Liczba do faktury pochodzi z Widoku miesięcznego.')
 
     def _render_table(self, rows, department):
@@ -413,17 +443,20 @@ class AccountingPage(QWidget):
                            'sent': status in ('sent', 'processing', 'accepted'),
                            'awaiting': status in ('sent', 'processing', 'accepted') and not entry.get('upo'),
                            'accepted': status == 'accepted' and bool(entry.get('upo')),
-                           'rejected': status == 'rejected'}
+                           'rejected': status in ('rejected', 'failed')}
                 if selected and not matches[selected]:
                     continue
                 employee = entry.get('employee_name') or 'Cała firma / zestaw'
                 if entry.get('employee_id'):
                     employee += ' (' + entry['employee_id'] + ')'
                 records.append([row.get('nazwa'), owner, employee, entry['form'],
-                                STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
+                                entry.get('status_text') or STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
                                 _date(entry.get('sent_at')), 'Tak' if entry.get('upo') else '—',
                                 _date(entry.get('upo_at')), entry.get('source_system', 'enova'),
-                                declaration_issue(entry) or 'OK'])
+                                (declaration_issue(entry) or 'OK') +
+                                (f"; {entry['raw_status']}" if entry.get('raw_status') else '') +
+                                (f"; dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
+                                 if entry.get('source_system') == 'platnik' and entry.get('source_id') else '')])
                 receipts.append(str(entry.get('upo') or 'Brak potwierdzenia UPO.'))
         self._fill(table, ['Firma', 'Opiekun w biurze', 'Pracownik firmy', 'Deklaracja', 'Status',
                            'Data wysyłki', 'UPO', 'Data UPO', 'Źródło', 'Do sprawdzenia'], records)

@@ -40,8 +40,8 @@ def declaration_issue(entry):
     if status == 'accepted' and entry.get('upo'):
         return None
     return {'sent': 'Oczekuje na UPO', 'accepted': 'Brak potwierdzenia UPO',
-            'rejected': 'Odrzucona', 'not_sent': 'Niewysłana', 'prepared': 'Przygotowana, niewysłana',
-            'processing': 'Przetwarzana'}.get(status, 'Nie sprawdzono')
+            'rejected': 'Odrzucona', 'failed': 'Błąd przetwarzania', 'cancelled': 'Anulowana', 'not_sent': 'Niewysłana', 'prepared': 'Przygotowana, niewysłana',
+            'processing': 'Przetwarzana', 'unknown': 'Odczytano dokument; status wysyłki/UPO nieustalony'}.get(status, 'Nie sprawdzono')
 
 
 def hr_status(event, today=None, days=30):

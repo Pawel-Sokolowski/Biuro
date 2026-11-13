@@ -46,13 +46,13 @@ class EnovaConnectionSettings(QWidget):
         self.trust_certificate.setChecked(config.get('trust_server_certificate', False))
         self.trust_certificate.setToolTip('Połączenie pozostaje szyfrowane. Ta opcja pomija weryfikację certyfikatu i nazwy serwera.')
         self.declarations_query = QLineEdit(config.get('declarations_query', ''))
-        self.declarations_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql deklaracji i UPO na serwerze workera')
+        self.declarations_query.setPlaceholderText('Automatycznie — opcjonalny zamiennik SQL deklaracji i UPO')
         self.payroll_query = QLineEdit(config.get('payroll_query', ''))
-        self.payroll_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql dokumentów kadrowych')
+        self.payroll_query.setPlaceholderText('Automatycznie: wbudowane listy płac i wypłaty. Opcjonalnie własny plik .sql')
         self.hr_events_query = QLineEdit(config.get('hr_events_query', ''))
         self.hr_events_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql umów, badań i BHP')
         self.jpk_query = QLineEdit(config.get('jpk_query', ''))
-        self.jpk_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql statusów JPK na serwerze workera')
+        self.jpk_query.setPlaceholderText('Automatycznie — opcjonalny zamiennik SQL JPK VAT')
         self.enabled = QCheckBox('Włącz codzienny import')
         self.enabled.setChecked(config['enabled'])
         self.months = QSpinBox()
@@ -67,7 +67,7 @@ class EnovaConnectionSettings(QWidget):
                               ('Sterownik SQL', self.driver), ('Login SQL', self.username),
                               ('Hasło SQL', self.password), ('Certyfikat TLS', self.trust_certificate),
                               ('Limit zapytania — wyszukiwanie baz', self.discovery_timeout),
-                              ('Deklaracje i UPO', self.declarations_query), ('Dokumenty kadrowe', self.payroll_query), ('Umowy, badania i BHP', self.hr_events_query), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
+                              ('Deklaracje i UPO', self.declarations_query), ('Dokumenty kadrowe — zamiennik SQL (opcjonalnie)', self.payroll_query), ('Umowy, badania i BHP', self.hr_events_query), ('Zapytanie statusu JPK', self.jpk_query), ('Liczba miesięcy wstecz', self.months),
                               ('Import', self.enabled)]:
             form.addRow(label, widget)
         layout.addLayout(form)
@@ -184,12 +184,12 @@ class EnovaConnectionSettings(QWidget):
         self.update_mapping_status()
 
     def update_adapter_status(self,*_):
-        missing = [label for label,field in (('deklaracje i UPO',self.declarations_query),
-                   ('dokumenty kadrowe',self.payroll_query),('umowy/BHP',self.hr_events_query),('JPK',self.jpk_query))
+        missing = [label for label,field in (('umowy/BHP',self.hr_events_query),)
                    if not field.text().strip()]
-        self.adapter_status.setText('Liczby dokumentów: zapytania wbudowane, bez wskazywania pliku. '+
+        self.adapter_status.setText('Dokumenty księgowe, listy płac, wypłaty, deklaracje podatkowe i JPK VAT: zapytania wbudowane, bez wskazywania pliku. '+
             ('Bez adaptera SQL: '+', '.join(missing)+'. ' if missing else 'Podano ścieżki adapterów; pliki muszą istnieć na serwerze workera. ')+
             'Pola powyżej przyjmują pliki .sql, nie skrypty instalacji .ps1/.cmd. '
+            'Puste pola deklaracji, JPK i dokumentów kadrowych przywracają zapytania wbudowane; własny plik zastępuje odpowiedni odczyt. '
             'Eksport struktury Enovy służy przygotowaniu adapterów; sam nie jest zapytaniem importującym.')
 
     def review_mappings(self):
@@ -402,7 +402,6 @@ class EnovaConnectionSettings(QWidget):
             self.schema_status.setText(message)
 
     def export_schema(self):
-        from app.integrations.enova.schema_probe import inspect_schema
         import json
         from pathlib import Path
         row = self.table.currentRow()
@@ -437,6 +436,7 @@ class EnovaConnectionSettings(QWidget):
                 pass
         def work():
             from app.security.authorization import is_administrator
+            from app.integrations.enova.schema_probe import inspect_schema
             import os
             import tempfile
             if not is_administrator(actor_id):

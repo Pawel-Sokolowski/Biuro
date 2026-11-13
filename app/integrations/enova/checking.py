@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from app.integrations.enova.document_counts import fetch_counts, normalize_nip, validate_rows, whole_count, requested_months
 from app.integrations.enova.jpk import STATUSES
 from app.utils.months import previous_month, month_bounds
+from app.services.worker_activity import record
 
 DEPARTMENTS = ('accounting', 'payroll')
 
@@ -148,6 +149,8 @@ def validate_declarations(rows, source, months):
                               'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
                               'sent_at': _timestamp(row['sent_at']), 'upo': upo,
                               'upo_at': _timestamp(row['upo_at'])})
+        if row.get('raw_status'):
+            result[month][-1]['raw_status'] = str(row['raw_status'])[:256]
     return result
 
 
@@ -182,7 +185,8 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
     for period in months:
         month_bounds(period)
     key = f'enova_checking_checked_{company_id}'
-    signature = {'version': 3, 'day': day.isoformat(), 'server': config.get('server'),
+    from app.integrations.enova.query_defaults import ADAPTER_REVISION
+    signature = {'version': 3, 'adapter_revision': ADAPTER_REVISION, 'day': day.isoformat(), 'server': config.get('server'),
                  'database': source['database'], 'months': months,
                  'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
@@ -241,12 +245,19 @@ def run_checking_import(config, *, apply=False, today=None, months=None, force=F
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Import sprawdzania jest już uruchomiony.')
         for source in config['sources']:
+            company = None
             try:
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
+                    if apply:
+                        record('enova', 'reading', company_id=company['id'])
                     result = sync_checking(conn, config, source, company['id'], day, apply=apply, months=months, force=force)
                     results.append({'database': source['database'], 'company_id':company['id'], 'kind': 'checking', 'ok': True, **result})
+                if apply:
+                    record('enova', 'read', company_id=company['id'])
             except Exception as exc:
+                if apply:
+                    record('enova', 'failed', company_id=company['id'] if company else None)
                 error = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
                 results.append({'database': source['database'], 'kind': 'checking', 'ok': False, 'error': error})
                 if apply:

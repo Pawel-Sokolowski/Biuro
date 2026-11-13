@@ -52,6 +52,8 @@ class BankReconciliationTests(DbTestCase):
         self.assertIn(correction, {row['id'] for row in payments.list_invoice_choices(1)})
         payments.confirm_bank_payment(transfer, correction, '110', 1)
         self.assertEqual(self.remaining(transfer), 0)
+        self.assertNotIn(transfer,{row['id'] for row in payments.list_unsettled_transfers(1)})
+        self.assertIn(transfer,{row['id'] for row in payments.list_unsettled_transfers(1,include_all=True)})
         self.assertEqual(payments.get_invoice_payment_summary(correction, 1)['balance'], 0)
 
     def test_partial_manual_link_splits_without_changing_payment_total_or_date(self):

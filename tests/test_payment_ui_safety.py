@@ -44,7 +44,7 @@ class BankReviewSafetyTests(unittest.TestCase):
 
     def test_non_pln_import_is_visible_without_offering_settlement(self):
         self.transfers[0]["waluta"] = "EUR"
-        self.dialog.refresh()
+        self.dialog.all_imports.setChecked(True)
         self.assertTrue(self.dialog.all_imports.isChecked())
         self.assertEqual(self.dialog.table.rowCount(), 2)
         self.assertFalse(self.dialog.table.cellWidget(0, self.dialog.COL_INVOICE).isEnabled())
@@ -53,6 +53,14 @@ class BankReviewSafetyTests(unittest.TestCase):
         with patch("app.invoices.payments_ui.confirm_bank_payment") as confirm, patch.object(QMessageBox, "warning"):
             self.dialog._confirm()
         confirm.assert_not_called()
+
+    def test_default_queue_requests_only_unsettled_transfers_and_history_is_optional(self):
+        with patch('app.invoices.payments_ui.list_unsettled_transfers',return_value=[]) as read:
+            self.dialog.refresh()
+            self.assertFalse(self.dialog.all_imports.isChecked())
+            read.assert_called_once_with(1,include_all=False,limit=100)
+            self.dialog.all_imports.setChecked(True)
+            self.assertTrue(read.call_args.kwargs['include_all'])
 
     def test_editing_invoice_selects_its_transfer_and_caps_split_amount(self):
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(0)

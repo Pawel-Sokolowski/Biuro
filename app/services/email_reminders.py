@@ -204,6 +204,11 @@ def run_reminders(now=None):
                 values = {key: str(candidate.get(key, '')) for key in FIELDS}
                 values['termin'] = candidate['due'].isoformat()
                 subject, body = (template[key].format(**values) for key in ('subject', 'body'))
+                from app.services.manual_reminders import sent_manually_today,lock_day
+                lock_day(conn,kind,candidate['target'],now.date())
+                if sent_manually_today(conn,kind,candidate['target'],now.date()):
+                    conn.commit()
+                    continue
                 claim = conn.execute("""INSERT INTO email_reminder_log
                     (kind, target, scheduled_date, recipient, subject, body)
                     VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id""",

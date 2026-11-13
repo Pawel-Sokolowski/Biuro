@@ -592,6 +592,9 @@ class OfficeManagerApp(QMainWindow):
         QTimer.singleShot(5000, tick)
 
     def _start_saldeo_push_watcher(self):
+        from app.integrations.saldeo_web.settings import load as load_saldeo_web
+        if load_saldeo_web()['enabled']:
+            return  # The durable worker inbox owns these events; avoid duplicate Windows toasts.
         import threading
         from app.utils.saldeo_push import SaldeoPushWatcher
         self._saldeo_push = SaldeoPushWatcher()

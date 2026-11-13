@@ -59,6 +59,9 @@ def list_user_notifications(actor_id):
             })
             if sum(entry['kind'] == 'task' for entry in notifications) >= 100:
                 break
+    if 'Widok miesięczny' in tabs or 'Sprawdzanie' in tabs:
+        from app.integrations.saldeo_web.history import notification_batches
+        notifications.extend(notification_batches(actor_id))
     return notifications
 
 
@@ -151,6 +154,17 @@ class NotificationCenter(QPushButton):
         self._rebuild_menu()
 
     def _open(self, entry):
+        if entry['kind'] == 'saldeo':
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout
+            from app.admin.settings.saldeo_web_settings import SaldeoHistory
+            window = QDialog(self)
+            window.setWindowTitle('Historia powiadomień Saldeo')
+            window.resize(1100, 650)
+            layout = QVBoxLayout(window)
+            layout.addWidget(SaldeoHistory(self.actor_id, window))
+            window.exec()
+            self._store_seen([entry['key']])
+            return
         if self.navigate(entry['target']):
             self._store_seen([entry['key']])
             self.refresh()

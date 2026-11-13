@@ -10,7 +10,7 @@ from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
 JOB_LABELS = {'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
-              'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
+              'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto'}
 
 
@@ -84,6 +84,8 @@ class WorkerMonitor(QWidget):
             page_layout.addWidget(table)
             self.job_views[keys] = table
             self.tabs.addTab(page, title)
+        from app.admin.settings.saldeo_web_settings import SaldeoHistory
+        self.tabs.addTab(SaldeoHistory(actor_id), 'Saldeo')
         self.tabs.addTab(log_page, 'Logi')
         self.timer = QTimer(self)
         self.timer.setInterval(5000)

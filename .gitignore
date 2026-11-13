@@ -50,3 +50,6 @@ inspect_export.log
 
 # Local server worker credentials
 worker.env
+
+# Authenticated browser profiles contain private session cookies.
+/saldeo-browser/

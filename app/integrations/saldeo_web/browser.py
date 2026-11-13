@@ -133,7 +133,7 @@ def remember_login_fields(page, actor_id):
     """Learn verified, unique visible controls. Never read values entered by the user."""
     candidates = {
         'username_selector':'input[qa-id="username"]',
-        'password_selector':'input[type="password"]',
+        'password_selector':'input[qa-id="password"]',
         'submit_selector':'button:has-text("Zaloguj")',
     }
     if not all(page.locator(selector + ':visible').count()==1 for selector in candidates.values()):

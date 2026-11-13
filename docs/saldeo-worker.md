@@ -83,7 +83,7 @@ Playwright dostaje tę ścieżkę zamiast polegać wyłącznie na domyślnym kan
 
 Otwarcie ręcznego logowania nie wymaga selektorów monitorowania, także jeśli
 w konfiguracji włączono wcześniej monitoring. Gdy formularz zawiera po jednym
-widocznym polu `input[qa-id="username"]`, `input[type="password"]` i przycisku
+widocznym polu `input[qa-id="username"]`, `input[qa-id="password"]` i przycisku
 `button:has-text("Zaloguj")`, zapamiętujemy te selektory w pustych ustawieniach.
 Nie odczytujemy wartości wpisanych do formularza ani hasła. Pozostałe mapowania
 są zachowane; po zamknięciu procesu logowania panel wczytuje rozpoznane pola do
@@ -94,3 +94,16 @@ historii powiadomień. Do historii nadal trzeba dopasować znacznik sesji,
 wiersze, pustą listę i paginację. Pełnego znacznika HTML nie wkleja się do pola CSS:
 z przesłanego `<input ... qa-id="username" id="mat-input-0">` selektor to
 `input[qa-id="username"]`. Dynamicznego `mat-input-0` nie utrwalamy.
+
+
+Zweryfikowane fragmenty formularza przesłane przez użytkownika:
+- pole loginu: `input[qa-id="username"]`;
+- pole hasła: `input[qa-id="password"]`;
+- ikona dzwonka: `[qa-id="bo-counter"]` (kliknięcie, jeśli potrzebne do otwarcia listy).
+
+Elementy `bs-mat-cell` ze statusem `background-operation-list-table__status` /
+„Zakończone” opisują komórki operacji w tle. Nie są potwierdzeniem kompletu
+dokumentów. Selektor pojedynczego wpisu musi obejmować cały komunikat z nazwą
+firmy i okresem, np. „MERIT. informuje o dostarczeniu dokumentów za 10/2026”.
+Nie konfigurujemy automatycznie selektora historii na podstawie samych tych
+komórek ani nie zmieniamy reguły oznaczania kompletu na podstawie słowa „Zakończone”.

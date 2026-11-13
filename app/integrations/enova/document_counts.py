@@ -119,7 +119,8 @@ def load_config(path):
         seen_databases.add(database.casefold())
         if source.get('accounting_type'):
             calculate_total(source['accounting_type'], 0, 0)
-    return config
+    from app.integrations.enova.query_defaults import with_query_defaults
+    return with_query_defaults(config)
 
 
 def _odbc_quote(value):
@@ -188,8 +189,9 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         }
         required = contracts[result_kind]
         optional = ({'rodzaje'} if result_kind == 'counts' else
-                    {'employee_id', 'employee_name', 'source_system'} if result_kind == 'declarations' else
-                    {'document_number'} if result_kind == 'hr_events' else set())
+                    {'employee_id', 'employee_name', 'source_system', 'raw_status'} if result_kind == 'declarations' else
+                    {'document_number'} if result_kind == 'hr_events' else
+                    {'raw_status'} if result_kind == 'jpk' else set())
         if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
             raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))
         limit = len(months) if result_kind in ('counts', 'jpk') else 20000
@@ -333,9 +335,13 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748209)').fetchone()[0]:
             raise ValueError('Inny import Enova jest już uruchomiony.')
         for source in config['sources']:
+            company = None
             try:
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
+                    if apply:
+                        from app.services.worker_activity import record
+                        record('enova', 'reading', company_id=company['id'])
                     source = resolve_source(source, company)
                     divisor = effective_divisor(rules, company['id']) if source['accounting_type'] == 'KH' else 1
                     signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor,
@@ -380,7 +386,12 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                                     'components': {count.month: {'documents': count.documents,
                                                                'bank_transactions': count.bank_transactions}
                                                    for count in counts}, 'ok': True})
+                if apply:
+                    record('enova', 'read', company_id=company['id'])
             except Exception as exc:
+                if apply:
+                    from app.services.worker_activity import record
+                    record('enova', 'failed', company_id=company['id'] if company else None)
                 error = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else type(exc).__name__
                 results.append({'database': source['database'], 'ok': False, 'error': error})
                 if apply:

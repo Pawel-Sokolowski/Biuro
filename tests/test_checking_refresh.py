@@ -90,6 +90,19 @@ class CheckingRefreshTests(DbTestCase):
         self.assertIsNotNone(get_setting(f'ezla_sync_{self.company}'))
         self.assertIsNone(get_setting(f'ezla_sync_{self.other}'))
 
+    def test_monthly_platnik_declarations_use_selected_companies_and_previous_month(self):
+        enqueue(self.admin, 'platnik_declarations', [self.company], '2026-01')
+        with patch('app.integrations.platnik.declarations.import_months', return_value={
+                'mode': 'applied', 'months': ['2025-12', '2026-01']}) as importer:
+            self.assertEqual(process_next()['state'], 'completed')
+        importer.assert_called_once_with(['2025-12', '2026-01'], company_ids=[self.company])
+
+    def test_annual_platnik_uses_requested_year_without_monthly_coercion(self):
+        enqueue(self.admin, 'platnik_annual', [self.company], 2025)
+        with patch('app.integrations.platnik.declarations.import_year', return_value={'mode': 'applied'}) as importer:
+            self.assertEqual(process_next()['state'], 'completed')
+        importer.assert_called_once_with(2025, company_ids=[self.company])
+
     def test_staff_can_queue_reads_under_current_module_permissions_without_admin_credentials(self):
         employee = self.make_employee()
         request = enqueue(employee,'enova',[self.company],'2026-11')

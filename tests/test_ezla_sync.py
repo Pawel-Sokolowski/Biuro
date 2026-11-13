@@ -44,6 +44,23 @@ class EzlaSyncTests(DbTestCase):
         self.assertEqual(saved[0]['report'].certificates[0].employee_name, 'JAN PRZYKŁAD')
         self.assertEqual(load_reports(self.admin, '2018-05')['reports'], [])
 
+    def test_live_progress_precedes_remote_response_and_success_follows_committed_reports(self):
+        from app.services.worker_activity import KEY
+        from app.db.dao_app_settings import get_setting
+        def download(*args, **kwargs):
+            events = json.loads(get_setting(KEY))
+            self.assertEqual(events[-1]['stage'], 'downloading')
+            self.assertEqual(events[-1]['company_id'], self.company)
+            return [Download('2018-08-01', report(certificate()))]
+        with patch('app.integrations.ezla.sync.fetch_reports', side_effect=download):
+            run_sync(actor_id=self.admin)
+        events = json.loads(get_setting(KEY))
+        self.assertEqual([event['stage'] for event in events], ['downloading', 'saving', 'downloaded'])
+        self.assertEqual(events[-1]['count'], 1)
+        self.assertEqual(self.status()['state'], 'ok')
+        self.assertNotIn('service-secret', json.dumps(events))
+        self.assertNotIn('JAN PRZYKŁAD', json.dumps(events))
+
     def test_plain_text_settings_are_never_cast_as_report_json(self):
         with get_conn() as conn:
             for key, value in (('ezla_test_month', '2026-11'), ('ezla_test_date', '2026-11-12'),
@@ -116,11 +133,28 @@ class EzlaSyncTests(DbTestCase):
     def test_worker_uses_independent_ezla_job_and_reports_partial_failure(self):
         from app.worker import run_job
         with patch('app.integrations.ezla.sync.run_sync', return_value={'companies': 2, 'failed': 0}) as run:
-            self.assertEqual(run_job('ezla'), {'companies': 2, 'failed': 0})
+            self.assertEqual(run_job('ezla'), {'companies': 2, 'failed': 0, 'mode': 'completed'})
             run.assert_called_once_with(stop=None)
         with patch('app.integrations.ezla.sync.run_sync', return_value={'companies': 2, 'failed': 1}):
             with self.assertRaises(RuntimeError):
                 run_job('ezla')
+
+    def test_unattended_worker_downloads_commits_and_exposes_live_company_log(self):
+        from app.worker import JOBS, serve
+        from app.services.worker_settings import DEFAULTS, save_settings as save_worker
+        from app.db.dao_app_settings import get_setting
+        from app.services.worker_activity import KEY
+        settings = {**DEFAULTS, **{name: False for name in JOBS}, 'enabled': True, 'ezla': True}
+        save_worker(settings, actor_id=self.admin)
+        with patch('app.integrations.ezla.sync.fetch_reports', return_value=[Download('2018-08-01', report(certificate()))]) as download:
+            self.assertEqual(serve(once=True), 0)
+        download.assert_called_once()
+        heartbeat = json.loads(get_setting('background_worker_heartbeat'))
+        self.assertEqual(heartbeat['jobs']['ezla']['state'], 'ok')
+        self.assertEqual(heartbeat['jobs']['ezla']['result']['companies'], 1)
+        self.assertEqual(self.status()['new_reports'], 1)
+        event = json.loads(get_setting(KEY))[-1]
+        self.assertEqual((event['company_id'], event['stage'], event['count']), (self.company, 'downloaded', 1))
 
     def test_batch_lock_prevents_manual_download_from_overlapping_runner(self):
         with get_conn() as connection:

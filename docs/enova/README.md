@@ -262,20 +262,17 @@ raz dziennie również dla miesięcy bez etapu „Wysłane wyniki”; podgląd n
 Błąd źródła zachowuje dotychczasowe dane. Data odczytu i referencja UPO są
 widoczne w podpowiedzi statusu.
 
-Repozytorium nie zawiera potwierdzonego schematu JPK danej instalacji Enova.
-Uruchom `inspect-jpk-schema.sql` w SSMS. Po potwierdzeniu znaczenia pól przygotuj
-zapytanie SELECT wybierające ostateczny/najnowszy status danego okresu
-(z uwzględnieniem korekt). Nie zgaduj statusu na podstawie numeru kodu.
-Ścieżkę do pliku SQL na serwerze importu wpisz w polu „Zapytanie statusu JPK”.
-Dla konfiguracji JSON obsługiwane jest `jpk_query` w każdym wpisie `sources`.
-Bez skonfigurowanego zapytania dokumenty są importowane normalnie, JPK pozostaje
-niesprawdzony.
+Domyślny odczyt `queries/jpk.sql` jest dołączony do workera i wybierany
+automatycznie, bez wskazywania pliku. Obejmuje JPK VAT/V7M/V7K z `JednolitePK`;
+szczegóły odczytu i ograniczenia opisano poniżej. Pole „Zapytanie statusu JPK”
+pozwala go zastąpić własnym SQL. JSON obsługuje `jpk_query` globalnie i w `sources`.
 
 Zapytanie JPK ma dwa parametry ODBC `?`: początek zakresu włącznie i koniec
 wyłącznie. Zwraca dokładnie jeden wiersz na miesiąc z kolumnami `nip`, `miesiac`
 (`YYYY-MM`), `status` oraz `upo` (referencja potwierdzenia, NULL dopuszczalny poza
 `accepted`). Dozwolone statusy: `not_sent`, `sent`, `accepted`, `rejected`,
-`not_applicable`. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
+`not_applicable`, `prepared`, `processing`, `unknown`, `failed`, `cancelled`. Opcjonalne `raw_status`
+zachowuje kod źródła. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
 nie są zamieniane na „niewysłany”. Bez prawdziwego źródła nie można potwierdzić
 połączenia z JPK ani przetestować go w tej sesji.
 
@@ -368,15 +365,66 @@ Brak danych nie oznacza „Niewysłany” ani „Nie dotyczy”. Przyjęcie wyma
 statusu i potwierdzenia UPO; data pobrania nigdy nie zastępuje daty wysyłki/UPO.
 Starszy odczyt JPK bez dat nadal jest obsługiwany, z pustymi datami.
 
-**Do rzeczywistego odczytu kadr i deklaracji potrzebne jest potwierdzone mapowanie
-schematu danej instalacji Enova.** Repozytorium nie zawiera zweryfikowanych tabel
-ani znaczenia kodów tych modułów. Nie ma zapytań zgadujących numery statusów.
-W ustawieniach wybierz firmę z wpisaną bazą i kliknij **Eksportuj strukturę Enova —
-deklaracje i kadry**. Plik JSON zawiera wyłącznie nazwy tabel, kolumn, typy i relacje
-(bez haseł i danych dokumentów). Ułatwia przygotowanie właściwych zapytań.
-Konto SQL musi widzieć metadane wymaganych obiektów (`VIEW DEFINITION`).
+**Listy płac i wypłaty mają wbudowany adapter `queries/payroll.sql`.** Jest
+dołączony do aplikacji i workera przez instalator oraz automatycznie wybierany
+przy odczycie zapisanych ustawień i konfiguracji JSON. Nie trzeba wskazywać pliku.
+Istniejące ustawienia również otrzymują ten adapter po aktualizacji workera.
+Liczy nagłówki `ListyPlac` i osobne dokumenty `Wyplaty` według ich pola `Data`,
+grupując je według symbolu definicji. Bufor wypłat jest pokazywany jako osobny
+rodzaj, a nie odrzucany. Lista płac i wypłaty to osobne rodzaje dokumentów,
+nie liczba osób; ich suma nie oznacza liczby pracowników. Okres nie jest
+wyznaczany przez datę zapłaty, miesiąc ZUS ani okres naliczenia.
+Pusty miesiąc ma jawne zero. Brak lub wiele NIP-ów właściciela powoduje błąd.
+Schemat tabel i połączeń jest wspólny dla dostarczonych wariantów księgowości;
+wynik należy porównać z Enovą dla wybranego miesiąca.
 
-Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze workera:
+Własny plik `payroll_query` jest opcjonalnym zamiennikiem. Pole w ustawieniach
+może pozostać puste — wtedy działa adapter wbudowany. Zamiennik konkretnej firmy
+w `sources` ma pierwszeństwo przed zamiennikiem globalnym. Względne ścieżki
+zamienników są liczone od konfiguracji JSON (albo `docs/enova` dla ustawień
+zapisanych w aplikacji). Wbudowany plik jest wyszukiwany w instalacji, niezależnie
+od położenia JSON. Własny SQL przechowuj poza katalogiem instalacyjnym, aby
+aktualizacja go nie nadpisała. Księgowość nadal dobiera wbudowane zapytanie do formy
+opodatkowania.
+
+**Deklaracje podatkowe i JPK VAT mają teraz wbudowane zapytania.**
+`queries/declarations.sql` czyta VAT-7/7K/7D (wspólny raport VAT), VAT-UE/UEK,
+VAT-8, VAT-9M, VAT-12, VAT-27, zaliczki PIT/CIT i CIT-8 z `Deklaracje`,
+`EDeklaracje` i `ETransmisje`. Kod formularza XML ma pierwszeństwo przed symbolem
+w definicji. Formularze kwartalne/roczne należą do miesiąca końca okresu.
+Najnowszy numer deklaracji i ID wygrywają w obrębie formularza/miesiąca,
+także gdy starsza deklaracja miała UPO, a nowa korekta jeszcze go nie ma.
+
+Znaczenie relacji i pól transmisji potwierdza opublikowana przez producenta
+[definicja bazy Soneta](https://github.com/soneta/EnovaDB/blob/master/EnovaDB/Generator/Deklaracje.business.xml).
+Odczyt używa kodów odpowiedzi MF: 200 z pobraną referencją UPO oznacza przyjęcie,
+301–304 przetwarzanie, 400–499 odrzucenie. Kody wewnętrzne zmapowano na podstawie opublikowanych stałych enumów Sonety;
+[pełna tabela i źródła](status-codes.md). Surowe wartości są nadal zachowywane. [Opis kodów MF](https://podatki.gov.pl/e-deklaracje-zloz-deklaracje-podatkowa-online/informacje-podstawowe).
+Brak elektronicznej wersji deklaracji oznacza przygotowanie; kody Enovy rozdzielają
+przygotowanie, oczekiwanie na wysłanie i na UPO, błędy oraz anulowanie. Nieznane
+kody pozostają nieustalone. Anulowana deklaracja nie staje się przyjęta ze starego UPO. Data UPO pochodzi wyłącznie z elementu
+`DataWytworzeniaPotwierdzenia`; data wysyłki pozostaje pusta, ponieważ data próby
+transmisji nie potwierdza złożenia. `Stamp` to wersja wiersza, nie data.
+
+`queries/jpk.sql` odczytuje JPK VAT/V7M/V7K z `JednolitePK` (nazwy i typy kolumn
+potwierdzone we wszystkich czterech lokalnych eksportach). Wybiera najwyższy numer
+korekty, następnie ID. Pobiera tylko referencję z kolumny UPO, bez treści dokumentów
+ani kwot. Przyjęcie wymaga statusu Finished=100, oficjalnej bramki=3 i referencji UPO.
+Testowe UPO nie potwierdza złożenia produkcyjnego. Statusy przygotowania,
+wysyłania, przetwarzania i błędu mapujemy według potwierdzonych enumów;
+nieznane kody, brak pliku i zakończenie bez UPO pozostają nieustalone.
+Nie obejmuje JPK CIT/KR/FA/MAG ani plików zewnętrznych nieobecnych w tej bazie.
+
+SQL jest instalowany razem z workerem i działa także dla zapisanych wcześniej
+konfiguracji. Puste pola deklaracji/JPK przywracają domyślne odczyty. Własny plik
+SQL można podać globalnie lub dla źródła; zastępuje odpowiedni odczyt wbudowany.
+Dla firm ze zmienionymi symbolami, niestandardowym XML UPO lub inną kolejnością
+korekt służy `profile-declarations.sql` i opcjonalny zamiennik SQL. Schematy JSON
+pozostają poza repozytorium. Zapytania nie były uruchamiane na bazach klientów.
+Terminy umów/badań/BHP i indywidualne deklaracje podatkowe pracowników nadal
+wymagają osobnego adaptera; nie są zastępowane dokumentami księgowymi.
+
+Kontrakty opcjonalnych zamienników SQL:
 
 - `payroll_query` / „Dokumenty kadrowe”: dwa parametry dat (początek włącznie,
   koniec wyłącznie), kolumny `nip`, `miesiac` (`YYYY-MM`), `rodzaj`, `liczba`.
@@ -386,14 +434,14 @@ Dopiero po potwierdzeniu schematu wpisz ścieżki do zapytań na serwerze worker
   `nip`, `miesiac`, `department` (`accounting` albo `payroll`), `form` (np. JPK_VAT,
   CIT-8, PIT-11, ZUS DRA), `status`, `sent_at`, `upo` (referencja potwierdzenia),
   `upo_at`. Statusy: `prepared`, `processing`, `not_sent`, `sent`, `accepted`,
-  `rejected`, `not_applicable`. Dla `accepted` UPO nie może być puste. Daty mogą
+  `rejected`, `not_applicable`, `unknown`, `failed`, `cancelled`. Opcjonalne `raw_status` zachowuje kod źródła. Dla `accepted` UPO nie może być puste. Daty mogą
   być NULL, datą ISO lub znacznikiem czasu ISO; nie są dopowiadane przez importer.
   Zapytanie musi wybierać aktualny stan formularza, uwzględniając korekty; duplikat
   formularza/działu/miesiąca/pracownika jest błędem. Przypisanie formularzy rocznych lub
   kwartalnych do okresu miesięcznego musi być jawne w zapytaniu, zgodne z zasadami
   biura. Brak wiersza pozostawia „Brak danych”, nie tworzy fałszywego statusu.
 
-Oba zapytania mogą być globalne w ustawieniach albo osobne przy `sources` w JSON.
+Zamienniki zapytań mogą być globalne w ustawieniach albo osobne przy `sources` w JSON.
 Wszystkie wyniki muszą zawierać NIP zgodny z mapowaniem firmy. Błąd walidacji
 zachowuje dotychczasowy odczyt firmy; pozostałe firmy są przetwarzane dalej.
 Odczyt księgowości i kadr do Sprawdzania ma własną transakcję i blokadę, niezależną
@@ -542,3 +590,10 @@ Sterowniki Microsoft ODBC 17 i 18 obsługują SQL Server 2017, 2019 i 2022.
 Nie dobieraj numeru sterownika do rocznika SQL Server ani wersji SSMS.
 Jeden zainstalowany ODBC Driver 18 i wybór Automatycznie może obsłużyć oba
 połączenia workera — Enovę i Płatnika.
+
+
+Dołączone ścieżki SQL są rozwiązywane w katalogu instalacji komputera wykonującego
+odczyt. Zapis ustawień nie utrwala ścieżek domyślnych z komputera administratora
+jako zamienników firmy. Wartość dziedziczona z ustawienia globalnego nadal
+podlega późniejszym zmianom globalnego SQL. Rzeczywisty zamiennik firmy zachowuje
+pierwszeństwo. Rewizja adapterów unieważnia dzienne znaczniki po aktualizacji SQL.

@@ -4,14 +4,24 @@ from zoneinfo import ZoneInfo
 from PyQt6.QtCore import QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                            QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView)
+                            QTabWidget, QTableWidget, QTableWidgetItem, QAbstractItemView, QCheckBox, QComboBox)
 from app.services.worker_monitor import snapshot
 from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
-JOB_LABELS = {'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
+JOB_LABELS = {'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — ZUS i wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
               'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
-STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto'}
+STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania'}
+
+MODES = {'waiting': 'Oczekiwanie na godzinę odczytu', 'checked_today': 'Sprawdzono już dzisiaj',
+         'disabled': 'Wyłączono w ustawieniach usługi', 'not_configured': 'Brak konfiguracji usługi',
+         'busy': 'Odczyt już trwa', 'idle': 'Kolejka pusta', 'empty': 'Brak firm do odczytu', 'cancelled': 'Przerwano'}
+
+
+def state_label(value):
+    result = value.get('result') or {}
+    mode = value.get('mode') or (result.get('mode') if isinstance(result, dict) else None)
+    return MODES.get(mode) or STATES.get(value.get('state'), value.get('state'))
 
 
 class WorkerMonitor(QWidget):
@@ -31,6 +41,9 @@ class WorkerMonitor(QWidget):
         refresh = QPushButton('Odśwież')
         refresh.clicked.connect(self.refresh)
         bar.addWidget(refresh)
+        live_logs = QPushButton('Otwórz bieżące logi')
+        live_logs.clicked.connect(lambda: self.tabs.setCurrentWidget(self.log_page))
+        bar.addWidget(live_logs)
         layout.addLayout(bar)
         self.instance_info = QLabel()
         self.instance_info.setWordWrap(True)
@@ -49,9 +62,22 @@ class WorkerMonitor(QWidget):
         self.tabs.addTab(status_page, 'Status')
         log_page = QWidget()
         log_layout = QVBoxLayout(log_page)
-        self.logs = self._table(['Data', 'Zadanie', 'Zdarzenie', 'Typ błędu'])
+        controls = QHBoxLayout()
+        self.log_filter = QComboBox()
+        self.log_filter.addItem('Wszystkie zadania', '')
+        for key, label in JOB_LABELS.items():
+            self.log_filter.addItem(label, key)
+        self.follow_logs = QCheckBox('Śledź nowe zdarzenia')
+        self.follow_logs.setChecked(True)
+        controls.addWidget(self.log_filter)
+        controls.addWidget(self.follow_logs)
+        controls.addStretch()
+        log_layout.addLayout(controls)
+        self.logs = self._table(['Data', 'Zadanie', 'Firma', 'Zdarzenie', 'Typ błędu'])
+        self._log_data = None
+        self.log_filter.currentIndexChanged.connect(self.render_logs)
         log_layout.addWidget(self.logs)
-        log_note = QLabel('Ostatnie 200 zdarzeń workera jest dostępne z każdego komputera. '
+        log_note = QLabel('Bieżący postęp i ostatnie 500 zdarzeń są dostępne z każdego komputera. Odświeżanie co 2 sekundy. '
                           'Szczegółowe pliki logów znajdują się na komputerze, na którym działa worker.')
         log_note.setWordWrap(True)
         log_layout.addWidget(log_note)
@@ -93,7 +119,7 @@ class WorkerMonitor(QWidget):
         self.tabs.addTab(SaldeoHistory(actor_id), 'Saldeo')
         self.tabs.addTab(log_page, 'Logi')
         self.timer = QTimer(self)
-        self.timer.setInterval(5000)
+        self.timer.setInterval(2000)
         self.timer.timeout.connect(self.refresh)
 
     @staticmethod
@@ -152,15 +178,14 @@ class WorkerMonitor(QWidget):
             self.instance_info.setText('Worker nie zgłosił jeszcze identyfikatora procesu i wersji. '
                                        'Panel odczytuje stan tej bazy Biuro; nie uruchamia kolejnego workera.')
         jobs = heartbeat.get('jobs', {})
-        job_rows = {name: [JOB_LABELS.get(name, name), STATES.get(value.get('state'), value.get('state')),
+        job_rows = {name: [JOB_LABELS.get(name, name), state_label(value),
             value.get('started_at'), value.get('finished_at'), value.get('next_run_at'), value.get('error_type')]
             for name, value in jobs.items()}
         self._fill(self.jobs, list(job_rows.values()))
         for keys, table in self.job_views.items():
             self._fill(table, [job_rows[key] for key in keys if key in job_rows])
-        self._fill(self.logs, [[event.get('at'), JOB_LABELS.get(event.get('job'), event.get('job')),
-                               STATES.get(event.get('state'), event.get('state')), event.get('error_type')]
-                              for event in reversed(data['events'])])
+        self._log_data = data
+        self.render_logs()
         progress = data['progress']
         names = {row['id']: row['nazwa'] for row in data['companies']}
         message = 'e-ZLA: ' + str(progress.get('stage') or 'Oczekiwanie na pobieranie')
@@ -191,6 +216,29 @@ class WorkerMonitor(QWidget):
                          STATES.get(sync.get('state'), 'Nie sprawdzono'), sync.get('checked_at'),
                          sync.get('last_success'), sync.get('new_reports'), error])
         self._fill(self.ezla, rows)
+
+    def render_logs(self, *_):
+        if self._log_data is None:
+            return
+        from app.services.worker_activity import STAGES
+        data = self._log_data
+        names = {row['id']: row['nazwa'] for row in data['companies']}
+        selected = self.log_filter.currentData()
+        scroll = self.logs.verticalScrollBar().value()
+        rows = []
+        for event in data['events']:
+            if selected and event.get('job') != selected:
+                continue
+            message = STAGES.get(event.get('stage')) or state_label(event)
+            if event.get('count') is not None:
+                message += f"; raporty/dokumenty: {event['count']}"
+            rows.append([event.get('at'), JOB_LABELS.get(event.get('job'), event.get('job')),
+                         names.get(event.get('company_id'), event.get('company_id')), message, event.get('error_type')])
+        self._fill(self.logs, rows)
+        if self.follow_logs.isChecked():
+            self.logs.scrollToBottom()
+        else:
+            self.logs.verticalScrollBar().setValue(scroll)
 
     def open_logs(self):
         from app.config import get_data_dir

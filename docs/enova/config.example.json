@@ -3,6 +3,7 @@
   "server": "ENOVA-SQL.example.local,1433",
   "driver": "ODBC Driver 18 for SQL Server",
   "months_back": 3,
+  "payroll_query": "",
   "sources": [
     {
       "database": "Enova_Klient_KPIR",

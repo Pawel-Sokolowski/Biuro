@@ -60,6 +60,8 @@ jobs:
           python -m pip install --require-hashes -r requirements-build.lock
           python -m ruff check app tests
           python -m mypy --follow-imports=skip app/utils/money.py app/reports/dto.py app/utils/table_records.py app/utils/import_source.py app/utils/background.py app/email/notification_types.py
+      - name: Check Płatnik forms and filing setup
+        run: python -m unittest tests.test_platnik_connection tests.test_platnik_declarations tests.test_monthly_obligations tests.test_checking_refresh tests.test_enova_query_defaults tests.test_enova_checking tests.test_enova_settings_and_jpk tests.test_monthly_delivery_sorting tests.test_worker_activity tests.test_worker_monitor tests.test_background_worker tests.test_ezla_sync
       - name: Run all test modules
         run: python run_tests.py
       - name: Retain test results
@@ -145,6 +147,12 @@ jobs:
           $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /COMPONENTS=program,worker /DIR=`"$target`"" -Wait -PassThru
           if ($process.ExitCode) { throw 'Combined program/worker installation failed' }
           $workerScript = Join-Path $target 'scripts\install_background_worker.ps1'
+          $payrollSql = Join-Path $target '_internal\docs\enova\queries\payroll.sql'
+          if (-not (Test-Path $payrollSql)) { throw 'Bundled Enova payroll adapter missing from worker installation' }
+          foreach ($adapter in @('declarations', 'jpk')) {
+            if (-not (Test-Path (Join-Path $target "_internal\docs\enova\queries\$adapter.sql"))) { throw "Bundled Enova $adapter adapter missing from worker installation" }
+          }
+          if (-not (Test-Path (Join-Path $target '_internal\docs\platnik\queries\declarations.sql'))) { throw 'Bundled Platnik RCA/DRA adapter missing from worker installation' }
           $workerLauncher = Join-Path $target 'scripts\install_background_worker.cmd'
           if (-not (Test-Path $workerLauncher)) { throw 'Worker launcher missing from installation' }
           $parseTokens = $null

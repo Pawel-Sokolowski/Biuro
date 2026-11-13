@@ -76,8 +76,9 @@ def enova_job(now=None):
     settings = load_settings()
     config = load_connection()
     day = now.date().isoformat()
-    checking_signature = json.dumps({'day': day, 'version': 3, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
-        'sources': [{key: source.get(key) for key in ('database', 'nip', 'payroll_query', 'declarations_query', 'hr_events_query')}
+    from app.integrations.enova.query_defaults import ADAPTER_REVISION
+    checking_signature = json.dumps({'day': day, 'version': 4, 'adapter_revision': ADAPTER_REVISION, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
+        'sources': [{key: source.get(key) for key in ('database', 'nip', 'payroll_query', 'declarations_query', 'hr_events_query', 'jpk_query')}
                     for source in config.get('sources', [])]}, sort_keys=True, default=str)
     # Checking adapters/configuration changes invalidate the daily marker.
     # Failures do not consume it and retry at the interval.
@@ -117,7 +118,7 @@ def ezla_job(stop=None):
     result = run_sync(stop=stop)
     if result['failed']:
         raise RuntimeError('Nie pobrano e-ZLA dla części firm. Szczegóły w raporcie e-ZLA.')
-    return {key: result[key] for key in ('companies', 'failed')}
+    return {**{key: result[key] for key in ('companies', 'failed')}, 'mode': result.get('mode', 'completed')}
 
 
 def saldeo_job(stop=None):
@@ -126,8 +127,17 @@ def saldeo_job(stop=None):
 
 
 def platnik_job():
-    from app.integrations.platnik.holidays import worker_job
-    return worker_job()
+    from app.integrations.platnik.holidays import worker_job as holidays_job, PlatnikSqlError
+    from app.integrations.platnik.declarations import worker_job as declarations_job
+    results, failed = {}, []
+    for name, job in (('holidays', holidays_job), ('declarations', declarations_job)):
+        try:
+            results[name] = job()
+        except Exception as error:
+            failed.append(name + ': ' + (str(error) if isinstance(error, (PlatnikSqlError, ValueError)) else 'Odczyt nie powiódł się'))
+    if failed:
+        raise RuntimeError('Nieukończone odczyty Płatnika: ' + ', '.join(failed))
+    return results
 
 
 def checking_refresh_job(stop=None):
@@ -196,7 +206,8 @@ def serve(*, once=False, stop=None):
                 started_at = statuses[name].get('started_at')
                 try:
                     outcome = future.result()
-                    statuses[name] = {'state': 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                    statuses[name] = {'state': 'skipped' if isinstance(outcome, dict) and outcome.get('mode') in
+                                      ('waiting', 'checked_today', 'disabled', 'not_configured', 'busy', 'idle', 'empty', 'cancelled') else 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
                 except Exception as exc:
                     # Avoid logging arbitrary third-party exception strings/credentials.
                     logger.error('worker_job_failed job=%s error_type=%s', name, type(exc).__name__)
@@ -205,7 +216,9 @@ def serve(*, once=False, stop=None):
                 statuses[name]['started_at'] = started_at
                 last_started[name] = clock.monotonic()  # A full interval after completion, including failures.
                 events.append({'at': statuses[name]['finished_at'], 'job': name, 'state': statuses[name]['state'],
-                               'error_type': statuses[name].get('error_type')})
+                               'error_type': statuses[name].get('error_type'),
+                               'mode': (statuses[name].get('result') or {}).get('mode')
+                               if isinstance(statuses[name].get('result'), dict) else None})
                 events_changed = True
                 del running[name]
             for name in JOBS:

@@ -15,7 +15,7 @@ class JpkValidationTests(TestCase):
         source = {'nip': '1234567890'}
         row = {'nip': source['nip'], 'miesiac': '2026-11', 'status': 'sent', 'upo': None}
         self.assertEqual(validate_jpk([row], source, ['2026-11'])['2026-11']['status'], 'sent')
-        for changes in ({'status': 'accepted'}, {'status': 'unknown'}, {'nip': '9999999999'}):
+        for changes in ({'status': 'accepted'}, {'status': 'invalid'}, {'nip': '9999999999'}):
             with self.assertRaises(ValueError):
                 validate_jpk([{**row, **changes}], source, ['2026-11'])
         with self.assertRaises(ValueError):
@@ -38,7 +38,7 @@ class ConnectionAndJpkTests(DbTestCase):
         super().setUp()
         with get_conn() as conn:
             self.admin = conn.execute('SELECT id FROM pracownicy WHERE is_admin=1').fetchone()[0]
-        self.company = self.make_company(nip='1234567890', forma_opodatkowania='Księgi rachunkowe')
+        self.company = self.make_company(nip='1234567890', forma_opodatkowania='Księgi rachunkowe', status_vat='Czynny')
 
     def test_connection_encryption_and_blank_password_preserves_secret(self):
         config = {'server': r'10.0.0.1\ENOVA', 'database':'Biuro_rachunkowe', 'discovery_query_timeout':300,

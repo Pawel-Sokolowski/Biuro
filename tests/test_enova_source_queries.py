@@ -26,10 +26,14 @@ def postgres_query(name):
     sql = sql.replace("N'", "'").replace('LEN(nip)', 'length(nip)')
     sql = sql.replace('NCHAR(', 'CHR(')
     sql = sql.replace('DATEADD(month, 1, m.MonthStart)', "(m.MonthStart + interval '1 month')::date")
-    for column in ('d.Data', 'd.DataEwidencji'):
+    for column in ('d.Data', 'd.DataEwidencji', 'd.DocumentDate'):
         sql = sql.replace(f'DATEFROMPARTS(YEAR({column}), MONTH({column}), 1)',
                           f'make_date(EXTRACT(YEAR FROM {column})::int, EXTRACT(MONTH FROM {column})::int, 1)')
     sql = sql.replace('CONVERT(char(7), m.MonthStart, 120)', "to_char(m.MonthStart, 'YYYY-MM')")
+    if name == 'payroll.sql':
+        sql = sql.replace('nvarchar(256)', 'varchar(256)')
+        sql = sql.replace("'Lista płac: ' + COALESCE", "'Lista płac: ' || COALESCE")
+        sql = sql.replace('+ COALESCE(NULLIF(LTRIM', '|| COALESCE(NULLIF(LTRIM')
     return sql.replace('OPTION (MAXRECURSION 24)', '').replace('OPTION (MAXRECURSION 36)', '')
 
 
@@ -45,6 +49,9 @@ class EnovaSourceQueryTests(DbTestCase):
                 'CREATE TABLE RaportyESP(ID int PRIMARY KEY)',
                 'CREATE TABLE Zaplaty(ID int, Raport int, RaportType text)',
                 'CREATE TABLE OperacjeBankowe(ID int, WyciagBankowy int)',
+                'CREATE TABLE DefListPlac(ID int PRIMARY KEY, Symbol text)',
+                'CREATE TABLE ListyPlac(ID int, Data timestamp, Definicja int)',
+                'CREATE TABLE Wyplaty(ID int, Data timestamp, Definicja int, Bufor int)',
             ):
                 conn.execute(statement)
             conn.execute("INSERT INTO OddzialyFirmy VALUES ('PL 123-456-78-90'), ('1234567890')")
@@ -151,3 +158,34 @@ class EnovaSourceQueryTests(DbTestCase):
         rows = self.query('checking.sql')
         self.assertEqual(rows[0]['dokumenty'], 5)
         self.assertEqual(rows[0]['pozycje_bankowe'], 0)
+
+    def payroll_rows(self, start=date(2026, 6, 1), end=date(2026, 8, 1)):
+        with get_conn() as conn:
+            return [dict(row) for row in conn.execute(postgres_query('payroll.sql'), (start, end)).fetchall()]
+
+    def test_payroll_counts_headers_and_payslips_separately_with_buffers_and_empty_month(self):
+        from app.integrations.enova.checking import validate_payroll
+        with get_conn() as conn:
+            conn.execute("INSERT INTO DefListPlac VALUES (1,'LP')")
+            conn.execute("INSERT INTO DefDokumentow VALUES (2,'WYP')")
+            conn.execute("INSERT INTO ListyPlac VALUES (1,'2026-06-01',1),(2,'2026-05-31',1),(3,'2026-08-01',1)")
+            conn.execute("INSERT INTO Wyplaty VALUES (1,'2026-06-30',2,0),(2,'2026-06-30',2,0),"
+                         "(3,'2026-06-30',2,1),(4,'2026-08-01',2,0),(5,'2026-06-15',999,NULL)")
+        rows = self.payroll_rows()
+        self.assertEqual(validate_payroll(rows, {'nip': NIP}, ['2026-06', '2026-07']), {
+            '2026-06': {'Lista płac: LP': 1, 'Wypłata: WYP': 2, 'Wypłata (bufor): WYP': 1,
+                        'Wypłata (nieznany bufor): Bez definicji': 1},
+            '2026-07': {},
+        })
+        self.assertIn({'nip': NIP, 'miesiac': '2026-07', 'rodzaj': None, 'liczba': 0}, rows)
+
+    def test_payroll_rejects_missing_and_ambiguous_company_nip(self):
+        from app.integrations.enova.checking import validate_payroll
+        with get_conn() as conn:
+            conn.execute('DELETE FROM OddzialyFirmy')
+        with self.assertRaises(ValueError):
+            validate_payroll(self.payroll_rows(), {'nip': NIP}, ['2026-06', '2026-07'])
+        with get_conn() as conn:
+            conn.execute("INSERT INTO OddzialyFirmy VALUES ('1234567890'),('9999999999')")
+        with self.assertRaises(ValueError):
+            validate_payroll(self.payroll_rows(), {'nip': NIP}, ['2026-06', '2026-07'])

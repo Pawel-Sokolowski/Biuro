@@ -2,6 +2,13 @@
 import sys
 
 SUPPORTED_DRIVERS = ('ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server')
+DEFAULT_QUERY_TIMEOUT = 120
+
+
+def validate_query_timeout(value):
+    if type(value) is not int or not 30<=value<=600:
+        raise ValueError('Limit zapytania SQL musi wynosić od 30 do 600 sekund.')
+    return value
 
 
 class SqlOperationError(RuntimeError):

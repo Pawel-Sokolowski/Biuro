@@ -51,7 +51,7 @@ class EnovaConnectionSettings(QWidget):
         self.months.setRange(1, 24)
         self.months.setValue(config['months_back'])
         self.discovery_timeout = QSpinBox()
-        self.discovery_timeout.setRange(30,600)
+        self.discovery_timeout.setRange(30,1200)
         self.discovery_timeout.setSuffix(' s')
         self.discovery_timeout.setValue(config.get('discovery_query_timeout',120))
         self.discovery_timeout.setToolTip('Limit pojedynczego zapytania przy wyszukiwaniu baz, nie całego wyszukiwania. Domyślnie 120 s.')
@@ -119,26 +119,62 @@ class EnovaConnectionSettings(QWidget):
                       'Harmonogram ustaw w „Worker w tle”. Licznik rozliczeniowy respektuje etap „Wysłane wyniki”.')
         note.setWordWrap(True)
         layout.addWidget(note)
+        self._saved_state = self.form_state()
 
-    def save(self):
-        try:
-            config = dict(server=self.server.text().strip(), database=self.database.text().strip(),
+    def form_config(self):
+        config = dict(server=self.server.text().strip(), database=self.database.text().strip(),
                           discovery_query_timeout=self.discovery_timeout.value(),
                           driver=self.driver.currentData(), username=self.username.text().strip(),
                           trust_server_certificate=self.trust_certificate.isChecked(),
                           hr_events_query=self.hr_events_query.text().strip(),
                           declarations_query=self.declarations_query.text().strip(), payroll_query=self.payroll_query.text().strip(),
                           jpk_query=self.jpk_query.text().strip(), enabled=self.enabled.isChecked(), months_back=self.months.value(), sources=[])
-            for row, company in enumerate(self.companies):
-                database = self.table.item(row, 2).text().strip()
-                if database:
-                    config['sources'].append(dict(nip=company['nip'], database=database))
-            save_connection(config, actor_id=self.actor_id, password=self.password.text())
-            self.password.clear()
+        for row, company in enumerate(self.companies):
+            database = self.table.item(row, 2).text().strip()
+            if database:
+                config['sources'].append(dict(nip=company['nip'], database=database))
+        return config
+
+    def form_state(self):
+        import json
+        return json.dumps(self.form_config(),sort_keys=True),bool(self.password.text())
+
+    def is_dirty(self):
+        return self.form_state()!=self._saved_state
+
+    def persist(self):
+        save_connection(self.form_config(),actor_id=self.actor_id,password=self.password.text())
+        self.password.clear()
+        self._saved_state = self.form_state()
+
+    def reload_saved(self):
+        if self.is_dirty():
+            return
+        config = load_connection()
+        for field,key in ((self.server,'server'),(self.database,'database'),(self.username,'username'),
+                          (self.declarations_query,'declarations_query'),(self.payroll_query,'payroll_query'),
+                          (self.hr_events_query,'hr_events_query'),(self.jpk_query,'jpk_query')):
+            field.setText(config.get(key,''))
+        self.driver.setCurrentIndex(max(0,self.driver.findData(config['driver'])))
+        self.trust_certificate.setChecked(config['trust_server_certificate'])
+        self.discovery_timeout.setValue(config['discovery_query_timeout'])
+        self.months.setValue(config['months_back'])
+        self.enabled.setChecked(config['enabled'])
+        sources = {source['nip']:source['database'] for source in config['sources']}
+        for row,company in enumerate(self.companies):
+            self.table.item(row,2).setText(sources.get(company['nip'],''))
+        self._saved_state = self.form_state()
+
+    def save(self):
+        try:
+            self.persist()
         except Exception as exc:
             QMessageBox.warning(self, 'Enova', str(exc))
             return
-        QMessageBox.information(self, 'Enova', 'Zapisano połączenie. Harmonogram na serwerze użyje tych ustawień.')
+        message = 'Zapisano połączenie. Harmonogram na serwerze użyje tych ustawień.'
+        if not self.form_config()['sources']:
+            message += ' Przed importem znajdź bazy firm po NIP lub przypisz je ręcznie i zapisz.'
+        QMessageBox.information(self, 'Enova', message)
 
     def preview(self):
         from app.integrations.enova.document_counts import run_import

@@ -18,7 +18,10 @@ class WorkerMonitorTests(TestCase):
         try:
             self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())], ['Status', 'e-ZLA', 'Import do Enovy', 'Odczyt z Enovy', 'Poczta', 'Faktury i przypomnienia', 'KSeF', 'Płatnik', 'Saldeo', 'Logi'])
             panel.render({'heartbeat': {'checked_at': now.isoformat(), 'enabled': True, 'jobs': {
-                'ezla': {'state': 'running', 'started_at': now.isoformat()}}},
+                'ezla': {'state': 'running', 'started_at': now.isoformat()}},
+                'instance':{'id':'active-worker','host':'ENOVA','pid':1234,'version':'1.4.5',
+                            'executable':r'C:\Biuro\Biuro.exe','config_file':r'C:\Users\worker\Biuro\worker.env',
+                            'started_at':now.isoformat()},'settings_checked_at':now.isoformat()},
                 'events': [{'at': now.isoformat(), 'job': 'ezla', 'state': 'started'}],
                 'progress': {'stage': 'Przerwa między firmami', 'company_id': 1, 'position': 1, 'total': 2,
                              'resume_at': (now + timedelta(seconds=30)).isoformat()},
@@ -26,6 +29,8 @@ class WorkerMonitorTests(TestCase):
                 'companies': [{'id': 1, 'nazwa': 'Firma Test', 'nip': '1112223344',
                                'sync': {'state': 'failed', 'error_code': '101'}}]})
             self.assertIn('Worker aktywny', panel.summary.text())
+            self.assertIn('ENOVA, PID 1234, wersja 1.4.5',panel.instance_info.text())
+            self.assertIn(r'C:\Biuro\Biuro.exe',panel.instance_info.text())
             self.assertIn('Przerwa między firmami', panel.progress.text())
             self.assertIn('Firma Test', panel.progress.text())
             self.assertIn('wznowienie za', panel.progress.text())

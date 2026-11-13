@@ -120,6 +120,19 @@ def get_coordination_conn() -> PooledConnection:
     return _get_connection(_coordination_pool, 4)
 
 
+def database_context() -> str:
+    """Actual PostgreSQL endpoint/database/schema, without credentials."""
+    with get_conn() as conn:
+        row = conn.execute('''SELECT current_database() AS database_name,
+            (SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE c.oid=to_regclass('app_settings')) AS schema_name,
+            inet_server_addr()::text AS server_address,inet_server_port() AS server_port''').fetchone()
+    address = row['server_address'] or 'lokalne połączenie'
+    if ':' in address:
+        address = '['+address+']'
+    return f"{address}:{row['server_port'] or '—'}/{row['database_name']} · schemat: {row['schema_name'] or '—'}"
+
+
 def _get_connection(mapping, max_size) -> PooledConnection:
     schema = get_schema()
     dsn = get_dsn()

@@ -1,4 +1,4 @@
-# Płatnik — roczne wakacje składkowe (1.4.5)
+# Płatnik — roczne wakacje składkowe (1.4.6)
 
 ## Konfiguracja
 
@@ -15,7 +15,7 @@ Płatnik; domyślnie co godzinę odświeża poprzedni i bieżący rok. Starszy r
 pobierz ręcznie. Nie ma zapisu do Płatnika ani wysyłania dokumentów do ZUS.
 Nie jest wymagany własny plik SQL ani instalacja Płatnika na workerze.
 
-Pole **Limit zapytania SQL** ma domyślnie 120 sekund i zakres 30–600 sekund.
+Pole **Limit zapytania SQL** ma domyślnie 120 sekund i zakres 30–1200 sekund.
 Dotyczy pojedynczego zapytania; logowanie ma osobny limit 15 sekund. Zapisane
 ustawienie stosuje również automatyczny worker. Podczas ręcznego odczytu widoczny
 jest wskaźnik pracy oraz etapy: łączenie, odczyt RWS, walidacja i zapis w Biuro.

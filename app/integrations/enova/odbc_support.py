@@ -6,8 +6,8 @@ DEFAULT_QUERY_TIMEOUT = 120
 
 
 def validate_query_timeout(value):
-    if type(value) is not int or not 30<=value<=600:
-        raise ValueError('Limit zapytania SQL musi wynosić od 30 do 600 sekund.')
+    if type(value) is not int or not 30<=value<=1200:
+        raise ValueError('Limit zapytania SQL musi wynosić od 30 do 1200 sekund.')
     return value
 
 

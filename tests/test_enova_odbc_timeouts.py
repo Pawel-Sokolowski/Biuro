@@ -56,14 +56,14 @@ class OdbcTimeoutTests(TestCase):
 
     def test_discovery_custom_query_timeout_is_separate_from_login_timeout(self):
         self.cursor.fetchmany.return_value = []
-        result = discover({**self.config,'discovery_query_timeout':300},password='secret')
+        result = discover({**self.config,'discovery_query_timeout':1200},password='secret')
         self.assertEqual(result['visible'],0)
-        self.assertEqual(self.connection.timeout,300)
+        self.assertEqual(self.connection.timeout,1200)
         self.assertEqual(self.driver.connect.call_args.kwargs['timeout'],15)
         self.connection.close.assert_called_once()
 
     def test_invalid_discovery_timeout_never_opens_sql(self):
-        for timeout in (0,10,601,True,'120'):
+        for timeout in (0,10,1201,True,'120'):
             with self.subTest(timeout=timeout),self.assertRaises(ValueError):
                 discover({**self.config,'discovery_query_timeout':timeout},password='secret')
         self.driver.connect.assert_not_called()

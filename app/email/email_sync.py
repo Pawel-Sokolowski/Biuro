@@ -857,7 +857,7 @@ def fetch_headers(
                     "FETCH",
                     ",".join(chunk),
                     "(FLAGS BODY.PEEK[HEADER.FIELDS "
-                    "(FROM TO CC SUBJECT DATE MESSAGE-ID "
+                    "(FROM TO CC BCC SUBJECT DATE MESSAGE-ID "
                     "IN-REPLY-TO REFERENCES CONTENT-TYPE)])",
                 )
 
@@ -917,7 +917,7 @@ def fetch_headers(
                             msg.get("From", "")
                         ),
                         "recipient": ", ".join(
-                            part for part in (safe_header(msg.get("To", "")), safe_header(msg.get("Cc", ""))) if part
+                            part for part in (safe_header(msg.get("To", "")), safe_header(msg.get("Cc", "")), safe_header(msg.get("Bcc", ""))) if part
                         ),
                         "subject": safe_header(
                             msg.get("Subject", "")

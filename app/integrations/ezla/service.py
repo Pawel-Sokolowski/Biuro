@@ -12,6 +12,9 @@ from app.integrations.ezla.report import parse_report, MAX_BYTES
 
 ENDPOINT = ('https://pue.zus.pl:8500/ws/zus.channel.platnikRaportyZla:wsdlPlatnikRaportyZla/'
             'zus_channel_platnikRaportyZla_wsdlPlatnikRaportyZla_Port')
+# Mandatory SOAP 1.1 action from the ZUS instruction effective 2026-02-13.
+SOAP_ACTION = 'zus_channel_platnikRaportyZla_wsdlPlatnikRaportyZla_Binder_pobierzRaporty'
+WSDL_URL = ENDPOINT + '?wsdl'
 SOAP_NS = 'http://schemas.xmlsoap.org/soap/envelope/'
 ZUS_NS = 'http://zus/zus.channel.platnikRaportyZla:wsdlPlatnikRaportyZla'
 # Published transport credentials from the ZUS producer instruction; not payer credentials.
@@ -180,7 +183,7 @@ def fetch_reports(nip, login, password, zip_password, since, *, today=None):
         raise ValueError('Uzupełnij osobne hasło szyfrowania ZIP z ustawień PUE/eZUS.')
     try:
         with requests.post(ENDPOINT, data=payload, auth=(TRANSPORT_LOGIN, TRANSPORT_LOGIN),
-                headers={'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '""'},
+                headers={'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '"' + SOAP_ACTION + '"'},
                 timeout=(15, 90), allow_redirects=False, stream=True) as response:
             status = response.status_code
             if status != 200:

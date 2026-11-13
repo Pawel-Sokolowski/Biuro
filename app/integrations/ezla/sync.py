@@ -24,7 +24,7 @@ def since_date(previous, today):
 
 
 def _metadata(report):
-    months, review = set(), False
+    months, review = set(), bool(report.issues)
     for item in report.certificates:
         if item.issues:
             review = True

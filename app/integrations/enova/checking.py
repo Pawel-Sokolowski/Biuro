@@ -10,6 +10,71 @@ from app.utils.months import previous_month, month_bounds
 DEPARTMENTS = ('accounting', 'payroll')
 
 
+def import_document_year(config, year, *, actor_id, progress=None):
+    """Explicit counts-only backfill, independent of billing stages and schedule.
+
+    Only the accounting section of checking snapshots is refreshed. In particular,
+    this operation never writes monthly counters, provenance or daily job markers.
+    """
+    from app.db.dao_conn import get_conn
+    from app.security.authorization import is_administrator
+    from app.integrations.enova.document_counts import find_company
+    if not is_administrator(actor_id):
+        raise PermissionError('Tylko administrator może uruchamiać import Enovy.')
+    if type(year) is not int or not 2000 <= year <= 2100:
+        raise ValueError('Wybierz rok od 2000 do 2100.')
+    sources = config.get('sources') or []
+    if not sources:
+        raise ValueError('Najpierw przypisz bazy Enovy do firm i zapisz połączenie.')
+    months = [f'{year}-{month:02d}' for month in range(1, 13)]
+    results = []
+    with get_conn() as conn:
+        if not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
+            raise ValueError('Import sprawdzania jest już uruchomiony. Poczekaj na jego zakończenie.')
+        for index, source in enumerate(sources):
+            database = source['database']
+            if progress:
+                progress(index, len(sources), database)
+            try:
+                with conn.transaction():
+                    company = find_company(conn, normalize_nip(source['nip']))
+                    report_source = {**source, 'accounting_type': 'KH', 'count_query': str(
+                        Path(__file__).resolve().parents[3] / 'docs/enova/queries/checking.sql')}
+                    counts = validate_rows(fetch_counts(config, report_source, months), report_source, months)
+                    if any(count.by_type is None for count in counts):
+                        raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
+                    stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+                    for count in counts:
+                        key = f'enova_checking_{company["id"]}_{count.month}'
+                        old = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE', (key,)).fetchone()
+                        snapshot = json.loads(old[0]) if old else {}
+                        snapshot.setdefault('documents', {})['accounting'] = count.by_type
+                        snapshot.update(database=database, accounting_imported_at=stamp)
+                        snapshot.setdefault('imported_at', stamp)
+                        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                                     (key, json.dumps(snapshot, ensure_ascii=False)))
+                    details = {'year': year, 'company_id': company['id'], 'months': months,
+                               'counts': {count.month: count.documents for count in counts}}
+                    conn.execute("INSERT INTO import_history(import_type,source_path,status,updated_count,completed_at,details) "
+                                 "VALUES ('enova_document_year',%s,'completed',12,to_char(now(),'YYYY-MM-DD HH24:MI:SS'),%s)",
+                                 (database, json.dumps(details)))
+                    results.append({'database': database, 'company': company['nazwa'], 'ok': True, **details})
+            except Exception as exc:
+                from app.integrations.enova.odbc_support import describe_sql_error
+                # Reuse redaction rather than leaking connection strings from an ODBC error.
+                diagnostic = describe_sql_error(exc, secrets=(config.get('password_enc'),))
+                error = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else diagnostic['hint']
+                results.append({'database': database, 'ok': False, 'error': error})
+                conn.execute("INSERT INTO import_history(import_type,source_path,status,details) "
+                             "VALUES ('enova_document_year',%s,'failed',%s)",
+                             (database, json.dumps({'year': year, 'error': error})))
+            finally:
+                if progress:
+                    progress(index + 1, len(sources), database)
+    return results
+
+
 def history_months(month, count=12):
     month_bounds(month)
     if type(count) is not int or not 0 <= count <= 36:

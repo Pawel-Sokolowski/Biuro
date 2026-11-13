@@ -310,6 +310,8 @@ class AccountingPage(QWidget):
             if department == 'accounting':
                 cells.append(_item(row.get('ilosc_dok'), 'Licznik miesięczny, z zachowaniem ręcznych korekt.'))
             stamp = report.get('imported_at') if counts is not None or report.get('declarations') is not None else None
+            if department == 'accounting' and counts is not None:
+                stamp = report.get('accounting_imported_at') or stamp
             if department == 'accounting' and not report:
                 stamp = decoded(row.get('snapshot')).get('imported_at')
             cells.append(_item(_date(stamp)))

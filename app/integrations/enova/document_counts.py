@@ -170,7 +170,8 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
     connection = pyodbc.connect(connection_string, timeout=15, attrs_before={101: 1})
     try:
         cursor = connection.cursor()
-        connection.timeout = 120
+        from app.integrations.enova.discovery import query_timeout
+        connection.timeout = query_timeout(config)
         # Exactly two positional date parameters: inclusive start, exclusive end.
         cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
                        date.fromisoformat(month_bounds(months[-1])[1]))
@@ -300,6 +301,12 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
         raise ValueError('Połączenie Enovy można zapisać bez baz firm. Przed importem znajdź bazy po NIP lub przypisz je ręcznie i zapisz ustawienia.')
     run_day = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
     months = requested_months(run_day, config.get('months_back', 3))
+    # Historical counts belong to Sprawdzanie. Only periods starting with this
+    # deployment's activation month may feed the monthly billing counter.
+    first_month = config.get('monthly_counts_from') or run_day.strftime('%Y-%m')
+    if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', first_month):
+        raise ValueError('Nieprawidłowy miesiąc rozpoczęcia importu do widoku miesięcznego.')
+    monthly_months = [month for month in months if month >= first_month]
     rules = load_rules()
     results = []
     with get_conn() as conn:
@@ -317,7 +324,7 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                     if source.get('jpk_query'):
                         from app.integrations.enova.jpk import import_jpk
                         jpk_result = import_jpk(conn, config, source, company['id'], months, run_day, apply=apply)
-                    eligible = _eligible_months(conn, company['id'], months, signature, apply=apply)
+                    eligible = _eligible_months(conn, company['id'], monthly_months, signature, apply=apply)
                     counts = []
                     # Query each eligible month separately: do not query uncompleted gaps.
                     for month in eligible:

@@ -2,9 +2,9 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QFormLayout,QLineEdit,QCheckBox,
-    QComboBox,QPushButton,QLabel,QSpinBox)
+    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox)
 from PyQt6.QtCore import Qt
-from app.integrations.platnik.holidays import load,save,check_connection,import_year
+from app.integrations.platnik.holidays import load,save,check_connection,import_year,PlatnikSqlError
 from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
 from app.utils.background import TaskRunner
 
@@ -17,6 +17,7 @@ class PlatnikSettings(QWidget):
             raise PermissionError('Tylko administrator konfiguruje Płatnika.')
         self.actor_id = actor_id
         self.runner = TaskRunner(self)
+        self.error_diagnostic = None
         config = load()
         layout = QVBoxLayout(self)
         note = QLabel('Osobne połączenie Microsoft SQL Server programu Płatnik. '
@@ -25,6 +26,10 @@ class PlatnikSettings(QWidget):
                       'Adapter korzysta ze standardowej tabeli wakacji składkowych z Waszego eksportu; nie wymaga własnego pliku SQL.')
         note.setWordWrap(True)
         layout.addWidget(note)
+        driver_note = QLabel('Sterownik ODBC 17 lub 18 musi być zainstalowany na komputerze workera. '
+                             'Obsługują SQL Server 2017, 2019 i 2022; numery wersji serwera i sterownika nie muszą być takie same.')
+        driver_note.setWordWrap(True)
+        layout.addWidget(driver_note)
         form = QFormLayout()
         self.fields = {}
         for key,label in (('server','Serwer / instancja'),('database','Baza Płatnika'),('username','Login SQL')):
@@ -67,6 +72,10 @@ class PlatnikSettings(QWidget):
             button.clicked.connect(action)
             self.buttons.append(button)
             layout.addWidget(button)
+        self.error_button = QPushButton('Pokaż szczegóły błędu SQL…')
+        self.error_button.clicked.connect(self.show_error_details)
+        self.error_button.hide()
+        layout.addWidget(self.error_button)
         layout.addStretch()
 
     def config(self):
@@ -80,11 +89,16 @@ class PlatnikSettings(QWidget):
         try:
             save(self.config(),self.actor_id,self.password.text())
             self.password.clear()
+            self.error_diagnostic = None
+            self.error_button.hide()
             self.status.setText('Zapisano wspólne połączenie Płatnika. Worker użyje go przy następnym przebiegu zadania.')
         except Exception as error:
             self.failed(error)
 
     def busy(self,value):
+        if value:
+            self.error_diagnostic = None
+            self.error_button.hide()
         for button in self.buttons:
             button.setEnabled(not value)
 
@@ -106,6 +120,8 @@ class PlatnikSettings(QWidget):
 
     def checked(self,_):
         self.busy(False)
+        self.error_diagnostic = None
+        self.error_button.hide()
         self.status.setText('Połączenie SQL Płatnika poprawne. Test nie odczytywał ani nie importował dokumentów.')
 
     def download(self):
@@ -125,6 +141,24 @@ class PlatnikSettings(QWidget):
 
     def failed(self,error):
         self.busy(False)
+        self.error_diagnostic = error.diagnostic if isinstance(error,PlatnikSqlError) else None
+        self.error_button.setVisible(self.error_diagnostic is not None)
+        if self.error_diagnostic:
+            self.status.setText(str(error)+' Rozwiń szczegóły błędu SQL. Poprzednie dane pozostawiono.')
+            return
         self.status.setText(str(error) if isinstance(error,(ValueError,PermissionError)) else
                             'Operacja nie powiodła się. Sprawdź instancję, bazę platnik, konto SQL, sterownik, certyfikat i wspólny klucz. '
                             'Nie nadpisano poprzednich danych błędnym odczytem.')
+
+    def show_error_details(self):
+        if not self.error_diagnostic:
+            return
+        error = self.error_diagnostic
+        box = QMessageBox(self)
+        box.setWindowTitle('Płatnik — szczegóły błędu SQL')
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(f"{error['operation']} [{error['sqlstate'] or 'brak SQLSTATE'}]\n{error['hint']}")
+        box.setDetailedText(f"Serwer / instancja: {error['server']}\nBaza: {error['database']}\n"
+                            f"Sterownik: {error['driver']}\n\n{error['details']}")
+        box.exec()

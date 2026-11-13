@@ -1,6 +1,7 @@
 from unittest import TestCase
 from unittest.mock import Mock, patch
 from app.integrations.enova.discovery import propose, discover
+from app.integrations.enova.odbc_support import SqlOperationError
 
 
 class EnovaDiscoveryTests(TestCase):
@@ -34,3 +35,45 @@ class EnovaDiscoveryTests(TestCase):
         root.close.assert_called_once()
         company.close.assert_called_once()
         self.assertEqual(driver.connect.call_args.kwargs['attrs_before'],{101:1})
+
+    def test_master_connection_error_keeps_actual_state_and_redacts_password(self):
+        driver = Mock()
+        driver.connect.side_effect = Exception('08001','Instance unavailable; PWD={private;pass}; private;pass')
+        with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
+             patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'), \
+             self.assertRaises(SqlOperationError) as caught:
+            discover({'server':r'ENOVA\SQLEXPRESS','username':'sa'},password='private;pass')
+        error = caught.exception
+        self.assertEqual(error.diagnostic['sqlstate'],'08001')
+        self.assertEqual(error.diagnostic['database'],'master')
+        self.assertIn('Instance unavailable',error.diagnostic['details'])
+        self.assertNotIn('private;pass',str(error.diagnostic))
+
+    def test_master_query_permission_error_is_distinct_from_login_and_closes_connection(self):
+        root = Mock()
+        root.cursor.return_value.execute.side_effect = Exception('42000','SELECT permission denied (229)')
+        driver = Mock()
+        driver.connect.return_value = root
+        with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
+             patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 17 for SQL Server'), \
+             self.assertRaises(SqlOperationError) as caught:
+            discover({'server':r'ENOVA\SQLEXPRESS','username':'reader'},password='secret')
+        self.assertEqual(caught.exception.diagnostic['sqlstate'],'42000')
+        self.assertIn('229',caught.exception.diagnostic['details'])
+        root.close.assert_called_once()
+
+    def test_partial_company_scan_keeps_redacted_diagnostics_and_blocks_automatic_assignment(self):
+        root,company = Mock(),Mock()
+        root.cursor.return_value.fetchmany.return_value = [('ALFA',)]
+        company.cursor.return_value.execute.side_effect = Exception('42S22','Invalid column; PWD=secret;')
+        driver = Mock()
+        driver.connect.side_effect = [root,company]
+        with patch('app.integrations.enova.discovery.load_odbc',return_value=driver), \
+             patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
+            result = discover({'server':r'ENOVA\SQLEXPRESS','username':'reader'},password='secret')
+        self.assertIn('42S22',result['errors'][0])
+        self.assertIn('Invalid column',result['errors'][0])
+        self.assertNotIn('secret',result['errors'][0])
+        self.assertEqual(propose([{'id':1,'nip':'1112223344'}],{},result)[0],{})
+        root.close.assert_called_once()
+        company.close.assert_called_once()

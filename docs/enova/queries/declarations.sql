@@ -1,6 +1,7 @@
 -- Bundled accounting declaration reader. Verified tables: Soneta EnovaDB Deklaracje.business.xml.
 -- Read only; latest numbered declaration/correction per reporting month and normalized form.
--- The internal Enova enum is retained raw, never interpreted as an MF response code.
+-- Internal enum values verified in Soneta.Deklaracje 2506.0.0, 2606.0.1, 2610.0.2.
+-- Enova states and MF response codes are separate namespaces.
 -- Transmission attempts are NOT declaration submission dates. Stamp is rowversion, not a date.
 -- Only MF response 200 plus a downloaded UPO reference counts as accepted.
 WITH Parameters AS (
@@ -31,12 +32,14 @@ SourceDocuments AS (
            UPPER(REPLACE(REPLACE(COALESCE(NULLIF(e.XmlDocument.value('(//*[local-name()="KodFormularza"]/text())[1]', 'nvarchar(64)'), N''),
                NULLIF(f.Symbol, N''), d.NumerSymbol), N'-', N''), N' ', N'')) AS FormKey,
            e.ID AS ElectronicID, e.StatusEDeklaracji,
-           TRY_CONVERT(xml, CAST(e.Potwierdzenie AS nvarchar(max))) AS Confirmation
+           TRY_CONVERT(xml, CASE WHEN LEFT(CAST(e.Potwierdzenie AS nvarchar(max)), 5) = N'<?xml' AND CHARINDEX(N'?>', CAST(e.Potwierdzenie AS nvarchar(max))) > 0
+                   THEN SUBSTRING(CAST(e.Potwierdzenie AS nvarchar(max)), CHARINDEX(N'?>', CAST(e.Potwierdzenie AS nvarchar(max))) + 2, 2147483647) ELSE CAST(e.Potwierdzenie AS nvarchar(max)) END) AS Confirmation
     FROM dbo.Deklaracje d
     LEFT JOIN dbo.DefDokumentow f ON f.ID = d.Definicja
     OUTER APPLY (
         SELECT TOP (1) x.ID, x.StatusEDeklaracji, x.Potwierdzenie,
-               TRY_CONVERT(xml, CAST(x.Dokument AS nvarchar(max))) AS XmlDocument
+               TRY_CONVERT(xml, CASE WHEN LEFT(CAST(x.Dokument AS nvarchar(max)), 5) = N'<?xml' AND CHARINDEX(N'?>', CAST(x.Dokument AS nvarchar(max))) > 0
+                   THEN SUBSTRING(CAST(x.Dokument AS nvarchar(max)), CHARINDEX(N'?>', CAST(x.Dokument AS nvarchar(max))) + 2, 2147483647) ELSE CAST(x.Dokument AS nvarchar(max)) END) AS XmlDocument
         FROM dbo.EDeklaracje x WHERE x.Deklaracja = d.ID ORDER BY x.ID DESC
     ) e
     CROSS JOIN Parameters p
@@ -65,20 +68,26 @@ Results AS (
     FROM Ranked d
     OUTER APPLY (
         SELECT TOP (1) x.StatusETransmisji FROM dbo.ETransmisje x
-        WHERE x.EDeklaracja = d.ElectronicID ORDER BY x.Czas DESC, x.ID DESC
+        WHERE x.EDeklaracja = d.ElectronicID AND x.Typ = 2 ORDER BY x.Czas DESC, x.ID DESC
     ) t
     WHERE d.Position = 1
 )
 SELECT c.nip, CONVERT(char(7), d.OkresTo, 120) AS miesiac,
        N'accounting' AS department, d.FormName AS form,
-       CASE WHEN d.StatusETransmisji = 200 AND NULLIF(d.Receipt, N'') IS NOT NULL THEN N'accepted'
-            WHEN d.StatusETransmisji IN (301,302,303,304) THEN N'processing'
+       CASE WHEN d.StatusEDeklaracji = 100 THEN N'cancelled'
             WHEN d.StatusETransmisji BETWEEN 400 AND 499 THEN N'rejected'
-            WHEN d.ElectronicID IS NULL THEN N'prepared'
+            WHEN d.StatusEDeklaracji = 99 THEN N'failed'
+            WHEN d.StatusETransmisji = 200 AND NULLIF(d.Receipt, N'') IS NOT NULL THEN N'accepted'
+            WHEN d.StatusEDeklaracji = 4 AND d.StatusETransmisji IS NULL
+                 AND NULLIF(d.Receipt, N'') IS NOT NULL THEN N'accepted'
+            WHEN d.StatusETransmisji IN (301,302,303,304) THEN N'processing'
+            WHEN d.StatusEDeklaracji = 1 OR d.ElectronicID IS NULL THEN N'prepared'
+            WHEN d.StatusEDeklaracji = 2 THEN N'not_sent'
+            WHEN d.StatusEDeklaracji = 3 THEN N'sent'
             ELSE N'unknown' END AS status,
        CAST(NULL AS datetime) AS sent_at,
        COALESCE(d.Receipt, N'') AS upo,
-       TRY_CONVERT(datetimeoffset, d.Confirmation.value('(//*[local-name()="DataWytworzeniaPotwierdzenia"]/text())[1]', 'nvarchar(64)')) AS upo_at,
+       CONVERT(nvarchar(64), TRY_CONVERT(datetimeoffset, d.Confirmation.value('(//*[local-name()="DataWytworzeniaPotwierdzenia"]/text())[1]', 'nvarchar(64)')), 127) AS upo_at,
        CONCAT(N'Enova=', d.StatusEDeklaracji, N'; MF=', d.StatusETransmisji) AS raw_status
 FROM Results d CROSS JOIN Company c
 ORDER BY d.OkresTo, d.FormName

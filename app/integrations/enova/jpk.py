@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.integrations.enova.document_counts import fetch_counts, normalize_nip
 
-STATUSES = {'unknown': 'Nieustalony — sprawdź źródło', 'prepared': 'Przygotowany', 'processing': 'Przetwarzany', 'not_sent': 'Niewysłany', 'sent': 'Wysłany', 'accepted': 'Przyjęty (UPO)', 'rejected': 'Odrzucony', 'not_applicable': 'Nie dotyczy'}
+STATUSES = {'failed': 'Błąd przetwarzania', 'cancelled': 'Anulowany', 'unknown': 'Nieustalony — sprawdź źródło', 'prepared': 'Przygotowany', 'processing': 'Przetwarzany', 'not_sent': 'Niewysłany', 'sent': 'Wysłany', 'accepted': 'Przyjęty (UPO)', 'rejected': 'Odrzucony', 'not_applicable': 'Nie dotyczy'}
 
 
 def validate_jpk(rows, source, months):
@@ -27,7 +27,8 @@ def validate_jpk(rows, source, months):
 
 def import_jpk(conn, config, source, company_id, months, day, *, apply, force=False):
     key = f'enova_jpk_checked_{company_id}'
-    signature = {'day': day.isoformat(), 'server': config.get('server'), 'database': source['database'],
+    from app.integrations.enova.query_defaults import ADAPTER_REVISION
+    signature = {'adapter_revision': ADAPTER_REVISION, 'day': day.isoformat(), 'server': config.get('server'), 'database': source['database'],
                  'query': source['jpk_query'], 'months': months}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
     if apply and not force and checked and json.loads(checked[0]) == signature:

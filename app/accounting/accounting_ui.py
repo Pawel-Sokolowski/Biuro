@@ -96,7 +96,7 @@ class AccountingPage(QWidget):
             selector = QComboBox()
             for title, status in [('Wszystkie deklaracje', ''), ('Do wysłania', 'to_send'),
                                   ('Wysłane', 'sent'), ('Oczekujące na UPO', 'awaiting'),
-                                  ('Przyjęte z UPO', 'accepted'), ('Odrzucone', 'rejected')]:
+                                  ('Przyjęte z UPO', 'accepted'), ('Odrzucone lub z błędem', 'rejected')]:
                 selector.addItem(title, status)
             self.declaration_filters[department] = selector
             declaration_layout.addWidget(selector)
@@ -443,7 +443,7 @@ class AccountingPage(QWidget):
                            'sent': status in ('sent', 'processing', 'accepted'),
                            'awaiting': status in ('sent', 'processing', 'accepted') and not entry.get('upo'),
                            'accepted': status == 'accepted' and bool(entry.get('upo')),
-                           'rejected': status == 'rejected'}
+                           'rejected': status in ('rejected', 'failed')}
                 if selected and not matches[selected]:
                     continue
                 employee = entry.get('employee_name') or 'Cała firma / zestaw'

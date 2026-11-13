@@ -185,7 +185,8 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
     for period in months:
         month_bounds(period)
     key = f'enova_checking_checked_{company_id}'
-    signature = {'version': 3, 'day': day.isoformat(), 'server': config.get('server'),
+    from app.integrations.enova.query_defaults import ADAPTER_REVISION
+    signature = {'version': 3, 'adapter_revision': ADAPTER_REVISION, 'day': day.isoformat(), 'server': config.get('server'),
                  'database': source['database'], 'months': months,
                  'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()

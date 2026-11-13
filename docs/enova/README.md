@@ -271,7 +271,7 @@ Zapytanie JPK ma dwa parametry ODBC `?`: początek zakresu włącznie i koniec
 wyłącznie. Zwraca dokładnie jeden wiersz na miesiąc z kolumnami `nip`, `miesiac`
 (`YYYY-MM`), `status` oraz `upo` (referencja potwierdzenia, NULL dopuszczalny poza
 `accepted`). Dozwolone statusy: `not_sent`, `sent`, `accepted`, `rejected`,
-`not_applicable`, `prepared`, `processing`, `unknown`. Opcjonalne `raw_status`
+`not_applicable`, `prepared`, `processing`, `unknown`, `failed`, `cancelled`. Opcjonalne `raw_status`
 zachowuje kod źródła. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
 nie są zamieniane na „niewysłany”. Bez prawdziwego źródła nie można potwierdzić
 połączenia z JPK ani przetestować go w tej sesji.
@@ -398,18 +398,21 @@ także gdy starsza deklaracja miała UPO, a nowa korekta jeszcze go nie ma.
 Znaczenie relacji i pól transmisji potwierdza opublikowana przez producenta
 [definicja bazy Soneta](https://github.com/soneta/EnovaDB/blob/master/EnovaDB/Generator/Deklaracje.business.xml).
 Odczyt używa kodów odpowiedzi MF: 200 z pobraną referencją UPO oznacza przyjęcie,
-301–304 przetwarzanie, 400–499 odrzucenie. Kody wewnętrzne Enovy pozostają surowe,
-bez zgadywania wartości enumów. [Opis kodów MF](https://podatki.gov.pl/e-deklaracje-zloz-deklaracje-podatkowa-online/informacje-podstawowe).
-Brak elektronicznej wersji deklaracji oznacza przygotowanie; pozostałe nierozpoznane
-stany są jawnie nieustalone. Data UPO pochodzi wyłącznie z elementu
+301–304 przetwarzanie, 400–499 odrzucenie. Kody wewnętrzne zmapowano na podstawie opublikowanych stałych enumów Sonety;
+[pełna tabela i źródła](status-codes.md). Surowe wartości są nadal zachowywane. [Opis kodów MF](https://podatki.gov.pl/e-deklaracje-zloz-deklaracje-podatkowa-online/informacje-podstawowe).
+Brak elektronicznej wersji deklaracji oznacza przygotowanie; kody Enovy rozdzielają
+przygotowanie, oczekiwanie na wysłanie i na UPO, błędy oraz anulowanie. Nieznane
+kody pozostają nieustalone. Anulowana deklaracja nie staje się przyjęta ze starego UPO. Data UPO pochodzi wyłącznie z elementu
 `DataWytworzeniaPotwierdzenia`; data wysyłki pozostaje pusta, ponieważ data próby
 transmisji nie potwierdza złożenia. `Stamp` to wersja wiersza, nie data.
 
 `queries/jpk.sql` odczytuje JPK VAT/V7M/V7K z `JednolitePK` (nazwy i typy kolumn
 potwierdzone we wszystkich czterech lokalnych eksportach). Wybiera najwyższy numer
 korekty, następnie ID. Pobiera tylko referencję z kolumny UPO, bez treści dokumentów
-ani kwot. Niepusty numer referencyjny w poprawnym XML UPO potwierdza przyjęcie;
-brak pliku lub UPO oznacza stan nieustalony. `StatusJPK` jest zachowany surowo.
+ani kwot. Przyjęcie wymaga statusu Finished=100, oficjalnej bramki=3 i referencji UPO.
+Testowe UPO nie potwierdza złożenia produkcyjnego. Statusy przygotowania,
+wysyłania, przetwarzania i błędu mapujemy według potwierdzonych enumów;
+nieznane kody, brak pliku i zakończenie bez UPO pozostają nieustalone.
 Nie obejmuje JPK CIT/KR/FA/MAG ani plików zewnętrznych nieobecnych w tej bazie.
 
 SQL jest instalowany razem z workerem i działa także dla zapisanych wcześniej
@@ -431,7 +434,7 @@ Kontrakty opcjonalnych zamienników SQL:
   `nip`, `miesiac`, `department` (`accounting` albo `payroll`), `form` (np. JPK_VAT,
   CIT-8, PIT-11, ZUS DRA), `status`, `sent_at`, `upo` (referencja potwierdzenia),
   `upo_at`. Statusy: `prepared`, `processing`, `not_sent`, `sent`, `accepted`,
-  `rejected`, `not_applicable`, `unknown`. Opcjonalne `raw_status` zachowuje kod źródła. Dla `accepted` UPO nie może być puste. Daty mogą
+  `rejected`, `not_applicable`, `unknown`, `failed`, `cancelled`. Opcjonalne `raw_status` zachowuje kod źródła. Dla `accepted` UPO nie może być puste. Daty mogą
   być NULL, datą ISO lub znacznikiem czasu ISO; nie są dopowiadane przez importer.
   Zapytanie musi wybierać aktualny stan formularza, uwzględniając korekty; duplikat
   formularza/działu/miesiąca/pracownika jest błędem. Przypisanie formularzy rocznych lub
@@ -587,3 +590,10 @@ Sterowniki Microsoft ODBC 17 i 18 obsługują SQL Server 2017, 2019 i 2022.
 Nie dobieraj numeru sterownika do rocznika SQL Server ani wersji SSMS.
 Jeden zainstalowany ODBC Driver 18 i wybór Automatycznie może obsłużyć oba
 połączenia workera — Enovę i Płatnika.
+
+
+Dołączone ścieżki SQL są rozwiązywane w katalogu instalacji komputera wykonującego
+odczyt. Zapis ustawień nie utrwala ścieżek domyślnych z komputera administratora
+jako zamienników firmy. Wartość dziedziczona z ustawienia globalnego nadal
+podlega późniejszym zmianom globalnego SQL. Rzeczywisty zamiennik firmy zachowuje
+pierwszeństwo. Rewizja adapterów unieważnia dzienne znaczniki po aktualizacji SQL.

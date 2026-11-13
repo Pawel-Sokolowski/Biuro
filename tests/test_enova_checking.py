@@ -57,6 +57,14 @@ class CheckingRulesTests(TestCase):
         self.assertEqual(jpk['raw_status'], row['raw_status'])
         self.assertEqual(jpk['status'], 'unknown')
 
+    def test_source_processing_error_and_cancellation_are_distinct_from_mf_rejection(self):
+        from app.accounting.insights import declaration_issue
+        row = {'nip': NIP, 'miesiac': '2026-11', 'department': 'accounting', 'form': 'VAT-UE',
+               'sent_at': None, 'upo': '', 'upo_at': None}
+        for status, message in (('failed', 'Błąd przetwarzania'), ('cancelled', 'Anulowana'), ('rejected', 'Odrzucona')):
+            value = validate_declarations([{**row, 'status': status}], SOURCE, ['2026-11'])['2026-11'][0]
+            self.assertEqual(declaration_issue(value), message)
+
     def test_payroll_requires_explicit_empty_month_and_rejects_duplicate_types(self):
         row = {'nip': NIP, 'miesiac': '2026-11', 'rodzaj': 'Lista płac', 'liczba': 2}
         self.assertEqual(validate_payroll([row], SOURCE, ['2026-11'])['2026-11'], {'Lista płac': 2})

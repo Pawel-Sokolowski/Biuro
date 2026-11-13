@@ -1,5 +1,10 @@
 # Ręczne przypomnienia i rozliczenia MT940 (1.5.3)
 
+Widok miesięczny ma dwa niezależne filtry: **Dokumenty** (Wszystkie / Dostarczone /
+Niedostarczone) i **Etap** (Wszystkie / Brak / Zatwierdzone / Zaksięgowane /
+Wysłane wyniki). Można je łączyć, np. Dostarczone + Zaksięgowane. Etap dotyczy
+aktualnego działu — księgowości albo kadr.
+
 W **Księgowość/Kadry → Widok miesięczny** wybierz miesiąc, zaznacz jedną firmę
 i kliknij **Przypomnij o dokumentach…**. Wiadomość dotyczy wskazanego miesiąca,
 także archiwalnego; termin wynika z ustawionego dnia w kolejnym miesiącu.

@@ -109,6 +109,35 @@ class ReadResponsivenessTests(unittest.TestCase):
         page.refresh_background()
         self.assertTrue(wait_until(lambda: page.model_ks.rowCount() == 1))
 
+    def test_document_delivery_and_stage_filters_combine_without_reloading_rows(self):
+        rows = [
+            {**monthly_row(1,'Delivered booked'),'dokumenty_dostarczone':1,'etap':'Zaksięgowane','etap_kadry':'Brak'},
+            {**monthly_row(2,'Missing booked'),'dokumenty_dostarczone':0,'etap':'Zaksięgowane','etap_kadry':'Wysłane wyniki'},
+            {**monthly_row(3,'Delivered approved'),'dokumenty_dostarczone':1,'etap':'Zatwierdzone','etap_kadry':'Zaksięgowane'},
+            monthly_row(4,'Missing without stage'),
+        ]
+        page,logic = self.monthly_page(lambda *_: [dict(row) for row in rows])
+        self.assertTrue(wait_until(lambda: page.model_ks.rowCount()==4))
+        before = logic.get_monthly_rows.call_count
+        def ids(model):
+            return [model.get_row(i)['id'] for i in range(model.rowCount())]
+        page.delivery_combo.setCurrentText('Dostarczone')
+        self.assertEqual(ids(page.model_ks),[1,3])
+        page.stage_combo.setCurrentText('Zaksięgowane')
+        self.assertEqual(ids(page.model_ks),[1])
+        self.assertEqual(ids(page.model_kadry),[3])
+        page.delivery_combo.setCurrentText('Niedostarczone')
+        self.assertEqual(ids(page.model_ks),[2])
+        page.stage_combo.setCurrentText('Wysłane wyniki')
+        self.assertEqual(ids(page.model_ks),[])
+        self.assertEqual(ids(page.model_kadry),[2])
+        page.stage_combo.setCurrentText('Brak')
+        self.assertEqual(ids(page.model_ks),[4])
+        page.delivery_combo.setCurrentText('Wszystkie')
+        page.stage_combo.setCurrentText('Wszystkie')
+        self.assertEqual(ids(page.model_ks),[1,2,3,4])
+        self.assertEqual(logic.get_monthly_rows.call_count,before)
+
     def test_year_end_filters_use_cached_rows_and_keep_selected_company_identity(self):
         data = [annual_company(1, 'Alpha'), annual_company(2, 'Beta', filed=True)]
         with mock.patch.object(year_end_ui, 'list_year_end', return_value=data) as read:

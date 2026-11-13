@@ -4,13 +4,22 @@ from app.db.dao_app_settings import get_setting, set_setting
 
 KEY = 'saldeo_web'
 DEFAULTS = dict(enabled=False, login_url='https://saldeo.brainshare.pl/', history_url='https://saldeo.brainshare.pl/biuro/operacje/lista-operacji.hta',
-                username='', password_enc='', logged_in_selector='', item_selector='',
-                empty_selector='', open_selector='', next_selector='', username_selector='', password_selector='',
-                submit_selector='', channel='msedge', max_pages=20, pause_seconds=2)
+                username='', password_enc='', logged_in_selector='[qa-id="bo-counter"]', item_selector='div[qa-id^="row-bo-id-"]',
+                empty_selector='', open_selector='[qa-id="bo-counter"]', next_selector='', username_selector='input[qa-id="username"]', password_selector='input[qa-id="password"]',
+                submit_selector='', channel='auto', executable_path='', max_pages=20, pause_seconds=2)
 
 
 def load():
-    return {**DEFAULTS, **json.loads(get_setting(KEY) or '{}')}
+    saved = json.loads(get_setting(KEY) or '{}')
+    value = {**DEFAULTS, **saved}
+    for key in ('username_selector','password_selector'):
+        if not value[key]:
+            value[key] = DEFAULTS[key]
+    if not saved.get('item_selector') and value['history_url']==DEFAULTS['history_url']:
+        for key in ('item_selector','logged_in_selector','open_selector'):
+            if not value[key]:
+                value[key] = DEFAULTS[key]
+    return value
 
 
 def validate(config):
@@ -26,12 +35,12 @@ def validate(config):
         if origin is not None and current != origin:
             raise ValueError('Logowanie i historia muszą być na tym samym serwerze Saldeo.')
         origin = current
-    if config['channel'] not in ('msedge', 'chrome'):
+    if config['channel'] not in ('auto', 'msedge', 'chrome'):
         raise ValueError('Wybierz Edge lub Chrome zainstalowany na serwerze.')
     if type(config['enabled']) is not bool or not 1 <= config['max_pages'] <= 100 or not 1 <= config['pause_seconds'] <= 60:
         raise ValueError('Nieprawidłowe limity monitorowania.')
-    if config['enabled'] and not all(config[k].strip() for k in ('history_url', 'logged_in_selector', 'item_selector', 'empty_selector')):
-        raise ValueError('Uzupełnij adres historii i selektory widoku: zalogowany, wpis i pusta historia.')
+    if config['enabled'] and not all(config[k].strip() for k in ('history_url', 'logged_in_selector', 'item_selector')):
+        raise ValueError('Uzupełnij adres historii i selektory widoku: zalogowany i cały wpis.')
 
 
 def save(config, actor_id, password=''):

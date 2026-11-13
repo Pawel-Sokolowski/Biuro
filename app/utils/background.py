@@ -15,6 +15,8 @@ from app.utils.request_cache import request_scope
 
 _pool = QThreadPool()
 _pool.setMaxThreadCount(4)
+metadata_pool = QThreadPool()
+metadata_pool.setMaxThreadCount(1)
 
 
 class _Signals(QObject):
@@ -54,8 +56,9 @@ class _Job(QRunnable):
 
 class TaskRunner(QObject):
     """Deliver results on the GUI thread; an older request cannot replace a new one."""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, pool=None):
         super().__init__(parent)
+        self._pool = pool if pool is not None else _pool
         self._generation = 0
         self._callbacks = {}
         self._jobs = {}
@@ -73,7 +76,7 @@ class TaskRunner(QObject):
         self._pending_read = None
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
-            if _pool.tryTake(job):
+            if self._pool.tryTake(job):
                 self._jobs.pop(generation, None)
         self._generation += 1
         generation = self._generation
@@ -83,7 +86,7 @@ class TaskRunner(QObject):
         self._jobs[generation] = job
         job.signals.finished.connect(self._completed)
         try:
-            _pool.start(job)
+            self._pool.start(job)
         except Exception:
             self._jobs.pop(generation, None)
             self._callbacks.pop(generation, None)
@@ -94,7 +97,7 @@ class TaskRunner(QObject):
         self._pending_read = None
         for generation, job in list(self._jobs.items()):
             job.cancelled.set()
-            if _pool.tryTake(job):
+            if self._pool.tryTake(job):
                 self._jobs.pop(generation, None)
         self._generation += 1
         self._callbacks.clear()

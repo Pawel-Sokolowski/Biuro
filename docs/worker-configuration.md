@@ -68,6 +68,15 @@ jeszcze nie ma. Puste pole oznacza brak tego odczytu. Plik wskazany własną śc
 musi znajdować się na serwerze workera. Eksport struktury Enovy daje metadane do
 przygotowania adaptera, ale nie tworzy działającego zapytania automatycznie.
 
+Do rozpoznania adapterów nie trzeba eksportować wszystkich firm. Zacznij od bazy
+z pełną księgowością, bazy KPiR/ryczałtu oraz bazy z używanymi kadrami i deklaracjami
+(ta sama baza może spełniać kilka warunków). Dodatkowe próbki są potrzebne, jeśli
+firmy mają różne wersje lub dodatki Enovy. Eksport nie zawiera rekordów dokumentów.
+Po wskazaniu pliku JSON widać etap połączenia, odczytu kolumn, relacji i zapisu,
+a na końcu pełną ścieżkę wyniku lub błąd. Eksport korzysta z ustawionego limitu
+zapytania do 1200 s i osobnej kolejki od długich odczytów danych. Nieudany odczyt
+nie zastępuje wcześniejszego pliku eksportu.
+
 W **Księgowość / Kadry → Sprawdzanie** są też przyciski pobrania wybranych firm:
 **Pobierz z Enovy…**, **Pobierz e-ZLA z ZUS…**, a w zestawieniu wakacji składkowych
 **Pobierz z Płatnika…**. Wybierz jedną lub kilka firm w raporcie (Ctrl / Shift)

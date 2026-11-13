@@ -70,11 +70,13 @@ class OdbcTimeoutTests(TestCase):
 
     def test_metadata_export_uses_connection_query_timeout(self):
         self.cursor.description = [('schema_name',), ('object_name',), ('column_name',), ('data_type',)]
-        self.cursor.fetchmany.side_effect = [[('dbo', 'Deklaracje', 'Status', 'int')], []]
-        result = inspect_schema(self.config, 'ClientA', password='secret')
+        self.cursor.fetchmany.side_effect = [[('dbo', 'Deklaracje', 'Status', 'int')], [], []]
+        progress = Mock()
+        result = inspect_schema({**self.config,'discovery_query_timeout':1200}, 'ClientA', password='secret',progress=progress)
         self.assertEqual(result['columns'][0]['object_name'], 'Deklaracje')
-        self.assertEqual(self.connection.timeout, 30)
+        self.assertEqual(self.connection.timeout, 1200)
         self.assertEqual(self.cursor.execute.call_count, 2)
+        self.assertIn('1200',str(progress.call_args_list))
         self.connection.close.assert_called_once()
 
     def test_discovery_custom_query_timeout_is_separate_from_login_timeout(self):

@@ -46,9 +46,9 @@ class WorkerSetupTests(TestCase):
         token = Fernet(key).encrypt(b'secret').decode()
         conn = Mock()
         conn.execute.return_value.fetchall.side_effect = [
-            [(token,)], [('ezla_service', '{"password_enc":"' + token + '"}')]]
+            [(1, 'office@example.test', token)], [('ezla_service', '{"password_enc":"' + token + '"}')]]
         self.assertEqual(_check_tokens(conn, key.decode()), 2)
-        conn.execute.return_value.fetchall.side_effect = [[(token,)], []]
+        conn.execute.return_value.fetchall.side_effect = [[(1, 'office@example.test', token)], []]
         with self.assertRaisesRegex(ValueError, 'Klucz nie odszyfrowuje'):
             _check_tokens(conn, Fernet.generate_key().decode())
 
@@ -76,3 +76,52 @@ class WorkerSetupTests(TestCase):
             self.assertNotIn('private-password', repr(args))
             self.assertIn('private-password', kwargs['input'])
             preflight.assert_called_once()
+
+    def test_diagnostics_identify_all_unreadable_records_without_secrets(self):
+        from app.services.worker_setup import CredentialKeyError
+        key = Fernet.generate_key()
+        readable = Fernet(key).encrypt(b'good-secret').decode()
+        unreadable = Fernet(Fernet.generate_key()).encrypt(b'old-secret').decode()
+        conn = Mock()
+        conn.execute.return_value.fetchall.side_effect = [
+            [(1,'good@example.test',readable),(2,'old@example.test',unreadable)],
+            [('enova_connection','{"password_enc":"' + unreadable + '"}')]]
+        with self.assertRaises(CredentialKeyError) as caught:
+            _check_tokens(conn,key.decode())
+        error = caught.exception
+        self.assertEqual(len(error.failed),2)
+        self.assertEqual(error.checked,3)
+        message = str(error)
+        self.assertIn('old@example.test',message)
+        self.assertIn('enova_connection',message)
+        self.assertNotIn(key.decode(),message)
+        self.assertNotIn(unreadable,message)
+        self.assertNotIn('old-secret',message)
+
+    def test_key_import_updates_worker_config_and_survives_reload(self):
+        from app.utils.env_config import install_encryption_key, load_environment
+        with TemporaryDirectory() as folder, patch.dict(os.environ), \
+             patch('app.services.worker_setup.worker_env_path', return_value=Path(folder)/'worker.env'), \
+             patch('app.utils.env_config.user_env_path', return_value=Path(folder)/'.env'):
+            worker = Path(folder)/'worker.env'
+            worker.write_text('DB_URL=postgresql://server/biuro\n',encoding='utf-8')
+            os.environ['BIO_WORKER_MODE'] = '1'
+            key = Fernet.generate_key().decode()
+            install_encryption_key(key)
+            self.assertFalse((Path(folder)/'.env').exists())
+            os.environ['BIO_ENCRYPTION_KEY'] = 'inherited-old-key'
+            load_environment()
+            self.assertEqual(os.environ['BIO_ENCRYPTION_KEY'],key)
+            self.assertIn('DB_URL=postgresql://server/biuro',worker.read_text())
+
+    def test_explicit_desktop_key_import_wins_over_inherited_old_key_on_restart(self):
+        from app.utils.env_config import install_encryption_key, load_environment
+        with TemporaryDirectory() as folder, patch.dict(os.environ), \
+             patch('app.utils.env_config.user_env_path', return_value=Path(folder)/'.env'), \
+             patch('app.utils.env_config.env_search_paths', return_value=[Path(folder)/'.env']):
+            os.environ.pop('BIO_WORKER_MODE',None)
+            key = Fernet.generate_key().decode()
+            install_encryption_key(key)
+            os.environ['BIO_ENCRYPTION_KEY'] = 'inherited-old-key'
+            load_environment()
+            self.assertEqual(os.environ['BIO_ENCRYPTION_KEY'],key)

@@ -140,24 +140,29 @@ def choose_copy_folder(konto_id: int, from_addr: str, to_addrs: Iterable[str], s
     return rule["target"] if rule else None
 
 
-def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> None:
+def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> bool:
     """Zapisuje kopię wysłanej wiadomości na serwerze i w bazie; błąd nie psuje wysyłki."""
     import logging
     from app.email.email_storage import find_special_folder
-    from app.email.email_sync import append_message, sync_folder
+    from app.email.email_sync import append_message, sync_folder, list_folders_from_imap_and_store
 
     log = logging.getLogger(__name__)
     try:
         target = folder or find_special_folder(konto_id, "sent")
         if not target:
-            return
-        bcc = msg.get("Bcc")
+            list_folders_from_imap_and_store(konto_id)
+            target = find_special_folder(konto_id, "sent")
+        if not target:
+            return False
         if append_message(konto_id, target, msg.as_bytes()):
             sync_folder(konto_id, target)
+            return True
         else:
             log.warning("Nie udało się zapisać kopii wysłanej wiadomości w %s", target)
+            return False
     except Exception:
         log.warning("Nie udało się zapisać kopii wysłanej wiadomości", exc_info=True)
+        return False
 
 
 def send_email_smtp(
@@ -216,11 +221,36 @@ def send_email_smtp(
                 to_addrs=recipients,
             )
 
+        copy_warning = False
         if save_copy:
-            store_sent_copy(konto_id, msg, copy_folder)
+            # BCC is archive metadata only. Never put it on the SMTP wire.
+            from copy import deepcopy
+            archive = deepcopy(msg)
+            if bcc:
+                archive['Bcc'] = ', '.join(bcc)
+            copy_warning = not store_sent_copy(konto_id, archive, copy_folder)
+            if bcc:
+                # A BCC batch belongs to several clients; a move to only the first
+                # matching folder would lose it from all other clients and Sent.
+                try:
+                    from app.email.email_storage import find_special_folder
+                    sent = copy_folder or find_special_folder(konto_id, 'sent')
+                    folders = {}
+                    for recipient in bcc:
+                        target = choose_copy_folder(konto_id, cfg['user'], [recipient], subject)
+                        if target and target != sent:
+                            folders.setdefault(target, []).append(recipient)
+                    for target, addresses in folders.items():
+                        client_copy = deepcopy(msg)
+                        client_copy['Bcc'] = ', '.join(addresses)
+                        if not store_sent_copy(konto_id, client_copy, target):
+                            copy_warning = True
+                except Exception:
+                    copy_warning = True
         if isinstance(refused, dict) and refused:
             return False, "SMTP odrzucił część odbiorców: " + ", ".join(refused)
-        return True, "OK"
+        return True, ("Wysłano przez SMTP, ale nie potwierdzono wszystkich kopii IMAP / ich synchronizacji. "
+                      "Sprawdź folder Wysłane i foldery klientów; nie ponawiaj wysyłki do odbiorców." if copy_warning else "OK")
 
     except Exception as exc:
         return (

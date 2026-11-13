@@ -119,7 +119,8 @@ def load_config(path):
         seen_databases.add(database.casefold())
         if source.get('accounting_type'):
             calculate_total(source['accounting_type'], 0, 0)
-    return config
+    from app.integrations.enova.query_defaults import with_query_defaults
+    return with_query_defaults(config)
 
 
 def _odbc_quote(value):

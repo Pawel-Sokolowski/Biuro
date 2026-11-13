@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import date
+from pathlib import Path
 from unittest.mock import Mock, patch
 from cryptography.fernet import Fernet
 
@@ -155,7 +156,9 @@ class EnovaYearImportTests(DbTestCase):
             config, year = run.call_args.args
             self.assertEqual(year, 2025)
             self.assertEqual(config['server'], 'ENOVA,49848')
-            self.assertEqual(config['sources'], [SOURCE])
+            self.assertEqual(len(config['sources']), 1)
+            self.assertEqual({key: config['sources'][0][key] for key in SOURCE}, SOURCE)
+            self.assertEqual(Path(config['sources'][0]['payroll_query']).name, 'payroll.sql')
             self.assertFalse(config['enabled'])
             self.assertFalse(page.is_dirty())
             self.assertEqual(run.call_args.kwargs['actor_id'], self.admin)

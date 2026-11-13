@@ -47,7 +47,8 @@ def mark_documents_complete(name: str, month: str, today: Optional[datetime.date
         cur.execute(
             "SELECT id, nazwa_saldeo_firmy AS nazwa_saldeo FROM firmy WHERE COALESCE(TRIM(nazwa_saldeo_firmy), '') <> ''"
         )
-        firma_id = next((r["id"] for r in cur.fetchall() if _fold(r["nazwa_saldeo"]) == _fold(name)), None)
+        matches = [r["id"] for r in cur.fetchall() if _fold(r["nazwa_saldeo"]) == _fold(name)]
+        firma_id = matches[0] if len(matches) == 1 else None
         if firma_id is None:
             return "brak_firmy"
         cur.execute(
@@ -123,14 +124,16 @@ class SaldeoPushWatcher:
         for toast in toasts:
             if toast["id"] in self._seen:
                 continue
-            self._seen.add(toast["id"])
             parsed = parse_notification(toast["text"])
             if not parsed:
+                self._seen.add(toast["id"])
                 continue
             try:
                 outcome = mark_documents_complete(*parsed)
             except Exception:
                 logger.exception("Powiadomienia Saldeo: błąd zapisu statusu")
                 continue
+            if outcome in ("ok", "juz"):
+                self._seen.add(toast["id"])
             results.append((parsed[0], parsed[1], outcome))
         return results

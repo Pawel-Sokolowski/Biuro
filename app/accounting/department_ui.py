@@ -6,6 +6,17 @@ from app.security.authorization import allowed_tabs
 DEPARTMENT_LABELS = {'accounting': 'Księgowość', 'payroll': 'Kadry'}
 
 
+def park_monthly_editor(editor, parent):
+    """Own the shared editor without painting it over the main window on startup."""
+    parking = QWidget(parent)
+    parking.hide()
+    layout = QVBoxLayout(parking)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(editor)
+    editor.hide()
+    return parking
+
+
 def department_sections(permissions):
     return [label for label in ('Widok miesięczny', 'Sprawdzanie') if label in permissions]
 
@@ -49,6 +60,7 @@ class DepartmentPage(QWidget):
         if title == 'Widok miesięczny':
             # Reparent the same editor: no duplicate timers, pending edits or logic.
             if self.monthly_page.parentWidget() is not host:
+                self.monthly_page.hide()
                 host.layout().addWidget(self.monthly_page)
             changed = self.monthly_page.set_department(self.department)
             self.monthly_page.show()

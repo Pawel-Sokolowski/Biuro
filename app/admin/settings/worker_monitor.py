@@ -32,6 +32,11 @@ class WorkerMonitor(QWidget):
         refresh.clicked.connect(self.refresh)
         bar.addWidget(refresh)
         layout.addLayout(bar)
+        self.instance_info = QLabel()
+        self.instance_info.setWordWrap(True)
+        self.instance_info.setTextFormat(Qt.TextFormat.PlainText)
+        self.instance_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.instance_info)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         status_page = QWidget()
@@ -134,6 +139,18 @@ class WorkerMonitor(QWidget):
         state = 'Brak aktualnego sygnału workera' if stale else 'Worker aktywny'
         enabled = 'zadania włączone' if heartbeat.get('enabled') else 'zadania wyłączone'
         self.summary.setText(f'{state}; {enabled}. Ostatni sygnał: {checked or "—"}.')
+        instance = heartbeat.get('instance') or {}
+        if instance:
+            label = 'Ostatnio zgłoszony proces' if stale else 'Działający worker'
+            self.instance_info.setText(
+                f"{label}: {instance.get('host','—')}, PID {instance.get('pid','—')}, wersja {instance.get('version','—')}\n"
+                f"Uruchomiony: {instance.get('started_at','—')}\nPlik: {instance.get('executable','—')}\n"
+                f"Konfiguracja: {instance.get('config_file','—')}\n"
+                f"Harmonogram odczytany: {heartbeat.get('settings_checked_at') or '—'}. "
+                'Ustawienia usług są używane przy następnym przebiegu zadania.')
+        else:
+            self.instance_info.setText('Worker nie zgłosił jeszcze identyfikatora procesu i wersji. '
+                                       'Panel odczytuje stan tej bazy Biuro; nie uruchamia kolejnego workera.')
         jobs = heartbeat.get('jobs', {})
         job_rows = {name: [JOB_LABELS.get(name, name), STATES.get(value.get('state'), value.get('state')),
             value.get('started_at'), value.get('finished_at'), value.get('next_run_at'), value.get('error_type')]

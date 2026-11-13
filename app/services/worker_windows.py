@@ -16,6 +16,14 @@ def identity():
 TASK_COMMAND = r'''
 $ErrorActionPreference = 'Stop'
 $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+function Stop-BiuroTask {
+    Stop-ScheduledTask -TaskName 'Biuro-Background-Worker'
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        if ((Get-ScheduledTask -TaskName 'Biuro-Background-Worker').State -ne 'Running') { return }
+        Start-Sleep -Milliseconds 200
+    }
+    throw 'still_running'
+}
 try {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     if ($id.User.Value -ne $p.sid) { throw 'identity' }
@@ -29,13 +37,14 @@ try {
     }
     if ($p.mode -eq 'stop') {
         if (-not $old) { throw 'missing_task' }
-        Stop-ScheduledTask -TaskName $name
+        Stop-BiuroTask
     } elseif ($p.mode -eq 'restart') {
         if (-not $old) { throw 'missing_task' }
-        Stop-ScheduledTask -TaskName $name
+        Stop-BiuroTask
         Start-ScheduledTask -TaskName $name
     } elseif ($p.mode -eq 'install') {
         if ($old) {
+            if ($old.State -eq 'Running') { Stop-BiuroTask }
             Start-ScheduledTask -TaskName $name
         } else {
             $action = New-ScheduledTaskAction -Execute $p.exe -Argument '--worker' -WorkingDirectory ([IO.Path]::GetDirectoryName($p.exe))

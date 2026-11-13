@@ -54,17 +54,39 @@ class WorkerSettings(QWidget):
             button.clicked.connect(action)
             layout.addWidget(button)
         layout.addStretch()
+        self._saved_state = self.form_settings()
         self.refresh()
 
-    def save(self):
+    def form_settings(self):
         settings = load_settings()
         settings['enabled'] = self.enabled.isChecked()
         settings['enova_time'] = self.enova_time.time().toString('HH:mm')
         for key, toggle in self.toggles.items():
             settings[key] = toggle.isChecked()
             settings[key + '_interval'] = self.intervals[key].value()
+        return settings
+
+    def is_dirty(self):
+        return self.form_settings()!=self._saved_state
+
+    def persist(self):
+        save_settings(self.form_settings(),actor_id=self.actor_id)
+        self._saved_state = self.form_settings()
+
+    def reload_saved(self):
+        if self.is_dirty():
+            return
+        settings = load_settings()
+        self.enabled.setChecked(settings['enabled'])
+        self.enova_time.setTime(QTime.fromString(settings['enova_time'],'HH:mm'))
+        for key,toggle in self.toggles.items():
+            toggle.setChecked(settings[key])
+            self.intervals[key].setValue(settings[key+'_interval'])
+        self._saved_state = self.form_settings()
+
+    def save(self):
         try:
-            save_settings(settings, actor_id=self.actor_id)
+            self.persist()
         except Exception as exc:
             QMessageBox.warning(self, 'Worker', str(exc))
             return

@@ -61,7 +61,7 @@ class PlatnikConnectionTests(TestCase):
         load_odbc.assert_not_called()
 
     def test_query_timeout_is_configurable_and_separate_from_login_timeout(self):
-        for timeout in (120,300):
+        for timeout in (120,300,1200):
             with self.subTest(timeout=timeout):
                 connection = Mock()
                 odbc = Mock()
@@ -74,7 +74,7 @@ class PlatnikConnectionTests(TestCase):
 
     def test_invalid_query_timeout_does_not_open_sql(self):
         with patch('app.integrations.platnik.holidays.load_odbc') as load_odbc:
-            for timeout in (0,10,601,True,'120'):
+            for timeout in (0,10,1201,True,'120'):
                 with self.subTest(timeout=timeout),self.assertRaises(ValueError):
                     connect({**self.config,'query_timeout':timeout})
         load_odbc.assert_not_called()

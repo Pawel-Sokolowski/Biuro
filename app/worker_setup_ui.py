@@ -164,9 +164,11 @@ class WorkerSetupWindow(QMainWindow):
         if not is_administrator(actor_id):
             raise PermissionError('Konfiguracja wymaga administratora Biuro.')
         self.actor_id = actor_id
-        self.setWindowTitle('Biuro — konfiguracja i panel workera')
+        from app.version import __version__
+        self.setWindowTitle(f'Biuro {__version__} — konfiguracja i panel workera')
         self.resize(1200, 850)
         self.runner = TaskRunner(self)
+        self.opened_pages = {}
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
         start = QWidget()
@@ -180,8 +182,18 @@ class WorkerSetupWindow(QMainWindow):
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
         path = QLabel(f'Konfiguracja tego konta Windows: {worker_env_path()}')
+        path.setTextFormat(Qt.TextFormat.PlainText)
         path.setWordWrap(True)
         layout.addWidget(path)
+        from app.db.dao_conn import database_context
+        self.runtime_info = QLabel(f'Panel: {sys.executable}\nWersja: {__version__}\nBaza konfiguracji: {database_context()}')
+        self.runtime_info.setTextFormat(Qt.TextFormat.PlainText)
+        self.runtime_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.runtime_info.setWordWrap(True)
+        layout.addWidget(self.runtime_info)
+        self.save_button = QPushButton('Zapisz połączenia SQL i ustawienia zadań')
+        self.save_button.clicked.connect(self.save_settings)
+        layout.addWidget(self.save_button)
         check = QPushButton('Sprawdź bazę i odszyfrowanie zapisanych haseł — bez uruchamiania zadań')
         check.clicked.connect(self.check)
         layout.addWidget(check)
@@ -214,6 +226,15 @@ class WorkerSetupWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.open_tab)
 
     def open_tab(self, index):
+        existing = self.opened_pages.get(index)
+        if existing is not None:
+            reload_saved = getattr(existing,'reload_saved',None)
+            if callable(reload_saved):
+                try:
+                    reload_saved()
+                except Exception:
+                    self.status.setText('Nie udało się odświeżyć ustawień z bazy Biuro. Zachowano formularz; sprawdź połączenie z bazą.')
+            return
         factory = self.factories.get(index)
         if not factory:
             return
@@ -223,12 +244,36 @@ class WorkerSetupWindow(QMainWindow):
             QMessageBox.warning(self, 'Worker', 'Nie udało się odczytać ustawień. Sprawdź bazę i wspólny klucz.')
             return
         self.factories.pop(index)
+        self.opened_pages[index] = page
         container = self.tabs.widget(index)
         layout = QVBoxLayout(container)
         area = QScrollArea()
         area.setWidgetResizable(True)
         area.setWidget(page)
         layout.addWidget(area)
+
+    def save_opened_settings(self):
+        # Only edited, instantiated forms participate. Never create/write blank
+        # defaults for untouched tabs or open another settings window.
+        for index,page in self.opened_pages.items():
+            persist = getattr(page,'persist',None)
+            is_dirty = getattr(page,'is_dirty',None)
+            if not callable(persist) or not callable(is_dirty):
+                continue
+            try:
+                if is_dirty():
+                    persist()
+            except Exception as error:
+                self.tabs.setCurrentIndex(index)
+                detail = str(error) if isinstance(error,(ValueError,PermissionError)) else 'Sprawdź połączenie z bazą Biuro i wspólny klucz.'
+                self.status.setText('Nie zapisano ustawień; instalacja nie została uruchomiona. '+detail)
+                QMessageBox.warning(self,'Zapis ustawień workera',detail)
+                return False
+        return True
+
+    def save_settings(self):
+        if self.save_opened_settings():
+            self.status.setText('Zapisano zmienione połączenia SQL i ustawienia zadań w bazie Biuro. Działający worker użyje ustawień usług przy następnym przebiegu; rozpoczęte zadania kończą pracę z dotychczasowymi ustawieniami.')
 
     def check(self):
         self.status.setText('Sprawdzanie bazy i wspólnego klucza…')
@@ -247,6 +292,8 @@ class WorkerSetupWindow(QMainWindow):
     def install(self):
         if os.name != 'nt' or not getattr(sys, 'frozen', False):
             self.status.setText('Instalacja jednym kliknięciem wymaga zainstalowanej wersji Biuro EXE na Windows.')
+            return
+        if not self.save_opened_settings():
             return
         self.install_button.setEnabled(False)
         self.status.setText('Sprawdzanie konfiguracji przed instalacją…')

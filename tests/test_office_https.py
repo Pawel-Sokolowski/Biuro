@@ -62,6 +62,39 @@ class OfficeHttpsTests(DbTestCase):
         with self.assertRaises(PermissionError):
             self.client.resume(token)
 
+    def test_company_invoice_settings_and_monthly_logic_share_server_owned_state(self):
+        from app.companies.company_logic import CompanyLogic
+        from app.invoices.faktury_logic import FakturyLogic
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+        from app.admin.global_settings_logic import GlobalSettingsLogic
+        from app.remote.boundary import remote_class
+        from app.remote.state import configure
+        company = self.make_company('Proxy firma')
+        self.client.login('admin@biuro.pl','Admin12345')
+        configure(self.client)
+        try:
+            for cls in (CompanyLogic,FakturyLogic,MonthlyViewLogic,GlobalSettingsLogic):
+                original = getattr(cls,'__office_original__',cls)
+                proxy = remote_class(original.__module__+'.'+original.__name__)(original)
+                with mock.patch('app.utils.ceidg_suspension.run_in_background'):
+                    value = proxy(1) if cls.__name__=='MonthlyViewLogic' else proxy()
+                if cls.__name__=='CompanyLogic':
+                    self.assertEqual(value.get_company(company)['nazwa'],'Proxy firma')
+                elif cls.__name__=='FakturyLogic':
+                    self.assertEqual(value._get_company(company)['nazwa'],'Proxy firma')
+                elif cls.__name__=='GlobalSettingsLogic':
+                    self.assertTrue(value.get_roles())
+                else:
+                    value.set_month('2026-10')
+                    self.assertEqual(value.aktualny_miesiac,'2026-10')
+                    value.start_general_timer({})
+                    self.assertTrue(value.is_general_timer_running())
+                    self.assertTrue(value.timer_checkpoints())
+                    value.stop_all_timers()
+                    self.assertFalse(value.is_general_timer_running())
+        finally:
+            configure(None)
+
     def test_cleartext_and_untrusted_certificates_are_not_accepted(self):
         with self.assertRaises(ValueError):
             OfficeClient('http://127.0.0.1')

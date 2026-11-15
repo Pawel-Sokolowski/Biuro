@@ -136,3 +136,23 @@ class OfficeServiceTests(DbTestCase):
         with mock.patch('app.email.email_storage.get_email_accounts_for_employee',return_value=[]):
             with self.assertRaises(PermissionError):
                 self.call('app.remote.screen_data.mail_view_snapshot',{'konto_id':999,'folder':'INBOX'})
+
+    def test_raw_setting_changes_cannot_redirect_saved_credentials(self):
+        for key in ('saldeo_web','enova_connection','caldav_url','google_client_secret'):
+            with self.assertRaises(PermissionError):
+                self.call('app.db.dao_app_settings.set_setting',{'key':key,'value':'attacker'},token=self.admin)
+
+    def test_smtp_test_restores_credentials_only_for_unchanged_saved_account(self):
+        from app.remote.secrets import PRESENT
+        account = {'id':50,'email':'mail@example.com','serwer_imap':'imap.example.com','port_imap':993,
+                   'ssl_imap':'SSL/TLS','serwer_smtp':'smtp.example.com','port_smtp':465,'ssl_smtp':'SSL/TLS','haslo_enc':'private-ciphertext'}
+        def check_connection(value,timeout=15):
+            self.assertEqual(value['haslo_enc'],'private-ciphertext')
+            return True,'OK'
+        # The service restores the secret internally; no plaintext or ciphertext is returned.
+        with mock.patch('app.email.email_storage.get_account_info',return_value=account), \
+                mock.patch('app.email.email_connection.check_smtp',new=check_connection):
+            redacted = dict(account,haslo_enc=PRESENT)
+            self.assertEqual(self.call('app.email.email_connection.check_smtp',{'account':redacted},token=self.admin),(True,'OK'))
+            with self.assertRaises(ValueError):
+                self.call('app.email.email_connection.check_smtp',{'account':dict(redacted,serwer_smtp='attacker')},token=self.admin)

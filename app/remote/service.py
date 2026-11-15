@@ -142,7 +142,7 @@ class OfficeService:
                         def construct(**kwargs):
                             return cls(**kwargs)
                         import inspect
-                        signature = inspect.signature(initializer)
+                        signature = inspect.Signature() if initializer is object.__init__ else inspect.signature(initializer)
                         arguments = {k:v for k,v in signature.parameters.items() if k!='self'}
                         construct.__signature__ = signature.replace(parameters=arguments.values())
                         bound = bind(construct,values,spec,actor)

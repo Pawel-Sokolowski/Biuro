@@ -156,3 +156,17 @@ class OfficeServiceTests(DbTestCase):
             self.assertEqual(self.call('app.email.email_connection.check_smtp',{'account':redacted},token=self.admin),(True,'OK'))
             with self.assertRaises(ValueError):
                 self.call('app.email.email_connection.check_smtp',{'account':dict(redacted,serwer_smtp='attacker')},token=self.admin)
+
+    def test_bundled_queries_remain_server_defaults_instead_of_private_copies(self):
+        from app.db.dao_app_settings import set_setting
+        from app.integrations.enova.connection_settings import load_connection
+        from app.integrations.enova.query_defaults import saved_source
+        set_setting('enova_connection',json.dumps({'server':'trusted','username':'reader','password_enc':'saved',
+                    'sources':[{'database':'company','nip':'1234563218'}]}))
+        config = load_connection()
+        def check_connection(config,*,password=''):
+            self.assertIn('payroll_query',config['sources'][0]['_query_defaults'])
+            self.assertNotIn('payroll_query',saved_source(config['sources'][0]))
+            return []
+        with mock.patch('app.integrations.enova.connection_settings.check_connection',new=check_connection):
+            self.assertEqual(self.call('app.integrations.enova.connection_settings.check_connection',{'config':config},token=self.admin),[])

@@ -39,6 +39,14 @@ def prepare(operation, arguments, files, owner):
             _queries(source,old,files,owner,bundled)
             # Defaults are server metadata, not instructions supplied by a desktop.
             source.pop('_query_defaults',None)
+            if operation.startswith('app.integrations.enova.'):
+                for key in ('payroll_query','declarations_query','jpk_query'):
+                    shipped = str(bundled/'queries'/(key.removesuffix('_query')+'.sql'))
+                    if str(source.get(key,''))==shipped and not incoming.get(key):
+                        source.pop(key,None)
+        if operation.startswith('app.integrations.enova.'):
+            from app.integrations.enova.query_defaults import with_query_defaults
+            incoming = with_query_defaults(incoming)
         arguments[field] = incoming
     if operation in ('app.email.email_connection.check_imap','app.email.email_connection.check_smtp'):
         account = dict(arguments['account'])

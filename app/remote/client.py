@@ -124,7 +124,9 @@ class OfficeClient:
             values['plan'] = replace(values['plan'],attachments=tuple(self._file(path,'input') for path in values['plan'].attachments))
         def query_upload(value):
             if isinstance(value,dict):
-                return {key:(self._file(item,'input') if key.endswith('_query') and isinstance(item,str)
+                defaults = value.get('_query_defaults') or {}
+                return {key:(item if key=='_query_defaults' or defaults.get(key)==item else
+                             self._file(item,'input') if key.endswith('_query') and isinstance(item,str)
                              and Path(item).is_file() else query_upload(item)) for key,item in value.items()}
             if isinstance(value,list):
                 return [query_upload(item) for item in value]

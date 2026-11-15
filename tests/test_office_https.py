@@ -131,7 +131,8 @@ class OfficeHttpsTests(DbTestCase):
     def test_z_desktop_starts_without_database_credentials_or_office_key(self):
         import os,subprocess,sys
         script = r"""
-import os,sys
+import os,sys,faulthandler
+faulthandler.dump_traceback_later(25,repeat=True)
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer,QThreadPool
 from app.remote.client import OfficeClient
@@ -142,8 +143,11 @@ application = QApplication(['biuro-keyless-ci'])
 connection = OfficeClient(sys.argv[1],verify=sys.argv[2])
 connection.login('admin@biuro.pl','Admin12345')
 configure(connection)
+print('KEYLESS_LOGGED_IN',flush=True)
 from app.main_ui import OfficeManagerApp
+print('KEYLESS_MODULES_LOADED',flush=True)
 window = OfficeManagerApp(1)
+print('KEYLESS_WINDOW_CREATED',flush=True)
 assert window.btn_employee_timers.text() == 'Mój czas'
 assert window.page_monthly.logic.__dict__.get('_office_object')
 assert not hasattr(window,'key')
@@ -156,8 +160,12 @@ print('KEYLESS_DESKTOP_READY')
         env = dict(os.environ,BIO_CLIENT_MODE='1',QT_QPA_PLATFORM='offscreen')
         env.pop('DB_URL',None)
         env.pop('BIO_ENCRYPTION_KEY',None)
-        result = subprocess.run([sys.executable,'-c',script,self.client.server,str(self.cert)],
-                                env=env,text=True,capture_output=True,timeout=90)
+        try:
+            result = subprocess.run([sys.executable,'-c',script,self.client.server,str(self.cert)],
+                                    env=env,text=True,capture_output=True,timeout=70)
+        except subprocess.TimeoutExpired as error:
+            output = (error.stdout or b'') + (error.stderr or b'')
+            self.fail(output.decode('utf-8',errors='replace') if isinstance(output,bytes) else output)
         self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
         self.assertIn('KEYLESS_DESKTOP_READY',result.stdout)
 

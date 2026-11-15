@@ -22,6 +22,7 @@ public static class SchedulerInstaller
         {
             var task = config.AddRow(new TaskDefinition("Pracownicy"));
             task.Name = JobName;
+            task.IsVisibleInScheduler = true;
             // Standard HZ global automatic action. Contains no passwords, tokens or database keys.
             task.OtherMethods = """
                 [Soneta.Business.AutoAction("Import e-ZLA z Biuro", true)]
@@ -34,7 +35,10 @@ public static class SchedulerInstaller
             schedule.Name = JobName;
             schedule.TaskDefinition = task;
             schedule.ScheduleType = ScheduleTypeEnum.UseCycleDefinition;
-            schedule.DefaultAutoAction = true;
+            // Select the named custom method, rather than the platform's default
+            // workflow-start action (this task does not require a WF process).
+            schedule.DefaultAutoAction = false;
+            schedule.SetAutoActionName("BiuroEzlaImport");
             schedule.StartDate = Date.Today.AddDays(1);
             schedule.CycleDefinition.Typ = DefinicjaCykluTyp.Dzienny;
             schedule.CycleDefinition.Czas = time;

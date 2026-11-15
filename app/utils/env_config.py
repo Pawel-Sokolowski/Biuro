@@ -49,6 +49,8 @@ def active_env_path() -> Path:
 
 def load_environment() -> List[Path]:
     """Wczytuje istniejące pliki .env (pierwszy ma pierwszeństwo). Zwraca użyte ścieżki."""
+    if os.getenv('BIO_CLIENT_MODE') == '1':
+        return []
     loaded = []
     local_key_selected = False
     if os.getenv('BIO_WORKER_MODE') == '1':
@@ -74,6 +76,9 @@ def load_environment() -> List[Path]:
 def ensure_encryption_key() -> str:
     """Require an explicitly provisioned deployment key; never invent a PC key."""
     from cryptography.fernet import Fernet
+    from app.remote.state import client
+    if os.getenv('BIO_CLIENT_MODE') == '1' or client() is not None:
+        raise PermissionError('Klucz szyfrowania jest dostępny wyłącznie na serwerze biura.')
     existing = os.environ.get(KEY_NAME)
     if not existing:
         raise ValueError('Brak wspólnego klucza szyfrowania. Otwórz Ustawienia → Klucz szyfrowania i zaimportuj klucz z działającego komputera. Nowe biuro wymaga jednego wspólnego klucza BIO_ENCRYPTION_KEY.')

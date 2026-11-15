@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import psycopg
 from typing import Any, Dict, List, Optional
@@ -29,6 +30,7 @@ def _valid_nip(nip: str) -> bool:
     return checksum != 10 and checksum == int(nip[9])
 
 
+@office_endpoint('app.db.dao_kontrahenci.save_kontrahent')
 def save_kontrahent(data: Dict[str, Any], kontrahent_id: Optional[int] = None) -> int:
     values = _values(data)
     conn = get_conn()
@@ -54,6 +56,7 @@ def save_kontrahent(data: Dict[str, Any], kontrahent_id: Optional[int] = None) -
         conn.close()
 
 
+@office_endpoint('app.db.dao_kontrahenci.get_kontrahent')
 def get_kontrahent(kontrahent_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -63,6 +66,7 @@ def get_kontrahent(kontrahent_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_kontrahenci.list_kontrahenci')
 def list_kontrahenci() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -71,6 +75,7 @@ def list_kontrahenci() -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_kontrahenci.search_kontrahenci')
 def search_kontrahenci(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     term = (query or "").strip()
     conn = get_conn()
@@ -86,6 +91,7 @@ def search_kontrahenci(query: str, limit: int = 50) -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_kontrahenci.delete_kontrahent')
 def delete_kontrahent(kontrahent_id: int) -> None:
     conn = get_conn()
     try:

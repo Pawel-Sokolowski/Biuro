@@ -1,4 +1,5 @@
 """Standard Płatnik forms, without guessing transmission status codes."""
+from app.remote.boundary import endpoint as office_endpoint
 from datetime import datetime
 import json
 from pathlib import Path
@@ -181,16 +182,19 @@ def decoded_snapshot(value):
     return json.loads(decrypt_password(value)) if value else {}
 
 
+@office_endpoint('app.integrations.platnik.declarations.import_months')
 def import_months(months, *, company_ids=None, actor_id=None):
     return _import_periods(months, company_ids=company_ids, actor_id=actor_id)
 
 
+@office_endpoint('app.integrations.platnik.declarations.import_year')
 def import_year(year, *, company_ids=None, actor_id=None):
     if type(year) is not int or not 2000 <= year <= 2100:
         raise ValueError('Nieprawidłowy rok raportów ZUS.')
     return _import_periods([str(year)], company_ids=company_ids, actor_id=actor_id, annual=True)
 
 
+@office_endpoint('app.integrations.platnik.declarations.read_year')
 def read_year(actor_id, year):
     from app.integrations.enova.accounting import require_access
     from app.security.authorization import assigned_company_ids

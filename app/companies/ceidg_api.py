@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import os
 
 import requests
@@ -62,6 +63,7 @@ def get_ceidg_civil_partners(nip_sc: str):
     return partners
 
 
+@office_endpoint('app.companies.ceidg_api.get_ceidg_firma_by_nip')
 def get_ceidg_firma_by_nip(nip: str):
     key = (os.getenv("CEIDG_API_KEY") or CEIDG_API_KEY or "").strip()
     base_url = (os.getenv("CEIDG_BASE_URL") or CEIDG_BASE_URL or "").strip().rstrip("/")

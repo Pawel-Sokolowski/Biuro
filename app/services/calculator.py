@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/globals/calculator.py
 import psycopg
 from typing import Dict, Any
@@ -132,6 +133,7 @@ def _get_pricing_for_key(klucz: str) -> Dict[str, Any]:
     }
 
 
+@office_endpoint('app.services.calculator.oblicz_miesieczny_koszt')
 def oblicz_miesieczny_koszt(firma_id: int, miesiac: str) -> Dict[str, float]:
     """
     Główna funkcja używana przez raporty:

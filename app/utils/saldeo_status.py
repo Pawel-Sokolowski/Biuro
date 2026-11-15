@@ -5,6 +5,7 @@ oraz "<Nazwa skrócona z Saldeo> Rozliczenie ZUS za miesiąc wrzesień 2026".
 """
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import logging
 import re
@@ -65,6 +66,7 @@ def _mark_complete(cur, firma_id: int, month: str) -> None:
     )
 
 
+@office_endpoint('app.utils.saldeo_status.rescan_saldeo_emails')
 def rescan_saldeo_emails(months: Optional[set] = None) -> Dict[str, int]:
     """Jednorazowo przegląda wszystkie maile z rozliczeniami i uzupełnia etapy.
 
@@ -131,6 +133,7 @@ def rescan_on_startup() -> Optional[Dict[str, int]]:
     return rescan_saldeo_emails()
 
 
+@office_endpoint('app.utils.saldeo_status.apply_saldeo_emails')
 def apply_saldeo_emails() -> int:
     """Przetwarza nowe maile z Saldeo; zwraca liczbę zmienionych statusów."""
     try:

@@ -1,9 +1,11 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/db/dao_employees.py
 import bcrypt
 from typing import List, Optional, Dict, Any
 from app.db.dao_conn import get_conn
 
 # Pracownicy
+@office_endpoint('app.db.dao_employees.add_employee')
 def add_employee(email: str, haslo: str, imie: str, nazwisko: str, aktywny: int = 1) -> int:
     conn = get_conn()
     try:
@@ -43,6 +45,7 @@ def login_employee(email: str, haslo: str) -> Optional[int]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.get_employee_info')
 def get_employee_info(pracownik_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -57,6 +60,7 @@ def get_employee_info(pracownik_id: int) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.list_employees')
 def list_employees() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -71,6 +75,7 @@ def list_employees() -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.update_employee')
 def update_employee(pracownik_id: int, email: str, imie: str, nazwisko: str, aktywny: int) -> None:
     conn = get_conn()
     try:
@@ -84,6 +89,7 @@ def update_employee(pracownik_id: int, email: str, imie: str, nazwisko: str, akt
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.change_employee_password')
 def change_employee_password(pracownik_id: int, new_password: str) -> None:
     new_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     conn = get_conn()
@@ -98,6 +104,7 @@ def change_employee_password(pracownik_id: int, new_password: str) -> None:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.set_employee_active')
 def set_employee_active(pracownik_id: int, active: bool) -> None:
     conn = get_conn()
     try:
@@ -111,6 +118,7 @@ def set_employee_active(pracownik_id: int, active: bool) -> None:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.delete_employee')
 def delete_employee(pracownik_id: int) -> None:
     conn = get_conn()
     try:
@@ -122,6 +130,7 @@ def delete_employee(pracownik_id: int) -> None:
         conn.close()
 
 # Konta email i przypisania
+@office_endpoint('app.db.dao_employees.get_email_accounts_for_employee')
 def get_email_accounts_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -148,6 +157,7 @@ def get_email_accounts_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.get_all_email_accounts')
 def get_all_email_accounts() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -174,6 +184,7 @@ def get_all_email_accounts() -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.add_email_account_for_employee')
 def add_email_account_for_employee(pracownik_id: Optional[int],
                                    email: str,
                                    imap_server: str,
@@ -211,6 +222,7 @@ def add_email_account_for_employee(pracownik_id: Optional[int],
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.delete_email_account')
 def delete_email_account(konto_id: int) -> None:
     conn = get_conn()
     try:
@@ -221,6 +233,7 @@ def delete_email_account(konto_id: int) -> None:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.get_email_assignments')
 def get_email_assignments() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -237,6 +250,7 @@ def get_email_assignments() -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.assign_email_to_employee')
 def assign_email_to_employee(konto_id: int, pracownik_id: int) -> None:
     conn = get_conn()
     try:
@@ -250,6 +264,7 @@ def assign_email_to_employee(konto_id: int, pracownik_id: int) -> None:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.remove_email_assignment')
 def remove_email_assignment(konto_id: int, pracownik_id: int) -> None:
     conn = get_conn()
     try:
@@ -263,6 +278,7 @@ def remove_email_assignment(konto_id: int, pracownik_id: int) -> None:
         conn.close()
 
 # Reguły filtrów
+@office_endpoint('app.db.dao_employees.get_email_filters_for_employee')
 def get_email_filters_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -281,6 +297,7 @@ def get_email_filters_for_employee(pracownik_id: int) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.add_email_filter')
 def add_email_filter(konto_id: int,
                      od: Optional[str],
                      do: Optional[str],
@@ -319,6 +336,7 @@ def add_email_filter(konto_id: int,
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_employees.delete_email_filter')
 def delete_email_filter(filter_id: int) -> None:
     conn = get_conn()
     try:

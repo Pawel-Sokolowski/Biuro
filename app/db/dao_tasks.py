@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import datetime
 import psycopg
@@ -54,6 +55,7 @@ def create_task_in_transaction(
     return int(cur.fetchone()[0])
 
 
+@office_endpoint('app.db.dao_tasks.list_tasks_for_timer')
 def list_tasks_for_timer(
     pracownik_id: Optional[int],
     firma_id: Optional[int],
@@ -87,6 +89,7 @@ def list_tasks_for_timer(
         conn.close()
 
 
+@office_endpoint('app.db.dao_tasks.list_tasks')
 def list_tasks(
     pracownik_id: Optional[int] = None,
     firma_id: Optional[int] = None,
@@ -147,6 +150,7 @@ def list_tasks(
         conn.close()
 
 
+@office_endpoint('app.db.dao_tasks.save_task')
 def save_task(
     tytul: str,
     opis: str = "",
@@ -222,6 +226,7 @@ def save_task(
         conn.close()
 
 
+@office_endpoint('app.db.dao_tasks.notify_company_event')
 def notify_company_event(
     firma_id: int, tytul: str, opis: str, everyone: bool = False
 ) -> List[int]:
@@ -272,6 +277,7 @@ def notify_company_event(
         conn.close()
 
 
+@office_endpoint('app.db.dao_tasks.notify_company_resumed')
 def notify_company_resumed(firma_id: int) -> List[int]:
     return notify_company_event(
         firma_id,
@@ -280,6 +286,7 @@ def notify_company_resumed(firma_id: int) -> List[int]:
     )
 
 
+@office_endpoint('app.db.dao_tasks.notify_company_suspended')
 def notify_company_suspended(firma_id: int) -> List[int]:
     return notify_company_event(
         firma_id,
@@ -288,6 +295,7 @@ def notify_company_suspended(firma_id: int) -> List[int]:
     )
 
 
+@office_endpoint('app.db.dao_tasks.notify_services_changed')
 def notify_services_changed(firma_id: int, suspended: bool) -> List[int]:
     if suspended:
         return notify_company_event(
@@ -319,6 +327,7 @@ def _allowed_task_ids(conn, task_ids: List[int], actor_id: int) -> List[int]:
     return [int(r[0]) for r in rows]
 
 
+@office_endpoint('app.db.dao_tasks.delete_tasks')
 def delete_tasks(task_ids: List[int], actor_id: Optional[int] = None) -> int:
     """Usuwa wiele zadań naraz; pomija te, do których brak uprawnień. Zwraca liczbę usuniętych."""
     if not actor_id:
@@ -339,6 +348,7 @@ def delete_tasks(task_ids: List[int], actor_id: Optional[int] = None) -> int:
         conn.close()
 
 
+@office_endpoint('app.db.dao_tasks.set_tasks_status')
 def set_tasks_status(task_ids: List[int], status: str, actor_id: Optional[int] = None) -> int:
     """Masowo zmienia status zadań; pomija te, do których brak uprawnień. Zwraca liczbę zmienionych."""
     if not actor_id:
@@ -366,6 +376,7 @@ def set_tasks_status(task_ids: List[int], status: str, actor_id: Optional[int] =
         conn.close()
 
 
+@office_endpoint('app.db.dao_tasks.delete_task')
 def delete_task(task_id: int, actor_id: Optional[int] = None) -> None:
     if not actor_id:
         raise PermissionError("Identyfikator użytkownika jest wymagany.")

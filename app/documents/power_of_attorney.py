@@ -5,6 +5,7 @@ the old UPL XSD makes an authentication date mandatory inside its signature
 block, so that block is omitted from unsigned XML; paper signers are printed
 separately from the reviewed representative data.
 """
+from app.remote.boundary import endpoint as office_endpoint
 from datetime import date, datetime
 import re
 
@@ -17,6 +18,7 @@ NS = dict(adr='http://crd.gov.pl/xml/schematy/adres/2009/11/09/',
           inst='http://crd.gov.pl/xml/schematy/instytucja/2009/11/16/',
           meta='http://crd.gov.pl/xml/schematy/meta/2009/11/16/',
           str='http://crd.gov.pl/xml/schematy/struktura/2009/11/16/')
+@office_endpoint('app.documents.power_of_attorney.office_email')
 def office_email():
     from app.db.dao_app_settings import get_setting
     return str(get_setting('faktury_sprzedawca_email') or get_setting('stopka_szablon_email') or '').strip()
@@ -37,6 +39,7 @@ def split_street(line):
     return dict(street=match[1].strip(), building=match[2], apartment=match[3] or '') if match else dict(street=line, building='', apartment='')
 
 
+@office_endpoint('app.documents.power_of_attorney.office_address')
 def office_address():
     from app.db.dao_app_settings import get_setting
     country = get_setting('faktury_sprzedawca_kraj') or 'PL'

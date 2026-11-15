@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import psycopg
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -5,6 +6,7 @@ from datetime import datetime
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.db.dao_notes.get_latest_notes_for_firms')
 def get_latest_notes_for_firms(firm_ids: List[int]) -> Dict[int, Dict[str, Any]]:
     if not firm_ids:
         return {}
@@ -47,6 +49,7 @@ def get_latest_notes_for_firms(firm_ids: List[int]) -> Dict[int, Dict[str, Any]]
     return result
 
 
+@office_endpoint('app.db.dao_notes.get_notes_for_company')
 def get_notes_for_company(firma_id: int, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -68,6 +71,7 @@ def get_notes_for_company(firma_id: int, limit: Optional[int] = None) -> List[Di
     return rows
 
 
+@office_endpoint('app.db.dao_notes.save_company_note')
 def save_company_note(firma_id: int, tresc: str, autor_id: Optional[int]) -> int:
     conn = get_conn()
     cur = conn.cursor()
@@ -86,6 +90,7 @@ def save_company_note(firma_id: int, tresc: str, autor_id: Optional[int]) -> int
     return nid
 
 
+@office_endpoint('app.db.dao_notes.update_company_note')
 def update_company_note(note_id: int, new_text: str) -> bool:
     conn = get_conn()
     cur = conn.cursor()
@@ -100,6 +105,7 @@ def update_company_note(note_id: int, new_text: str) -> bool:
     return changed
 
 
+@office_endpoint('app.db.dao_notes.delete_company_note')
 def delete_company_note(note_id: int) -> bool:
     conn = get_conn()
     cur = conn.cursor()

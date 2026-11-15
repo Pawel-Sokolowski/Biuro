@@ -389,19 +389,8 @@ class ReportsPage(QWidget):
             render(work())
 
     def _reportable_employees(self):
-        from app.db.dao_conn import get_conn
-        from app.security.authorization import can, is_administrator
-        conn = get_conn()
-        try:
-            rows = conn.execute(
-                "SELECT id, TRIM(COALESCE(imie, '') || ' ' || COALESCE(nazwisko, '')) AS label "
-                "FROM pracownicy ORDER BY nazwisko, imie"
-            ).fetchall()
-        finally:
-            conn.close()
-        see_all = (not self.pracownik_id or is_administrator(self.pracownik_id)
-                   or can(self.pracownik_id, "can_view_finances"))
-        return [(r["id"], r["label"] or f"#{r['id']}") for r in rows if see_all or r["id"] == self.pracownik_id]
+        from app.remote.screen_data import reportable_employees
+        return reportable_employees(self.pracownik_id)
 
     def _daily_from_changed(self):
         if self.daily_to.selectedDate() < self.daily_from.selectedDate():

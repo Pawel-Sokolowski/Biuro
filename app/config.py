@@ -32,6 +32,9 @@ def get_data_dir() -> Path:
 
 def get_dsn() -> str:
     """Adres bazy PostgreSQL z DB_URL (postgresql://uzytkownik:haslo@host:5432/baza)."""
+    from app.remote.state import client
+    if client() is not None:
+        raise PermissionError('Połączenie z bazą jest obsługiwane przez serwer biura.')
     url = (os.getenv("DB_URL") or "").strip()
     if not url:
         raise RuntimeError(
@@ -42,6 +45,9 @@ def get_dsn() -> str:
 
 def get_database() -> str:
     """Opis bazy do wyświetlenia (host:port/baza), bez hasła."""
+    from app.remote.state import client
+    if client() is not None:
+        return client().server
     try:
         parsed = urlparse(get_dsn())
     except RuntimeError:

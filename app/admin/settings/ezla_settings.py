@@ -43,8 +43,8 @@ class EzlaSettings(QWidget):
         form.addRow('Przerwa między firmami', self.pause)
         form.addRow('Przerwa po błędzie ZUS', self.error_pause)
         layout.addLayout(form)
-        with get_conn() as conn:
-            self.companies = conn.execute('SELECT id,nazwa,nip FROM firmy ORDER BY nazwa').fetchall()
+        from app.remote.screen_data import company_identities
+        self.companies = company_identities()
         all_companies = QCheckBox('Zaznacz wszystkie firmy')
         layout.addWidget(all_companies)
         self.table = QTableWidget(len(self.companies), 3)
@@ -101,18 +101,14 @@ class EzlaSettings(QWidget):
             row = self.table.currentRow()
             if row < 0:
                 raise ValueError('Wybierz wiersz firmy do sprawdzenia połączenia.')
-            old = load_settings()
-            from app.utils.crypto import decrypt_password
-            password = self.password.text() or (decrypt_password(old['password_enc']) if old['password_enc'] else '')
-            zip_password = self.zip_password.text() or (decrypt_password(old['zip_password_enc']) if old['zip_password_enc'] else '')
+            password,zip_password = self.password.text(),self.zip_password.text()
             login = self.login.text().strip()
             from app.integrations.enova.document_counts import normalize_nip
             nip = normalize_nip(self.companies[row]['nip'])
             def work():
                 self._require_admin()
-                from app.integrations.ezla.service import fetch_reports
-                today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
-                return len(fetch_reports(nip, login, password, zip_password, today - timedelta(days=30), today=today))
+                from app.remote.screen_data import check_ezla_service
+                return check_ezla_service(nip,login,password,zip_password)
             self.status.setText('Sprawdzanie usługi raportów ZUS…')
             self.runner.submit(work, lambda count: self.status.setText(
                 f'Połączenie poprawne. Raporty: {count}. ' + ('ZIP odczytano poprawnie.' if count else

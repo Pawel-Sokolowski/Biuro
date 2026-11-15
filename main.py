@@ -4,11 +4,23 @@ import sys
 
 from app.utils.env_config import load_environment, ensure_encryption_key
 
-if __name__ == '__main__' and any(flag in sys.argv for flag in ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task', '--saldeo-login', '--worker-migrate')):
-    os.environ['BIO_WORKER_MODE'] = '1'
+SERVER_FLAGS = ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task',
+                '--saldeo-login', '--worker-migrate', '--api-server', '--direct')
+if __name__ == '__main__':
+    if any(flag in sys.argv for flag in SERVER_FLAGS):
+        os.environ['BIO_WORKER_MODE'] = '1'
+        os.environ.pop('BIO_CLIENT_MODE', None)
+    elif '--direct' not in sys.argv and '--migrate' not in sys.argv and '--smoke-test' not in sys.argv:
+        os.environ['BIO_CLIENT_MODE'] = '1'
+        # Employee machines never need these inherited server credentials.
+        os.environ.pop('DB_URL', None)
+        os.environ.pop('BIO_ENCRYPTION_KEY', None)
 load_environment()
 if __name__ == '__main__' and '--worker-migrate' in sys.argv:
     sys.argv[sys.argv.index('--worker-migrate')] = '--migrate'
+if __name__ == '__main__' and '--api-server' in sys.argv:
+    from app.remote.http_server import main as api_main
+    sys.exit(api_main())
 if __name__ == '__main__' and '--worker' in sys.argv:
     from app.worker import main as worker_main
     sys.exit(worker_main([arg for arg in sys.argv[1:] if arg != '--worker']))
@@ -77,22 +89,32 @@ if __name__ == "__main__":
             (QMessageBox.information if ok else QMessageBox.critical)(None, "Aktualizacja bazy", msg)
         sys.exit(0 if ok else 1)
 
-    from app.main_ui import LoginWindow, OfficeManagerApp
-
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     install_polish_translations(app)
-    try:
-        ensure_encryption_key()
-    except ValueError:
-        from app.key_setup_ui import KeySetupDialog
-        if KeySetupDialog().exec() != QDialog.DialogCode.Accepted:
-            sys.exit(0)
-    login_window = LoginWindow()
+    if '--direct' in sys.argv:
+        # Local server administration/provisioning only, never an automatic fallback.
+        try:
+            ensure_encryption_key()
+        except ValueError:
+            from app.key_setup_ui import KeySetupDialog
+            if KeySetupDialog().exec() != QDialog.DialogCode.Accepted:
+                sys.exit(0)
+        from app.main_ui import LoginWindow
+        login_window = LoginWindow()
+    else:
+        from app.remote.login_ui import ServerLoginDialog
+        login_window = ServerLoginDialog()
     if login_window.exec() == QDialog.DialogCode.Accepted:
         pracownik_id = login_window.pracownik_id
+        # Import business screens after the authenticated client is configured.
+        from app.main_ui import OfficeManagerApp
         window = OfficeManagerApp(pracownik_id)
         window.restore_window_state()
-        sys.exit(app.exec())
+        exit_code = app.exec()
+        from app.remote.state import client
+        if client() is not None:
+            client().close()
+        sys.exit(exit_code)
     else:
         sys.exit()

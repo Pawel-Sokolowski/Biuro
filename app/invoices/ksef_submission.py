@@ -4,6 +4,7 @@ Wysyłka jest inicjowana wyłącznie po potwierdzeniu użytkownika.
 Status przyjęcia i numer KSeF są pobierane osobno, asynchronicznie po stronie MF.
 """
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from pathlib import Path
 from datetime import date
@@ -251,6 +252,7 @@ def _send_invoice_bytes(invoice_id: int, xml: bytes, actor_id: int, *, client=No
     return response
 
 
+@office_endpoint('app.invoices.ksef_submission.refresh_invoice_submission')
 def refresh_invoice_submission(invoice_id: int, actor_id: int, *, client=None) -> dict:
     invoice = _authorized_invoice(invoice_id, actor_id)
     session = invoice.get("ksef_referencja_sesji")
@@ -320,6 +322,7 @@ def refresh_invoice_submission(invoice_id: int, actor_id: int, *, client=None) -
     return result
 
 
+@office_endpoint('app.invoices.ksef_submission.send_invoice_xml')
 def send_invoice_xml(invoice_id: int, xml_path: str, actor_id: int) -> dict:
     """Legacy file API retained for existing integrations; the UI generates FA3."""
     source = Path(xml_path)
@@ -328,6 +331,7 @@ def send_invoice_xml(invoice_id: int, xml_path: str, actor_id: int) -> dict:
     return _send_invoice_bytes(invoice_id, source.read_bytes(), actor_id)
 
 
+@office_endpoint('app.invoices.ksef_submission.generate_invoice_xml')
 def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -> bytes:
     from app.db.dao_app_settings import get_setting_first
     from app.db.dao_invoices import get_invoice_positions
@@ -373,6 +377,7 @@ def generate_invoice_xml(invoice_id: int, actor_id: int, *, allow_draft=False) -
     return build_fa3_xml(invoice, get_invoice_positions(invoice_id), seller, corrected=corrected)
 
 
+@office_endpoint('app.invoices.ksef_submission.send_invoice_document')
 def send_invoice_document(invoice_id: int, actor_id: int, *, client=None) -> dict:
     invoice = _authorized_invoice(invoice_id, actor_id)
     if not invoice.get("eksportowana"):
@@ -386,6 +391,7 @@ def send_invoice_document(invoice_id: int, actor_id: int, *, client=None) -> dic
     return _send_invoice_bytes(invoice_id, xml, actor_id, client=client)
 
 
+@office_endpoint('app.invoices.ksef_submission.download_submitted_invoice')
 def download_submitted_invoice(invoice_id: int, actor_id: int, *, client=None) -> str:
     """Archive the accepted XML against the original local ID, preserving payments."""
     import re
@@ -453,6 +459,7 @@ def download_submitted_invoice(invoice_id: int, actor_id: int, *, client=None) -
     return str(destination)
 
 
+@office_endpoint('app.invoices.ksef_submission.process_invoice_batch')
 def process_invoice_batch(invoice_ids, actor_id, *, send=False, progress=None):
     """One nonblocking worker pass: send once, poll once, download accepted XML.
 

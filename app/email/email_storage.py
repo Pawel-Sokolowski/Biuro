@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import psycopg
 from contextlib import contextmanager, nullcontext
@@ -26,6 +27,7 @@ def mail_read_snapshot():
         yield conn
 
 
+@office_endpoint('app.email.email_storage.get_mailbox_generation')
 def get_mailbox_generation(konto_id: int, folder: str) -> Optional[str]:
     with get_conn() as conn:
         row = conn.execute(
@@ -55,6 +57,7 @@ def _lock_mailbox_generation(conn, konto_id: int, folder_id: int, generation: Op
         raise MailboxGenerationChanged("Generacja folderu IMAP zmieniła się podczas synchronizacji.")
 
 
+@office_endpoint('app.email.email_storage.get_account_info')
 def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
 
@@ -77,6 +80,7 @@ def get_account_info(konto_id: int) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.get_email_accounts_for_employee')
 def get_email_accounts_for_employee(
     pracownik_id: int,
 ) -> List[Dict[str, Any]]:
@@ -107,12 +111,14 @@ def get_email_accounts_for_employee(
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.get_all_email_accounts')
 def get_all_email_accounts() -> List[Dict[str, Any]]:
     from app.db.dao_employees import get_all_email_accounts as _get_all
 
     return _get_all()
 
 
+@office_endpoint('app.email.email_storage.get_email_filters_for_company')
 def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -131,6 +137,7 @@ def get_email_filters_for_company(firma_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.add_email_filter')
 def add_email_filter(
     konto_id: int,
     firma_id: Optional[int],
@@ -210,6 +217,7 @@ def delete_missing_folders(
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.delete_email_filter_for_company')
 def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
     conn = get_conn()
     try:
@@ -222,6 +230,7 @@ def delete_email_filter_for_company(filter_id: int, firma_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_known_sender_addresses')
 def get_known_sender_addresses(konto_id: Optional[int] = None) -> List[str]:
     """Unikalne adresy nadawców z wiadomości w skrzynce (opcjonalnie jednego konta)."""
     from email.utils import parseaddr
@@ -245,16 +254,22 @@ def get_known_sender_addresses(konto_id: Optional[int] = None) -> List[str]:
     return sorted(addresses)
 
 
-def ensure_contact_email_filters(firma_id: int, folder_name: str) -> None:
+@office_endpoint('app.email.email_storage.ensure_contact_email_filters')
+def ensure_contact_email_filters(firma_id: int, folder_name: str, actor_id: Optional[int] = None) -> None:
     """Create a filter for each company contact e-mail that has none yet."""
     conn = get_conn()
     try:
         contacts = conn.execute(
             "SELECT email FROM company_contacts WHERE firma_id = %s", (firma_id,)
         ).fetchall()
-        account = conn.execute(
-            "SELECT id FROM konta_email WHERE COALESCE(aktywne, 1) = 1 AND COALESCE(systemowe, 0) = 0 ORDER BY id LIMIT 1"
-        ).fetchone()
+        if actor_id is None:
+            account = conn.execute(
+                "SELECT id FROM konta_email WHERE COALESCE(aktywne,1)=1 AND COALESCE(systemowe,0)=0 ORDER BY id LIMIT 1"
+            ).fetchone()
+        else:
+            account = conn.execute("""SELECT k.id FROM konta_email k JOIN pracownik_konto_email p ON p.konto_id=k.id
+                WHERE p.pracownik_id=%s AND COALESCE(k.aktywne,1)=1 AND COALESCE(k.systemowe,0)=0 ORDER BY k.id LIMIT 1""",
+                (actor_id,)).fetchone()
         if not account:
             return
         existing = {
@@ -335,6 +350,7 @@ def save_folder(
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_folder_id')
 def get_folder_id(
     konto_id: int,
     server_name: str,
@@ -365,6 +381,7 @@ def get_folder_id(
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_folders_for_account')
 def get_folders_for_account(
     konto_id: int,
     *, connection=None,
@@ -392,6 +409,7 @@ def get_folders_for_account(
             conn.close()
 
 
+@office_endpoint('app.email.email_storage.account_has_headers')
 def account_has_headers(konto_id: int) -> bool:
     """Czy konto ma już zapisane foldery i nagłówki (np. z gotowej, wypełnionej bazy)."""
     conn = get_conn()
@@ -617,6 +635,7 @@ def get_known_uids(konto_id: int, folder_id: int) -> set:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_cached_messages')
 def get_cached_messages(
     konto_id: int,
     folder_id: int,
@@ -647,6 +666,7 @@ def get_cached_messages(
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_unread_counts')
 def get_unread_counts(konto_id: int) -> Dict[int, int]:
 
     conn = get_conn()
@@ -706,6 +726,7 @@ def filter_visible_unread_counts(
     return visible
 
 
+@office_endpoint('app.email.email_storage.get_visible_unread_counts')
 def get_visible_unread_counts(konto_id: int, hidden_paths: set[str] | None = None) -> Dict[int, int]:
     """Licznik widocznych folderów danego konta email."""
     return filter_visible_unread_counts(
@@ -718,6 +739,7 @@ def get_visible_unread_counts(konto_id: int, hidden_paths: set[str] | None = Non
 _NO_TOAST_ROLES = {"sent", "drafts", "trash", "junk", "archive"}
 
 
+@office_endpoint('app.email.email_storage.get_new_unread_messages')
 def get_new_unread_messages(
     konto_id: int,
     after_id: Optional[int],
@@ -762,6 +784,7 @@ def get_new_unread_messages(
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.find_special_folder')
 def find_special_folder(konto_id: int, role: str) -> Optional[str]:
     """Zwraca surową nazwę serwerową folderu o danej roli (archive/junk/trash/sent/drafts)."""
     for folder in get_folders_for_account(konto_id):
@@ -774,6 +797,7 @@ def find_special_folder(konto_id: int, role: str) -> Optional[str]:
     return None
 
 
+@office_endpoint('app.email.email_storage.get_message_by_uid')
 def get_message_by_uid(
     konto_id: int,
     uid: str,
@@ -870,6 +894,7 @@ def get_message_cache_states(konto_id: int, folder_id: int, uids: List[str]):
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.load_raw_message')
 def load_raw_message(
     message_row_id: int,
 ) -> Optional[bytes]:
@@ -898,6 +923,7 @@ def load_raw_message(
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.get_message_row_id')
 def get_message_row_id(
     konto_id: int,
     folder_id: int,
@@ -932,6 +958,7 @@ def get_message_row_id(
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.update_message_read_flag')
 def update_message_read_flag(
     konto_id: int,
     uid: str,
@@ -968,6 +995,7 @@ def update_message_read_flag(
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.mark_deleted')
 def mark_deleted(
     konto_id: int,
     uid: str,
@@ -1029,6 +1057,7 @@ def move_local_message(
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.search_messages')
 def search_messages(
     konto_id: int,
     phrase: str,
@@ -1148,6 +1177,7 @@ def prune_email_storage(
     finally:
         conn.close()
 
+@office_endpoint('app.email.email_storage.get_cached_messages_by_folder_name')
 def get_cached_messages_by_folder_name(
     konto_id: int,
     server_name: str,
@@ -1243,6 +1273,7 @@ def apply_server_state(
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_assignment_map')
 def get_assignment_map(row_ids: List[int], *, connection=None) -> Dict[int, List[int]]:
     """{id wiadomo?ci: [id pracownik?w]}; przypisanie pod??a za wiadomo?ci? po Message-ID (np. po przeniesieniu)."""
     if not row_ids:
@@ -1269,6 +1300,7 @@ def get_assignment_map(row_ids: List[int], *, connection=None) -> Dict[int, List
             conn.close()
 
 
+@office_endpoint('app.email.email_storage.set_employee_assignment')
 def set_employee_assignment(row_ids: List[int], employee_id: int, assigned: bool) -> None:
     if not row_ids:
         return
@@ -1301,6 +1333,7 @@ def set_employee_assignment(row_ids: List[int], employee_id: int, assigned: bool
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_completed_map')
 def get_completed_map(row_ids: List[int], *, connection=None) -> set[int]:
     if not row_ids:
         return set()
@@ -1321,6 +1354,7 @@ def get_completed_map(row_ids: List[int], *, connection=None) -> set[int]:
             conn.close()
 
 
+@office_endpoint('app.email.email_storage.set_messages_completed')
 def set_messages_completed(row_ids: List[int], completed: bool) -> None:
     if not row_ids:
         return
@@ -1341,6 +1375,7 @@ def set_messages_completed(row_ids: List[int], completed: bool) -> None:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.count_completed_messages')
 def count_completed_messages(konto_id: int) -> int:
     conn = get_conn()
     try:
@@ -1362,6 +1397,7 @@ def count_completed_messages(konto_id: int) -> int:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.list_completed_rows')
 def list_completed_rows(konto_id: int, limit: int = 500) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -1386,6 +1422,7 @@ def list_completed_rows(konto_id: int, limit: int = 500) -> List[Dict[str, Any]]
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.count_assigned_by_employee')
 def count_assigned_by_employee(konto_id: int) -> Dict[int, int]:
     conn = get_conn()
     try:
@@ -1405,6 +1442,7 @@ def count_assigned_by_employee(konto_id: int) -> Dict[int, int]:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.count_unread_assigned_by_employee')
 def count_unread_assigned_by_employee(konto_id: int) -> Dict[int, int]:
     """Unread assigned messages across folders; copied Message-IDs count once."""
     conn = get_conn()
@@ -1426,6 +1464,7 @@ def count_unread_assigned_by_employee(konto_id: int) -> Dict[int, int]:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.list_assigned_rows')
 def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -1448,6 +1487,7 @@ def list_assigned_rows(konto_id: int, employee_id: int, limit: int = 500) -> Lis
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.get_mail_page')
 def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 500,
                   before=None, employee_id=None, completed=False, through=None, include_ids=(), connection=None):
     """Read one page, or revalidate the already loaded range through a keyset."""
@@ -1498,6 +1538,7 @@ def get_mail_page(konto_id: int, folder: str, *, phrase: str = "", limit: int = 
         return rows, more, cursor
 
 
+@office_endpoint('app.email.email_storage.refresh_email_list')
 def refresh_email_list(
     konto_id: int,
     server_folder: str,
@@ -1575,6 +1616,7 @@ def rename_folder_local(konto_id: int, old: str, new: str) -> int:
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.resolve_assigned_message')
 def resolve_assigned_message(actor_id: int, target: dict, *, require_assignment=True):
     """Revalidate account access and follow an assignment after an IMAP move."""
     conn = get_conn()
@@ -1607,11 +1649,13 @@ def resolve_assigned_message(actor_id: int, target: dict, *, require_assignment=
         conn.close()
 
 
+@office_endpoint('app.email.email_storage.resolve_notification_message')
 def resolve_notification_message(actor_id: int, target: dict):
     """Resolve a new-mail toast by row/message identity, rechecking account access."""
     return resolve_assigned_message(actor_id, target, require_assignment=False)
 
 
+@office_endpoint('app.email.email_storage.mail_notification_snapshot')
 def mail_notification_snapshot(accounts, hidden_folders, last_ids, limit=20) -> MailNotificationSnapshot:
     """At most four SQL reads and limit candidates per account, in one snapshot."""
     account_map = {int(account['id']): dict(account) for account in accounts}

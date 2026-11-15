@@ -3,6 +3,7 @@
 schema_baseline is the frozen pre-Alembic bootstrap/repair API. Add future DDL
 as Alembic revisions rather than editing/replaying that historical procedure.
 """
+from app.remote.boundary import endpoint as office_endpoint
 from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
@@ -34,6 +35,7 @@ def init_db():
         apply_saldeo_web(conn)
 
 
+@office_endpoint('app.db.schema.schema_is_current')
 def schema_is_current():
     with get_conn() as conn:
         if not conn.execute("SELECT to_regclass('app_settings') IS NOT NULL").fetchone()[0]:

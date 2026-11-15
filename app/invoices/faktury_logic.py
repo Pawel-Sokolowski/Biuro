@@ -1,3 +1,4 @@
+from app.remote.boundary import remote_class as office_remote_class
 # app/invoices/faktury_logic.py
 import json
 from app.utils.request_cache import scoped, cached, prime_cached
@@ -23,6 +24,7 @@ from app.services.payroll_names import payroll_invoice_service_name
 logger = logging.getLogger(__name__)
 
 
+@office_remote_class('app.invoices.faktury_logic.FakturyLogic')
 class FakturyLogic:
     _NON_BILLABLE_TIME_LINES = {"praca księgowa", "praca kadrowa"}
 

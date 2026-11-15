@@ -534,13 +534,8 @@ class EmailPage(QWidget):
             self.load_folders_from_db()
             self.start_background_sync()
         else:
-            QMessageBox.warning(
-                self,
-                "Brak kont",
-                "Nie masz przypisanego żadnego konta e-mail.\n"
-                "Administrator może je przypisać w Ustawienia → Konta e-mail → "
-                "Dostęp pracowników.",
-            )
+            self.sync_status.setText('Brak przypisanego konta e-mail')
+            self.sync_status.setToolTip('Administrator może przypisać konto w Ustawienia → Konta e-mail → Dostęp pracowników.')
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.start_background_sync)
@@ -1340,6 +1335,10 @@ class EmailPage(QWidget):
 
     def _fetch_mail_data(self, request, before=None, existing=(), through=None, ensure_row=None):
         account, folder, query, employee, completed = request
+        from app.remote.state import client
+        if client() is not None:
+            from app.remote.screen_data import mail_view_snapshot
+            return mail_view_snapshot(account,folder,query,employee,completed,before,existing,through,ensure_row)
         ensure_ids = [ensure_row["id"]] if ensure_row and ensure_row.get("konto_id") == account else []
         with mail_read_snapshot() as connection:
             rows, more, cursor = get_mail_page(account, folder, phrase=query, before=before,

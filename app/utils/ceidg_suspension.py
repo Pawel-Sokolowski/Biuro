@@ -1,5 +1,6 @@
 """Cykliczne sprawdzanie w CEIDG, czy działalność firmy jest zawieszona."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import logging
 import threading
@@ -117,6 +118,7 @@ def check_ceidg_state(fetch: Optional[Callable[[str], dict]] = None) -> Tuple[Li
     return suspended, resumed
 
 
+@office_endpoint('app.utils.ceidg_suspension.check_company_ceidg')
 def check_company_ceidg(firma_id: int, fetch: Optional[Callable[[str], dict]] = None) -> Dict:
     """Ręczne sprawdzenie jednej firmy. Zwraca {"state": "zawieszona"|"aktywna"|None,
     "change": "suspended"|"resumed"|None, "error": komunikat|None}."""

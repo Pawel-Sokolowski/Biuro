@@ -1,0 +1,3 @@
+<Project Sdk="Soneta.Sdk">
+  <PropertyGroup><TargetFramework>$(SonetaTargetFramework)</TargetFramework></PropertyGroup>
+</Project>

@@ -5,6 +5,7 @@ Konfiguracja w pliku .env:
     GUS_API_URL  opcjonalnie adres usługi (domyślnie produkcyjny; dla klucza
                  testowego użyj https://wyszukiwarkaregontest.stat.gov.pl/wsBIR/UslugaBIRzewnPubl.svc)
 """
+from app.remote.boundary import endpoint as office_endpoint
 import html
 import os
 import re
@@ -152,6 +153,7 @@ def parse_legal_report(xml_text: str) -> Dict[str, str]:
     return result
 
 
+@office_endpoint('app.companies.gus_api.get_gus_firma_by_nip')
 def get_gus_firma_by_nip(nip: str) -> Dict[str, Any]:
     """Zwraca dane firmy z GUS albo {"error": True, "message": ...}."""
     key, url = _config()

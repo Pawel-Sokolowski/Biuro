@@ -1,6 +1,7 @@
 """Połączenia IMAP/SMTP z obsługą SSL/TLS, STARTTLS i braku szyfrowania oraz test połączenia."""
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import imaplib
 import smtplib
@@ -95,6 +96,7 @@ def _password(account: Dict[str, Any]) -> str:
     return decrypt_password(account.get("haslo_enc")) if account.get("haslo_enc") else ""
 
 
+@office_endpoint('app.email.email_connection.check_imap')
 def check_imap(account: Dict[str, Any], timeout: int = 15) -> Tuple[bool, str]:
     try:
         conn = open_imap(
@@ -116,6 +118,7 @@ def check_imap(account: Dict[str, Any], timeout: int = 15) -> Tuple[bool, str]:
             pass
 
 
+@office_endpoint('app.email.email_connection.check_smtp')
 def check_smtp(account: Dict[str, Any], timeout: int = 15) -> Tuple[bool, str]:
     try:
         conn = open_smtp(

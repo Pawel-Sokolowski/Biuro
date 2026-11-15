@@ -1,5 +1,6 @@
 """Scheduled reminders. No SMTP retry after an ambiguous delivery result."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import calendar
 from copy import deepcopy
@@ -31,6 +32,7 @@ DEFAULTS = {
 }
 
 
+@office_endpoint('app.services.email_reminders.load_settings')
 def load_settings():
     result = deepcopy(DEFAULTS)
     raw = get_setting(SETTINGS_KEY)
@@ -73,6 +75,7 @@ def validate_settings(settings):
         raise ValueError('Dzień terminu dokumentów musi wynosić od 1 do 31.')
 
 
+@office_endpoint('app.services.email_reminders.save_settings')
 def save_settings(settings):
     validate_settings(settings)
     set_setting(SETTINGS_KEY, json.dumps(settings, ensure_ascii=False))

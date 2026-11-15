@@ -1,6 +1,7 @@
 """Pobieranie logu kopii zapasowej z maila wysyłanego przez program do backupu."""
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import logging
 from datetime import datetime, timezone
@@ -130,6 +131,7 @@ def _sync_inbox(account_id: int) -> None:
         logger.exception("Nie udało się odświeżyć skrzynki konta %s", account_id)
 
 
+@office_endpoint('app.utils.backup_mail.check_backup_from_latest_mail')
 def check_backup_from_latest_mail() -> Dict[str, Any]:
     """Ręczne sprawdzenie: najnowszy mail z logiem -> daty ostatniej kopii zapisane w firmach."""
     from app.utils.backup_status import get_backup_status, save_backup_dates_to_companies
@@ -156,6 +158,7 @@ def check_backup_from_latest_mail() -> Dict[str, Any]:
     return {"ok": True, "komunikat": text, "wiersze": wiersze, **saved}
 
 
+@office_endpoint('app.utils.backup_mail.refresh_backup_log_from_mail')
 def refresh_backup_log_from_mail(sync_headers: bool = True, force: bool = False) -> Dict[str, Any]:
     """Pobiera najnowszy mail z logiem i zapisuje jego tekst w ustawieniach."""
     from app.email.email_sync import fetch_message_from_imap

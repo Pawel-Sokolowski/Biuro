@@ -4,6 +4,7 @@ Word/LibreOffice perform pagination and PDF export; python-docx preserves the
 templates rather than rebuilding their layout in HTML. No document is sent.
 """
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import json
 import os
@@ -87,6 +88,7 @@ def company_context(company, partners=(), contacts=()):
     }
 
 
+@office_endpoint('app.documents.contract_pack.office_context')
 def office_context():
     from app.db.dao_app_settings import get_setting
     from app.documents.power_of_attorney import office_email
@@ -100,6 +102,7 @@ def office_context():
     return result
 
 
+@office_endpoint('app.documents.contract_pack.load_context')
 def load_context(company_id, actor_id):
     from app.security.authorization import assigned_company_ids
     from app.db.dao_companies import get_company, get_partners, get_contacts

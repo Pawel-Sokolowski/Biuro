@@ -1,4 +1,5 @@
 """Shared connection configuration; passwords use the deployment encryption key."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from pathlib import Path
 from app.db.dao_app_settings import get_setting, set_setting
@@ -6,6 +7,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 KEY = 'enova_connection'
 
 
+@office_endpoint('app.integrations.enova.connection_settings.load_connection')
 def load_connection():
     config = json.loads(get_setting(KEY) or '{}')
     config.setdefault('enabled', False)
@@ -25,6 +27,7 @@ def load_connection():
     return with_query_defaults(config)
 
 
+@office_endpoint('app.integrations.enova.connection_settings.save_connection')
 def save_connection(config, *, actor_id, password=''):
     from app.security.authorization import is_administrator
     from app.integrations.enova.document_counts import normalize_nip, requested_months
@@ -83,6 +86,7 @@ def credentials(config):
     return config['username'], decrypt_password(config['password_enc'])
 
 
+@office_endpoint('app.integrations.enova.connection_settings.check_connection')
 def check_connection(config, *, password=''):
     """Test actual database access without running imports or writing data."""
     from app.integrations.enova.document_counts import sql_connection_string

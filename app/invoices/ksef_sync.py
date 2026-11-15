@@ -1,6 +1,7 @@
 """Synchronizacja numerów KSeF z wystawionymi fakturami (backend, bez UI)."""
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import logging
 import base64
@@ -267,6 +268,7 @@ def _upsert_downloaded_invoice(
         conn.close()
 
 
+@office_endpoint('app.invoices.ksef_sync.assign_downloaded_invoice')
 def assign_downloaded_invoice(
     data: Dict[str, Any], ksef_number: str, company_id: Optional[int] = None,
     contractor_id: Optional[int] = None,
@@ -275,6 +277,7 @@ def assign_downloaded_invoice(
     return _upsert_downloaded_invoice(data, ksef_number, company_id=company_id, contractor_id=contractor_id)
 
 
+@office_endpoint('app.invoices.ksef_sync.save_ksef_credentials')
 def save_ksef_credentials(nip: str, token: Optional[str], environment: str = "prod") -> None:
     if environment not in ENVIRONMENTS:
         raise ValueError(f"Nieznane środowisko KSeF: {environment}")
@@ -284,6 +287,7 @@ def save_ksef_credentials(nip: str, token: Optional[str], environment: str = "pr
         set_setting(TOKEN_KEY, encrypt_password(token.strip()))
 
 
+@office_endpoint('app.invoices.ksef_sync.is_configured')
 def is_configured() -> bool:
     from app.invoices.ksef_credentials import load_credentials
 
@@ -350,6 +354,7 @@ def _metadata_buyer_nip(meta: Dict[str, Any]) -> str:
     return _digits(((meta.get("buyer") or {}).get("identifier") or {}).get("value"))
 
 
+@office_endpoint('app.invoices.ksef_sync.sync_issued_invoices')
 def sync_issued_invoices(
     date_from: datetime,
     date_to: Optional[datetime] = None,
@@ -556,6 +561,7 @@ def months_of_period(period: str, today: Optional[datetime] = None) -> List[str]
     return [f"{year:04d}-{month:02d}" for month in range(1, last + 1)]
 
 
+@office_endpoint('app.invoices.ksef_sync.sync_month')
 def sync_month(miesiac: str, xml_dir: Optional[Path] = None, client: Optional[KsefClient] = None,
                progress=None, **filters) -> Dict[str, Any]:
     """miesiac: 'RRRR-MM' albo 'RRRR'. Cały rok jest pobierany osobno miesiąc po miesiącu,

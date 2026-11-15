@@ -4,6 +4,7 @@ JDG: CEIDG. Spółka cywilna: REGON/GUS + powiązania wspólników w CEIDG.
 Pozostałe podmioty wpisane do KRS: GUS -> numer KRS -> odpis KRS.
 Biała Lista MF sprawdzana dla KAŻDEJ formy, ale uzupełnia WYŁĄCZNIE VAT i konto.
 """
+from app.remote.boundary import endpoint as office_endpoint
 from typing import Any, Callable, Dict, Optional
 
 from app.companies.biala_lista_api import get_biala_lista_by_nip
@@ -52,6 +53,7 @@ def _matches_nip(data: Dict[str, Any], nip: str) -> bool:
     return not returned or returned == _digits(nip)
 
 
+@office_endpoint('app.companies.company_lookup.lookup_company_by_nip')
 def lookup_company_by_nip(
     nip: str,
     wl: Callable = get_biala_lista_by_nip,

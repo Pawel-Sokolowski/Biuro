@@ -1,4 +1,5 @@
 """Shared Enova bank-position weighting: office default and client overrides."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_conn import get_conn
@@ -12,6 +13,7 @@ def validate_divisor(value):
     return value
 
 
+@office_endpoint('app.integrations.enova.counting_rules.load_rules')
 def load_rules():
     raw = get_setting(SETTINGS_KEY)
     rules = json.loads(raw) if raw else {'bank_divisor': 3, 'company_overrides': {}}
@@ -26,10 +28,12 @@ def load_rules():
     return {'bank_divisor': rules['bank_divisor'], 'company_overrides': overrides}
 
 
+@office_endpoint('app.integrations.enova.counting_rules.effective_divisor')
 def effective_divisor(rules, company_id):
     return validate_divisor(rules['company_overrides'].get(str(company_id), rules['bank_divisor']))
 
 
+@office_endpoint('app.integrations.enova.counting_rules.save_rules')
 def save_rules(default, overrides, *, actor_id):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):

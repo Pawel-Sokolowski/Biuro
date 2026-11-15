@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import re
 from html import escape, unescape
@@ -28,6 +29,7 @@ SEPARATOR = "----------------------"
 DEFAULT_SENDER_KEY = "email_konto_wysylki_id"
 
 
+@office_endpoint('app.email.signature.get_template')
 def get_template() -> Dict[str, str]:
     template = {}
     for key, default in DEFAULT_TEMPLATE.items():
@@ -36,6 +38,7 @@ def get_template() -> Dict[str, str]:
     return template
 
 
+@office_endpoint('app.email.signature.save_template')
 def save_template(values: Dict[str, str]) -> None:
     for key in DEFAULT_TEMPLATE:
         if key in values:
@@ -141,6 +144,7 @@ def load_signature_file(path: str) -> Tuple[str, str]:
     return content.strip(), text_to_html(content.strip())
 
 
+@office_endpoint('app.email.signature.get_employee_signature')
 def get_employee_signature(pracownik_id: int) -> Tuple[str, str]:
     """Aktualny wspólny wzór z danymi autora wiadomości, niezależnie od nadawcy SMTP."""
     conn = get_conn()
@@ -156,6 +160,7 @@ def get_employee_signature(pracownik_id: int) -> Tuple[str, str]:
     return build_default_signature(row["imie"], row["nazwisko"], telefon=row["telefon"] or "")
 
 
+@office_endpoint('app.email.signature.save_employee_phone')
 def save_employee_phone(pracownik_id: int, telefon: str) -> None:
     conn = get_conn()
     try:
@@ -165,6 +170,7 @@ def save_employee_phone(pracownik_id: int, telefon: str) -> None:
         conn.close()
 
 
+@office_endpoint('app.email.signature.get_saved_signature')
 def get_saved_signature(pracownik_id: int) -> Tuple[str, str]:
     conn = get_conn()
     try:
@@ -176,6 +182,7 @@ def get_saved_signature(pracownik_id: int) -> Tuple[str, str]:
     return (row["stopka_tekst"] or "", row["stopka_html"] or "") if row else ("", "")
 
 
+@office_endpoint('app.email.signature.save_employee_signature')
 def save_employee_signature(pracownik_id: int, text: str, html: str) -> None:
     conn = get_conn()
     try:
@@ -218,6 +225,7 @@ def merge_signature(
     return text_to_html(body) + block if body else block
 
 
+@office_endpoint('app.email.signature.default_sender_id')
 def default_sender_id() -> Optional[int]:
     value = get_setting(DEFAULT_SENDER_KEY, None)
     try:
@@ -226,6 +234,7 @@ def default_sender_id() -> Optional[int]:
         return None
 
 
+@office_endpoint('app.email.signature.set_default_sender_id')
 def set_default_sender_id(konto_id: Optional[int]) -> None:
     set_setting(DEFAULT_SENDER_KEY, str(konto_id) if konto_id else "")
 

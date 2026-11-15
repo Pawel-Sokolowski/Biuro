@@ -1,4 +1,5 @@
 """Read-only discovery using the same company identity as the document importer."""
+from app.remote.boundary import endpoint as office_endpoint
 from collections import defaultdict
 from app.integrations.enova.document_counts import normalize_nip, sql_connection_string
 from app.integrations.enova.odbc_support import (load_odbc, resolve_driver, validate_server, describe_sql_error,
@@ -9,6 +10,7 @@ def query_timeout(config):
     return validate_query_timeout(config.get('discovery_query_timeout',DEFAULT_QUERY_TIMEOUT))
 
 
+@office_endpoint('app.integrations.enova.discovery.discover')
 def discover(config, *, password='', progress=None):
     validate_server(config.get('server'))
     timeout = query_timeout(config)

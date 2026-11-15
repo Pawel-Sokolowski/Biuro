@@ -201,9 +201,8 @@ class ReminderSettings(QWidget):
         QMessageBox.information(self, 'Przypomnienia', 'Zapisano ustawienia automatycznych e-maili.')
 
     def _load_history(self):
-        with get_conn() as conn:
-            rows = conn.execute('SELECT created_at, kind, recipient, subject, status, error '
-                                'FROM email_reminder_log ORDER BY id DESC LIMIT 100').fetchall()
+        from app.remote.screen_data import reminder_history
+        rows = reminder_history()
         self.history.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, value in enumerate(row):

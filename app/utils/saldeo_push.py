@@ -5,6 +5,7 @@ gdzie "Rajch" to nazwa skrócona z Saldeo (pole firmy `nazwa_saldeo`).
 """
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import asyncio
 import datetime
@@ -39,6 +40,7 @@ def parse_notification(text: str) -> Optional[Tuple[str, str]]:
     return match.group("name").strip(), f"{int(match.group('year')):04d}-{month:02d}"
 
 
+@office_endpoint('app.utils.saldeo_push.mark_documents_complete')
 def mark_documents_complete(name: str, month: str, today: Optional[datetime.date] = None) -> str:
     """'ok' - ustawiono, 'juz' - już było, 'brak_firmy' - nie znaleziono firmy o tej nazwie w Saldeo."""
     conn = get_conn()

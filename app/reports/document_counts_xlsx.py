@@ -1,4 +1,5 @@
 """Import explicit monthly accounting document counts from annual XLSX matrices."""
+from app.remote.boundary import endpoint as office_endpoint
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -114,6 +115,7 @@ def read_document_counts(path):
             formulas.close()
 
 
+@office_endpoint('app.reports.document_counts_xlsx.import_document_counts_file')
 def import_document_counts_file(path, *, actor_id, overwrite=False):
     from app.security.authorization import can, is_administrator
     if not actor_id or not (is_administrator(actor_id) or can(actor_id, 'can_view_finances')):

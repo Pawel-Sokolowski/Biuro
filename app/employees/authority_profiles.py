@@ -1,4 +1,5 @@
 """Encrypted personal identity fields for repeatable PEL/UPL preparation."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 import re
 from app.db.dao_conn import get_conn
@@ -9,6 +10,7 @@ FIELDS = {'pesel': 'PESEL', 'nip': 'NIP', 'birth_date': 'Data urodzenia (RRRR-MM
           'identity_type': 'Typ dokumentu: 1 — dowód, 2 — paszport'}
 
 
+@office_endpoint('app.employees.authority_profiles.load')
 def load(employee_id, actor_id):
     from app.security.authorization import is_administrator, allowed_tabs
     if not is_administrator(actor_id) and not set(allowed_tabs(actor_id)) & {'Klienci', 'Widok miesięczny', 'Ustawienia'}:
@@ -18,6 +20,7 @@ def load(employee_id, actor_id):
     return json.loads(decrypt_password(row[0])) if row else {}
 
 
+@office_endpoint('app.employees.authority_profiles.save')
 def save(employee_id, values, actor_id):
     from app.security.authorization import can
     if not can(actor_id, 'can_manage_users'):

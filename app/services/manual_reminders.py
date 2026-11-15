@@ -1,4 +1,5 @@
 """Reviewed, one-off reminders from monthly/invoice views; no SMTP retries."""
+from app.remote.boundary import endpoint as office_endpoint
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 import calendar
@@ -11,6 +12,7 @@ from .email_reminders import FIELDS, load_settings, _candidates, _civil_recipien
 from .reminder_recipients import select_recipient
 
 
+@office_endpoint('app.services.manual_reminders.prepare')
 def prepare(kind, target_id, actor_id, month=None):
     if type(target_id) is not int or target_id<=0:
         raise ValueError('Wybierz firmę albo fakturę.')
@@ -64,6 +66,7 @@ def prepare(kind, target_id, actor_id, month=None):
             'subject':template['subject'].format(**values),'body':template['body'].format(**values)}
 
 
+@office_endpoint('app.services.manual_reminders.send')
 def send(plan, actor_id, message):
     # Eligibility, amount, contact details and sender permissions are checked again
     # after the user reviews the message. Never retry an ambiguous SMTP attempt.

@@ -1,3 +1,4 @@
+from app.remote.boundary import remote_class as office_remote_class
 # app/companies/company_logic.py
 import psycopg
 from typing import Any, Dict, Optional, List
@@ -423,6 +424,7 @@ def pick_cennik_by_key_or_limit(desired_key: str, limit: int, cenniki_rows: List
 # -------------------------
 # CompanyLogic core (rozszerzona wersja z oryginalnego pliku)
 # -------------------------
+@office_remote_class('app.companies.company_logic.CompanyLogic')
 class CompanyLogic:
     def __init__(self):
         pass

@@ -28,9 +28,9 @@ class CompanyTimerRecordsTests(DbTestCase):
             self.timer_kadry = self._timer(conn, self.firma, "kadry", 600, "2026-10-06T10:00:00")
             self.timer_other = self._timer(conn, self.other, "ksiegowosc", 100, "2026-10-07T10:00:00")
             self.imported = conn.execute(
-                "INSERT INTO import_czas_pracy (hash, firma_id, pracownik_nazwa, data, miesiac, od, do_, "
-                "sekundy, czynnosc, dzial) VALUES ('h1', %s, 'Jan K', '2026-10-01', '2026-10', '08:00', '09:00', "
-                "3600, 'Rozmowa', 'ksiegowosc') RETURNING id", (self.firma,)).fetchone()[0]
+                "INSERT INTO import_czas_pracy (hash, firma_id, pracownik_id, pracownik_nazwa, data, miesiac, od, do_, "
+                "sekundy, czynnosc, dzial) VALUES ('h1', %s, %s, 'Jan K', '2026-10-01', '2026-10', '08:00', '09:00', "
+                "3600, 'Rozmowa', 'ksiegowosc') RETURNING id", (self.firma,self.emp)).fetchone()[0]
             conn.commit()
         finally:
             conn.close()

@@ -261,6 +261,7 @@ def main(argv=None):
     from app.diagnostics import configure_logging
     configure_logging()
     app = None
+    api_server = None
     try:
         # Configure logging before credential checks: the packaged EXE has no console.
         ensure_encryption_key()
@@ -275,11 +276,18 @@ def main(argv=None):
         stop = threading.Event()
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda *_: stop.set())
+        if not args.once:
+            from app.remote.http_server import start_configured
+            api_server = start_configured()
         return serve(once=args.once, stop=stop)
     except Exception:
         logger.exception('worker_startup_or_runtime_failed')
         return 1
     finally:
+        if api_server is not None:
+            api_server.shutdown()
+            api_server.server_close()
+            api_server.office_service.close()
         if app is not None:
             from app.email.email_sync import close_sessions
             from app.db.dao_conn import close_pool

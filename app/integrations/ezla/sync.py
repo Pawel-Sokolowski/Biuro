@@ -1,4 +1,5 @@
 """Download generated ZUS reports atomically per company; retain exact XML encrypted."""
+from app.remote.boundary import endpoint as office_endpoint
 import base64
 from datetime import date, datetime, timedelta
 import hashlib
@@ -61,6 +62,7 @@ def progress(stage, **details):
                 'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}))
 
 
+@office_endpoint('app.integrations.ezla.sync.run_sync')
 def run_sync(*, actor_id=None, today=None, stop=None, company_ids=None):
     if actor_id is not None:
         from app.security.authorization import is_administrator
@@ -167,6 +169,7 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
             'companies': len(results), 'failed': sum(row['state'] == 'failed' for row in results), 'results': results}
 
 
+@office_endpoint('app.integrations.ezla.sync.load_reports')
 def load_reports(actor_id, month):
     from app.integrations.enova.accounting import require_access
     from app.security.authorization import assigned_company_ids

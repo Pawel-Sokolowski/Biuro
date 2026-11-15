@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/reports/reports_logic.py
 import psycopg
 from decimal import Decimal, ROUND_HALF_UP
@@ -31,6 +32,7 @@ def _extra_timer_seconds(conn, firma_ids, months):
 # ============================================================
 # LISTA FIRM
 # ============================================================
+@office_endpoint('app.reports.reports_logic.get_all_companies')
 def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -64,6 +66,7 @@ def _authorized_company_ids(firma_ids: List[int], pracownik_id: int | None) -> L
 _TYPE_LABELS = {"ksiegowosc": "Księgowość", "kadry": "Kadry", "dodatkowe": "Czynność dodatkowa", "ogolne": "Ogólne"}
 
 
+@office_endpoint('app.reports.reports_logic.build_daily_report')
 def build_daily_report(employee_ids: List[int], start: str, end: str,
                        pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     """Czas pracy z czasomierzy dla wybranych pracowników w dniach start..end (YYYY-MM-DD, włącznie).
@@ -157,6 +160,7 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
 # ============================================================
 # RANGE MIESIĘCY
 # ============================================================
+@office_endpoint('app.reports.reports_logic.get_months_range')
 def get_months_range(start: str, end: str) -> List[str]:
     from datetime import datetime
     out = []
@@ -178,6 +182,7 @@ def get_months_range(start: str, end: str) -> List[str]:
 # ============================================================
 # GODZINY DLA FIRMY I MIESIĄCA
 # ============================================================
+@office_endpoint('app.reports.reports_logic.get_imported_seconds')
 def get_imported_seconds(firma_ids: List[int], months: List[str]) -> Dict[tuple, Dict[str, float]]:
     """Zaimportowany czas pracy: (firma_id, miesiąc) -> {'ksiegowosc': s, 'kadry': s}."""
     if not firma_ids or not months:
@@ -205,6 +210,7 @@ def get_imported_seconds(firma_ids: List[int], months: List[str]) -> Dict[tuple,
     return out
 
 
+@office_endpoint('app.reports.reports_logic.get_hours_for_company_month')
 def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]:
     conn = get_conn()
     cur = conn.cursor()
@@ -229,10 +235,12 @@ def get_hours_for_company_month(firma_id: int, miesiac: str) -> Dict[str, float]
 # ============================================================
 # USŁUGI DODATKOWE — SUMA
 # ============================================================
+@office_endpoint('app.reports.reports_logic.get_extra_services_value')
 def get_extra_services_value(firma_id: int, miesiac: str) -> float:
     return sum(get_extra_services_by_department(firma_id, miesiac).values())
 
 
+@office_endpoint('app.reports.reports_logic.get_extra_services_by_department')
 def get_extra_services_by_department(firma_id: int, miesiac: str) -> Dict[str, float]:
     conn = get_conn()
     cur = conn.cursor()
@@ -252,6 +260,7 @@ def get_extra_services_by_department(firma_id: int, miesiac: str) -> Dict[str, f
     return totals
 
 
+@office_endpoint('app.reports.reports_logic.build_summary_report')
 def build_summary_report(firma_ids, months, pracownik_id=None):
     """Compatibility view of the canonical invoice/time profitability dataset."""
     from app.reports.import_dao import build_profitability_report
@@ -262,6 +271,7 @@ def build_summary_report(firma_ids, months, pracownik_id=None):
 # ============================================================
 # RAPORT MIESIĘCZNY — POPRAWIONY
 # ============================================================
+@office_endpoint('app.reports.reports_logic.build_report')
 def build_report(
     firma_ids: List[int],
     months: List[str],
@@ -375,6 +385,7 @@ def build_report(
 # ============================================================
 # RAPORT ROCZNY — wszystkie 12 miesięcy
 # ============================================================
+@office_endpoint('app.reports.reports_logic.build_yearly_report')
 def build_yearly_report(firma_id: int, year: int) -> Dict[str, Any]:
     months = [f"{year}-{m:02d}" for m in range(1, 12 + 1)]
     return build_report([firma_id], months)[firma_id]
@@ -383,6 +394,7 @@ def build_yearly_report(firma_id: int, year: int) -> Dict[str, Any]:
 # ============================================================
 # PORÓWNANIE FIRM — POPRAWIONE
 # ============================================================
+@office_endpoint('app.reports.reports_logic.compare_companies')
 def compare_companies(firma_ids, miesiac, pracownik_id=None):
     """Compare actual billed department revenue and tracked time."""
     from app.reports.import_dao import build_profitability_report
@@ -401,6 +413,7 @@ def compare_companies(firma_ids, miesiac, pracownik_id=None):
     return out
 
 
+@office_endpoint('app.reports.reports_logic.build_profit_report')
 def build_profit_report(firma_ids, months, pracownik_id=None):
     """Compatibility hourly revenue report, using the same actual data as profitability."""
     from app.reports.import_dao import build_profitability_report

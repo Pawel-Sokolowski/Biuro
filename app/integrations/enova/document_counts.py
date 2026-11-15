@@ -1,5 +1,6 @@
 """Daily, repeatable import of monthly Enova counts. Preview is the default."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import argparse
 from dataclasses import dataclass
@@ -316,6 +317,7 @@ def _eligible_months(conn, company_id, months, signature, *, apply):
     return eligible
 
 
+@office_endpoint('app.integrations.enova.document_counts.run_import')
 def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
     if apply and not config.get('enabled', False):
         raise ValueError('Import wyłączony. Najpierw sprawdź podgląd, następnie ustaw enabled=true.')

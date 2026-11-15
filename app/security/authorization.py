@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import psycopg
 from typing import Any, Dict, Optional, Set
@@ -7,6 +8,7 @@ from app.db.dao_conn import get_conn
 from app.utils.request_cache import cached
 
 
+@office_endpoint('app.security.authorization.get_permissions')
 @cached
 def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
     if not pracownik_id:
@@ -36,6 +38,7 @@ def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
     return permissions
 
 
+@office_endpoint('app.security.authorization.is_administrator')
 @cached
 def is_administrator(pracownik_id: Optional[int]) -> bool:
     if not pracownik_id:
@@ -57,6 +60,7 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
         conn.close()
 
 
+@office_endpoint('app.security.authorization.can')
 def can(pracownik_id: Optional[int], permission: str) -> bool:
     return is_administrator(pracownik_id) or get_permissions(pracownik_id).get(permission, False)
 
@@ -81,6 +85,7 @@ def parse_tabs(raw: Optional[str], can_admin_settings: bool = False) -> list:
     return [t for t in TABS if t in chosen]
 
 
+@office_endpoint('app.security.authorization.allowed_tabs')
 def allowed_tabs(pracownik_id: Optional[int]) -> list:
     """Zakładki dostępne dla pracownika (administrator widzi wszystkie)."""
     if not pracownik_id:
@@ -104,11 +109,13 @@ def allowed_tabs(pracownik_id: Optional[int]) -> list:
     return parse_tabs(row["zakladki"], bool(row["adm"]))
 
 
+@office_endpoint('app.security.authorization.can_manage_invoices')
 def can_manage_invoices(pracownik_id: Optional[int]) -> bool:
     """The Faktury module grants its ordinary invoice workflow, including manual buyers."""
     return bool(pracownik_id) and 'Faktury' in allowed_tabs(pracownik_id)
 
 
+@office_endpoint('app.security.authorization.assigned_company_ids')
 @cached
 def assigned_company_ids(pracownik_id: Optional[int]) -> Set[int]:
     """Każdy pracownik ma dostęp do wszystkich firm; przypisanie księgowa/kadrowa służy tylko do filtrów."""

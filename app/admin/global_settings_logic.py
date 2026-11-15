@@ -5,6 +5,7 @@ Zawiera: dostęp do DB, ustawienia aplikacji, role, użytkownicy, konta email,
 cenniki, kadry, usługi dodatkowe, firmy, faktury (CRUD + pozycje), tagi,
 załączniki, logi, backup oraz pomocnicze migracje schematu.
 """
+from app.remote.boundary import remote_class as office_remote_class
 
 import csv
 import json
@@ -69,6 +70,7 @@ def _row_to_dict_safe(row):
         return d
 
 
+@office_remote_class('app.admin.global_settings_logic.GlobalSettingsLogic')
 class GlobalSettingsLogic:
     def __init__(self):
         try:
@@ -320,7 +322,10 @@ class GlobalSettingsLogic:
         smtp_port: int,
         ssl_imap: str,
         ssl_smtp: str,
+        password: str = "",
     ):
+        from app.utils.crypto import encrypt_password
+        encrypted = encrypt_password(password) if password else None
         dao_global_settings.update_email_account_connection(
             acc_id=acc_id,
             email=email,
@@ -330,6 +335,7 @@ class GlobalSettingsLogic:
             smtp_port=smtp_port,
             ssl_imap=ssl_imap,
             ssl_smtp=ssl_smtp,
+            haslo_enc=encrypted,
         )
 
     def update_email_password(self, acc_id: int, password: str):

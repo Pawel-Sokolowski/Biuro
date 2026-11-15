@@ -53,3 +53,14 @@ worker.env
 
 # Authenticated browser profiles contain private session cookies.
 /saldeo-browser/
+
+# Session uploads and private server-owned SQL overrides are deployment data.
+/api-files/
+/sql-overrides/
+/server-certs/
+*.key
+*.pem
+*.pfx
+*.p12
+enova-schema-*.json
+platnik-schema*.json

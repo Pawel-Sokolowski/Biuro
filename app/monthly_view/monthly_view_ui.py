@@ -327,19 +327,8 @@ class ActivityDialog(QDialog):
 
     @staticmethod
     def _load(firma_id: int, miesiac: str):
-        from app.db.dao_conn import get_conn
-        conn = get_conn()
-        try:
-            cur = conn.execute(
-                "SELECT c.typ, c.rozpoczecie, c.zakonczenie, c.sekundy, "
-                "p.imie || ' ' || p.nazwisko AS pracownik "
-                "FROM czasomierze c LEFT JOIN pracownicy p ON p.id = c.pracownik_id "
-                "WHERE c.firma_id = %s AND c.miesiac = %s ORDER BY c.rozpoczecie DESC",
-                (firma_id, miesiac),
-            )
-            return [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
-        finally:
-            conn.close()
+        from app.remote.screen_data import activity_rows
+        return activity_rows(firma_id,miesiac)
 
 
 class ActivitySelectionDialog(QDialog):

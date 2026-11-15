@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/db/dao_monthly.py
 import psycopg
 from typing import Dict, Any, Optional
@@ -5,6 +6,7 @@ from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
 
 
+@office_endpoint('app.db.dao_monthly.get_month_status')
 def get_month_status(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -21,6 +23,7 @@ def get_month_status(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+@office_endpoint('app.db.dao_monthly.save_month_status')
 def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> None:
     import datetime
     payload = dict(payload)
@@ -81,6 +84,7 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
 SUBSTITUTION_ROLES = ("ksiegowosc", "kadry")
 
 
+@office_endpoint('app.db.dao_monthly.list_active_substitutions')
 def list_active_substitutions(today=None) -> Dict[tuple, Dict[str, Any]]:
     """{(firma_id, rola): zastępstwo} dla zastępstw bez daty końca lub jeszcze obowiązujących."""
     import datetime
@@ -104,6 +108,7 @@ def list_active_substitutions(today=None) -> Dict[tuple, Dict[str, Any]]:
     return {(r["firma_id"], r["rola"]): dict(r) for r in rows}
 
 
+@office_endpoint('app.db.dao_monthly.set_substitution')
 def set_substitution(firma_id: int, rola: str, zastepca_id: int,
                      zastepowany_id: Optional[int], do_dnia: Optional[str] = None) -> None:
     if rola not in SUBSTITUTION_ROLES:
@@ -128,6 +133,7 @@ def set_substitution(firma_id: int, rola: str, zastepca_id: int,
         conn.close()
 
 
+@office_endpoint('app.db.dao_monthly.clear_substitution')
 def clear_substitution(firma_id: int, rola: str) -> None:
     conn = get_conn()
     try:
@@ -137,6 +143,7 @@ def clear_substitution(firma_id: int, rola: str) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_monthly.count_documents_for_month')
 def count_documents_for_month(firma_id: int, miesiac: str) -> int:
     conn = get_conn()
     cur = conn.cursor()
@@ -156,6 +163,7 @@ def count_documents_for_month(firma_id: int, miesiac: str) -> int:
     return int(row["cnt"] or 0)
 
 
+@office_endpoint('app.db.dao_monthly.get_month_contracts')
 def get_month_contracts(firma_id: int, miesiac: str) -> Dict[str, int]:
     """Ilość umów w danym miesiącu: wpis miesięczny, a gdy go brak - ostatni wcześniejszy, a potem dane firmy."""
     conn = get_conn()
@@ -178,6 +186,7 @@ def get_month_contracts(firma_id: int, miesiac: str) -> Dict[str, int]:
     return {k: int((row.get(k) if row else 0) or 0) for k in ("uop_ilosc", "uz_ilosc", "uod_ilosc")}
 
 
+@office_endpoint('app.db.dao_monthly.save_month_contracts')
 def save_month_contracts(firma_id: int, miesiac: str, uop: int, uz: int, uod: int) -> None:
     """Zapisuje ilość umów w miesiącu; jeśli to najnowszy miesiąc, aktualizuje też kartę firmy."""
     conn = get_conn()

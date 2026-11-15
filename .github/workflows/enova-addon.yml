@@ -1,0 +1,51 @@
+name: Enova e-ZLA add-on
+on:
+  pull_request:
+    paths: ['addons/enova/**', 'app/integrations/ezla/enova_export.py', '.github/workflows/enova-addon.yml']
+  push:
+    branches: ['feature/enova-ezla-addon', main]
+    paths: ['addons/enova/**', 'app/integrations/ezla/enova_export.py', '.github/workflows/enova-addon.yml']
+concurrency:
+  group: enova-addon-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  addon:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: addons/enova
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build exact enova365 2512.11.13 add-on
+        run: dotnet build Biuro.Ezla.UI/Biuro.Ezla.UI.csproj --configuration Release
+      - name: Verify parser and import decisions on synthetic reports
+        run: dotnet test Biuro.Ezla.Tests/Biuro.Ezla.Tests.csproj --configuration Release --logger 'trx;LogFileName=enova-ezla.trx'
+      - name: Package add-on assemblies (no Soneta runtime or private settings)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package
+          Copy-Item bin/Release/Biuro.Ezla.dll package/
+          Copy-Item bin/Release/Biuro.Ezla.UI.dll package/
+          Copy-Item README.md package/
+          Compress-Archive -Path package/* -DestinationPath Biuro.Ezla-enova-2512.11.13.zip
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("$PWD/Biuro.Ezla-enova-2512.11.13.zip")
+          try {
+            $names = @($zip.Entries | ForEach-Object FullName | Sort-Object)
+            $expected = @('Biuro.Ezla.dll', 'Biuro.Ezla.UI.dll', 'README.md') | Sort-Object
+            if (@(Compare-Object $names $expected).Count) { throw 'Unexpected files in add-on package' }
+          } finally { $zip.Dispose() }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Biuro.Ezla-enova-2512.11.13
+          path: addons/enova/Biuro.Ezla-enova-2512.11.13.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: enova-addon-test-results
+          path: addons/enova/Biuro.Ezla.Tests/TestResults/

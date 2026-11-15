@@ -151,11 +151,19 @@ class SaldeoWebSettings(QWidget):
             self.status.setText(str(error))
 
     def choose_browser(self):
+        from app.remote.state import client
+        if client() is not None:
+            self.status.setText('Ścieżkę przeglądarki ustaw lokalnie w panelu workera na serwerze.')
+            return
         path,_ = QFileDialog.getOpenFileName(self,'Wybierz Chrome lub Edge','','Program (*.exe)')
         if path:
             self.executable.setText(path)
 
     def detect_browser(self):
+        from app.remote.state import client
+        if client() is not None:
+            self.status.setText('Przeglądarkę wykryj lokalnie w panelu workera na serwerze.')
+            return
         from app.integrations.saldeo_web.executable import resolve
         try:
             path = resolve({'channel':self.channel.currentData(),'executable_path':self.executable.text()})
@@ -164,6 +172,10 @@ class SaldeoWebSettings(QWidget):
             self.status.setText(str(error))
 
     def login(self):
+        from app.remote.state import client
+        if client() is not None:
+            self.status.setText('Pierwsze logowanie Saldeo i 2FA wykonaj w panelu workera na serwerze.')
+            return
         args = [sys.executable, '--saldeo-login'] if getattr(sys,'frozen',False) else [sys.executable, '-m', 'app.integrations.saldeo_web.login']
         try:
             process = subprocess.Popen(args)

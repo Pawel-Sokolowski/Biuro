@@ -290,17 +290,8 @@ class ManualInvoiceDialog(QDialog):
         term = (text or "").strip()
         if not term:
             return
-        conn = get_conn()
-        try:
-            like = f"%{term}%"
-            companies = conn.execute(
-                """SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa, nip
-                   FROM firmy WHERE nazwa ILIKE %s OR nazwa_skrocona ILIKE %s OR nip ILIKE %s
-                   ORDER BY lower(COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa)), id LIMIT 30""",
-                (like, like, like),
-            ).fetchall()
-        finally:
-            conn.close()
+        from app.remote.screen_data import search_company_buyers
+        companies = search_company_buyers(term)
         for entity in companies:
             item = QListWidgetItem(f"Firma: {entity[1]}" + (f" (NIP: {entity[2]})" if entity[2] else ""))
             item.setData(Qt.ItemDataRole.UserRole, {"typ": "firma", "id": entity[0]})

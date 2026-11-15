@@ -1,4 +1,5 @@
 """Company report scope for checking; absence of imported rows is not an obligation."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -20,10 +21,12 @@ VAT_PERIODS = (('auto', 'Według statusu VAT — miesięcznie'), ('monthly', 'VA
                ('quarterly', 'VAT kwartalny'), ('none', 'Nie dotyczy'))
 
 
+@office_endpoint('app.companies.checking_obligations.load')
 def load(company_id):
     return json.loads(get_setting(f'checking_obligations_{company_id}') or '{}') if company_id else {}
 
 
+@office_endpoint('app.companies.checking_obligations.profile')
 def profile(value, month):
     month_bounds(month)
     if isinstance(value, str):
@@ -34,6 +37,7 @@ def profile(value, month):
     return {**periods[max(eligible)], '_configured': True} if eligible else {'vat_period': 'auto', 'forms': {}}
 
 
+@office_endpoint('app.companies.checking_obligations.save')
 def save(company_id, edits, actor_id):
     from app.security.authorization import can, assigned_company_ids
     if actor_id is not None and (not can(actor_id, 'can_edit_companies') or company_id not in assigned_company_ids(actor_id)):
@@ -64,6 +68,7 @@ def save(company_id, edits, actor_id):
     clear_request_cache()
 
 
+@office_endpoint('app.companies.checking_obligations.report_applies')
 def report_applies(company, form, month=None):
     month = month or company.get('checking_period') or datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
     selected = profile(company.get('checking_obligations'), month)

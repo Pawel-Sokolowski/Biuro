@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/chat/chat_model.py
 from typing import List, Dict, Any, Optional
 from app.db.dao_conn import get_conn
@@ -7,6 +8,7 @@ def _get_conn():
     return get_conn()
 
 
+@office_endpoint('app.chat.chat_model.get_conversations')
 def get_conversations(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Zwraca listę konwersacji. Jeśli podano pracownik_id, można filtrować (jeśli istnieje tabela uczestnicy_chat).
@@ -29,6 +31,7 @@ def get_conversations(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]
     return [{k: row[k] for k in row.keys()} for row in rows]
 
 
+@office_endpoint('app.chat.chat_model.get_messages')
 def get_messages(konwersacja_id: int, limit: int = 100, offset: int = 0, *, actor_id: int) -> List[Dict[str, Any]]:
     """
     Zwraca najnowsze wiadomości w kolejności naturalnej (najstarsze pierwsze).
@@ -66,6 +69,7 @@ def _lock_authorized_conversation(conn, conversation_id: int, actor_id: int) -> 
         raise PermissionError("Nie masz dostępu do tego kanału.")
 
 
+@office_endpoint('app.chat.chat_model.add_message')
 def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
     return add_message_with_attachments(konwersacja_id, pracownik_id, tresc, [])
 
@@ -73,6 +77,7 @@ def add_message(konwersacja_id: int, pracownik_id: int, tresc: str) -> int:
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
+@office_endpoint('app.chat.chat_model.add_message_with_attachments')
 def add_message_with_attachments(konwersacja_id: int, pracownik_id: int, tresc: str,
                                  files: List[Dict[str, Any]]) -> int:
     """Dodaje wiadomość razem z załącznikami ({'nazwa': str, 'dane': bytes})."""
@@ -98,6 +103,7 @@ def add_message_with_attachments(konwersacja_id: int, pracownik_id: int, tresc: 
     return message_id
 
 
+@office_endpoint('app.chat.chat_model.get_attachments')
 def get_attachments(message_ids: List[int], *, actor_id: int) -> Dict[int, List[Dict[str, Any]]]:
     """Metadane załączników (bez zawartości) pogrupowane po id wiadomości."""
     if not message_ids:
@@ -119,6 +125,7 @@ def get_attachments(message_ids: List[int], *, actor_id: int) -> Dict[int, List[
     return result
 
 
+@office_endpoint('app.chat.chat_model.get_attachment_data')
 def get_attachment_data(attachment_id: int, pracownik_id: int) -> Optional[Dict[str, Any]]:
     """Zwraca załącznik tylko uczestnikowi konwersacji."""
     conn = _get_conn()
@@ -135,6 +142,7 @@ def get_attachment_data(attachment_id: int, pracownik_id: int) -> Optional[Dict[
     return {"nazwa": row["nazwa"], "dane": bytes(row["dane"])}
 
 
+@office_endpoint('app.chat.chat_model.edit_message')
 def edit_message(message_id: int, new_text: str) -> None:
     conn = _get_conn()
     cur = conn.cursor()
@@ -147,6 +155,7 @@ def edit_message(message_id: int, new_text: str) -> None:
     conn.close()
 
 
+@office_endpoint('app.chat.chat_model.get_new_messages')
 def get_new_messages(konwersacja_id: int, last_timestamp: str, *, actor_id: int) -> List[Dict[str, Any]]:
     """
     Pobiera wiadomości nowsze niż last_timestamp (format zgodny z zapisem w DB).
@@ -170,6 +179,7 @@ def get_new_messages(konwersacja_id: int, last_timestamp: str, *, actor_id: int)
     return [{k: row[k] for k in row.keys()} for row in rows]
 
 
+@office_endpoint('app.chat.chat_model.get_latest_message_ids')
 def get_latest_message_ids(konwersacja_ids: List[int], *, actor_id: int) -> Dict[int, Dict[str, Any]]:
     """Zwraca {konwersacja_id: {"id": najnowsze id, "pracownik_id": autor}}."""
     ids = [int(i) for i in konwersacja_ids if i is not None]
@@ -190,6 +200,7 @@ def get_latest_message_ids(konwersacja_ids: List[int], *, actor_id: int) -> Dict
     return {r["konwersacja_id"]: {"id": r["id"], "pracownik_id": r["pracownik_id"]} for r in rows}
 
 
+@office_endpoint('app.chat.chat_model.count_messages_after')
 def count_messages_after(konwersacja_id: int, after_id: int, exclude_pracownik_id: Optional[int] = None, *, actor_id: int) -> int:
     conn = _get_conn()
     cur = conn.cursor()
@@ -205,6 +216,7 @@ def count_messages_after(konwersacja_id: int, after_id: int, exclude_pracownik_i
     return int(row["n"] if row else 0)
 
 
+@office_endpoint('app.chat.chat_model.get_unread_counts')
 def get_unread_counts(pracownik_id: int) -> Dict[int, int]:
     """Initialize legacy watermarks and count unread messages in one round trip."""
     with _get_conn() as conn:
@@ -225,6 +237,7 @@ def get_unread_counts(pracownik_id: int) -> Dict[int, int]:
     return {row['kid']:int(row['n']) for row in rows}
 
 
+@office_endpoint('app.chat.chat_model.mark_conversation_read')
 def mark_conversation_read(konwersacja_id: int, pracownik_id: int, through_id: Optional[int] = None) -> None:
     """Acknowledge only rendered IDs; delayed writes never regress the watermark."""
     with _get_conn() as conn:
@@ -238,6 +251,7 @@ def mark_conversation_read(konwersacja_id: int, pracownik_id: int, through_id: O
         """, (through_id, konwersacja_id, konwersacja_id, pracownik_id, through_id, konwersacja_id))
 
 
+@office_endpoint('app.chat.chat_model.create_conversation')
 def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None,
                         participant_ids: Optional[List[int]] = None) -> int:
     """
@@ -264,6 +278,7 @@ def create_conversation(nazwa: str, pracownik_creator_id: Optional[int] = None,
     return last_id
 
 
+@office_endpoint('app.chat.chat_model.get_conversation')
 def get_conversation(konwersacja_id: int) -> Optional[Dict[str, Any]]:
     conn = _get_conn()
     row = conn.execute(
@@ -274,6 +289,7 @@ def get_conversation(konwersacja_id: int) -> Optional[Dict[str, Any]]:
     return {k: row[k] for k in row.keys()} if row else None
 
 
+@office_endpoint('app.chat.chat_model.get_participant_ids')
 def get_participant_ids(konwersacja_id: int) -> List[int]:
     conn = _get_conn()
     rows = conn.execute(
@@ -284,6 +300,7 @@ def get_participant_ids(konwersacja_id: int) -> List[int]:
     return [r["pracownik_id"] for r in rows]
 
 
+@office_endpoint('app.chat.chat_model.is_participant')
 def is_participant(konwersacja_id: int, pracownik_id: Optional[int]) -> bool:
     if not pracownik_id:
         return False
@@ -302,6 +319,7 @@ def is_participant(konwersacja_id: int, pracownik_id: Optional[int]) -> bool:
     return row is not None
 
 
+@office_endpoint('app.chat.chat_model.can_manage_conversation')
 def can_manage_conversation(konwersacja_id: int, pracownik_id: Optional[int]) -> bool:
     """Zarządzać dostępem może właściciel kanału lub administrator."""
     if not pracownik_id:
@@ -315,6 +333,7 @@ def can_manage_conversation(konwersacja_id: int, pracownik_id: Optional[int]) ->
     return conv["pracownik_creator_id"] == pracownik_id or is_administrator(pracownik_id)
 
 
+@office_endpoint('app.chat.chat_model.get_active_employees')
 def get_active_employees() -> List[Dict[str, Any]]:
     conn = _get_conn()
     rows = conn.execute(
@@ -325,6 +344,7 @@ def get_active_employees() -> List[Dict[str, Any]]:
     return [{k: r[k] for k in r.keys()} for r in rows]
 
 
+@office_endpoint('app.chat.chat_model.update_conversation')
 def update_conversation(konwersacja_id: int, nazwa: str, participant_ids: List[int],
                         actor_id: Optional[int] = None) -> None:
     """Zmienia nazwę i listę uczestników. Właściciel kanału zawsze pozostaje uczestnikiem."""
@@ -349,6 +369,7 @@ def update_conversation(konwersacja_id: int, nazwa: str, participant_ids: List[i
     conn.commit()
     conn.close()
 
+@office_endpoint('app.chat.chat_model.delete_conversation')
 def delete_conversation(konwersacja_id: int, actor_id: Optional[int]) -> str:
     """Kanał usuwa właściciel/administrator (z wiadomościami); rozmowę prywatną może wyczyścić uczestnik.
 
@@ -388,6 +409,7 @@ def _direct_name(a: int, b: int) -> str:
     return f"dm:{lo}-{hi}"
 
 
+@office_endpoint('app.chat.chat_model.ensure_direct_conversations')
 def ensure_direct_conversations(pracownik_id: int) -> None:
     """Tworzy brakujące rozmowy indywidualne z każdym innym aktywnym pracownikiem."""
     conn = _get_conn()
@@ -417,6 +439,7 @@ def ensure_direct_conversations(pracownik_id: int) -> None:
     conn.close()
 
 
+@office_endpoint('app.chat.chat_model.get_direct_conversations')
 def get_direct_conversations(pracownik_id: int) -> List[Dict[str, Any]]:
     """Rozmowy indywidualne pracownika wraz z danymi rozmówcy."""
     ensure_direct_conversations(pracownik_id)
@@ -441,6 +464,7 @@ def get_direct_conversations(pracownik_id: int) -> List[Dict[str, Any]]:
     ]
 
 
+@office_endpoint('app.chat.chat_model.get_chat_notification_messages')
 def get_chat_notification_messages(pracownik_id: int, after_id: Optional[int]):
     """New incoming messages in accessible conversations, independent of read state.
 

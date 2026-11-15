@@ -1,4 +1,5 @@
 """Explicit, paced BCC campaigns. An uncertain SMTP result is never retried."""
+from app.remote.boundary import endpoint as office_endpoint
 from dataclasses import dataclass
 from email.utils import getaddresses
 import re
@@ -82,6 +83,7 @@ class BulkMailPlan:
         return tuple(found.values())
 
 
+@office_endpoint('app.email.bulk_mail.send_bulk_batch')
 def send_bulk_batch(plan, recipients):
     try:
         if 'E-mail' not in allowed_tabs(plan.actor_id):

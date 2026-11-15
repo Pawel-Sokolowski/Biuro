@@ -158,15 +158,13 @@ class PlatnikSettings(QWidget):
 
     def check(self):
         try:
-            from app.utils.crypto import encrypt_password
             from app.security.authorization import is_administrator
             config = self.config()
-            if self.password.text():
-                config['password_enc'] = encrypt_password(self.password.text())
+            password = self.password.text()
             def work():
                 if not is_administrator(self.actor_id):
                     raise PermissionError('Utracono uprawnienia administratora.')
-                return check_connection(config)
+                return check_connection(config,password=password)
             self.busy(True)
             self.runner.submit(work,self.checked,self.failed)
         except Exception as error:

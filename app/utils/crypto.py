@@ -8,6 +8,7 @@ Zawiera:
 - funkcje rejestracji i logowania użytkowników
 - pomocnicze funkcje pobierania informacji o pracowniku i ról
 """
+from app.remote.boundary import endpoint as office_endpoint
 
 import psycopg
 import os
@@ -316,6 +317,7 @@ def login_user(email: str, password: str) -> _t.Tuple[bool, _t.Optional[int], st
         conn.close()
 
 
+@office_endpoint('app.utils.crypto.get_employee_info')
 def get_employee_info(pracownik_id: int) -> _t.Optional[_t.Dict[str, _t.Any]]:
     """
     Zwraca podstawowe informacje o pracowniku jako słownik lub None.
@@ -350,6 +352,7 @@ def get_employee_info(pracownik_id: int) -> _t.Optional[_t.Dict[str, _t.Any]]:
         conn.close()
 
 
+@office_endpoint('app.utils.crypto.get_employee_assigned_companies')
 def get_employee_assigned_companies(pracownik_id: int) -> _t.List[_t.Tuple]:
     """
     Zwraca listę firm przypisanych do pracownika.
@@ -382,6 +385,7 @@ def get_employee_assigned_companies(pracownik_id: int) -> _t.List[_t.Tuple]:
         conn.close()
 
 
+@office_endpoint('app.utils.crypto.get_employee_role')
 def get_employee_role(pracownik_id: int) -> _t.List[str]:
     """
     Zwraca listę nazw ról przypisanych do pracownika.
@@ -423,6 +427,7 @@ def get_employee_role(pracownik_id: int) -> _t.List[str]:
         conn.close()
 
 
+@office_endpoint('app.utils.crypto.is_admin')
 def is_admin(pracownik_id: int) -> bool:
     """
     Sprawdza, czy pracownik ma rolę 'admin' (ignoruje wielkość liter).

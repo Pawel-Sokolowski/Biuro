@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from urllib.parse import urlsplit
 from app.db.dao_app_settings import get_setting, set_setting
@@ -9,6 +10,7 @@ DEFAULTS = dict(enabled=False, login_url='https://saldeo.brainshare.pl/', histor
                 submit_selector='', channel='auto', executable_path='', max_pages=20, pause_seconds=2)
 
 
+@office_endpoint('app.integrations.saldeo_web.settings.load')
 def load():
     saved = json.loads(get_setting(KEY) or '{}')
     value = {**DEFAULTS, **saved}
@@ -43,6 +45,7 @@ def validate(config):
         raise ValueError('Uzupełnij adres historii i selektory widoku: zalogowany i cały wpis.')
 
 
+@office_endpoint('app.integrations.saldeo_web.settings.save')
 def save(config, actor_id, password=''):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):

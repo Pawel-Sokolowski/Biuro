@@ -6,6 +6,7 @@ którego używa reset hasła.
 """
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Any, Dict, Optional
 
@@ -15,11 +16,13 @@ from app.db.dao_conn import get_conn
 SYSTEM_ACCOUNT_KEY = "password_reset_account_id"
 
 
+@office_endpoint('app.utils.system_mailbox.get_system_account_id')
 def get_system_account_id() -> Optional[int]:
     value = (get_setting(SYSTEM_ACCOUNT_KEY) or "").strip()
     return int(value) if value.isdigit() else None
 
 
+@office_endpoint('app.utils.system_mailbox.get_system_account')
 def get_system_account() -> Optional[Dict[str, Any]]:
     account_id = get_system_account_id()
     if account_id is None:
@@ -32,6 +35,7 @@ def get_system_account() -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+@office_endpoint('app.utils.system_mailbox.save_system_account')
 def save_system_account(
     email: str,
     password: str,

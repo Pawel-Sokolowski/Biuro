@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -8,6 +9,7 @@ from app.db.dao_conn import get_conn
 CIT_LEGAL_FORMS = ("z o.o.", "akcyjna", "komandytowa", "fundacja", "stowarzyszenie")
 
 
+@office_endpoint('app.db.dao_year_end.inferred_main_declaration')
 def inferred_main_declaration(company: dict) -> str:
     form = (company.get("forma_opodatkowania") or "").strip().lower()
     legal = (company.get("forma_dzialalnosci") or "").strip().lower()
@@ -28,6 +30,7 @@ def inferred_main_declaration(company: dict) -> str:
     return ""
 
 
+@office_endpoint('app.db.dao_year_end.company_declarations')
 def company_declarations(company: dict) -> List[str]:
     """Deklaracje roczne firmy: podstawowa (pole firmy lub z formy opodatkowania) + dodatkowe."""
     if company.get("roczne_deklaracje") is not None:
@@ -103,11 +106,13 @@ def _ensure_year_snapshots(conn, year: int, firma_id: Optional[int] = None) -> N
     conn.execute("INSERT INTO year_end_snapshot_years(rok) VALUES (%s) ON CONFLICT DO NOTHING", (year,))
 
 
+@office_endpoint('app.db.dao_year_end.ensure_company_year_snapshot')
 def ensure_company_year_snapshot(firma_id: int, year: int) -> None:
     with get_conn() as conn:
         _ensure_year_snapshots(conn, year, firma_id)
 
 
+@office_endpoint('app.db.dao_year_end.list_year_end')
 def list_year_end(year: int) -> List[Dict]:
     """Use durable annual snapshots without per-company queries on every read."""
     with get_conn() as conn:
@@ -138,6 +143,7 @@ def list_year_end(year: int) -> List[Dict]:
     return result
 
 
+@office_endpoint('app.db.dao_year_end.set_company_declarations')
 def set_company_declarations(firma_id: int, main: str, extra: str, *, year: int, actor_id: int) -> None:
     ensure_company_year_snapshot(firma_id, year)
     with get_conn() as conn:
@@ -155,6 +161,7 @@ def set_company_declarations(firma_id: int, main: str, extra: str, *, year: int,
         conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('year_end_snapshots', %s, 'edycja', %s, %s)", (firma_id, actor_id, json.dumps({"year": year, "main": main, "extra": extra})))
 
 
+@office_endpoint('app.db.dao_year_end.save_declaration')
 def save_declaration(actor_id: int, firma_id: int, year: int, code: str, *,
                      filed: bool, filed_date: Optional[str] = None,
                      amount: Optional[float] = None, upo: str = "", notes: str = "", owner_key: int = 0) -> None:
@@ -179,6 +186,7 @@ def save_declaration(actor_id: int, firma_id: int, year: int, code: str, *,
         conn.close()
 
 
+@office_endpoint('app.db.dao_year_end.get_company_year_declarations')
 def get_company_year_declarations(firma_id: int, year: int) -> list[str]:
     """An unconfigured year starts from the company's defaults without writing a snapshot."""
     with get_conn() as conn:
@@ -190,6 +198,7 @@ def get_company_year_declarations(firma_id: int, year: int) -> list[str]:
         return company_declarations(dict(row)) if row else []
 
 
+@office_endpoint('app.db.dao_year_end.save_company_year_declarations')
 def save_company_year_declarations(firma_id: int, selections: dict[int, list[str]], actor_id: int) -> None:
     from app.security.authorization import can
     if actor_id is not None and not can(actor_id, "can_edit_companies"):
@@ -218,12 +227,14 @@ def save_company_year_declarations(firma_id: int, selections: dict[int, list[str
             conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('year_end_snapshots', %s, 'edycja', %s, %s)", (firma_id, actor_id, json.dumps({"year": year, "declarations": codes})))
 
 
+@office_endpoint('app.db.dao_year_end.get_owner_year_declarations')
 def get_owner_year_declarations(firma_id, year, owner_id):
     with get_conn() as conn:
         row = conn.execute("SELECT declarations_json FROM owner_year_declarations WHERE firma_id=%s AND rok=%s AND owner_id=%s", (firma_id, year, owner_id)).fetchone()
         return json.loads(row[0]) if row else []
 
 
+@office_endpoint('app.db.dao_year_end.save_owner_year_declarations')
 def save_owner_year_declarations(firma_id, selections, actor_id):
     from app.security.authorization import can
     if actor_id is not None and not can(actor_id, "can_edit_companies"):

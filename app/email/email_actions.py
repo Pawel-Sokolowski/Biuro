@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import email
 import base64
@@ -132,6 +133,7 @@ def prepare_message(
     return msg
 
 
+@office_endpoint('app.email.email_actions.choose_copy_folder')
 def choose_copy_folder(konto_id: int, from_addr: str, to_addrs: Iterable[str], subject: str) -> Optional[str]:
     """Folder z reguły filtra pasującej do wychodzącej wiadomości (np. folder klienta)."""
     from app.email.email_rules import _active_rules, find_rule
@@ -141,6 +143,7 @@ def choose_copy_folder(konto_id: int, from_addr: str, to_addrs: Iterable[str], s
     return rule["target"] if rule else None
 
 
+@office_endpoint('app.email.email_actions.store_sent_copy')
 def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> bool:
     """Zapisuje kopię wysłanej wiadomości na serwerze i w bazie; błąd nie psuje wysyłki."""
     import logging
@@ -166,6 +169,7 @@ def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> 
         return False
 
 
+@office_endpoint('app.email.email_actions.send_email_smtp')
 def send_email_smtp(
     konto_id: int,
     to_addrs: Iterable[str],
@@ -260,6 +264,7 @@ def send_email_smtp(
         )
 
 
+@office_endpoint('app.email.email_actions.send_batch_emails')
 def send_batch_emails(
     konto_id: int,
     messages: List[Dict[str, Any]],
@@ -384,18 +389,22 @@ def download_all_attachments(
     return saved
 
 
+@office_endpoint('app.email.email_actions.add_filter')
 def add_filter(konto_id: int, od: str, folder: str) -> None:
     add_email_filter(konto_id, None, od, None, None, None, None, folder)
 
 
+@office_endpoint('app.email.email_actions.mark_read')
 def mark_read(konto_id: int, uid: str) -> None:
     update_message_read_flag(konto_id, uid, True)
 
 
+@office_endpoint('app.email.email_actions.mark_unread')
 def mark_unread(konto_id: int, uid: str) -> None:
     update_message_read_flag(konto_id, uid, False)
 
 
+@office_endpoint('app.email.email_actions.delete_email')
 def delete_email(konto_id: int, uid: str) -> None:
     mark_deleted(konto_id, uid)
 

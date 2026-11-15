@@ -2,6 +2,7 @@
 
 Zostają: pracownicy, role, konta e-mail i wiadomości, ustawienia, czat, zadania, kalendarz, urzędy skarbowe, logi.
 """
+from app.remote.boundary import endpoint as office_endpoint
 from typing import Dict
 
 from app.db.dao_conn import get_conn
@@ -52,6 +53,7 @@ def _existing_tables(conn):
     return [t for t in TABLES if t in existing]
 
 
+@office_endpoint('app.db.reset_data.count_company_data')
 def count_company_data() -> Dict[str, int]:
     conn = get_conn()
     try:
@@ -60,6 +62,7 @@ def count_company_data() -> Dict[str, int]:
         conn.close()
 
 
+@office_endpoint('app.db.reset_data.delete_company_data')
 def delete_company_data() -> None:
     conn = get_conn()
     try:

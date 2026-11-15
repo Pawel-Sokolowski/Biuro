@@ -177,16 +177,8 @@ class KsefUnmatchedDialog(QDialog):
         self.table.setColumnWidth(4, 300)
         self.table.setColumnWidth(5, 100)
         layout.addWidget(self.table)
-        conn = get_conn()
-        try:
-            companies = [dict(row) for row in conn.execute(
-                "SELECT id, nazwa, nazwa_skrocona, nip FROM firmy ORDER BY COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)"
-            ).fetchall()]
-            contractors = [dict(row) for row in conn.execute(
-                "SELECT id, nazwa, nip FROM kontrahenci ORDER BY nazwa"
-            ).fetchall()]
-        finally:
-            conn.close()
+        from app.remote.screen_data import invoice_entities
+        companies, contractors = invoice_entities()
         if not can_manage_invoices(actor_id):
             companies = [company for company in companies if can_access_invoice(actor_id, company["id"])]
             contractors = []
@@ -351,20 +343,8 @@ class FakturyPage(QWidget):
         self.firma_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.firma_combo.setMinimumWidth(260)
         self.firma_combo.addItem("Wszystkie firmy", None)
-        conn = get_conn()
-        try:
-            rows = conn.execute(
-                """
-                SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa)
-                FROM firmy
-                ORDER BY LOWER(COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa)), id
-                """
-            ).fetchall()
-            contractors = conn.execute(
-                "SELECT id, nazwa FROM kontrahenci ORDER BY LOWER(nazwa), id"
-            ).fetchall()
-        finally:
-            conn.close()
+        from app.remote.screen_data import invoice_filter_entities
+        rows, contractors = invoice_filter_entities()
         for row in rows:
             self.firma_combo.addItem(row[1], row[0])
         for row in contractors:
@@ -738,11 +718,8 @@ class FakturyPage(QWidget):
         firma_id = self._selected_company_id()
         buyer_nip, company_label = None, "wszystkich firm"
         if firma_id is not None:
-            conn = get_conn()
-            try:
-                row = conn.execute("SELECT nip, nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
-            finally:
-                conn.close()
+            from app.db.dao_companies import get_company
+            row = get_company(firma_id)
             nip = "".join(ch for ch in str((row or {}).get("nip") or "") if ch.isdigit()) if row else ""
             if len(nip) != 10:
                 QMessageBox.warning(self, "KSeF", "Wybrana firma nie ma poprawnego NIP-u.")
@@ -780,11 +757,8 @@ class FakturyPage(QWidget):
             if ok:
                 self._start_ksef_download(month, invoice_number=number.strip() or None, force=True)
             return
-        conn = get_conn()
-        try:
-            row = conn.execute("SELECT nip, nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
-        finally:
-            conn.close()
+        from app.db.dao_companies import get_company
+        row = get_company(firma_id)
         nip = "".join(ch for ch in str((row or {}).get("nip") or "") if ch.isdigit()) if row else ""
         if len(nip) != 10:
             QMessageBox.warning(self, "KSeF", "Wybrana firma nie ma poprawnego NIP-u.")
@@ -1750,12 +1724,9 @@ class FakturyPage(QWidget):
 
     @staticmethod
     def _company_name(firma_id):
-        conn = get_conn()
-        try:
-            row = conn.execute("SELECT nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
-            return row[0] if row else ""
-        finally:
-            conn.close()
+        from app.db.dao_companies import get_company
+        company = get_company(firma_id)
+        return company['nazwa'] if company else ''
 
     # ---------------- faktury wystawione ----------------
     def _view_selected_issued(self):

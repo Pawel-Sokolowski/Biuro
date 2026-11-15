@@ -1,6 +1,7 @@
 # app/db/dao_conn.py
 """Połączenie z PostgreSQL (psycopg 3)."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import threading
 import atexit
@@ -127,6 +128,7 @@ def get_coordination_conn() -> PooledConnection:
     return _get_connection(_coordination_pool, 4)
 
 
+@office_endpoint('app.db.dao_conn.database_context')
 def database_context() -> str:
     """Actual PostgreSQL endpoint/database/schema, without credentials."""
     with get_conn() as conn:
@@ -141,6 +143,9 @@ def database_context() -> str:
 
 
 def _get_connection(mapping, max_size) -> PooledConnection:
+    from app.remote.state import client
+    if client() is not None:
+        raise PermissionError('Komputer pracownika korzysta wyłącznie z usługi biura, bez bezpośredniego dostępu do bazy.')
     schema = get_schema()
     dsn = get_dsn()
     key = (dsn, schema)

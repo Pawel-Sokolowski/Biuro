@@ -1,0 +1,5 @@
+bin/
+obj/
+*.business.cs
+*.user
+*.credentials.json

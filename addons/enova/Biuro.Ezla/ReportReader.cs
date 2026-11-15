@@ -18,6 +18,7 @@ public sealed class EzlaDocument
     public required DateTime Start { get; init; }
     public required DateTime End { get; init; }
     public required DateTime Issued { get; init; }
+    public required DateTime Generated { get; init; }
     public required string Codes { get; init; }
     public DateTime? HospitalStart { get; init; }
     public DateTime? HospitalEnd { get; init; }
@@ -39,6 +40,7 @@ public static class ReportReader
         var root = XDocument.Load(reader).Root;
         if (root?.Name != "raportEzla") throw Invalid();
         var header = Node(root, "daneRaportu");
+        var generated = Date(Text(header, "dataWygenerowania"));
         if (Text(Node(header, "platnik"), "nip").Replace("-", "").Replace(" ", "") != report.PayerNip) throw Invalid();
         var rows = root.Elements("dokumentyEzla").ToArray();
         if (!int.TryParse(Text(header, "liczbaDokumentowEzla"), out int count) || count != rows.Length || count > 20000) throw Invalid();
@@ -70,7 +72,8 @@ public static class ReportReader
             string cancelled = Text(doc, "czyAnulowane", false).ToLowerInvariant();
             if (cancelled is not ("" or "nie" or "false" or "0")) review.Add("Oznaczenie anulowania lub nieznana wartość.".Translate());
             string care = Text(doc, "kodPokrewienstwa", false);
-            if (care is not ("" or "0")) review.Add("Zwolnienie na opiekę wymaga odrębnej definicji nieobecności.".Translate());
+            if (care is not ("" or "0") || Text(doc, "dataUrodzeniaOsoby", false).Length > 0)
+                review.Add("Zwolnienie na opiekę wymaga odrębnej definicji nieobecności.".Translate());
             string insurance = Text(doc, "miejsceUbezpieczenia", false);
             if (insurance is not ("" or "1" or "ZUS")) review.Add("Sprawdź miejsce ubezpieczenia.".Translate());
             DateTime start = DateTime.MinValue, end = DateTime.MinValue, issued = DateTime.MinValue;
@@ -104,9 +107,9 @@ public static class ReportReader
             }
             string identity = Hash(string.Join("|", kind, id, series, number));
             string fingerprint = Hash(string.Join("|", identity, status, start.ToString("O"), end.ToString("O"), issued.ToString("O"), codes, hospitalStart?.ToString("O"), hospitalEnd?.ToString("O"), care, cancelled));
-            string source = new XElement("biuroEzla", new XAttribute("id", identity), new XAttribute("fingerprint", fingerprint), new XElement(row)).ToString(SaveOptions.DisableFormatting);
+            string source = new XElement(row).ToString(SaveOptions.DisableFormatting);
             result.Add(new EzlaDocument { Identity = identity, Identifier = id, Number = series + number,
-                Status = status, Start = start, End = end, Issued = issued, Codes = codes,
+                Status = status, Start = start, End = end, Issued = issued, Generated = generated, Codes = codes,
                 HospitalStart = hospitalStart, HospitalEnd = hospitalEnd, Source = source,
                 Fingerprint = fingerprint, Review = string.Join(" ", review.Distinct()) });
         }
@@ -123,7 +126,7 @@ public static class ReportReader
             if (blocked != null) { result.Add(blocked); continue; }
             if (group.Select(d => d.Fingerprint).Distinct().Count() != 1)
                 throw new InvalidDataException("Sprzeczne wersje e-ZLA. Sprawdź raporty w Biuro przed importem.".Translate());
-            result.Add(group.First());
+            result.Add(group.OrderByDescending(d => d.Generated).First());
         }
         return result;
     }

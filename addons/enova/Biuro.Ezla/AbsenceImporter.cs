@@ -39,7 +39,7 @@ public static class AbsenceImporter
                     n.Okres == new FromTo(ToDate(s.Start), ToDate(s.End)) && n.Definicja == definition &&
                     n.Zwolnienie.Numer == doc.Number && n.Zwolnienie.KodChoroby == doc.Codes &&
                     n.Zwolnienie.ZwolnienieWystawione == ToDate(doc.Issued) &&
-                    n.Zwolnienie.LeczenieSzpitalne == s.Hospital && n.Zwolnienie.Przyczyna == Cause(doc)));
+                    n.Zwolnienie.LeczenieSzpitalne == s.Hospital && n.Zwolnienie.Przyczyna == CauseForCodes(doc.Codes)));
                 lines.Add(new(employee.Kod, doc.Number, identical ? "Już zaimportowano.".Translate()
                     : "Konflikt z istniejącą nieobecnością — sprawdź ręcznie.".Translate(), 0, !identical));
                 continue;
@@ -58,14 +58,17 @@ public static class AbsenceImporter
                     absence.Definicja = definition;
                     absence.Okres = new FromTo(ToDate(segment.Start), ToDate(segment.End));
                     absence.Zwolnienie.Numer = doc.Number;
+                    absence.Zwolnienie.Przyczyna = CauseForCodes(doc.Codes);
+                    // The native setter also sets continuation for code A and
+                    // applies the B/C/D/E cause rules in the installed version.
                     absence.Zwolnienie.KodChoroby = doc.Codes;
-                    absence.Zwolnienie.Przyczyna = Cause(doc);
                     absence.Zwolnienie.LeczenieSzpitalne = segment.Hospital;
                     absence.Zwolnienie.ZwolnienieWystawione = ToDate(doc.Issued);
-                    // Delivery to the employer is not the moment this add-on happens to run.
-                    // Leave ZwolnienieDostarczone at the platform default for explicit review.
+                    // Match Soneta 2512's electronic PUE import convention:
+                    // delivery = issue date; ZLA.Data = report generation date.
+                    absence.Zwolnienie.ZwolnienieDostarczone = ToDate(doc.Issued);
                     absence.ZLA.Wersja = WersjaZLA.PUEService;
-                    absence.ZLA.Data = ToDate(doc.Issued);
+                    absence.ZLA.Data = ToDate(doc.Generated);
                     absence.ZLA.Zrodlo = doc.Source;
                 }
             lines.Add(new(employee.Kod, doc.Number, preview ? "Gotowe do importu.".Translate() : "Dodano nieobecność.".Translate(), preview ? 0 : segments.Length));
@@ -91,8 +94,9 @@ public static class AbsenceImporter
         return new Guid(hash.AsSpan(0, 16), bigEndian: true);
     }
     private static Date ToDate(DateTime value) => new(value.Year, value.Month, value.Day);
-    private static PrzyczynaZwolnienia Cause(EzlaDocument doc) => doc.Codes.Contains('B')
-        ? PrzyczynaZwolnienia.NiezdolnośćDoPracyWOkresieCiąży : doc.Codes.Contains('C')
-        ? PrzyczynaZwolnienia.NadużycieAlkoholu : doc.Codes.Contains('D')
-        ? PrzyczynaZwolnienia.ZwolnienieSpowodowaneGruźlicą : PrzyczynaZwolnienia.ZwolnienieLekarskie;
+    public static PrzyczynaZwolnienia CauseForCodes(string codes) => codes.Contains('B')
+        ? PrzyczynaZwolnienia.NiezdolnośćDoPracyWOkresieCiąży : codes.Contains('C')
+        ? PrzyczynaZwolnienia.NadużycieAlkoholu : codes.Contains('D')
+        ? PrzyczynaZwolnienia.ZwolnienieSpowodowaneGruźlicą : codes.Contains('E')
+        ? PrzyczynaZwolnienia.ChorobaZakaźna : PrzyczynaZwolnienia.ZwolnienieLekarskie;
 }

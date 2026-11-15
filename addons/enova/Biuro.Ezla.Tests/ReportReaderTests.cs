@@ -1,6 +1,7 @@
 using System.Text;
 using System.Xml;
 using NUnit.Framework;
+using Soneta.Kalend;
 
 namespace Biuro.Ezla.Tests;
 
@@ -10,7 +11,7 @@ public sealed class ReportReaderTests
     private static SourceReport Report(string status = "Wystawione", string extra = "", string prefix = "")
     {
         string xml = prefix + $$"""
-        <raportEzla><daneRaportu><platnik><nip>1112223344</nip></platnik><liczbaDokumentowEzla>1</liczbaDokumentowEzla></daneRaportu>
+        <raportEzla><daneRaportu><platnik><nip>1112223344</nip></platnik><dataWygenerowania>2025-12-11</dataWygenerowania><liczbaDokumentowEzla>1</liczbaDokumentowEzla></daneRaportu>
         <dokumentyEzla><daneUbezpieczonego><identyfikator><typ>PESEL</typ><wartosc>00000000000</wartosc></identyfikator></daneUbezpieczonego>
         <daneDokumentu><seria>ZZ</seria><numer>123456</numer><status>{{status}}</status><czyAnulowane>Nie</czyAnulowane>
         <dataWystawienia>2025-12-01</dataWystawienia><okresZwolnienia><dataOd>2025-12-01</dataOd><dataDo>2025-12-10</dataDo></okresZwolnienia>
@@ -26,6 +27,7 @@ public sealed class ReportReaderTests
         Assert.That(doc.Review, Is.Empty);
         Assert.That(doc.Number, Is.EqualTo("ZZ123456"));
         Assert.That(doc.Source, Does.Contain("dokumentyEzla").And.Not.Contain("daneRaportu"));
+        Assert.That(System.Xml.Linq.XElement.Parse(doc.Source).Name.LocalName, Is.EqualTo("dokumentyEzla"));
         Assert.That(doc.ToString(), Is.EqualTo("e-ZLA"));
         Assert.That(ReportReader.Consolidate(new[] { doc, doc }).Count, Is.EqualTo(1));
     }
@@ -74,6 +76,7 @@ public sealed class ReportReaderTests
     public void CareAndOutOfRangeHospitalDatesRequireReview()
     {
         Assert.That(ReportReader.Read(Report(extra: "<kodPokrewienstwa>1</kodPokrewienstwa>")).Single().Review, Is.Not.Empty);
+        Assert.That(ReportReader.Read(Report(extra: "<dataUrodzeniaOsoby>2020-01-01</dataUrodzeniaOsoby>")).Single().Review, Is.Not.Empty);
         Assert.That(ReportReader.Read(Report(extra: "<okresWSzpitalu><dataOd>2025-11-30</dataOd><dataDo>2025-12-02</dataDo></okresWSzpitalu>")).Single().Review, Is.Not.Empty);
     }
 
@@ -125,6 +128,26 @@ public sealed class ReportReaderTests
     {
         var document = ReportReader.Read(Report(extra: "<wypadekPrzyPracy>Tak</wypadekPrzyPracy>")).Single();
         Assert.That(document.Review, Is.Not.Empty);
+    }
+
+    [TestCase("", PrzyczynaZwolnienia.ZwolnienieLekarskie)]
+    [TestCase("A", PrzyczynaZwolnienia.ZwolnienieLekarskie)]
+    [TestCase("B", PrzyczynaZwolnienia.NiezdolnośćDoPracyWOkresieCiąży)]
+    [TestCase("C", PrzyczynaZwolnienia.NadużycieAlkoholu)]
+    [TestCase("D", PrzyczynaZwolnienia.ZwolnienieSpowodowaneGruźlicą)]
+    [TestCase("E", PrzyczynaZwolnienia.ChorobaZakaźna)]
+    public void LetterCodesKeepTheSonetaPuePayrollCause(string codes, PrzyczynaZwolnienia expected)
+        => Assert.That(AbsenceImporter.CauseForCodes(codes), Is.EqualTo(expected));
+
+    [Test]
+    public void ReportGenerationDateIsSeparateFromIssueDateAndLatestDuplicateWins()
+    {
+        var report = Report();
+        string xml = Encoding.UTF8.GetString(Convert.FromBase64String(report.Xml)).Replace("2025-12-11", "2025-12-12");
+        var newer = report with { Xml = Convert.ToBase64String(Encoding.UTF8.GetBytes(xml)) };
+        var document = ReportReader.Consolidate(ReportReader.Read(report).Concat(ReportReader.Read(newer))).Single();
+        Assert.That(document.Issued, Is.EqualTo(new DateTime(2025,12,1)));
+        Assert.That(document.Generated, Is.EqualTo(new DateTime(2025,12,12)));
     }
 
     [TestCase("http://biuro.example")]

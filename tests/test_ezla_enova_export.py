@@ -53,6 +53,27 @@ class EnovaEzlaExportTests(DbTestCase):
         with self.assertRaises(ValueError):
             export_reports(1, {'company_nip':'1112223344','month':'2018-04'})
 
+    def test_ciphertext_content_must_match_the_persistent_report_hash(self):
+        company = self.make_company(nip='1112223344')
+        key = self.save_report(company, report(certificate()))
+        changed = report(certificate(number='654321'))
+        set_setting(key, json.dumps({'months':['2018-04'], 'needs_review':False,
+                    'xml_enc':encrypt_password(base64.b64encode(changed).decode('ascii'))}))
+        with self.assertRaises(ValueError):
+            export_reports(1, {'company_nip':'1112223344','month':'2018-04'})
+
+    def test_size_bounded_pages_do_not_skip_or_repeat_reports(self):
+        company = self.make_company(nip='1112223344')
+        keys = {self.save_report(company, report(certificate(number=number))) for number in ('123456','654321')}
+        payload = {'company_nip':'1112223344','month':'2018-04'}
+        with patch('app.integrations.ezla.enova_export.PAGE_BYTES', 1):
+            first = export_reports(1,payload)
+            second = export_reports(1,{**payload, 'after':first['next']})
+        self.assertTrue(first['next'])
+        self.assertEqual(second['next'], '')
+        self.assertEqual({r['id'] for page in (first,second) for r in page['reports']}, keys)
+        self.assertEqual(len(first['reports'])+len(second['reports']), 2)
+
     def test_civil_partners_reports_share_the_single_company_database(self):
         from app.db.dao_companies import save_partner
         company = self.make_company('Spółka cywilna', nip='1112223344', forma_dzialalnosci='Spółka cywilna')

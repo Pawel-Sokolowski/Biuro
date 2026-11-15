@@ -7,6 +7,7 @@ import re
 from app.companies.identities import payer_nips
 from app.db.dao_companies import get_partners
 from app.db.dao_conn import get_conn
+from app.db.dao_app_settings import get_setting
 from app.integrations.enova.accounting import require_access
 from app.integrations.enova.document_counts import normalize_nip
 from app.integrations.ezla.report import parse_report
@@ -49,13 +50,18 @@ def export_reports(actor_id, value):
         # Materialize the exact company's subset before casting mixed settings to JSON.
         rows = conn.execute('''WITH reports AS MATERIALIZED (
             SELECT klucz,wartosc FROM app_settings WHERE starts_with(klucz,%s)
-        ) SELECT klucz,wartosc FROM reports WHERE klucz>%s AND
+        ) SELECT klucz FROM reports WHERE klucz>%s AND
             ((wartosc::jsonb->'months') ? %s OR wartosc::jsonb->>'needs_review'='true')
             ORDER BY klucz LIMIT 51''', (prefix, after, month)).fetchall()
     allowed = payer_nips(company, get_partners(company['id']))
     reports, size, cursor = [], 0, ''
     for row in rows[:50]:
-        metadata = json.loads(row['wartosc'])
+        # Select small keys first. Fetching 51 encrypted XML blobs at once would
+        # defeat the page memory limit before the response had even been built.
+        stored = get_setting(row['klucz'])
+        if stored is None:
+            raise ValueError('Raport usunięto podczas pobierania. Ponów import.')
+        metadata = json.loads(stored)
         raw = base64.b64decode(decrypt_password(metadata['xml_enc']), validate=True)
         parsed = parse_report(raw)
         checksum = hashlib.sha256(raw).hexdigest()

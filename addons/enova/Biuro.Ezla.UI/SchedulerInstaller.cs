@@ -38,7 +38,8 @@ public static class SchedulerInstaller
             // Select the named custom method, rather than the platform's default
             // workflow-start action (this task does not require a WF process).
             schedule.DefaultAutoAction = false;
-            schedule.SetAutoActionName("BiuroEzlaImport");
+            // In 2512 the string setter is internal; use its public typed list.
+            schedule.AutoActionName = schedule.GetListAutoActionName().Single(a => a.MethodName == "BiuroEzlaImport");
             schedule.StartDate = Date.Today.AddDays(1);
             schedule.CycleDefinition.Typ = DefinicjaCykluTyp.Dzienny;
             schedule.CycleDefinition.Czas = time;

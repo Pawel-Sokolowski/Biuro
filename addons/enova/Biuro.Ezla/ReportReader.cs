@@ -51,7 +51,7 @@ public static class ReportReader
         {
             var person = Node(row, "daneUbezpieczonego");
             var identifier = Node(person, "identyfikator");
-            string kind = Text(identifier, "typ"), id = Text(identifier, "wartosc");
+            string kind = Text(identifier, "typ").ToUpperInvariant(), id = Text(identifier, "wartosc");
             var doc = Node(row, "daneDokumentu");
             string series = Text(doc, "seria"), number = Text(doc, "numer");
             var review = new List<string>();
@@ -63,6 +63,7 @@ public static class ReportReader
                 review.Add("Dodatkowe nieobsługiwane dane dokumentu — sprawdź przed naliczeniem.".Translate());
             bool correction = row.Name == "dokumentyEzlaK";
             string status = correction ? "Skrócenie e-ZLA/K" : Text(doc, "status");
+            if (status.Equals("Wystawione", StringComparison.OrdinalIgnoreCase)) status = "Wystawione";
             if (correction || status != "Wystawione") review.Add("Korekta, anulowanie lub status wymagający obsługi w enova.".Translate());
             if (kind != "PESEL" || id.Length != 11 || id.Any(c => c is < '0' or > '9')) review.Add("Brak jednoznacznego PESEL.".Translate());
             if (series.Length == 0 || number.Length == 0 || (series + number).Length > 9) review.Add("Nieobsługiwana seria lub długość numeru ZLA.".Translate());
@@ -82,9 +83,9 @@ public static class ReportReader
             string codes = "";
             foreach (char code in "ABCDE")
             {
-                string flag = Text(doc, "kodChoroby" + code, false);
-                if (flag is "" or "0" or "false" or "Nie") continue;
-                if (flag == code.ToString() || flag is "1" or "true" or "Tak") codes += code;
+                string flag = Text(doc, "kodChoroby" + code, false).ToUpperInvariant();
+                if (flag is "" or "0" or "FALSE" or "NIE") continue;
+                if (flag == code.ToString() || flag is "1" or "TRUE" or "TAK") codes += code;
                 else review.Add("Nieznany kod literowy choroby.".Translate());
             }
             // Conflicting causes must be reviewed, never guessed from enum precedence.

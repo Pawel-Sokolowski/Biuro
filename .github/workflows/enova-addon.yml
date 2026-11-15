@@ -30,10 +30,16 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package
-          Copy-Item Biuro.Ezla/bin/Release/Biuro.Ezla.dll package/
-          Copy-Item Biuro.Ezla.UI/bin/Release/Biuro.Ezla.UI.dll package/
+          Copy-Item bin/Release/Biuro.Ezla.dll package/
+          Copy-Item bin/Release/Biuro.Ezla.UI.dll package/
           Copy-Item README.md package/
           Compress-Archive -Path package/* -DestinationPath Biuro.Ezla-enova-2512.11.13.zip
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("$PWD/Biuro.Ezla-enova-2512.11.13.zip")
+          try {
+            $names = @($zip.Entries | ForEach-Object FullName | Sort-Object)
+            $expected = @('Biuro.Ezla.dll', 'Biuro.Ezla.UI.dll', 'README.md') | Sort-Object
+            if (@(Compare-Object $names $expected).Count) { throw 'Unexpected files in add-on package' }
+          } finally { $zip.Dispose() }
       - uses: actions/upload-artifact@v4
         with:
           name: Biuro.Ezla-enova-2512.11.13

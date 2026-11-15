@@ -39,12 +39,15 @@ public static class EzlaJob
         if (!acquired) throw new InvalidOperationException("Trwa już import e-ZLA tej firmy.".Translate());
         try
         {
+            var log = new Log("Biuro e-ZLA", false);
+            log.WriteLine("Pobieranie raportów e-ZLA z serwera Biuro.".Translate());
             using var connection = new BiuroConnection(address);
             connection.Login(email, password);
             var months = new List<string>();
             for (DateTime month = new(from.Year, from.Month, 1); month <= to; month = month.AddMonths(1))
                 months.Add(month.ToString("yyyy-MM", CultureInfo.InvariantCulture));
             var reports = connection.Download(nip, months);
+            log.WriteLine("Pobrano raporty: {0}. Sprawdzanie dokumentów i pracowników.".TranslateFormat(reports.Count));
             // Read all pages/statuses before any database modification.
             var documents = ReportReader.SelectMonths(reports.SelectMany(ReportReader.Read), from, to);
             if (preview) return AbsenceImporter.Import(session, documents, definition, true);
@@ -55,7 +58,6 @@ public static class EzlaJob
                 transaction.Commit();
             }
             session.Save(); // Save conflicts propagate: never report success after a failed write.
-            var log = new Log("Biuro e-ZLA", true);
             log.WriteLine("Import e-ZLA: raporty {0}, dokumenty {1}, dodane odcinki nieobecności {2}, wymagają sprawdzenia {3}.".TranslateFormat(
                 reports.Count, lines.Count, lines.Sum(l => l.Added), lines.Count(l => l.NeedsReview)));
             return lines;

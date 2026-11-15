@@ -13,6 +13,10 @@ class FileStore:
         self.root = Path(directory).resolve()
         self.root.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.items = {}
+        # Retire orphaned upload files after a server restart as well.
+        for path in self.root.iterdir():
+            if path.is_file() and not path.is_symlink() and time.time()-path.stat().st_mtime>12*3600:
+                path.unlink(missing_ok=True)
 
     def put(self, owner, name, data=None):
         if data is not None and len(data)>MAX_FILE:
@@ -41,6 +45,7 @@ class FileStore:
         if not isinstance(value,dict) or set(value)-{'file','name'} or not isinstance(value.get('file'),str):
             raise ValueError('Wybierz plik na swoim komputerze.')
         with _lock:
+            self.expire()
             item = self.items.get(value['file'])
             if not item or item[0]!=owner:
                 raise PermissionError('Brak dostępu do pliku.')

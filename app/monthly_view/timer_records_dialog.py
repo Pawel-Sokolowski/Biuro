@@ -128,7 +128,8 @@ class EditTimerRecordDialog(QDialog):
         self._range_changed()
 
     def _range_seconds(self):
-        return int(self.started_at.dateTime().secsTo(self.ended_at.dateTime())) - self.pause_seconds
+        start,end = self.started_at.dateTime().toPyDateTime(),self.ended_at.dateTime().toPyDateTime()
+        return int((end-start).total_seconds()) - self.pause_seconds
 
     def _range_changed(self):
         seconds = self._range_seconds()

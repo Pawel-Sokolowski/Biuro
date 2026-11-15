@@ -240,7 +240,7 @@ def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
         attachments.append(
             {
                 "index": index,
-                "filename": Path(filename).name if filename else "attachment",
+                "filename": attachment_name(filename, payload),
                 "content_type": part.get_content_type(),
                 "size": len(payload) if payload else None,
                 "content_id": (part.get("Content-ID") or "").strip("<> \r\n"),
@@ -312,8 +312,78 @@ def is_risky_attachment(filename: Optional[str]) -> bool:
     return any(p.strip() in RISKY_EXTENSIONS for p in parts)
 
 
+def is_pdf_payload(payload) -> bool:
+    """Rozpoznanie zawartości niezależnie od MIME i widoczności rozszerzeń w Windows."""
+    return isinstance(payload, (bytes, bytearray)) and payload.startswith(b'%PDF-')
+
+
+def attachment_extension(payload) -> Optional[str]:
+    """Sygnatury dokumentów i zdjęć obsługiwanych przez aplikacje systemowe."""
+    if not isinstance(payload, (bytes, bytearray)):
+        return None
+    if is_pdf_payload(payload):
+        return '.pdf'
+    if payload.startswith(b'\xff\xd8\xff'):
+        return '.jpg'
+    if payload.startswith(b'\x89PNG\r\n\x1a\n'):
+        return '.png'
+    if payload.startswith((b'GIF87a', b'GIF89a')):
+        return '.gif'
+    if len(payload)>=12 and payload[:4]==b'RIFF' and payload[8:12]==b'WEBP':
+        return '.webp'
+    if payload.startswith((b'II\x2a\x00', b'MM\x00\x2a')):
+        return '.tif'
+    # ISO BMFF ftyp: major brand, minor version, optional compatible brands.
+    if len(payload)>=16 and payload[4:8]==b'ftyp':
+        length = int.from_bytes(payload[:4],'big')
+        if 16<=length<=min(len(payload),4096) and length%4==0:
+            brands = {bytes(payload[8:12])} | {bytes(payload[i:i+4]) for i in range(16,length,4)}
+            if brands & {b'heic',b'heix',b'hevc',b'hevx'}:
+                return '.heic'
+            if brands & {b'avif',b'avis'}:
+                return '.avif'
+            if brands & {b'mif1',b'msf1',b'heim',b'heis'}:
+                return '.heif'
+    return None
+
+
+_EXTENSION_ALIASES = {'.jpg': {'.jpg','.jpeg','.jpe'}, '.tif': {'.tif','.tiff'},
+                      '.heic': {'.heic','.heif'}, '.heif': {'.heif','.heic'}}
+
+
+def attachment_name(filename: Optional[str], payload) -> str:
+    """Pełna nazwa MIME; ukrywanie rozszerzeń w Windows nie zmienia nazwy pliku."""
+    name = safe_attachment_name(filename)
+    extension = attachment_extension(payload)
+    if extension and not is_risky_attachment(name):
+        accepted = _EXTENSION_ALIASES.get(extension,{extension})
+        if Path(name).suffix.lower() not in accepted:
+            name = name[:200-len(extension)] + extension
+    return name
+
+
+def attachment_save_path(path: str, payload) -> str:
+    """Uzupełnij tylko rzeczywisty brak rozszerzenia wybranej nazwy docelowej."""
+    extension = attachment_extension(payload)
+    if path and extension and not Path(path).suffix:
+        return path + extension
+    return path
+
+
+# Compatibility for existing callers; names are resolved for images as well.
+pdf_save_path = attachment_save_path
+
+
+def viewable_attachment_extension(filename, payload) -> Optional[str]:
+    if is_risky_attachment(filename) or not isinstance(payload,(bytes,bytearray)) or len(payload)>50*1024*1024:
+        return None
+    return attachment_extension(payload)
+
+
 __all__ = [
     "RISKY_EXTENSIONS",
+    "is_pdf_payload", "attachment_extension", "attachment_name", "attachment_save_path", "pdf_save_path",
+    "viewable_attachment_extension",
     "safe_attachment_name",
     "is_risky_attachment",
     "SERVER_TO_LOCAL",

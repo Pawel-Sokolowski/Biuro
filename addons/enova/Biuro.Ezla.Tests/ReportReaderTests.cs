@@ -84,6 +84,21 @@ public sealed class ReportReaderTests
         Assert.Throws<InvalidDataException>(() => ReportReader.Read(Report() with { PayerNip = "9999999999" }));
     }
 
+    [Test]
+    public void UiFormsAreActuallyEmbeddedInTheAddon()
+    {
+        var resources = typeof(Biuro.Ezla.UI.EzlaWorker).Assembly.GetManifestResourceNames();
+        Assert.That(resources.Any(n => n.EndsWith("EzlaParameters.Ogolne.pageform.xml")), Is.True);
+        Assert.That(resources.Any(n => n.EndsWith("ScheduleParameters.Ogolne.pageform.xml")), Is.True);
+    }
+
+    [Test]
+    public void UnknownMedicalFieldsAreNeverSilentlyDiscarded()
+    {
+        var document = ReportReader.Read(Report(extra: "<wypadekPrzyPracy>Tak</wypadekPrzyPracy>")).Single();
+        Assert.That(document.Review, Is.Not.Empty);
+    }
+
     [TestCase("http://biuro.example")]
     [TestCase("https://user:password@biuro.example")]
     [TestCase("https://biuro.example/api")]

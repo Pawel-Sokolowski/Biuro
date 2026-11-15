@@ -18,7 +18,9 @@ public static class EzlaJob
         string email = Required("BIURO_EZLA_EMAIL");
         string password = Required("BIURO_EZLA_PASSWORD");
         string definition = Environment.GetEnvironmentVariable("BIURO_EZLA_DEFINITION") ?? "Zwolnienie chorobowe";
-        return Run(owner, address, email, password, DateTime.Today.AddMonths(-2), DateTime.Today, definition, false);
+        var businessDate = Soneta.Types.Date.Today;
+        var today = new DateTime(businessDate.Year, businessDate.Month, businessDate.Day);
+        return Run(owner, address, email, password, today.AddMonths(-2), today, definition, false);
     }
 
     public static IReadOnlyList<ImportLine> Run(Session owner, string address, string email, string password,

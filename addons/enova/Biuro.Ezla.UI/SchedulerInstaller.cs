@@ -6,7 +6,7 @@ using Soneta.Langs;
 using Soneta.Tools;
 using Soneta.Types;
 
-namespace Biuro.Ezla;
+namespace Biuro.Ezla.UI;
 
 public static class SchedulerInstaller
 {
@@ -40,7 +40,7 @@ public static class SchedulerInstaller
             schedule.CycleDefinition.Czas = time;
             schedule.HzInstance = hzInstance.Trim();
             schedule.Locked = true; // Enable only after configuring the service identity and reviewing a preview.
-            transaction.Commit();
+            transaction.CommitUI();
         }
         config.Save();
     }

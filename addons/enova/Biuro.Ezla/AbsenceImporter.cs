@@ -24,7 +24,7 @@ public static class AbsenceImporter
         foreach (var doc in ReportReader.Consolidate(input))
         {
             if (doc.Review.Length > 0) { lines.Add(new("", doc.Number, doc.Review, 0, true)); continue; }
-            var employees = session.GetKadry().Pracownicy.WgPESEL[doc.Identifier].Cast<Pracownik>().ToArray();
+            var employees = session.GetKadry().Pracownicy.WgPESEL[doc.Identifier].Cast<Pracownik>().Take(2).ToArray();
             if (employees.Length != 1) { lines.Add(new("", doc.Number, "Brak jednego pracownika o zgodnym PESEL.".Translate(), 0, true)); continue; }
             var employee = employees[0];
             Date start = ToDate(doc.Start), end = ToDate(doc.End);
@@ -43,7 +43,7 @@ public static class AbsenceImporter
             }
             // Also detect the same certificate moved to another period in an earlier import.
             // The employee's keyed subtable bounds this read; never scan all employees/absences.
-            if (employee.Nieobecnosci.Cast<Nieobecnosc>().Any(n => n.Zwolnienie.Numer == doc.Number))
+            if (employee.Nieobecnosci[new FieldCondition.Equal("Zwolnienie.Numer", doc.Number)].Any())
             { lines.Add(new(employee.Kod, doc.Number, "Ten numer ZLA istnieje z innym okresem.".Translate(), 0, true)); continue; }
             if (!preview)
                 foreach (var segment in segments)

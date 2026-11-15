@@ -533,13 +533,8 @@ class EmailPage(QWidget):
             self.load_folders_from_db()
             self.start_background_sync()
         else:
-            QMessageBox.warning(
-                self,
-                "Brak kont",
-                "Nie masz przypisanego żadnego konta e-mail.\n"
-                "Administrator może je przypisać w Ustawienia → Konta e-mail → "
-                "Dostęp pracowników.",
-            )
+            self.sync_status.setText('Brak przypisanego konta e-mail')
+            self.sync_status.setToolTip('Administrator może przypisać konto w Ustawienia → Konta e-mail → Dostęp pracowników.')
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.start_background_sync)

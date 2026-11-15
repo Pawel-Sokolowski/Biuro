@@ -34,7 +34,7 @@ class EnovaConnectionSettings(QWidget):
         self.database.setPlaceholderText('Np. Biuro_rachunkowe — baza do testu połączenia i wyszukiwania baz firm')
         from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
         self.driver = QComboBox()
-        self.driver.addItem('Automatycznie — wykryj na tym komputerze', 'auto')
+        self.driver.addItem('Automatycznie — wykryj na serwerze biura', 'auto')
         for name in SUPPORTED_DRIVERS:
             self.driver.addItem(name, name)
         self.driver.setCurrentIndex(max(0, self.driver.findData(config.get('driver', 'auto'))))
@@ -85,7 +85,7 @@ class EnovaConnectionSettings(QWidget):
         layout.addWidget(local_note)
         note = QLabel('Wpisz nazwę bazy Enova przy każdej importowanej firmie. Puste pole pomija firmę. '
                       'Typ księgowości wynika z formy opodatkowania. Konto SQL wymaga praw tylko do odczytu. '
-                      'Hasło jest szyfrowane kluczem BIO_ENCRYPTION_KEY wspólnym dla aplikacji i serwera importu.')
+                      'Hasło pozostaje na serwerze biura. Sterownik SQL jest wykrywany na serwerze.')
         note.setWordWrap(True)
         layout.addWidget(note)
         from app.remote.screen_data import company_identities

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Soneta.Langs;
@@ -15,14 +16,24 @@ public sealed class BiuroConnection : IDisposable
     private readonly HttpClient http;
     private string? token;
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
-    public BiuroConnection(string address)
+    public BiuroConnection(string address) : this(ValidateAddress(address),
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }) { }
+
+    internal BiuroConnection(string address, HttpMessageHandler handler) : this(ValidateAddress(address), handler) { }
+
+    private static Uri ValidateAddress(string address)
     {
         if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
             !string.IsNullOrEmpty(uri.UserInfo) || uri.AbsolutePath != "/" ||
             !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             throw new ArgumentException("Podaj adres HTTPS serwera Biuro bez ścieżki.".Translate());
+        return uri;
+    }
+
+    private BiuroConnection(Uri uri, HttpMessageHandler handler)
+    {
         // Never disable certificate validation; never forward credentials through redirects.
-        http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
+        http = new HttpClient(handler)
         { BaseAddress = uri, Timeout = TimeSpan.FromSeconds(90), MaxResponseContentBufferSize = 24 * 1024 * 1024 };
     }
 
@@ -73,7 +84,10 @@ public sealed class BiuroConnection : IDisposable
 
     private T Post<T>(string path, object value)
     {
-        using var response = http.PostAsJsonAsync(path, value).GetAwaiter().GetResult();
+        // The office host requires a known Content-Length and rejects chunked
+        // uploads. JsonContent/PostAsJsonAsync streams with an unknown length.
+        using var content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json");
+        using var response = http.PostAsync(path, content).GetAwaiter().GetResult();
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             throw new UnauthorizedAccessException("Sesja Biuro wygasła lub brakuje uprawnień do eksportu e-ZLA.".Translate());
         if (!response.IsSuccessStatusCode)

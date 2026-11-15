@@ -66,6 +66,20 @@ def resource_access(operation,values,actor_id):
                                       (actor_id,provider,remote_id)).fetchone()
                 if not queued:
                     raise PermissionError('Brak zatwierdzonego usunięcia wydarzenia.')
+    if operation=='app.db.dao_calendar.save_event':
+        from app.db.dao_calendar import get_event
+        from app.kalendarz.google_sync import has_calendar_access
+        data = dict(values.get('data') or {})
+        existing = get_event(data['id']) if data.get('id') else None
+        if data.get('id') and (not existing or existing['pracownik_id']!=actor_id):
+            raise PermissionError('Brak dostępu do wydarzenia.')
+        if data.get('google_calendar_id') and not has_calendar_access(actor_id,data['google_calendar_id']):
+            raise PermissionError('Brak dostępu do kalendarza Google.')
+        # Remote identities belong to server synchronization, never to caller-supplied data.
+        for key in ('google_event_id','caldav_uid','caldav_calendar_id'):
+            data[key] = existing.get(key) if existing else None
+        data['zrodlo'] = existing.get('zrodlo') if existing else 'lokalne'
+        values['data'] = data
     if is_administrator(actor_id):
         return
     if operation.startswith(('app.email.','app.db.dao_email')) or operation=='app.remote.screen_data.mail_view_snapshot':

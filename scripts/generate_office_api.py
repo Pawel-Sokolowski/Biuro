@@ -10,7 +10,9 @@ READ = ('get_','list_','count_','find_','search_','format_','is_','can_','has_',
         'monthly_','payments_for_','bank_import_summary','opis_','wybierz_','inferred_','company_declarations')
 ACTORS = {'actor_id','current_user_id','user_id','uzytkownik_id'}
 SKIP_DAO = {'dao_conn','dao_calendar_sync','dao_active_timers'}
-DENY = {'login_employee','ensure_company_columns_exist','create_task_in_transaction','contracts_by_month'}
+DENY = {'login_employee','ensure_company_columns_exist','create_task_in_transaction','contracts_by_month',
+        'set_google_event_id','set_caldav_uid','get_event_by_google_id','get_event_by_caldav_uid',
+        'list_caldav_events','list_events_without_caldav','list_unsynced_events','remove_local_duplicates'}
 MANUAL = {
  'app.db.dao_conn':'database_context',
  'app.db.schema':'schema_is_current',

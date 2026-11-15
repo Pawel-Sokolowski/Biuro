@@ -180,3 +180,16 @@ class OfficeServiceTests(DbTestCase):
                           {'url':'https://new.example/','login':'new-reader','password':'new-password'},token=self.admin)
         config = caldav_sync.get_config()
         self.assertEqual((config['url'],config['login'],config['haslo']),('https://trusted.example/','reader','old-password'))
+
+    def test_client_calendar_data_cannot_choose_someone_elses_remote_identity(self):
+        from app.db.dao_calendar import get_event
+        event = self.call('app.db.dao_calendar.save_event',{'pracownik_id':1,'data':{
+            'tytul':'Moje wydarzenie','start':'2026-10-01T10:00:00','koniec':'2026-10-01T11:00:00',
+            'google_event_id':'another-users-event','caldav_uid':'another-users-uid','zrodlo':'google'}})
+        stored = get_event(event)
+        self.assertEqual(stored['pracownik_id'],self.employee)
+        self.assertIsNone(stored['google_event_id'])
+        self.assertIsNone(stored['caldav_uid'])
+        self.assertEqual(stored['zrodlo'],'lokalne')
+        with self.assertRaises(PermissionError):
+            self.call('app.db.dao_calendar.set_google_event_id',{'event_id':event,'google_event_id':'injected'})

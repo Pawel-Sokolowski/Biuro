@@ -193,3 +193,17 @@ class OfficeServiceTests(DbTestCase):
         self.assertEqual(stored['zrodlo'],'lokalne')
         with self.assertRaises(PermissionError):
             self.call('app.db.dao_calendar.set_google_event_id',{'event_id':event,'google_event_id':'injected'})
+
+    def test_user_management_permission_cannot_take_over_an_administrator_account(self):
+        with get_conn() as conn:
+            role = conn.execute("INSERT INTO role(nazwa,can_manage_users) VALUES ('Accounts manager',1) RETURNING id").fetchone()[0]
+            conn.execute('UPDATE pracownicy SET rola_id=%s WHERE id=%s',(role,self.employee))
+        with self.assertRaises(PermissionError):
+            self.call('app.db.dao_employees.change_employee_password',{'pracownik_id':1,'new_password':'Takeover12345'})
+        # Active status must not weaken the protection of a privileged account.
+        with get_conn() as conn:
+            conn.execute('UPDATE pracownicy SET aktywny=0 WHERE id=1')
+        with self.assertRaises(PermissionError):
+            self.call('app.db.dao_employees.change_employee_password',{'pracownik_id':1,'new_password':'Takeover12345'})
+        self.call('app.db.dao_employees.change_employee_password',{'pracownik_id':self.other,'new_password':'Changed12345'})
+        self.assertEqual(auth.login('other@example.com','Changed12345','manager-test')['employee_id'],self.other)

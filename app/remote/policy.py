@@ -46,6 +46,16 @@ def bind(function,values,spec,actor_id):
 
 def resource_access(operation,values,actor_id):
     from app.security.authorization import is_administrator
+    if operation.startswith('app.db.dao_employees.') and operation.rsplit('.',1)[1] in (
+        'update_employee','delete_employee','set_employee_active','change_employee_password'):
+        if not is_administrator(actor_id):
+            from app.db.dao_conn import get_conn
+            with get_conn() as conn:
+                privileged = conn.execute("""SELECT 1 FROM pracownicy p LEFT JOIN role r ON r.id=p.rola_id
+                    WHERE p.id=%s AND (COALESCE(p.is_admin,0)=1 OR lower(COALESCE(r.nazwa,''))='admin')""",
+                    (values.get('pracownik_id'),)).fetchone()
+            if privileged:
+                raise PermissionError('Kontem administratora może zarządzać tylko administrator.')
     if values.get('from_remote'):
         raise PermissionError('Tę operację wykonuje synchronizacja serwera.')
     # Remote calendar mutations must refer to a local event or a queued deletion.

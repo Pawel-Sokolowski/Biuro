@@ -3,10 +3,14 @@
     <TargetFramework>net8.0</TargetFramework>
     <IsTestProject>true</IsTestProject>
     <IsPackable>false</IsPackable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Biuro.Ezla/Biuro.Ezla.csproj" />
     <ProjectReference Include="../Biuro.Ezla.UI/Biuro.Ezla.UI.csproj" />
+    <!-- Add-ons rely on the installed enova host. The isolated CI test host must
+         explicitly receive its exact runtime dependencies; none enter the ZIP. -->
+    <PackageReference Include="Soneta.Products.Modules" Version="$(SonetaPackageVersion)" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="NUnit" Version="4.3.2" />
     <PackageReference Include="NUnit3TestAdapter" Version="5.0.0" />

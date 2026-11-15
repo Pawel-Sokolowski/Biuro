@@ -21,6 +21,7 @@ class EnovaEzlaExportTests(DbTestCase):
     def test_export_is_bound_to_one_company_and_contains_no_service_credentials(self):
         company = self.make_company(nip='1112223344')
         other = self.make_company('Other company', nip='9999999999')
+        self.make_company('No tax ID configured', nip='')
         raw = report(certificate())
         key = self.save_report(company, raw)
         self.save_report(other, raw.replace(b'1112223344', b'9999999999'))
@@ -42,7 +43,7 @@ class EnovaEzlaExportTests(DbTestCase):
         with patch('app.integrations.ezla.enova_export.assigned_company_ids', return_value=set()):
             with self.assertRaises(PermissionError):
                 export_reports(1, {'company_nip':'1112223344','month':'2018-04'})
-        self.make_company('Duplicate NIP', nip='1112223344')
+        self.make_company('Duplicate NIP in another format', nip='PL111-222-33-44')
         with self.assertRaises(PermissionError):
             export_reports(1, {'company_nip':'1112223344','month':'2018-04'})
 

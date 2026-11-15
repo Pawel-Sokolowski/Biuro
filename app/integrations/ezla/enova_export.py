@@ -30,9 +30,18 @@ def export_reports(actor_id, value):
     if not isinstance(after, str) or (after and not re.fullmatch(r'ezla_report_[0-9]+_[a-f0-9]{64}', after)):
         raise ValueError('Nieprawidłowy znacznik strony.')
     with get_conn() as conn:
-        companies = [row for row in conn.execute(
+        candidates = conn.execute(
             'SELECT id,nip,forma_dzialalnosci FROM firmy WHERE id=ANY(%s)',
-            (list(assigned_company_ids(actor_id)),)).fetchall() if normalize_nip(row['nip']) == nip]
+            (list(assigned_company_ids(actor_id)),)).fetchall()
+        companies = []
+        for row in candidates:
+            try:
+                candidate_nip = normalize_nip(row['nip'])
+            except ValueError:
+                # An unrelated, unconfigured company must not break this export.
+                continue
+            if candidate_nip == nip:
+                companies.append(row)
         if len(companies) != 1:
             raise PermissionError('NIP nie wskazuje jednej dostępnej firmy w Biuro.')
         company = companies[0]

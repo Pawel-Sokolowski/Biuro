@@ -23,9 +23,9 @@ class EncryptionSettings(QWidget):
             layout.addWidget(info)
             layout.addStretch()
             return
-        info = QLabel('Wszystkie komputery i worker muszą używać tego samego klucza. '
-                      'Na działającym komputerze wyeksportuj klucz, a następnie zaimportuj go na pozostałych. '
-                      'Plik klucza przekazuj bezpiecznie; nie wysyłaj go w czacie. '
+        info = QLabel('Klucz jest konfigurowany tylko lokalnie na serwerze biura. '
+                      'Przy migracji zachowaj dotychczasowy klucz, aby odczytać zapisane hasła. '
+                      'Stanowiska pracowników korzystają z logowania HTTPS i nie otrzymują klucza. '
                       'Zmiana klucza lokalnego nie szyfruje ponownie danych zapisanych innymi kluczami.')
         info.setWordWrap(True)
         layout.addWidget(info)

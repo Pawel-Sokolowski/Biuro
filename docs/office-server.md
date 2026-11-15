@@ -54,8 +54,8 @@ serwera. Importy i eksporty używają plików przypisanych do konkretnej sesji.
 Długie operacje przekazują postęp i obsługują przerwanie.
 
 **Mój czas** w nagłówku pokazuje czas pracownika ze wszystkich firm i stoper
-ogólny, z filtrem miesiąca. Pracownik może poprawiać własne rekordy. Wgląd i edycja
-czasu innych osób wymaga uprawnień finansowych lub administratora. Edycja **Od–do**
+ogólny, z filtrem miesiąca. Pracownik może poprawiać własne rekordy. Wybór innego pracownika w tym widoku
+oraz edycja cudzych rekordów wymaga uprawnień finansowych lub administratora. Edycja **Od–do**
 wylicza czas i aktualizuje sumy miesięczne; w rekordach importowanych odejmuje
 zapisaną przerwę. Importowany rekord obejmuje jeden dzień. Pozostaje też podanie
 samego czasu trwania. Zmiany i usunięcia są zapisywane w audycie.

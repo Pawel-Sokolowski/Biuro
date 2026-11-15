@@ -114,10 +114,6 @@ public static class ReportReader
 
     public static IReadOnlyList<EzlaDocument> Consolidate(IEnumerable<EzlaDocument> documents)
     {
-        var correctionRows = root.Elements("dokumentyEzlaK").Count();
-        string declaredCorrections = Text(header, "liczbaDokumentowEzlaK", false);
-        if (declaredCorrections.Length > 0 && (!int.TryParse(declaredCorrections, out int corrections) || corrections != correctionRows))
-            throw new InvalidDataException("Raport wykazuje e-ZLA/K bez zgodnych szczegółów. Pobierz pełny raport z Biuro.".Translate());
         var result = new List<EzlaDocument>();
         foreach (var group in documents.GroupBy(d => d.Identity))
         {

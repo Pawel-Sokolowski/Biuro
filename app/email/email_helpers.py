@@ -240,7 +240,7 @@ def get_attachments(msg: Optional[Message]) -> List[Dict[str, Any]]:
         attachments.append(
             {
                 "index": index,
-                "filename": Path(filename).name if filename else "attachment",
+                "filename": attachment_name(filename, payload),
                 "content_type": part.get_content_type(),
                 "size": len(payload) if payload else None,
                 "content_id": (part.get("Content-ID") or "").strip("<> \r\n"),
@@ -312,8 +312,29 @@ def is_risky_attachment(filename: Optional[str]) -> bool:
     return any(p.strip() in RISKY_EXTENSIONS for p in parts)
 
 
+def is_pdf_payload(payload) -> bool:
+    """Rozpoznanie zawartości niezależnie od MIME i widoczności rozszerzeń w Windows."""
+    return isinstance(payload, (bytes, bytearray)) and payload.startswith(b'%PDF-')
+
+
+def attachment_name(filename: Optional[str], payload) -> str:
+    """Pełna nazwa MIME; brak rozszerzenia w widoku Eksploratora niczego nie zmienia."""
+    name = safe_attachment_name(filename)
+    if is_pdf_payload(payload) and not is_risky_attachment(name) and not name.lower().endswith('.pdf'):
+        name = name[:196] + '.pdf'
+    return name
+
+
+def pdf_save_path(path: str, payload) -> str:
+    """Uzupełnij tylko faktycznie brakujące rozszerzenie wybranej nazwy docelowej."""
+    if path and is_pdf_payload(payload) and not Path(path).suffix:
+        return path + '.pdf'
+    return path
+
+
 __all__ = [
     "RISKY_EXTENSIONS",
+    "is_pdf_payload", "attachment_name", "pdf_save_path",
     "safe_attachment_name",
     "is_risky_attachment",
     "SERVER_TO_LOCAL",

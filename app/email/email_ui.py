@@ -38,6 +38,7 @@ from PyQt6.QtWebEngineCore import (
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
+from app.email.email_helpers import attachment_name, is_pdf_payload, pdf_save_path
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_employees import list_employees
 from app.email.email_labels import (
@@ -2487,7 +2488,7 @@ class EmailPage(QWidget):
             return
 
         def name_of(part) -> str:
-            return safe_attachment_name(part.get_filename())
+            return attachment_name(part.get_filename(), part.get_payload(decode=True))
 
         risky = [name_of(p) for _, p in chosen if is_risky_attachment(name_of(p))]
         if risky:
@@ -2510,6 +2511,7 @@ class EmailPage(QWidget):
             )
             if not path:
                 return
+            path = pdf_save_path(path, part.get_payload(decode=True))
             self._remember_save_dir(os.path.dirname(path))
             saved = 1 if self._write_attachment(part, path) else 0
         else:
@@ -2588,14 +2590,12 @@ class EmailPage(QWidget):
 
     @staticmethod
     def _is_safe_pdf_part(part) -> bool:
-        """PDF tylko gdy MIME, ostatnie rozszerzenie i zawartość (%PDF-) są zgodne."""
-        if part.get_content_type() != "application/pdf":
-            return False
-        name = os.path.basename(str(part.get_filename() or "")).strip().lower()
-        if not name.endswith(".pdf"):
+        """Otwieramy PDF rozpoznany po nagłówku; nie ufamy samemu rozszerzeniu/MIME."""
+        if is_risky_attachment(part.get_filename()):
             return False
         payload = part.get_payload(decode=True)
-        return bool(payload) and len(payload) <= 50 * 1024 * 1024 and payload.startswith(b"%PDF-")
+        return is_pdf_payload(payload) and len(payload) <= 50 * 1024 * 1024
+
 
     def _open_attachment_externally(self, part) -> bool:
         # Nazwa pliku od nadawcy nigdy nie trafia na dysk – zawsze stała nazwa .pdf.
@@ -2811,7 +2811,7 @@ class EmailPage(QWidget):
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
-            name = os.path.basename(part.get_filename() or "")
+            name = attachment_name(part.get_filename(), payload)
             if name in ("", ".", ".."):
                 name = f"zalacznik_{index}"
             # Separate directories preserve each MIME part's original filename

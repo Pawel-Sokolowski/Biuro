@@ -14,6 +14,7 @@ from email.utils import formataddr, formatdate, make_msgid
 
 from app.email.email_helpers import (
     attachment_output_path,
+    attachment_name,
     get_attachments,
     iter_message_attachments,
 )
@@ -348,7 +349,7 @@ def open_attachment(
         return None
 
     try:
-        output_path = attachment_output_path(part.get_filename() or "attachment")
+        output_path = attachment_output_path(attachment_name(part.get_filename(), payload))
 
         with open(output_path, "wb") as f:
             f.write(payload)

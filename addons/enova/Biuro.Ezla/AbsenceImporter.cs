@@ -18,6 +18,8 @@ public static class AbsenceImporter
         var kalend = session.GetKalend();
         var definition = kalend.DefNieobecnosci.WgNazwy[definitionName]
             ?? throw new InvalidOperationException("Nie znaleziono wskazanej definicji nieobecności.".Translate());
+        if (definition.Blokada || definition.Przyczyna != PrzyczynaNieobecnosci.ZwolnienieChorobowe)
+            throw new InvalidOperationException("Wskaż aktywną definicję zwolnienia chorobowego.".Translate());
         var lines = new List<ImportLine>();
         foreach (var doc in ReportReader.Consolidate(input))
         {

@@ -63,6 +63,28 @@ class OfficeHttpsTests(DbTestCase):
         with self.assertRaises(PermissionError):
             self.client.resume(token)
 
+    def test_enova_ezla_endpoint_authenticates_before_releasing_company_xml(self):
+        import base64
+        import hashlib
+        import json
+        import requests
+        from tests.test_ezla_report import report, certificate
+        from app.db.dao_app_settings import set_setting
+        from app.utils.crypto import encrypt_password
+        company = self.make_company('Enova HTTPS firma', nip='1112223344')
+        raw = report(certificate())
+        set_setting(f'ezla_report_{company}_' + hashlib.sha256(raw).hexdigest(), json.dumps({
+            'months':['2018-04'], 'needs_review':False,
+            'xml_enc':encrypt_password(base64.b64encode(raw).decode('ascii'))}))
+        url = self.client.server + '/api/v1/enova/ezla'
+        payload = {'company_nip':'1112223344','month':'2018-04'}
+        response = requests.post(url,json=payload,verify=str(self.cert),timeout=10)
+        self.assertEqual(response.status_code,401)
+        self.client.login('admin@biuro.pl','Admin12345')
+        result = self.client._request('enova/ezla',payload)
+        self.assertEqual(base64.b64decode(result['reports'][0]['xml']),raw)
+        self.assertNotIn('xml_enc',str(result))
+
     def test_company_invoice_settings_and_monthly_logic_share_server_owned_state(self):
         from app.companies.company_logic import CompanyLogic
         from app.invoices.faktury_logic import FakturyLogic

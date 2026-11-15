@@ -55,6 +55,12 @@ public static class ReportReader
             var doc = Node(row, "daneDokumentu");
             string series = Text(doc, "seria"), number = Text(doc, "numer");
             var review = new List<string>();
+            string[] known = ["seria", "numer", "status", "czyAnulowane", "dataWystawienia", "dataZus",
+                "okresZwolnienia", "okresWSzpitalu", "kodChorobyA", "kodChorobyB", "kodChorobyC",
+                "kodChorobyD", "kodChorobyE", "kodPokrewienstwa", "dataUrodzeniaOsoby",
+                "miejsceUbezpieczenia", "wskazaniaLekarskie", "dataZwolnieniaDo"];
+            if (doc.Elements().Any(e => (!known.Contains(e.Name.LocalName) || e.Name.NamespaceName.Length > 0) && !string.IsNullOrWhiteSpace(e.Value)))
+                review.Add("Dodatkowe nieobsługiwane dane dokumentu — sprawdź przed naliczeniem.".Translate());
             bool correction = row.Name == "dokumentyEzlaK";
             string status = correction ? "Skrócenie e-ZLA/K" : Text(doc, "status");
             if (correction || status != "Wystawione") review.Add("Korekta, anulowanie lub status wymagający obsługi w enova.".Translate());

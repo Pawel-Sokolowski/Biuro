@@ -1818,6 +1818,7 @@ def sync_folder_flags(konto_id: int, folder: str) -> int:
                                   **_revision_args(session.account_revision))
 
 
+@office_endpoint('app.email.email_sync.sync_automatic_accounts')
 def sync_automatic_accounts(accounts, current_account_id=None, current_folder=None, *, on_headers=None, on_progress=None, cancel_event=None):
     """Check new mail only. Full history is never initiated by app startup.
 

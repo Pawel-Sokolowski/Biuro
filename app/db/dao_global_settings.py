@@ -371,6 +371,7 @@ def update_email_account_connection(
     smtp_port: int,
     ssl_imap: str,
     ssl_smtp: str,
+    *, haslo_enc: Optional[str] = None,
 ) -> None:
     conn = get_conn()
     try:
@@ -380,8 +381,8 @@ def update_email_account_connection(
         identity_changed = (before["email"], before["serwer_imap"], before["port_imap"], before["ssl_imap"]) != (email, imap, imap_port, ssl_imap)
         conn.execute("""UPDATE konta_email SET email=%s, serwer_imap=%s, port_imap=%s,
             serwer_smtp=%s, port_smtp=%s, ssl_imap=%s, ssl_smtp=%s,
-            connection_revision=connection_revision+1 WHERE id=%s""",
-            (email, imap, imap_port, smtp, smtp_port, ssl_imap, ssl_smtp, acc_id))
+            haslo_enc=COALESCE(%s,haslo_enc), connection_revision=connection_revision+1 WHERE id=%s""",
+            (email, imap, imap_port, smtp, smtp_port, ssl_imap, ssl_smtp, haslo_enc, acc_id))
         if identity_changed:
             _retire_account_cache(conn, acc_id)
         conn.commit()

@@ -40,6 +40,33 @@ def prepare(operation, arguments, files, owner):
             # Defaults are server metadata, not instructions supplied by a desktop.
             source.pop('_query_defaults',None)
         arguments[field] = incoming
+    if operation in ('app.email.email_connection.check_imap','app.email.email_connection.check_smtp'):
+        account = dict(arguments['account'])
+        if not account.get('haslo') or account.get('haslo')==PRESENT:
+            from app.email.email_storage import get_account_info
+            old = get_account_info(account.get('id')) if account.get('id') else None
+            fields = ('email','serwer_imap','port_imap','ssl_imap','serwer_smtp','port_smtp','ssl_smtp')
+            if not old or not _same(account,old,fields):
+                raise ValueError('Przy zmianie serwera lub loginu wpisz ponownie hasło poczty.')
+            account['haslo'] = ''
+            account['haslo_enc'] = old['haslo_enc']
+        arguments['account'] = account
+    if operation.endswith(('.update_email_account','.update_email_account_connection')) and 'acc_id' in arguments:
+        from app.email.email_storage import get_account_info
+        old = get_account_info(arguments['acc_id'])
+        mapping = {'email':'email','imap':'serwer_imap','smtp':'serwer_smtp','imap_server':'serwer_imap',
+                   'smtp_server':'serwer_smtp','imap_port':'port_imap','smtp_port':'port_smtp','ssl_imap':'ssl_imap','ssl_smtp':'ssl_smtp'}
+        changed = old and any(str(arguments[key])!=str(old[column]) for key,column in mapping.items() if key in arguments)
+        fresh = arguments.get('password') or arguments.get('haslo_enc')
+        if changed and (not fresh or fresh==PRESENT):
+            raise ValueError('Przy zmianie serwera lub loginu wpisz ponownie hasło poczty.')
+    if operation=='app.utils.system_mailbox.save_system_account' and not arguments.get('password'):
+        from app.utils.system_mailbox import get_system_account
+        old = get_system_account()
+        mapping = {'email':'email','imap_server':'serwer_imap','smtp_server':'serwer_smtp','imap_port':'port_imap',
+                   'smtp_port':'port_smtp','ssl_imap':'ssl_imap','ssl_smtp':'ssl_smtp'}
+        if old and any(str(arguments[key])!=str(old[column]) for key,column in mapping.items()):
+            raise ValueError('Przy zmianie serwera lub loginu wpisz ponownie hasło konta systemowego.')
     if operation=='app.integrations.saldeo_web.settings.save':
         from app.integrations.saldeo_web.settings import load
         old = load()

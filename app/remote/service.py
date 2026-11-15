@@ -229,6 +229,10 @@ class OfficeService:
             from app.security.authorization import is_administrator
             if not is_administrator(actor):
                 raise PermissionError('Tylko administrator zmienia ustawienia biura.')
+            protected = {'enova_connection','platnik_connection','ezla_service','saldeo_web',
+                         'caldav_url','caldav_login','caldav_kalendarz','google_client_id'}
+            if setting_key in protected or secret_name(setting_key):
+                raise PermissionError('Użyj formularza konfiguracji usługi. Surowa zmiana danych dostępu jest zablokowana.')
             if name=='set_setting':
                 from app.db.dao_app_settings import get_setting
                 for field in ('value','wartosc'):

@@ -322,7 +322,10 @@ class GlobalSettingsLogic:
         smtp_port: int,
         ssl_imap: str,
         ssl_smtp: str,
+        password: str = "",
     ):
+        from app.utils.crypto import encrypt_password
+        encrypted = encrypt_password(password) if password else None
         dao_global_settings.update_email_account_connection(
             acc_id=acc_id,
             email=email,
@@ -332,6 +335,7 @@ class GlobalSettingsLogic:
             smtp_port=smtp_port,
             ssl_imap=ssl_imap,
             ssl_smtp=ssl_smtp,
+            haslo_enc=encrypted,
         )
 
     def update_email_password(self, acc_id: int, password: str):

@@ -89,7 +89,9 @@ def connect(config):
 
 
 @office_endpoint('app.integrations.platnik.holidays.check_connection')
-def check_connection(config):
+def check_connection(config, *, password=""):
+    if password:
+        config = {**config,"password_enc":encrypt_password(password)}
     connection = connect(config)
     with sql_operation(config,'Sprawdzenie bazy Płatnika'):
         try:

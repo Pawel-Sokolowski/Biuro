@@ -45,7 +45,7 @@ MANUAL = {
  'app.email.email_connection':'check_imap check_smtp',
  'app.email.email_rules':'import_thunderbird_filters apply_rules_to_folder',
  'app.email.signature':'get_template save_template get_employee_signature save_employee_phone get_saved_signature save_employee_signature default_sender_id set_default_sender_id',
- 'app.email.email_sync':'list_folder_infos list_folders fetch_message_from_imap prefetch_messages prefetch_recent prefetch_all_messages fetch_headers backfill_refs sync_folder_and_prefetch_all append_message move_message delete_message sync_account mark_unread_remote archive_message sync_folder needs_initial_sync sync_and_prefetch mark_read_remote list_folders_from_imap_and_store fetch_headers_from_imap_and_store fetch_message_from_imap_and_store delete_email_remote move_email_and_get_sender move_emails create_folder rename_folder sync_folder_flags sync_requested_accounts',
+ 'app.email.email_sync':'list_folder_infos list_folders fetch_message_from_imap prefetch_messages prefetch_recent prefetch_all_messages fetch_headers backfill_refs sync_folder_and_prefetch_all append_message move_message delete_message sync_account mark_unread_remote archive_message sync_folder needs_initial_sync sync_and_prefetch mark_read_remote list_folders_from_imap_and_store fetch_headers_from_imap_and_store fetch_message_from_imap_and_store delete_email_remote move_email_and_get_sender move_emails create_folder rename_folder sync_folder_flags sync_requested_accounts sync_automatic_accounts',
  'app.email.email_storage':'mail_read_snapshot get_mailbox_generation get_account_info get_email_accounts_for_employee get_all_email_accounts get_email_filters_for_company add_email_filter delete_email_filter_for_company get_known_sender_addresses ensure_contact_email_filters get_folder_id get_folders_for_account account_has_headers get_cached_messages get_unread_counts get_visible_unread_counts get_new_unread_messages find_special_folder get_message_by_uid load_raw_message get_message_row_id update_message_read_flag mark_deleted search_messages get_cached_messages_by_folder_name get_assignment_map set_employee_assignment get_completed_map set_messages_completed count_completed_messages list_completed_rows count_assigned_by_employee count_unread_assigned_by_employee list_assigned_rows get_mail_page refresh_email_list resolve_assigned_message resolve_notification_message mail_notification_snapshot',
  'app.invoices.ksef_credentials':'import_pkcs12 import_cert_and_key clear_certificate get_certificate_info',
  'app.invoices.ksef_submission':'refresh_invoice_submission send_invoice_xml generate_invoice_xml send_invoice_document download_submitted_invoice process_invoice_batch',
@@ -57,7 +57,7 @@ MANUAL = {
  'app.integrations.enova.connection_settings':'load_connection save_connection check_connection',
  'app.integrations.enova.discovery':'discover',
  'app.integrations.enova.document_counts':'run_import',
- 'app.integrations.enova.checking':'run_checking_import',
+ 'app.integrations.enova.checking':'run_checking_import import_document_year',
  'app.integrations.ezla.settings':'load_settings save_settings',
  'app.integrations.ezla.sync':'run_sync load_reports',
  'app.integrations.ezla.preview':'preview_report preview_reports',
@@ -187,7 +187,7 @@ def spec_for(module,name,node,cls=None):
     if module=='app.db.dao_active_timers' and 'employee' in args:
         actors.add('employee')
         result['actors']=sorted(actors)
-    for param,label in (('callbacks',{'progress','progress_cb','on_progress'}),('cancellation',{'stop','stop_event','cancel_event'})):
+    for param,label in (('callbacks',{'progress','progress_cb','on_progress','on_headers'}),('cancellation',{'stop','stop_event','cancel_event'})):
         if set(args)&label:
             result[param]=sorted(set(args)&label)
     files={}

@@ -21,7 +21,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 
 from app.companies.company_names import company_display_name
-from app.config import get_dsn, get_schema
+from app.config import get_database, get_schema
 from app.utils.background import TaskRunner
 from app.db.dao_companies import (
     list_companies,
@@ -177,7 +177,7 @@ class CompanyUI(QWidget):
     def _backup_metadata(self):
         from app.utils.backup_status import stored_backup_dates
         return self._backup_metadata_cache.read(
-            (get_dsn(), get_schema()), lambda: (self._backup_by_company(), stored_backup_dates()),
+            (get_database(), get_schema()), lambda: (self._backup_by_company(), stored_backup_dates()),
         )
 
     @staticmethod

@@ -138,6 +138,7 @@ class AccountDialog(QDialog):
             return
         if not data["haslo"] and self._acc:
             data["haslo_enc"] = self._acc["haslo_enc"]
+            data["id"] = self._acc["id"]
         _run_test(self, data)
 
 
@@ -402,10 +403,8 @@ class EmailSettings(QWidget):
                 acc_id=acc_id, email=v["email"],
                 imap=v["serwer_imap"], imap_port=v["port_imap"],
                 smtp=v["serwer_smtp"], smtp_port=v["port_smtp"],
-                ssl_imap=v["ssl_imap"], ssl_smtp=v["ssl_smtp"],
+                ssl_imap=v["ssl_imap"], ssl_smtp=v["ssl_smtp"], password=v["haslo"],
             )
-            if v["haslo"]:
-                self.logic.update_email_password(acc_id, v["haslo"])
             self._refresh()
             QMessageBox.information(self, "OK", "Zapisano zmiany.")
         except Exception as e:

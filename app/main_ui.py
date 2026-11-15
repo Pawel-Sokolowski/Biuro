@@ -577,6 +577,9 @@ class OfficeManagerApp(QMainWindow):
         return self._ensure_page("page_settings")
 
     def _start_email_reminders(self):
+        from app.remote.state import client
+        if client() is not None:
+            return  # Scheduled operations are owned by the server worker.
         from app.services.email_reminders import run_reminders
         from app.utils.background import TaskRunner
         self._reminder_runner = TaskRunner(self)
@@ -601,6 +604,9 @@ class OfficeManagerApp(QMainWindow):
         QTimer.singleShot(5000, tick)
 
     def _start_saldeo_push_watcher(self):
+        from app.remote.state import client
+        if client() is not None:
+            return  # Scheduled operations are owned by the server worker.
         from app.integrations.saldeo_web.settings import load as load_saldeo_web
         if load_saldeo_web()['enabled']:
             return  # The durable worker inbox owns these events; avoid duplicate Windows toasts.

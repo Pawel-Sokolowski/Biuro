@@ -5,7 +5,7 @@ import sys
 from app.utils.env_config import load_environment, ensure_encryption_key
 
 SERVER_FLAGS = ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task',
-                '--saldeo-login', '--worker-migrate', '--api-server')
+                '--saldeo-login', '--worker-migrate', '--api-server', '--direct')
 if __name__ == '__main__':
     if any(flag in sys.argv for flag in SERVER_FLAGS):
         os.environ['BIO_WORKER_MODE'] = '1'

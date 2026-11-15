@@ -25,6 +25,7 @@ def checking_source(source, company):
             'count_query':str(Path(__file__).resolve().parents[3] / 'docs/enova/queries' / query)}
 
 
+@office_endpoint('app.integrations.enova.checking.import_document_year')
 def import_document_year(config, year, *, actor_id, progress=None):
     """Explicit counts-only backfill, independent of billing stages and schedule.
 

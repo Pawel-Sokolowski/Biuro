@@ -51,11 +51,16 @@ class EditTimerRecordDialog(QDialog):
         self.minutes = QSpinBox()
         self.minutes.setRange(0, 59)
         self.minutes.setValue(seconds % 3600 // 60)
+        self.seconds = QSpinBox()
+        self.seconds.setRange(0,59)
+        self.seconds.setValue(seconds % 60)
         time_row = QHBoxLayout()
         time_row.addWidget(self.hours)
         time_row.addWidget(QLabel("godz."))
         time_row.addWidget(self.minutes)
         time_row.addWidget(QLabel("min"))
+        time_row.addWidget(self.seconds)
+        time_row.addWidget(QLabel("sek."))
         form.addRow("Dział / czynność:", self.department)
         self.activity_label = QLabel("Czynność dodatkowa:")
         form.addRow(self.activity_label, self._activity_row)
@@ -89,6 +94,7 @@ class EditTimerRecordDialog(QDialog):
         self.ended_at.dateTimeChanged.connect(self._range_changed)
         self.hours.valueChanged.connect(lambda: self.time_mode.setCurrentIndex(1))
         self.minutes.valueChanged.connect(lambda: self.time_mode.setCurrentIndex(1))
+        self.seconds.valueChanged.connect(lambda: self.time_mode.setCurrentIndex(1))
         self._time_mode_changed()
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -125,6 +131,7 @@ class EditTimerRecordDialog(QDialog):
         self.ended_at.setEnabled(use_range)
         self.hours.setEnabled(not use_range)
         self.minutes.setEnabled(not use_range)
+        self.seconds.setEnabled(not use_range)
         self._range_changed()
 
     def _range_seconds(self):
@@ -145,7 +152,7 @@ class EditTimerRecordDialog(QDialog):
         super().accept()
 
     def values(self):
-        seconds = self._range_seconds() if self.time_mode.currentData() == 'range' else self.hours.value()*3600+self.minutes.value()*60
+        seconds = self._range_seconds() if self.time_mode.currentData() == 'range' else self.hours.value()*3600+self.minutes.value()*60+self.seconds.value()
         return self.department.currentData(), self.description.text().strip(), seconds
 
     def timestamps(self):

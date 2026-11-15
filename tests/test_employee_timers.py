@@ -108,3 +108,12 @@ class EmployeeTimersTests(DbTestCase):
         view.month.setDateTime(QDateTime(datetime(2026,10,1)))
         self.assertEqual(view.employee.currentData(),self.employee)
         self.assertEqual(view.table.rowCount(),1)
+
+    def test_description_edit_preserves_seconds_in_a_duration_only_record(self):
+        from app.monthly_view.timer_records_dialog import EditTimerRecordDialog
+        entry = {'dzial':'ogolne','opis':'Stary opis','sekundy':95,'start':'','koniec':''}
+        with mock.patch('app.monthly_view.timer_records_dialog.list_extra_service_catalogue',return_value=[]):
+            dialog = EditTimerRecordDialog(entry,actor_id=self.employee)
+        self.addCleanup(dialog.close)
+        dialog.description.setText('Nowy opis')
+        self.assertEqual(dialog.values()[2],95)

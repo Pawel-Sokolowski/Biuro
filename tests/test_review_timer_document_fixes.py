@@ -57,8 +57,15 @@ class TimerReviewTests(DbTestCase):
             def __getattr__(self, name):
                 return getattr(self.conn, name)
 
+            def __enter__(self):
+                self.conn.__enter__()
+                return self
+
+            def __exit__(self,*args):
+                return self.conn.__exit__(*args)
+
             def execute(self, sql, params=None):
-                is_read = 'SELECT miesiac, typ, sekundy FROM czasomierze' in sql
+                is_read = 'FROM czasomierze' in sql and 'FOR UPDATE' in sql
                 if is_read and threading.current_thread().name == 'second-edit':
                     second_started.set()
                 result = self.conn.execute(sql, params)

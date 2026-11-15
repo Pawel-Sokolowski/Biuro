@@ -28,28 +28,34 @@ class CaldavError(Exception):
 # ---------- konfiguracja ----------
 @office_endpoint('app.kalendarz.caldav_sync.get_config')
 def get_config() -> Dict[str, str]:
-    enc = get_setting(KEY_PASSWORD) or ""
+    from app.db.dao_conn import get_conn
+    # One snapshot prevents combining an old secret with a newly changed URL.
+    with get_conn() as conn:
+        values = dict(conn.execute('SELECT klucz,wartosc FROM app_settings WHERE klucz=ANY(%s)',
+                                  ([KEY_URL,KEY_USER,KEY_PASSWORD,KEY_CALENDAR],)).fetchall())
+    enc = values.get(KEY_PASSWORD) or ''
     try:
-        password = decrypt_password(enc) if enc else ""
+        password = decrypt_password(enc) if enc else ''
     except Exception:
-        password = ""
-    return {
-        "url": (get_setting(KEY_URL) or "").strip(),
-        "login": (get_setting(KEY_USER) or "").strip(),
-        "haslo": password,
-        "kalendarz": (get_setting(KEY_CALENDAR) or "").strip(),
-    }
+        password = ''
+    return {'url':(values.get(KEY_URL) or '').strip(), 'login':(values.get(KEY_USER) or '').strip(),
+            'haslo':password, 'kalendarz':(values.get(KEY_CALENDAR) or '').strip()}
 
 
 @office_endpoint('app.kalendarz.caldav_sync.save_config')
 def save_config(url: str, login: str, password: str = "", calendar_url: Optional[str] = None) -> None:
     """Puste hasło oznacza pozostawienie zapisanego."""
-    set_setting(KEY_URL, url.strip())
-    set_setting(KEY_USER, login.strip())
+    from app.db.dao_conn import get_conn
+    from app.utils.request_cache import clear_request_cache
+    values = {KEY_URL:url.strip(), KEY_USER:login.strip()}
     if password:
-        set_setting(KEY_PASSWORD, encrypt_password(password))
+        values[KEY_PASSWORD] = encrypt_password(password)
     if calendar_url is not None:
-        set_setting(KEY_CALENDAR, calendar_url.strip())
+        values[KEY_CALENDAR] = calendar_url.strip()
+    with get_conn() as conn:
+        conn.cursor().executemany('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                                  'ON CONFLICT(klucz) DO UPDATE SET wartosc=excluded.wartosc',list(values.items()))
+    clear_request_cache()
 
 
 @office_endpoint('app.kalendarz.caldav_sync.is_configured')

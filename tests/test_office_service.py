@@ -170,3 +170,13 @@ class OfficeServiceTests(DbTestCase):
             return []
         with mock.patch('app.integrations.enova.connection_settings.check_connection',new=check_connection):
             self.assertEqual(self.call('app.integrations.enova.connection_settings.check_connection',{'config':config},token=self.admin),[])
+
+    def test_calendar_secret_failure_cannot_publish_a_new_url_with_an_old_password(self):
+        from app.kalendarz import caldav_sync
+        caldav_sync.save_config('https://trusted.example/','reader','old-password')
+        with mock.patch('app.kalendarz.caldav_sync.encrypt_password',side_effect=ValueError('Unable to encrypt')):
+            with self.assertRaises(ValueError):
+                self.call('app.kalendarz.caldav_sync.save_config',
+                          {'url':'https://new.example/','login':'new-reader','password':'new-password'},token=self.admin)
+        config = caldav_sync.get_config()
+        self.assertEqual((config['url'],config['login'],config['haslo']),('https://trusted.example/','reader','old-password'))

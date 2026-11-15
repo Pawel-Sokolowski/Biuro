@@ -22,6 +22,9 @@ Enovą, Płatnikiem, KSeF i e-ZLA z użyciem swoich lokalnych danych dostępu.
 5. Uruchom zwykłe Biuro na stanowisku, wpisz adres i zaloguj się kontem pracownika.
    Opcja zapamiętania logowania zapisuje token sesji w Menedżerze poświadczeń
    Windows, bez hasła pracownika, hasła bazy lub klucza biura.
+6. Po przełączeniu istniejących stanowisk usuń z ich dawnych plików `.env`
+   wpisy `DB_URL` i `BIO_ENCRYPTION_KEY`. Zachowaj konfigurację i klucz na serwerze.
+   Aplikacja pracownika nie odczytuje tych plików.
 
 Opcjonalnie samą usługę uruchamia `Biuro.exe --api-server` lub
 `python main.py --api-server`, korzystając z tej samej konfiguracji serwerowej:

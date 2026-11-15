@@ -46,7 +46,7 @@ def login(email, password, peer, remember=False):
     email = email.strip().casefold()
     with get_conn() as conn:
         permitted_ip = _attempt(conn, 'ip:' + peer, 100)
-        permitted_account = _attempt(conn, 'account:' + email, 10)
+        permitted_account = _attempt(conn, 'account:' + email, 10) if permitted_ip else False
     if not permitted_ip or not permitted_account:
         raise PermissionError('Zbyt wiele prób logowania. Spróbuj ponownie później.')
     with get_conn() as conn:

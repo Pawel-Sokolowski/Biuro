@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DataForm xmlns="http://www.enova.pl/schema/form.xsd" DataType="Biuro.Ezla.UI.ScheduleParameters,Biuro.Ezla.UI" Priority="0">
+  <Page Name="BiuroEzlaSchedule" CaptionHtml="Harmonogram importu e-ZLA" DataContext="{DataSource}">
+    <Field CaptionHtml="Instancja HZ" EditValue="{Instance}" Width="35" />
+    <Field CaptionHtml="Codziennie o godzinie" EditValue="{Time}" />
+  </Page>
+</DataForm>

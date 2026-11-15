@@ -44,7 +44,7 @@ class Certificate:
             notes.append('Skorygowane — sprawdź dokument powiązany w Enovie')
         elif self.status.startswith('Wsteczne'):
             notes.append('Zwolnienie wsteczne — wymaga sprawdzenia w Enovie')
-        return '; '.join(notes) or 'Podgląd — nie zaimportowano'
+        return '; '.join(notes) or 'Podgląd — sprawdź wynik importu w enova'
 
 
 @dataclass

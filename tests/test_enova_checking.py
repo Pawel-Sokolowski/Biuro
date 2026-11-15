@@ -176,7 +176,7 @@ class CheckingIntegrationTests(DbTestCase):
             page.ezla_panel.render({'report': report, 'company': {'id': self.company, 'nazwa': 'Firma Test'}, 'database': 'EnovaTest'})
             self.assertEqual(page.ezla_panel.table.item(0, 2).text(), 'PESEL: *******0000')
             self.assertEqual(page.ezla_panel.table.item(0, 4).text(), 'Anulowane')
-            self.assertIn('nie wykonano importu', page.ezla_panel.summary.text())
+            self.assertIn('wynik importu sprawdź w enova', page.ezla_panel.summary.text())
             page.ezla_panel.clear()
             self.assertEqual(page.ezla_panel.table.rowCount(), 1)
             self.assertEqual(page.ezla_panel.table.item(0, 4).text(), 'Nie wczytano raportu XML')

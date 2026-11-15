@@ -42,7 +42,8 @@ class EzlaPreviewPanel(QWidget):
         layout.addWidget(self.table)
         note = QLabel('Zestawienie raportów pobranych przez worker ZUS oraz lokalnie wczytanych XML. '
                       'Raporty z ZUS są zapisane w bazie w postaci zaszyfrowanej; lokalne XML nie są zapisywane. '
-                      'Nie wykonano importu do Enovy ani dopasowania pracownika do jej kartoteki. '
+                      'Import wykonuje dodatek Biuro e-ZLA w enova, ręcznie lub przez Harmonogram Zadań. '
+                      'Status ZUS w tym panelu nie potwierdza zapisu nieobecności w enova. '
                       'Anulowania i korekty wymagają odrębnej obsługi.')
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -133,7 +134,7 @@ class EzlaPreviewPanel(QWidget):
             for certificate, result in visible:
                 if self.only_attention and not failed and not certificate.issues and certificate.status == 'Wystawione' and not report_notes:
                     continue
-                database = result.get('database') or 'Brak mapowania bazy Enovy'
+                database = result.get('database') or 'Dodatek wybiera bazę po NIP firmy'
                 info = f"NIP: {result['report'].nip}; baza Enovy: {database}; raport: {result['report'].generated_at}"
                 records.append((company, certificate, '', certificate.review + ('; ' + report_notes if report_notes else '') + ('; ' + failure if failed else ''), info))
         self.table.setRowCount(len(records))
@@ -157,7 +158,7 @@ class EzlaPreviewPanel(QWidget):
                 self.table.setItem(row, column, item)
         self.table.resizeColumnsToContents()
         message = (f'Firmy: {len(self.companies)}; z wczytanym raportem: {loaded}; bez raportu: {len(self.companies) - loaded}. '
-                   'Wyłącznie podgląd — nie wykonano importu do Enovy.')
+                   'Podgląd raportów ZUS; wynik importu sprawdź w enova lub logu Harmonogramu Zadań.')
         errors = self.remote_errors + self.errors
         if errors:
             message += '\n' + '\n'.join(errors)

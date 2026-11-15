@@ -54,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.connection.settimeout(20)
             public_routes = {'/api/v1/login','/api/v1/reset','/api/v1/redeem'}
-            private_routes = {'/api/v1/session','/api/v1/logout','/api/v1/operations','/api/v1/jobs','/api/v1/files','/api/v1/download'}
+            private_routes = {'/api/v1/session','/api/v1/logout','/api/v1/operations','/api/v1/jobs','/api/v1/files','/api/v1/download','/api/v1/enova/ezla'}
             if self.path not in public_routes|private_routes:
                 self._answer(404,{'message':'Nieznana operacja.'})
                 return
@@ -140,6 +140,10 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path=='/api/v1/logout':
                 service.forget(token)
                 result = {'ok':True}
+            elif self.path=='/api/v1/enova/ezla':
+                from app.integrations.ezla.enova_export import export_reports
+                with service_scope():
+                    result = export_reports(actor,value)
             elif self.path=='/api/v1/operations':
                 result = service.submit(token,value)
             elif self.path=='/api/v1/jobs':

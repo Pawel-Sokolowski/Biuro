@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DataForm xmlns="http://www.enova.pl/schema/form.xsd" DataType="Biuro.Ezla.UI.EzlaParameters,Biuro.Ezla.UI" Priority="0">
+  <Page Name="BiuroEzla" CaptionHtml="Import e-ZLA z Biuro" DataContext="{DataSource}">
+    <Group CaptionHtml="Połączenie z Biuro">
+      <Field CaptionHtml="Serwer HTTPS" EditValue="{Server}" Width="50" />
+      <Field CaptionHtml="E-mail" EditValue="{Email}" Width="40" />
+      <Field CaptionHtml="Hasło" EditValue="{Password}" Class="PasswordEdit" Width="30" />
+    </Group>
+    <Group CaptionHtml="Zakres importu">
+      <Field CaptionHtml="Od miesiąca" EditValue="{From}" />
+      <Field CaptionHtml="Do miesiąca" EditValue="{To}" />
+      <Field CaptionHtml="Definicja nieobecności" EditValue="{Definition}" Width="40" />
+      <Field CaptionHtml="Tylko podgląd" EditValue="{Preview}" />
+    </Group>
+  </Page>
+</DataForm>

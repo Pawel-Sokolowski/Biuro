@@ -1,0 +1,4 @@
+{
+  "sdk": { "version": "8.0.100", "rollForward": "latestFeature" },
+  "msbuild-sdks": { "Soneta.Sdk": "1.2.0" }
+}

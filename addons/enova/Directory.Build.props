@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <SonetaTargetFramework>net8.0</SonetaTargetFramework>
+    <SonetaPackageVersion>2512.11.13</SonetaPackageVersion>
+    <Version>1.5.0</Version>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+</Project>

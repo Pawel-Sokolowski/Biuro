@@ -42,7 +42,7 @@ def probe_database(dsn, key):
     return True
 
 
-def save_local_config(dsn, key):
+def save_local_config(dsn, key, *, api_settings=None):
     """Persist to a dedicated file, restricted to this Windows user and SYSTEM."""
     from cryptography.fernet import Fernet
     from dotenv import set_key
@@ -53,6 +53,8 @@ def save_local_config(dsn, key):
     try:
         with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
             temporary = Path(handle.name)
+        if path.exists():
+            temporary.write_bytes(path.read_bytes())
         temporary.chmod(0o600)
         if os.name == 'nt':
             # whoami provides the SID without depending on localized account names.
@@ -65,6 +67,10 @@ def save_local_config(dsn, key):
                            creationflags=subprocess.CREATE_NO_WINDOW)
         set_key(str(temporary), 'DB_URL', dsn)
         set_key(str(temporary), 'BIO_ENCRYPTION_KEY', key.strip())
+        for name,value in (api_settings or {}).items():
+            if name not in {'BIO_API_ENABLED','BIO_API_BIND','BIO_API_PORT','BIO_API_CERT','BIO_API_TLS_KEY'}:
+                raise ValueError('Nieprawidłowe ustawienie usługi biura.')
+            set_key(str(temporary),name,value)
         # set_key replaces the file; reapply ACL to the resulting file before publishing it.
         if os.name == 'nt':
             subprocess.run(['icacls', str(temporary), '/inheritance:r', '/grant:r',
@@ -77,6 +83,7 @@ def save_local_config(dsn, key):
             temporary.unlink(missing_ok=True)
     os.environ['DB_URL'] = dsn
     os.environ['BIO_ENCRYPTION_KEY'] = key.strip()
+    os.environ.update(api_settings or {})
     from app.db.dao_conn import close_all_pools
     close_all_pools()
 

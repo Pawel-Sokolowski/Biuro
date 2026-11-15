@@ -1,5 +1,6 @@
 """Uzgadnianie wyciągów ING MT940 z fakturami: zatwierdzanie zawsze ręczne."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import hashlib
 import json
@@ -24,6 +25,7 @@ class PaymentError(ValueError):
 PAYABLE_KINDS = ("faktura", "zaliczkowa", "proforma", "korekta")
 
 
+@office_endpoint('app.db.dao_payments.invoice_payment_total')
 def invoice_payment_total(invoice):
     total = _money(str(invoice['kwota_brutto']))
     return abs(total) if invoice['rodzaj'] == 'korekta' else total
@@ -111,6 +113,7 @@ def _description_details(raw_text: str) -> dict[str, str]:
     return {"title": title, "contractor": contractor, "contractor_account": account,
             "contractor_nip": re.sub(r"\D", "", nip_match[1]) if nip_match else ""}
 
+@office_endpoint('app.db.dao_payments.parse_ing_mt940')
 def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, Any]]:
     """Parser biblioteki mt-940; import zachowuje walutę i rodzaj operacji.
 
@@ -195,6 +198,7 @@ def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, A
     return result
 
 
+@office_endpoint('app.db.dao_payments.import_mt940_file')
 def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> dict[str, int]:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do importu operacji bankowych.")
@@ -244,6 +248,7 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
     return {"all": records_all, "new": inserted, "duplicates": len(records) - inserted, "own": len(own)}
 
 
+@office_endpoint('app.db.dao_payments.bank_import_summary')
 def bank_import_summary(actor_id: int) -> dict:
     """Shared import inventory, independent of the importing employee."""
     if not _allowed(actor_id):
@@ -254,6 +259,7 @@ def bank_import_summary(actor_id: int) -> dict:
         return {"total": row["total"], "database": scope["database"], "schema": scope["schema"]}
 
 
+@office_endpoint('app.db.dao_payments.bank_transfer_block_reason')
 def bank_transfer_block_reason(transfer: dict) -> str:
     if transfer.get('waluta', 'PLN') != 'PLN':
         return 'Operacja w innej walucie — rozliczanie dotyczy PLN.'
@@ -267,6 +273,7 @@ def bank_transfer_block_reason(transfer: dict) -> str:
     return ''
 
 
+@office_endpoint('app.db.dao_payments.list_unsettled_transfers')
 def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit: int = 1000) -> list[dict[str, Any]]:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do przeglądania wyciągów.")
@@ -292,6 +299,7 @@ def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_payments.list_invoice_choices')
 def list_invoice_choices(
     actor_id: int,
 ) -> list[dict[str, Any]]:
@@ -371,6 +379,7 @@ def _contractor_key(invoice: dict) -> tuple:
     return ("name", name) if name else ("invoice", invoice["id"])
 
 
+@office_endpoint('app.db.dao_payments.invoice_contractor_key')
 def invoice_contractor_key(invoice: dict) -> tuple:
     """Publiczny identyfikator nabywcy używany przez ręczny filtr płatności."""
     return _contractor_key(invoice)
@@ -406,6 +415,7 @@ def _contractor_name_matches(bank_name: str, invoice_name: str) -> bool:
     return len(bank_tokens) >= 2 and bank_tokens.issubset(invoice_tokens)
 
 
+@office_endpoint('app.db.dao_payments.match_invoice_contractor')
 def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     """Rozpoznaje jednego nabywcę; nigdy nie zatwierdza zapłaty ani faktury."""
     unresolved = {"company_key": None, "resolved_contractor": None, "confident": False,
@@ -454,11 +464,13 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     return resolved(name_keys, "Dopasowano kontrahenta po nazwie nadawcy.") if name_keys else unresolved
 
 
+@office_endpoint('app.db.dao_payments.invoice_choices_for_transaction')
 def invoice_choices_for_transaction(transaction: dict, invoices: list[dict]) -> list[dict]:
     match = match_invoice_contractor(transaction, invoices)
     return [inv for inv in invoices if _contractor_key(inv) == match["company_key"]] if match["confident"] else list(invoices)
 
 
+@office_endpoint('app.db.dao_payments.suggested_invoice_ids')
 def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
     """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.
 
@@ -494,6 +506,7 @@ def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, 
     return [invoice_id for _, invoice_id in results]
 
 
+@office_endpoint('app.db.dao_payments.apply_invoice_correction')
 def apply_invoice_correction(correction_id, invoice_id, amount, paid_on, actor_id):
     """Apply an issued negative correction as credit, without inventing cash."""
     if not _allowed(actor_id):
@@ -549,6 +562,7 @@ def _check_date(value: str) -> date:
         raise PaymentError("Podaj datę w formacie RRRR-MM-DD.") from exc
 
 
+@office_endpoint('app.db.dao_payments.get_invoice_payment_summary')
 def get_invoice_payment_summary(invoice_id: int, actor_id: int) -> dict[str, Any]:
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do przeglądania rozliczeń.")
@@ -573,6 +587,7 @@ def get_invoice_payment_summary(invoice_id: int, actor_id: int) -> dict[str, Any
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.monthly_invoice_payments')
 def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
     """Wszystkie faktury wystawione za miesiąc, wraz z historią wpłat."""
     conn = get_conn()
@@ -606,6 +621,7 @@ def monthly_invoice_payments(month: str) -> dict[int, list[dict[str, Any]]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.confirm_bank_payment')
 def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, actor_id: int,
                          *, manual_payment_id=None, allow_legacy_credit=False) -> None:
     if not _allowed(actor_id):
@@ -678,10 +694,12 @@ def confirm_bank_payment(transaction_id: int, invoice_id: int, amount: Any, acto
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.record_cash_payment')
 def record_cash_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: int) -> None:
     _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, "gotowka")
 
 
+@office_endpoint('app.db.dao_payments.record_manual_payment')
 def record_manual_payment(invoice_id: int, paid_on: str, amount: Any, actor_id: int) -> None:
     """Bank payment confirmed manually, without requiring an MT940 transaction."""
     _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, "bank")
@@ -720,6 +738,7 @@ def _record_unlinked_payment(invoice_id, paid_on, amount, actor_id, method):
         raise
     finally:
         conn.close()
+@office_endpoint('app.db.dao_payments.list_company_choices')
 def list_company_choices(actor_id: int) -> list[dict[str, Any]]:
     """Wszystkie dostępne firmy, także te bez otwartych faktur (do ręcznego wyboru)."""
     if not _allowed(actor_id):
@@ -736,6 +755,7 @@ def list_company_choices(actor_id: int) -> list[dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.payments_for_invoices')
 def payments_for_invoices(invoice_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
     """Wpłaty przypisane do podanych faktur (do kolumny i podpowiedzi na liście faktur)."""
     ids = [int(i) for i in invoice_ids]
@@ -758,6 +778,7 @@ def payments_for_invoices(invoice_ids: list[int]) -> dict[int, list[dict[str, An
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.list_settlements')
 def list_settlements(actor_id: int, firma_id: int | None = None, search: str = "", limit: int = 500) -> list[dict[str, Any]]:
     """Rozliczenia faktur (od najnowszych) z danymi faktury i przelewu."""
     if not _allowed(actor_id):
@@ -796,6 +817,7 @@ def list_settlements(actor_id: int, firma_id: int | None = None, search: str = "
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.revert_settlement')
 def revert_settlement(payment_id: int, actor_id: int) -> None:
     """Wycofuje wpłatę albo samo powiązanie ręcznej wpłaty z wyciągiem."""
     if not _allowed(actor_id):
@@ -821,6 +843,7 @@ def revert_settlement(payment_id: int, actor_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_payments.delete_bank_transaction')
 def delete_bank_transaction(
     transaction_id: int,
     actor_id: int,

@@ -1,9 +1,11 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/db/dao_cenniki_kadry.py
 import psycopg
 from typing import List, Dict, Optional, Any
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.db.dao_cenniki_kadry.get_all_kadry_pricing')
 def get_all_kadry_pricing() -> List[Dict[str, Any]]:
     """
     Zwraca listę cenników kadrowych z kolumnami netto/brutto.
@@ -26,6 +28,7 @@ def get_all_kadry_pricing() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+@office_endpoint('app.db.dao_cenniki_kadry.get_kadry_price')
 def get_kadry_price(klucz: str) -> Optional[float]:
     """
     Pobiera cenę netto (cena_netto_kadry) dla danego klucza.
@@ -49,6 +52,7 @@ def get_kadry_price(klucz: str) -> Optional[float]:
     return float(row["cena_netto"]) if row and row["cena_netto"] is not None else None
 
 
+@office_endpoint('app.db.dao_cenniki_kadry.get_kadry_brutto')
 def get_kadry_brutto(klucz: str) -> Optional[float]:
     """
     Pobiera cenę brutto (cena_brutto_kadry) dla danego klucza.
@@ -79,6 +83,7 @@ def get_kadry_brutto(klucz: str) -> Optional[float]:
     return None
 
 
+@office_endpoint('app.db.dao_cenniki_kadry.get_kadry_description')
 def get_kadry_description(klucz: str) -> Optional[str]:
     if not klucz:
         return None
@@ -92,6 +97,7 @@ def get_kadry_description(klucz: str) -> Optional[str]:
     return row["opis"] if row else None
 
 
+@office_endpoint('app.db.dao_cenniki_kadry.import_kadry_pricing')
 def import_kadry_pricing(rows: List[Dict[str, str]]) -> Dict[str, Any]:
     """
     Import cennika kadrowego z CSV/XLSX.

@@ -1,9 +1,11 @@
 """Metadata-only export for mapping installation-specific payroll/declaration tables."""
+from app.remote.boundary import endpoint as office_endpoint
 from app.integrations.enova.document_counts import sql_connection_string
 from app.integrations.enova.odbc_support import load_odbc, resolve_driver, describe_sql_error
 from app.integrations.enova.connection_settings import credentials
 
 
+@office_endpoint('app.integrations.enova.schema_probe.inspect_schema')
 def inspect_schema(config, database, *, password='', progress=None):
     if not database:
         raise ValueError('Wpisz bazę Enova przy wybranej firmie.')

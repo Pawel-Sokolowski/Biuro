@@ -1,5 +1,6 @@
 """Ręczne sprawdzenie statusu VAT (Biała Lista MF) i VAT UE (VIES) dla firmy."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
@@ -23,6 +24,7 @@ def _employee_name(actor_id: Optional[int]) -> str:
     return f"{row[0]} {row[1]}".strip() if row else ""
 
 
+@office_endpoint('app.utils.vat_check.check_company_vat')
 def check_company_vat(
     firma_id: int,
     actor_id: Optional[int] = None,

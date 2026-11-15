@@ -1,5 +1,6 @@
 """Synchronizacja kalendarza przez CalDAV (biblioteka `caldav`) – Google Calendar lub dowolny serwer CalDAV."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from copy import deepcopy
 from datetime import date, datetime, timedelta
@@ -25,6 +26,7 @@ class CaldavError(Exception):
 
 
 # ---------- konfiguracja ----------
+@office_endpoint('app.kalendarz.caldav_sync.get_config')
 def get_config() -> Dict[str, str]:
     enc = get_setting(KEY_PASSWORD) or ""
     try:
@@ -39,6 +41,7 @@ def get_config() -> Dict[str, str]:
     }
 
 
+@office_endpoint('app.kalendarz.caldav_sync.save_config')
 def save_config(url: str, login: str, password: str = "", calendar_url: Optional[str] = None) -> None:
     """Puste hasło oznacza pozostawienie zapisanego."""
     set_setting(KEY_URL, url.strip())
@@ -49,6 +52,7 @@ def save_config(url: str, login: str, password: str = "", calendar_url: Optional
         set_setting(KEY_CALENDAR, calendar_url.strip())
 
 
+@office_endpoint('app.kalendarz.caldav_sync.is_configured')
 def is_configured() -> bool:
     cfg = get_config()
     return bool(cfg["url"] and cfg["login"] and cfg["haslo"])
@@ -102,6 +106,7 @@ def _cal_name(cal) -> str:
     return str(getattr(cal, "name", None) or _cal_url(cal))
 
 
+@office_endpoint('app.kalendarz.caldav_sync.test_connection')
 def test_connection(url: str, login: str, password: str) -> str:
     """Zwraca komunikat o powodzeniu albo rzuca CaldavError."""
     try:
@@ -113,6 +118,7 @@ def test_connection(url: str, login: str, password: str) -> str:
     return f"Połączono. Liczba znalezionych kalendarzy: {len(cals)}."
 
 
+@office_endpoint('app.kalendarz.caldav_sync.list_calendars')
 def list_calendars(cfg: Optional[Dict[str, str]] = None) -> List[Dict[str, str]]:
     cfg = cfg or get_config()
     try:
@@ -309,6 +315,7 @@ def _send_operation(op, calendar):
     outbox.acknowledge(op)
 
 
+@office_endpoint('app.kalendarz.caldav_sync.push_event')
 def push_event(pracownik_id: int, event: Dict[str, Any], calendar=None) -> None:
     try:
         cfg = get_config()
@@ -327,6 +334,7 @@ def push_event(pracownik_id: int, event: Dict[str, Any], calendar=None) -> None:
         raise CaldavError(friendly_error(exc)) from exc
 
 
+@office_endpoint('app.kalendarz.caldav_sync.delete_remote')
 def delete_remote(pracownik_id: int, uid: str, calendar=None, *, calendar_id=None) -> None:
     try:
         cfg = get_config()
@@ -382,6 +390,7 @@ def pull_events(pracownik_id: int, calendar, days_back: int = 30, days_ahead: in
     return stats
 
 
+@office_endpoint('app.kalendarz.caldav_sync.sync')
 def sync(pracownik_id: int, days_back: int = 30, days_ahead: int = 365) -> Dict[str, int]:
     try:
         cfg = get_config()

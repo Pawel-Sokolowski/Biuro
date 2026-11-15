@@ -1339,6 +1339,10 @@ class EmailPage(QWidget):
 
     def _fetch_mail_data(self, request, before=None, existing=(), through=None, ensure_row=None):
         account, folder, query, employee, completed = request
+        from app.remote.state import client
+        if client() is not None:
+            from app.remote.screen_data import mail_view_snapshot
+            return mail_view_snapshot(account,folder,query,employee,completed,before,existing,through,ensure_row)
         ensure_ids = [ensure_row["id"]] if ensure_row and ensure_row.get("konto_id") == account else []
         with mail_read_snapshot() as connection:
             rows, more, cursor = get_mail_page(account, folder, phrase=query, before=before,

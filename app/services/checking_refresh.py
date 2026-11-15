@@ -1,4 +1,5 @@
 """Selected-company read requests, executed by the existing server worker."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 import uuid
 from datetime import datetime
@@ -38,6 +39,7 @@ def _save(value):
                      (PREFIX+value['id'],json.dumps(value,ensure_ascii=False)))
 
 
+@office_endpoint('app.services.checking_refresh.enqueue')
 def enqueue(actor_id, kind, company_ids, period):
     scope(actor_id,company_ids)
     if kind not in KINDS:
@@ -62,6 +64,7 @@ def enqueue(actor_id, kind, company_ids, period):
     return value
 
 
+@office_endpoint('app.services.checking_refresh.latest')
 def latest(actor_id):
     require_access(actor_id)
     with get_conn() as conn:

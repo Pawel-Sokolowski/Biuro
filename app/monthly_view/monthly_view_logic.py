@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import remote_class as office_remote_class
 
 import datetime
 from calendar import monthrange
@@ -18,6 +19,7 @@ from app.security.authorization import assigned_company_ids, can, is_administrat
 from app.db import dao_active_timers
 
 
+@office_remote_class('app.monthly_view.monthly_view_logic.MonthlyViewLogic')
 class MonthlyViewLogic:
     _TIMER_FIELDS = {
         "ksiegowosc": (

@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Optional
@@ -75,6 +76,7 @@ def _insert_activity(conn, firma_id, miesiac, usluga_id, ilosc, cena_netto, fakt
     ).fetchone()[0])
 
 
+@office_endpoint('app.db.dao_services.add_company_extra_service')
 def add_company_extra_service(
     firma_id: int,
     miesiac: str,
@@ -102,6 +104,7 @@ def add_company_extra_service(
         conn.close()
 
 
+@office_endpoint('app.db.dao_services.create_extra_activity')
 def create_extra_activity(
     firma_id: int, miesiac: str, usluga_id: int, ilosc: float, cena_netto: float,
     fakturowac: bool, jednostka: str = "szt.", *, actor_id: int,
@@ -130,6 +133,7 @@ def create_extra_activity(
         conn.close()
 
 
+@office_endpoint('app.db.dao_services.link_extra_activity_task')
 def link_extra_activity_task(service_row_id: int, task_id: int, actor_id: int) -> None:
     conn = get_conn()
     try:
@@ -144,6 +148,7 @@ def link_extra_activity_task(service_row_id: int, task_id: int, actor_id: int) -
         conn.close()
 
 
+@office_endpoint('app.db.dao_services.create_task_for_extra_activity')
 def create_task_for_extra_activity(
     service_id: int, actor_id: int, task_title: Optional[str] = None,
     pracownik_id: Optional[int] = None, status: str = "Nowe", termin: Optional[str] = None, opis: str = "",
@@ -166,6 +171,7 @@ def create_task_for_extra_activity(
         conn.close()
 
 
+@office_endpoint('app.db.dao_services.list_extra_activities')
 def list_extra_activities(
     viewer_id: int, firma_id: Optional[int] = None, miesiac: Optional[str] = None, state: Optional[str] = None,
 ) -> list[dict]:

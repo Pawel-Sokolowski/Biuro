@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import json
 from typing import Any, Optional
@@ -6,6 +7,7 @@ from typing import Any, Optional
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.db.dao_audit.record_audit')
 def record_audit(
     table: str,
     action: str,
@@ -27,6 +29,7 @@ def record_audit(
         conn.close()
 
 
+@office_endpoint('app.db.dao_audit.list_audit')
 def list_audit(limit: int = 500):
     conn = get_conn()
     try:
@@ -44,6 +47,7 @@ def list_audit(limit: int = 500):
         conn.close()
 
 
+@office_endpoint('app.db.dao_audit.record_import')
 def record_import(
     import_type: str,
     source_path: str,
@@ -76,6 +80,7 @@ def record_import(
         conn.close()
 
 
+@office_endpoint('app.db.dao_audit.list_import_history')
 def list_import_history(limit: int = 200):
     conn = get_conn()
     try:

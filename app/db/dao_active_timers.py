@@ -1,4 +1,5 @@
 """Monotonic timers with recoverable checkpoints, owned by one app instance."""
+from app.remote.boundary import endpoint as office_endpoint
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
@@ -41,6 +42,7 @@ def finish(conn, session):
             raise ValueError('Ten stoper został odzyskany w innym oknie. Odśwież widok.')
 
 
+@office_endpoint('app.db.dao_active_timers.checkpoint')
 def checkpoint(snapshots):
     if not snapshots:
         return
@@ -50,6 +52,7 @@ def checkpoint(snapshots):
                 WHERE session_id=%s AND owner_token=%s''', (elapsed, session_id, owner))
 
 
+@office_endpoint('app.db.dao_active_timers.recoverable')
 def recoverable(employee):
     with get_conn() as conn:
         return [dict(row) for row in conn.execute('''SELECT a.*, COALESCE(NULLIF(f.nazwa_skrocona,''),f.nazwa,'Czynność ogólna') AS company
@@ -58,6 +61,7 @@ def recoverable(employee):
             ORDER BY a.started_at''', (employee,)).fetchall()]
 
 
+@office_endpoint('app.db.dao_active_timers.claim')
 def claim(employee, session_id):
     owner = str(uuid4())
     with get_conn() as conn:

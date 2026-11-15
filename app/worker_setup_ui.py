@@ -87,12 +87,12 @@ class ConnectionDialog(QDialog):
         if QMessageBox.question(self, 'Nowe biuro',
                 'Generować nowy wspólny klucz? Tylko dla nowego biura. '
                 'Jeżeli w Biuro są już zapisane hasła, wybierz klucz z działającego komputera. '
-                'Nowy klucz trzeba przekazać wszystkim stanowiskom.',
+                'Nowy klucz pozostaje wyłącznie na serwerze.',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             from cryptography.fernet import Fernet
             self.key.setText(Fernet.generate_key().decode())
-            self.status.setText('Wygenerowano klucz. Zapisz jego kopię w bezpiecznym miejscu i użyj go na wszystkich stanowiskach.')
+            self.status.setText('Wygenerowano klucz. Zapisz jego kopię w bezpiecznym miejscu i przechowuj go wyłącznie na serwerze.')
 
     def export_key(self):
         from cryptography.fernet import Fernet
@@ -219,11 +219,16 @@ class WorkerSetupWindow(QMainWindow):
             5: EmailSettings, 6: CalendarAndResetSettings, 7: ReminderSettings, 8: KsefSettings,
             9: lambda: SaldeoWebSettings(actor_id),
             10: lambda: PlatnikSettings(actor_id),
+            11: self.server_page,
         }
         for title in ('Panel i logi', 'Zadania', 'e-ZLA', 'Odczyt z Enovy', 'Konta poczty',
-                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik'):
+                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa HTTPS'):
             self.tabs.addTab(QWidget(), title)
         self.tabs.currentChanged.connect(self.open_tab)
+
+    def server_page(self):
+        from app.remote.server_settings_ui import ServerSettings
+        return ServerSettings()
 
     def open_tab(self, index):
         existing = self.opened_pages.get(index)

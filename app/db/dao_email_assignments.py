@@ -1,10 +1,12 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Optional
 
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.db.dao_email_assignments.assign_message')
 def assign_message(message_id: int, employee_id: Optional[int], company_id: Optional[int]) -> None:
     if employee_id is None and company_id is None:
         return
@@ -24,6 +26,7 @@ def assign_message(message_id: int, employee_id: Optional[int], company_id: Opti
         conn.close()
 
 
+@office_endpoint('app.db.dao_email_assignments.list_assigned_messages')
 def list_assigned_messages(
     konto_id: int,
     employee_id: Optional[int] = None,

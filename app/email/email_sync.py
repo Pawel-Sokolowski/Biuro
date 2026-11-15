@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import email.policy
 import imaplib
@@ -269,6 +270,7 @@ def close_sessions() -> None:
     for session in sessions:
         session.close()
 
+@office_endpoint('app.email.email_sync.list_folder_infos')
 def list_folder_infos(
     konto_id: int,
     timeout: int = 30,
@@ -361,6 +363,7 @@ def list_folder_infos(
             )
 
 
+@office_endpoint('app.email.email_sync.list_folders')
 def list_folders(
     konto_id: int,
     timeout: int = 30,
@@ -379,6 +382,7 @@ def _raw_from_fetch(data: Any) -> Optional[bytes]:
     return None
 
 
+@office_endpoint('app.email.email_sync.fetch_message_from_imap')
 def fetch_message_from_imap(
     konto_id: int,
     folder: str,
@@ -468,6 +472,7 @@ def fetch_message_from_imap(
     )
 
 
+@office_endpoint('app.email.email_sync.prefetch_messages')
 def prefetch_messages(
     konto_id: int,
     folder: str,
@@ -612,6 +617,7 @@ def prefetch_messages(
 
     return fetched
 
+@office_endpoint('app.email.email_sync.prefetch_recent')
 def prefetch_recent(
     konto_id: int,
     folder: str,
@@ -637,6 +643,7 @@ def prefetch_recent(
 
 
 
+@office_endpoint('app.email.email_sync.prefetch_all_messages')
 def prefetch_all_messages(
     konto_id: int,
     folder: str,
@@ -703,6 +710,7 @@ def _uidvalidity(conn) -> Optional[str]:
     return None
 
 
+@office_endpoint('app.email.email_sync.fetch_headers')
 def fetch_headers(
     konto_id: int,
     folder: str,
@@ -953,6 +961,7 @@ def thread_refs(msg) -> str:
     return " ".join(dict.fromkeys(found))
 
 
+@office_endpoint('app.email.email_sync.backfill_refs')
 def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) -> int:
     """Dociąga nagłówki wątków dla wiadomości zapisanych przed dodaniem tej funkcji."""
     uids = get_uids_missing_refs(konto_id, folder_id, limit)
@@ -985,6 +994,7 @@ def backfill_refs(konto_id: int, folder: str, folder_id: int, limit: int = 400) 
     save_refs(konto_id, folder_id, updates, expected_generation=generation, **_revision_args(account_revision))
     return len(updates)
 
+@office_endpoint('app.email.email_sync.sync_folder_and_prefetch_all')
 def sync_folder_and_prefetch_all(
     konto_id: int,
     folder: str,
@@ -996,6 +1006,7 @@ def sync_folder_and_prefetch_all(
     # zapisanych w bazie dla tego folderu.
     return prefetch_all_messages(konto_id, folder)
 
+@office_endpoint('app.email.email_sync.append_message')
 def append_message(konto_id: int, folder: str, raw: bytes, seen: bool = True, timeout: int = 60) -> bool:
     """Dokłada gotową wiadomość do folderu IMAP (jak kopia wysłanej w Thunderbirdzie)."""
     with _shared_session(konto_id, timeout) as session:
@@ -1023,6 +1034,7 @@ def _assert_selected_rows(konto_id, folder, expected_rows):
         raise RuntimeError("Wiadomość zmieniła identyfikator na serwerze. Odśwież listę przed ponowieniem operacji.")
 
 
+@office_endpoint('app.email.email_sync.move_message')
 def move_message(
     konto_id: int,
     uid: str,
@@ -1050,6 +1062,7 @@ def move_message(
         return True
 
 
+@office_endpoint('app.email.email_sync.delete_message')
 def delete_message(
     konto_id: int,
     uid: str,
@@ -1092,6 +1105,7 @@ def _store_folders(
         )
 
 
+@office_endpoint('app.email.email_sync.sync_account')
 def sync_account(konto_id: int) -> None:
     logger.warning(
         "SYNC_ACCOUNT START konto=%s",
@@ -1173,6 +1187,7 @@ def sync_account(konto_id: int) -> None:
     )
 
 
+@office_endpoint('app.email.email_sync.mark_unread_remote')
 def mark_unread_remote(
     konto_id: int,
     folder: str,
@@ -1182,6 +1197,7 @@ def mark_unread_remote(
 ) -> bool:
     return _set_seen_remote(konto_id, folder, uid, False, timeout, expected_row_id=expected_row_id)
 
+@office_endpoint('app.email.email_sync.archive_message')
 def archive_message(
     konto_id: int,
     uid: str,
@@ -1198,6 +1214,7 @@ def archive_message(
     )
 
 
+@office_endpoint('app.email.email_sync.sync_folder')
 def sync_folder(
     konto_id: int,
     folder: str,
@@ -1301,6 +1318,7 @@ def selectable_folder_names(konto_id: int) -> List[str]:
     return names
 
 
+@office_endpoint('app.email.email_sync.needs_initial_sync')
 def needs_initial_sync(konto_id: int) -> bool:
     """Only a completed full two-year download counts as initial sync."""
     return get_setting(f"email_initial_sync_complete_{konto_id}") != "1" or get_setting(f"email_initial_sync_pending_{konto_id}") == "1"
@@ -1505,6 +1523,7 @@ class MailboxSyncBusy(RuntimeError):
     """An explicit sync was not performed because another desktop owns it."""
 
 
+@office_endpoint('app.email.email_sync.sync_and_prefetch')
 def sync_and_prefetch(
     konto_id: int,
     folders: List[str],
@@ -1564,10 +1583,12 @@ def _set_seen_remote(
     return True
 
 
+@office_endpoint('app.email.email_sync.mark_read_remote')
 def mark_read_remote(konto_id: int, folder: str, uid: str, timeout: int = 30, *, expected_row_id=None) -> bool:
     return _set_seen_remote(konto_id, folder, uid, True, timeout, expected_row_id=expected_row_id)
 
 
+@office_endpoint('app.email.email_sync.list_folders_from_imap_and_store')
 def list_folders_from_imap_and_store(konto_id: int) -> bool:
     infos = list_folder_infos(konto_id)
     if not infos:
@@ -1576,6 +1597,7 @@ def list_folders_from_imap_and_store(konto_id: int) -> bool:
     return True
 
 
+@office_endpoint('app.email.email_sync.fetch_headers_from_imap_and_store')
 def fetch_headers_from_imap_and_store(
     konto_id: int,
     folder: str,
@@ -1585,10 +1607,12 @@ def fetch_headers_from_imap_and_store(
         folder,
         full_sync=True,
     )
+@office_endpoint('app.email.email_sync.fetch_message_from_imap_and_store')
 def fetch_message_from_imap_and_store(konto_id: int, folder: str, uid: str) -> bool:
     return fetch_message_from_imap(konto_id, folder, uid) is not None
 
 
+@office_endpoint('app.email.email_sync.delete_email_remote')
 def delete_email_remote(konto_id: int, folder: str, uid: str, *, expected_row_id=None) -> bool:
     options = {} if expected_row_id is None else {"expected_row_id": expected_row_id}
     ok = delete_message(konto_id, uid, folder, **options)
@@ -1599,6 +1623,7 @@ def delete_email_remote(konto_id: int, folder: str, uid: str, *, expected_row_id
     return ok
 
 
+@office_endpoint('app.email.email_sync.move_email_and_get_sender')
 def move_email_and_get_sender(
     konto_id: int,
     source_folder: str,
@@ -1616,6 +1641,7 @@ def move_email_and_get_sender(
     return cached.get("nadawca") or ""
 
 
+@office_endpoint('app.email.email_sync.move_emails')
 def move_emails(
     konto_id: int,
     source_folder: str,
@@ -1677,6 +1703,7 @@ def _check(result) -> None:
         raise RuntimeError(detail or "Serwer odrzuci? polecenie.")
 
 
+@office_endpoint('app.email.email_sync.create_folder')
 def create_folder(konto_id: int, name: str) -> str:
     """Tworzy folder na serwerze (`name` w postaci nieskodowanej, ze separatorem serwera) i zwraca jego nazw? IMAP."""
     server_name = encode_mailbox_utf7(name)
@@ -1698,6 +1725,7 @@ def _delimiter_of(konto_id: int, server_name: str) -> Optional[str]:
     return delimiters[0] if delimiters else None
 
 
+@office_endpoint('app.email.email_sync.rename_folder')
 def rename_folder(konto_id: int, old: str, new_name: str) -> str:
     """Zmienia nazw? lub przenosi folder (RENAME) na serwerze, potem w bazie lokalnej."""
     new_server = encode_mailbox_utf7(new_name)
@@ -1762,6 +1790,7 @@ def _changed_folders(konto_id: int, folders: List[str], force_full: bool) -> Tup
     return changed, current
 
 
+@office_endpoint('app.email.email_sync.sync_folder_flags')
 def sync_folder_flags(konto_id: int, folder: str) -> int:
     """Refresh remote read/unread flags even when STATUS counters are unchanged.
 
@@ -1895,6 +1924,7 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
     return errors
 
 
+@office_endpoint('app.email.email_sync.sync_requested_accounts')
 def sync_requested_accounts(accounts, *, on_progress=None, cancel_event=None):
     """Explicit Settings action: full messages/attachments, all folders, 730 days.
 

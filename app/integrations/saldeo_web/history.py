@@ -1,4 +1,5 @@
 """Idempotent inbox: persist first, apply atomically, retry unresolved entries."""
+from app.remote.boundary import endpoint as office_endpoint
 import hashlib
 import re
 from datetime import datetime
@@ -78,6 +79,7 @@ def apply_pending():
     return applied
 
 
+@office_endpoint('app.integrations.saldeo_web.history.list_history')
 def list_history(actor_id, limit=500):
     from app.security.authorization import is_administrator, assigned_company_ids, allowed_tabs
     # Use the same company visibility rules as the rest of Biuro.
@@ -91,6 +93,7 @@ def list_history(actor_id, limit=500):
         return [dict(row) for row in conn.execute('SELECT * FROM saldeo_web_events WHERE firma_id=ANY(%s) ORDER BY detected_at DESC LIMIT %s', (list(ids), limit)).fetchall()]
 
 
+@office_endpoint('app.integrations.saldeo_web.history.notification_batches')
 def notification_batches(actor_id):
     """Group one applied transaction into one inbox notification instead of a popup per firm."""
     rows = list_history(actor_id, 200)

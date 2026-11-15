@@ -5,6 +5,7 @@ Zawiera: dostęp do DB, ustawienia aplikacji, role, użytkownicy, konta email,
 cenniki, kadry, usługi dodatkowe, firmy, faktury (CRUD + pozycje), tagi,
 załączniki, logi, backup oraz pomocnicze migracje schematu.
 """
+from app.remote.boundary import remote_class as office_remote_class
 
 import csv
 import json
@@ -69,6 +70,7 @@ def _row_to_dict_safe(row):
         return d
 
 
+@office_remote_class('app.admin.global_settings_logic.GlobalSettingsLogic')
 class GlobalSettingsLogic:
     def __init__(self):
         try:

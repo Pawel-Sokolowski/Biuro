@@ -1,11 +1,13 @@
 # app/db/dao_global_settings.py
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import psycopg
 from typing import Optional, List
 
 from app.db.dao_conn import get_conn, Row
 
+@office_endpoint('app.db.dao_global_settings.get_roles')
 def get_roles() -> List[Row]:
     conn = get_conn()
     try:
@@ -28,6 +30,7 @@ def get_roles() -> List[Row]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_role_tabs')
 def get_role_tabs(rid: int) -> List[str]:
     from app.security.authorization import parse_tabs
 
@@ -46,6 +49,7 @@ def get_role_tabs(rid: int) -> List[str]:
     return parse_tabs(row["zakladki"], bool(row["adm"]))
 
 
+@office_endpoint('app.db.dao_global_settings.set_role_tabs')
 def set_role_tabs(rid: int, tabs: List[str]) -> None:
     conn = get_conn()
     try:
@@ -61,6 +65,7 @@ def set_role_tabs(rid: int, tabs: List[str]) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_role')
 def get_role(rid: int) -> Optional[Row]:
     conn = get_conn()
     try:
@@ -94,6 +99,7 @@ def _invoice_tabs(raw, admin_settings, enabled):
     return '|'.join(tab for tab in TABS if tab in tabs)
 
 
+@office_endpoint('app.db.dao_global_settings.add_role')
 def add_role(
     nazwa: str,
     can_view_invoices: bool = False,
@@ -133,6 +139,7 @@ def add_role(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.update_role')
 def update_role(rid: int, nazwa: str, **perms) -> None:
     conn = get_conn()
     try:
@@ -172,6 +179,7 @@ def update_role(rid: int, nazwa: str, **perms) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.delete_role')
 def delete_role(rola_id: int) -> None:
     conn = get_conn()
     try:
@@ -184,6 +192,7 @@ def delete_role(rola_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_user_permissions')
 def get_user_permissions(pracownik_id: int) -> Row:
     conn = get_conn()
     try:
@@ -205,6 +214,7 @@ def get_user_permissions(pracownik_id: int) -> Row:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.assign_role')
 def assign_role(uid: int, rid: int, firma_id: int = 1) -> None:
     conn = get_conn()
     try:
@@ -220,6 +230,7 @@ def assign_role(uid: int, rid: int, firma_id: int = 1) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_user_role')
 def get_user_role(uid: int) -> Optional[int]:
     conn = get_conn()
     try:
@@ -237,6 +248,7 @@ def get_user_role(uid: int) -> Optional[int]:
 # -------------------------
 # Konta email i przypisania
 # -------------------------
+@office_endpoint('app.db.dao_global_settings.get_email_accounts')
 def get_email_accounts() -> List[Row]:
     conn = get_conn()
     try:
@@ -259,6 +271,7 @@ def get_email_accounts() -> List[Row]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_global_settings.get_email_account')
 def get_email_account(acc_id: int) -> Optional[Row]:
     conn = get_conn()
     try:
@@ -269,6 +282,7 @@ def get_email_account(acc_id: int) -> Optional[Row]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.add_email_account')
 def add_email_account(
     email: str,
     imap_server: str,
@@ -324,6 +338,7 @@ def _retire_account_cache(conn, acc_id):
                    f"email_initial_sync_complete_{acc_id}"],))
 
 
+@office_endpoint('app.db.dao_global_settings.update_email_account')
 def update_email_account(
     acc_id: int,
     email: str,
@@ -346,6 +361,7 @@ def update_email_account(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.update_email_account_connection')
 def update_email_account_connection(
     acc_id: int,
     email: str,
@@ -373,6 +389,7 @@ def update_email_account_connection(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.update_email_account_password')
 def update_email_account_password(acc_id: int, haslo_enc: str) -> None:
     conn = get_conn()
     try:
@@ -384,6 +401,7 @@ def update_email_account_password(acc_id: int, haslo_enc: str) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_account_employee_ids')
 def get_account_employee_ids(konto_id: int) -> List[int]:
     conn = get_conn()
     try:
@@ -396,6 +414,7 @@ def get_account_employee_ids(konto_id: int) -> List[int]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.set_account_employees')
 def set_account_employees(konto_id: int, employee_ids: List[int]) -> None:
     conn = get_conn()
     try:
@@ -411,6 +430,7 @@ def set_account_employees(konto_id: int, employee_ids: List[int]) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.toggle_email_account_active')
 def toggle_email_account_active(acc_id: int) -> None:
     conn = get_conn()
     try:
@@ -426,6 +446,7 @@ def toggle_email_account_active(acc_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.delete_email_account')
 def delete_email_account(konto_id: int) -> None:
     conn = get_conn()
     try:
@@ -437,6 +458,7 @@ def delete_email_account(konto_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_email_assignments')
 def get_email_assignments() -> List[Row]:
     conn = get_conn()
     try:
@@ -455,6 +477,7 @@ def get_email_assignments() -> List[Row]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.assign_email_to_employee')
 def assign_email_to_employee(konto_id: int, pracownik_id: int) -> None:
     conn = get_conn()
     try:
@@ -472,6 +495,7 @@ def assign_email_to_employee(konto_id: int, pracownik_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.remove_email_assignment')
 def remove_email_assignment(konto_id: int, pracownik_id: int) -> None:
     conn = get_conn()
     try:
@@ -491,6 +515,7 @@ def remove_email_assignment(konto_id: int, pracownik_id: int) -> None:
 # -------------------------
 # Cenniki i usługi
 # -------------------------
+@office_endpoint('app.db.dao_global_settings.get_global_pricing')
 def get_global_pricing() -> List[Row]:
     conn = get_conn()
     try:
@@ -507,6 +532,7 @@ def get_global_pricing() -> List[Row]:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_global_settings.get_pricing_kadry')
 def get_pricing_kadry() -> List[Row]:
     conn = get_conn()
     try:
@@ -523,6 +549,7 @@ def get_pricing_kadry() -> List[Row]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.get_extra_services')
 def get_extra_services() -> List[Row]:
     conn = get_conn()
     try:
@@ -539,6 +566,7 @@ def get_extra_services() -> List[Row]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.update_global_pricing_item')
 def update_global_pricing_item(
     klucz: str,
     cena_netto_ksiegowosc: float,
@@ -568,6 +596,7 @@ def update_global_pricing_item(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.add_global_pricing_item')
 def add_global_pricing_item(
     klucz: str,
     cena_netto_ksiegowosc: float,
@@ -592,6 +621,7 @@ def add_global_pricing_item(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.add_pricing_kadry_item')
 def add_pricing_kadry_item(
     klucz: str,
     cena_netto_kadry: float,
@@ -613,6 +643,7 @@ def add_pricing_kadry_item(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.update_pricing_kadry_item')
 def update_pricing_kadry_item(
     klucz: str,
     cena_netto_kadry: float,
@@ -638,6 +669,7 @@ def update_pricing_kadry_item(
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.add_extra_service')
 def add_extra_service(nazwa: str, cena_netto: float, stawka_vat: str, kategoria: str) -> None:
     conn = get_conn()
     try:
@@ -654,6 +686,7 @@ def add_extra_service(nazwa: str, cena_netto: float, stawka_vat: str, kategoria:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.delete_extra_service')
 def delete_extra_service(usluga_id: int) -> None:
     conn = get_conn()
     try:
@@ -664,6 +697,7 @@ def delete_extra_service(usluga_id: int) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_global_settings.update_extra_service_by_name')
 def update_extra_service_by_name(
     old_name: str,
     nazwa: str,

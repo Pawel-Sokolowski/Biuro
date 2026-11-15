@@ -1,4 +1,5 @@
 """Personal assignment inbox, with local seen state and permission-checked links."""
+from app.remote.boundary import endpoint as office_endpoint
 import logging
 from PyQt6.QtCore import QObject, QRunnable, QSettings, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QMenu, QPushButton
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_MS = 15000
 
 
+@office_endpoint('app.notifications.list_user_notifications')
 def list_user_notifications(actor_id):
     """Only current assignments accessible to this employee; no historic backfill."""
     tabs = set(allowed_tabs(actor_id))

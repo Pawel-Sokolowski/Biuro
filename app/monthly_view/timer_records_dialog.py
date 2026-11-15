@@ -1,11 +1,13 @@
+from datetime import datetime
+from PyQt6.QtCore import QDateTime, Qt
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
+    QAbstractItemView, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.db.dao_timers import (
     DEPARTMENTS, SOURCE_IMPORT, add_extra_service_to_catalogue, delete_company_timers, list_company_timers,
-    list_extra_service_catalogue, update_company_timer,
+    list_extra_service_catalogue, list_employee_timers, update_company_timer,
 )
 
 _DEPARTMENT_NAMES = dict(DEPARTMENTS)
@@ -22,6 +24,7 @@ class EditTimerRecordDialog(QDialog):
     def __init__(self, entry, parent=None, actor_id=None):
         super().__init__(parent)
         self.actor_id = actor_id
+        self.pause_seconds = int(entry.get("pauza_sekundy") or 0)
         self.setWindowTitle("Edytuj rekord czasu")
         form = QFormLayout(self)
         self.department = QComboBox()
@@ -57,7 +60,36 @@ class EditTimerRecordDialog(QDialog):
         self.activity_label = QLabel("Czynność dodatkowa:")
         form.addRow(self.activity_label, self._activity_row)
         form.addRow("Opis:", self.description)
-        form.addRow("Czas:", time_row)
+        self.time_mode = QComboBox()
+        self.time_mode.addItem("Od–do", "range")
+        self.time_mode.addItem("Czas trwania", "duration")
+        self.started_at = QDateTimeEdit()
+        self.ended_at = QDateTimeEdit()
+        for field in (self.started_at, self.ended_at):
+            field.setCalendarPopup(True)
+            field.setDisplayFormat("dd.MM.yyyy HH:mm:ss")
+        valid_range = False
+        try:
+            start = datetime.fromisoformat(str(entry.get('start') or ''))
+            end = datetime.fromisoformat(str(entry.get('koniec') or ''))
+            valid_range = end > start and int((end-start).total_seconds())-self.pause_seconds == seconds
+        except ValueError:
+            start = end = datetime.now().replace(microsecond=0)
+        self.started_at.setDateTime(QDateTime(start))
+        self.ended_at.setDateTime(QDateTime(end))
+        self.time_mode.setCurrentIndex(0 if valid_range else 1)
+        form.addRow("Sposób podania czasu:", self.time_mode)
+        form.addRow("Od:", self.started_at)
+        form.addRow("Do:", self.ended_at)
+        self.range_duration = QLabel()
+        form.addRow("Czas pracy:", self.range_duration)
+        form.addRow("Czas trwania:", time_row)
+        self.time_mode.currentIndexChanged.connect(self._time_mode_changed)
+        self.started_at.dateTimeChanged.connect(self._range_changed)
+        self.ended_at.dateTimeChanged.connect(self._range_changed)
+        self.hours.valueChanged.connect(lambda: self.time_mode.setCurrentIndex(1))
+        self.minutes.valueChanged.connect(lambda: self.time_mode.setCurrentIndex(1))
+        self._time_mode_changed()
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -87,9 +119,39 @@ class EditTimerRecordDialog(QDialog):
             return
         self._load_activities(new_id)
 
+    def _time_mode_changed(self):
+        use_range = self.time_mode.currentData() == 'range'
+        self.started_at.setEnabled(use_range)
+        self.ended_at.setEnabled(use_range)
+        self.hours.setEnabled(not use_range)
+        self.minutes.setEnabled(not use_range)
+        self._range_changed()
+
+    def _range_seconds(self):
+        return int(self.started_at.dateTime().secsTo(self.ended_at.dateTime())) - self.pause_seconds
+
+    def _range_changed(self):
+        seconds = self._range_seconds()
+        text = format_duration(seconds) if seconds >= 0 else 'Nieprawidłowy przedział'
+        if self.pause_seconds:
+            text += f' (po odjęciu przerwy: {format_duration(self.pause_seconds)})'
+        self.range_duration.setText(text)
+
+    def accept(self):
+        if self.time_mode.currentData() == 'range' and self._range_seconds() <= 0:
+            QMessageBox.warning(self, 'Czas pracy', 'Koniec musi być późniejszy niż początek i uwzględniać przerwę.')
+            return
+        super().accept()
+
     def values(self):
-        return (self.department.currentData(), self.description.text().strip(),
-                self.hours.value() * 3600 + self.minutes.value() * 60)
+        seconds = self._range_seconds() if self.time_mode.currentData() == 'range' else self.hours.value()*3600+self.minutes.value()*60
+        return self.department.currentData(), self.description.text().strip(), seconds
+
+    def timestamps(self):
+        if self.time_mode.currentData() != 'range':
+            return {}
+        return {'started_at': self.started_at.dateTime().toPyDateTime().isoformat(),
+                'ended_at': self.ended_at.dateTime().toPyDateTime().isoformat()}
 
     def activity_id(self):
         return self.activity.currentData() if self.department.currentData() == "dodatkowe" else None
@@ -99,18 +161,36 @@ class EditTimerRecordDialog(QDialog):
 
 
 class TimerRecordsDialog(QDialog):
-    """Rekordy czasu klienta: edycja i usuwanie dostępne dla każdego pracownika."""
+    """Rekordy firmy lub wybranego pracownika; serwer sprawdza prawo do edycji."""
 
-    def __init__(self, firma_id: int, actor_id: int, parent=None):
+    def __init__(self, firma_id: int | None, actor_id: int, parent=None, *, employee_view=False):
         super().__init__(parent)
         self.firma_id = firma_id
         self.actor_id = actor_id
+        self.employee_view = employee_view
         self._rows = []
-        self.setWindowTitle("Czasomierz klienta")
+        self.setWindowTitle("Czas pracownika" if employee_view else "Czasomierz klienta")
         self.resize(900, 480)
         layout = QVBoxLayout(self)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Miesiąc", "Początek", "Pracownik", "Dział / czynność", "Opis", "Czas"])
+        if employee_view:
+            from app.remote.screen_data import reportable_employees
+            filters = QHBoxLayout()
+            self.employee = QComboBox()
+            for employee_id, label in reportable_employees(actor_id):
+                self.employee.addItem(label, employee_id)
+            self.employee.setCurrentIndex(max(0, self.employee.findData(actor_id)))
+            self.month = QDateTimeEdit(QDateTime.currentDateTime())
+            self.month.setDisplayFormat('MM.yyyy')
+            self.month.setCalendarPopup(True)
+            filters.addWidget(QLabel('Pracownik:'))
+            filters.addWidget(self.employee, 1)
+            filters.addWidget(QLabel('Miesiąc:'))
+            filters.addWidget(self.month)
+            layout.addLayout(filters)
+            self.employee.currentIndexChanged.connect(self.reload)
+            self.month.dateTimeChanged.connect(self.reload)
+        self.table = QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels(["Miesiąc", "Początek", "Koniec", "Firma", "Pracownik", "Dział / czynność", "Opis", "Czas"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -134,12 +214,14 @@ class TimerRecordsDialog(QDialog):
         self.reload()
 
     def reload(self):
-        self._rows = list_company_timers(self.firma_id)
+        self._rows = (list_employee_timers(self.employee.currentData(), self.actor_id,
+                                         self.month.dateTime().toString('yyyy-MM')) if self.employee_view
+                      else list_company_timers(self.firma_id))
         self.table.setRowCount(0)
         for entry in self._rows:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            values = [entry["miesiac"], entry["start"], entry["pracownik"],
+            values = [entry["miesiac"], entry["start"], entry["koniec"], entry["firma"], entry["pracownik"],
                       " — ".join(filter(None, [_DEPARTMENT_NAMES.get(entry["dzial"], entry["dzial"]),
                                                entry.get("usluga")])), entry["opis"],
                       format_duration(entry["sekundy"])]
@@ -165,8 +247,8 @@ class TimerRecordsDialog(QDialog):
         if usluga_id and entry["zrodlo"] == SOURCE_IMPORT:
             opis = " — ".join(filter(None, [dialog.activity_name(), opis]))
         try:
-            update_company_timer(self.firma_id, entry["zrodlo"], entry["id"], dzial, opis, seconds,
-                                 self.actor_id, usluga_id)
+            update_company_timer(entry.get('firma_id', self.firma_id), entry["zrodlo"], entry["id"], dzial, opis, seconds,
+                                 self.actor_id, usluga_id, **dialog.timestamps())
         except Exception as exc:
             QMessageBox.critical(self, "Czasomierz", f"Nie udało się zapisać zmian: {exc}")
             return
@@ -182,7 +264,14 @@ class TimerRecordsDialog(QDialog):
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            delete_company_timers(self.firma_id, items, self.actor_id)
+            if self.employee_view:
+                # One company scope per deletion; the server independently checks each record owner.
+                for company in {self._rows[row]['firma_id'] for row in selected}:
+                    company_items = [(self._rows[row]['zrodlo'],self._rows[row]['id']) for row in selected
+                                     if self._rows[row]['firma_id']==company]
+                    delete_company_timers(company, company_items, self.actor_id)
+            else:
+                delete_company_timers(self.firma_id, items, self.actor_id)
         except Exception as exc:
             QMessageBox.critical(self, "Czasomierz", f"Nie udało się usunąć rekordów: {exc}")
             return

@@ -59,7 +59,8 @@ class CalendarAndResetSettings(QWidget):
         gtitle.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(gtitle)
 
-        client_id, client_secret = google_sync.get_client_credentials()
+        from app.remote.screen_data import google_client_metadata
+        client_id, client_secret = google_client_metadata()
         self.google_client_id = QLineEdit(client_id)
         self.google_client_secret = QLineEdit()
         self.google_client_secret.setEchoMode(QLineEdit.EchoMode.Password)
@@ -129,7 +130,10 @@ class CalendarAndResetSettings(QWidget):
 
     def _update_google_buttons(self):
         connected = google_sync.is_account_connected()
-        self.btn_google_connect.setEnabled(not connected)
+        from app.remote.state import client
+        self.btn_google_connect.setEnabled(not connected and client() is None)
+        if client() is not None:
+            self.btn_google_connect.setToolTip('Pierwsze logowanie Google wykonaj w panelu workera na serwerze.')
         self.btn_google_disconnect.setEnabled(connected)
         self.btn_google_test.setEnabled(True)
         if connected and not self.google_status.text():

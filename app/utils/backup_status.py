@@ -1,6 +1,7 @@
 """Status ostatniej kopii zapasowej na podstawie logu programu do backupu."""
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import re
 from datetime import date, datetime, timedelta
@@ -176,6 +177,7 @@ def _company_rows() -> list:
         conn.close()
 
 
+@office_endpoint('app.utils.backup_status.save_backup_dates_to_companies')
 def save_backup_dates_to_companies(status: Dict[str, Any]) -> Dict[str, Any]:
     """Zapisuje w firmach datę ostatniej kopii (z nazwy pliku, a gdy jej brak - z logu)."""
     from app.db.dao_conn import get_conn
@@ -209,6 +211,7 @@ def save_backup_dates_to_companies(status: Dict[str, Any]) -> Dict[str, Any]:
     return {"zapisano": len(best), "bez_firmy": unmatched}
 
 
+@office_endpoint('app.utils.backup_status.stored_backup_dates')
 def stored_backup_dates() -> Dict[int, tuple]:
     from app.db.dao_conn import get_conn
 
@@ -238,6 +241,7 @@ def _age_hours(start: datetime, end: datetime) -> float:
     return total
 
 
+@office_endpoint('app.utils.backup_status.get_backup_status')
 def get_backup_status(now: Optional[datetime] = None, from_mail: bool = False) -> Dict[str, Any]:
     """Stan: brak_konfiguracji, brak_logu, brak_kopii, ok, nieaktualna, blad.
 

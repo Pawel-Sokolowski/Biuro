@@ -1,8 +1,10 @@
 """A shared navigation default for payroll staff, independent of access rights."""
+from app.remote.boundary import endpoint as office_endpoint
 import re
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.preferences.department.default_department')
 def default_department(actor_id):
     if not actor_id:
         return 'accounting'

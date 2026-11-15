@@ -14,6 +14,15 @@ class EncryptionSettings(QWidget):
         if not is_administrator(actor_id):
             raise PermissionError('Tylko administrator może konfigurować klucz.')
         layout = QVBoxLayout(self)
+        from app.remote.state import client
+        if client() is not None:
+            info = QLabel('Klucz szyfrowania i hasła usług pozostają na serwerze biura. '
+                          'Ten komputer używa wyłącznie sesji pracownika weryfikowanej przez serwer. '
+                          'Konfigurację klucza wykonuje administrator lokalnie na serwerze.')
+            info.setWordWrap(True)
+            layout.addWidget(info)
+            layout.addStretch()
+            return
         info = QLabel('Wszystkie komputery i worker muszą używać tego samego klucza. '
                       'Na działającym komputerze wyeksportuj klucz, a następnie zaimportuj go na pozostałych. '
                       'Plik klucza przekazuj bezpiecznie; nie wysyłaj go w czacie. '

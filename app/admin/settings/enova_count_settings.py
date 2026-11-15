@@ -43,9 +43,8 @@ class EnovaCountSettings(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setMinimumHeight(300)
-        with get_conn() as conn:
-            companies = conn.execute("SELECT id,COALESCE(NULLIF(nazwa_skrocona,''),nazwa) AS nazwa,nip "
-                                     'FROM firmy ORDER BY lower(nazwa)').fetchall()
+        from app.remote.screen_data import company_identities
+        companies = company_identities(short_names=True)
         self.editors = {}
         self.table.setRowCount(len(companies))
         for row, company in enumerate(companies):

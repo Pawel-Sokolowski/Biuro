@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/db/dao_companies.py
 import psycopg
 from typing import List, Dict, Any, Optional, Tuple
@@ -107,6 +108,7 @@ def _attach_pelnomocnictwa(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+@office_endpoint('app.db.dao_companies.list_companies')
 def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -139,6 +141,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     ))
 
 
+@office_endpoint('app.db.dao_companies.list_mailing_companies')
 def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
     """Contact addresses and classification for companies visible to the employee."""
     if not actor_id:
@@ -166,6 +169,7 @@ def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_companies.get_companies_filtered')
 def get_companies_filtered(
     search: str,
     status: str,
@@ -223,10 +227,12 @@ def get_companies_filtered(
 PELNOMOCNICTWO_TYPES = ("PEL", "UPL")
 
 
+@office_endpoint('app.db.dao_companies.employee_initials')
 def employee_initials(imie: Optional[str], nazwisko: Optional[str]) -> str:
     return f"{(imie or '')[:1]}{(nazwisko or '')[:1]}".upper()
 
 
+@office_endpoint('app.db.dao_companies.get_pelnomocnictwa')
 def get_pelnomocnictwa(firma_id: int) -> Dict[str, List[int]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -241,6 +247,7 @@ def get_pelnomocnictwa(firma_id: int) -> Dict[str, List[int]]:
     return result
 
 
+@office_endpoint('app.db.dao_companies.set_pelnomocnictwa')
 def set_pelnomocnictwa(firma_id: int, typ: str, employee_ids: List[int]) -> None:
     if typ not in PELNOMOCNICTWO_TYPES:
         raise ValueError(f"Nieznany typ: {typ}")
@@ -255,6 +262,7 @@ def set_pelnomocnictwa(firma_id: int, typ: str, employee_ids: List[int]) -> None
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.get_pelnomocnictwa_initials')
 def get_pelnomocnictwa_initials(firma_ids: List[int]) -> Dict[int, Dict[str, str]]:
     if not firma_ids:
         return {}
@@ -283,6 +291,7 @@ def get_pelnomocnictwa_initials(firma_ids: List[int]) -> Dict[int, Dict[str, str
     return {fid: {t: " ".join(v) for t, v in d.items()} for fid, d in result.items()}
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_employees_list')
 def get_employees_list() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -301,6 +310,7 @@ def get_employees_list() -> List[Dict[str, Any]]:
 #  GET COMPANY
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_company')
 def get_company(firma_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -310,6 +320,7 @@ def get_company(firma_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+@office_endpoint('app.db.dao_companies.get_company_field_options')
 def get_company_field_options(field: str) -> List[str]:
     allowed = {"forma_dzialalnosci", "forma_opodatkowania", "sposob_zaplaty", "status_podatkowy"}
     if field not in allowed:
@@ -325,6 +336,7 @@ def get_company_field_options(field: str) -> List[str]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_companies.get_tax_offices')
 def get_tax_offices() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -466,6 +478,7 @@ def _sync_assignees(cur, firma_id: int) -> None:
             )
 
 
+@office_endpoint('app.db.dao_companies.save_company')
 def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int:
     conn = get_conn()
     cur = conn.cursor()
@@ -545,6 +558,7 @@ def save_company(payload: Dict[str, Any], actor_id: Optional[int] = None) -> int
     return firma_id
 
 
+@office_endpoint('app.db.dao_companies.set_services_suspended')
 def set_services_suspended(firma_id: int, suspended: bool, actor_id: Optional[int] = None) -> bool:
     """Włącza/wyłącza zawieszenie usług (niezależne od statusu i CEIDG).
     Przy zmianie wysyła powiadomienie do wszystkich pracowników. Zwraca True, gdy był zmiana."""
@@ -574,6 +588,7 @@ def set_services_suspended(firma_id: int, suspended: bool, actor_id: Optional[in
 # ============================================================
 #  DELETE / STATUS
 
+@office_endpoint('app.db.dao_companies.delete_company')
 def delete_company(firma_id: int, actor_id: Optional[int] = None) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -596,6 +611,7 @@ def delete_company(firma_id: int, actor_id: Optional[int] = None) -> None:
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.set_company_status')
 def set_company_status(firma_id: int, status: str, zawieszenia_dzialalnosci: Optional[str] = None) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -611,10 +627,12 @@ def set_company_status(firma_id: int, status: str, zawieszenia_dzialalnosci: Opt
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.archive_company')
 def archive_company(firma_id: int) -> None:
     set_company_status(firma_id, "Archiwalne")
 
 
+@office_endpoint('app.db.dao_companies.suspend_company_manual')
 def suspend_company_manual(firma_id: int, date_str: str) -> None:
     set_company_status(firma_id, "Zawieszone", date_str)
 
@@ -623,6 +641,7 @@ def suspend_company_manual(firma_id: int, date_str: str) -> None:
 #  NOTES
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_company_notes')
 def get_company_notes(firma_id: int, limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -642,6 +661,7 @@ def get_company_notes(firma_id: int, limit: int = 20) -> List[Dict[str, Any]]:
 #  EMPLOYEE ASSIGNMENT
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.assign_employee_to_company')
 def assign_employee_to_company(pracownik_id: int, firma_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -652,6 +672,7 @@ def assign_employee_to_company(pracownik_id: int, firma_id: int) -> None:
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.unassign_employee_from_company')
 def unassign_employee_from_company(pracownik_id: int, firma_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -660,6 +681,7 @@ def unassign_employee_from_company(pracownik_id: int, firma_id: int) -> None:
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.get_company_employees')
 def get_company_employees(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -685,6 +707,7 @@ def _sort_cenniki_rosnaco(rows: List[Row]) -> List[Dict[str, Any]]:
     return [dict(r) for r in sorted(rows, key=lambda r: cennik_sort_key(r["klucz"]))]
 
 
+@office_endpoint('app.db.dao_companies.get_cennik_by_key')
 def get_cennik_by_key(klucz: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -698,6 +721,7 @@ def get_cennik_by_key(klucz: str) -> Optional[Dict[str, Any]]:
 #  GLOBAL PRICING / OPIS CENNIKA
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_global_pricing')
 def get_global_pricing() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -729,6 +753,7 @@ def _extract_limit_from_key(klucz: str) -> Optional[int]:
         return None
 
 
+@office_endpoint('app.db.dao_companies.opis_cennika_z_klucza')
 def opis_cennika_z_klucza(klucz: str) -> str:
     try:
         parts = klucz.split("_")
@@ -742,6 +767,7 @@ def opis_cennika_z_klucza(klucz: str) -> str:
         return klucz
 
 
+@office_endpoint('app.db.dao_companies.wybierz_cennik')
 def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -775,6 +801,7 @@ def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optiona
 #  KSIĘGOWOŚĆ OPTIONS
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_ksiegowosc_options')
 def get_ksiegowosc_options() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -803,6 +830,7 @@ def get_ksiegowosc_options() -> List[Dict[str, Any]]:
     ]
 
 
+@office_endpoint('app.db.dao_companies.get_ksiegowosc_by_key')
 def get_ksiegowosc_by_key(klucz: str) -> Optional[Dict[str, Any]]:
     for item in get_ksiegowosc_options():
         if item["klucz"] == klucz:
@@ -814,6 +842,7 @@ def get_ksiegowosc_by_key(klucz: str) -> Optional[Dict[str, Any]]:
 #  PRICING KADRY
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_pricing_kadry')
 def get_pricing_kadry() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -831,6 +860,7 @@ def get_pricing_kadry() -> List[Dict[str, Any]]:
 #  KPIR CENNIKI / AUTO / MANUAL
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_kpir_cenniki')
 def get_kpir_cenniki() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -856,6 +886,7 @@ def _extract_limit_from_klucz(klucz: str) -> Optional[int]:
     return None
 
 
+@office_endpoint('app.db.dao_companies.choose_kpir_for_limit')
 def choose_kpir_for_limit(limit: int) -> Optional[Tuple[str, float]]:
     cenniki = get_kpir_cenniki()
     best = None
@@ -873,6 +904,7 @@ def choose_kpir_for_limit(limit: int) -> Optional[Tuple[str, float]]:
     return best
 
 
+@office_endpoint('app.db.dao_companies.update_company_cennik_auto')
 def update_company_cennik_auto(firma_id: int, limit_dokumentow: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -905,6 +937,7 @@ def update_company_cennik_auto(firma_id: int, limit_dokumentow: int) -> Optional
     return {"klucz": klucz, "cena": cena}
 
 
+@office_endpoint('app.db.dao_companies.set_manual_cennik_for_company')
 def set_manual_cennik_for_company(firma_id: int, manual_klucz: Optional[str]) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -938,6 +971,7 @@ def set_manual_cennik_for_company(firma_id: int, manual_klucz: Optional[str]) ->
     return {"klucz": manual_klucz, "cena": float(cena)}
 
 
+@office_endpoint('app.db.dao_companies.get_company_pricing_info')
 def get_company_pricing_info(firma_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -956,6 +990,7 @@ def get_company_pricing_info(firma_id: int) -> Optional[Dict[str, Any]]:
 #  LIMITY (tylko limit_dokumentow)
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.get_company_limits')
 def get_company_limits(firma_id: int) -> Dict[str, Any]:
     conn = get_conn()
     cur = conn.cursor()
@@ -971,6 +1006,7 @@ def get_company_limits(firma_id: int) -> Dict[str, Any]:
     return dict(row)
 
 
+@office_endpoint('app.db.dao_companies.update_company_limits')
 def update_company_limits(firma_id: int, limit_dok: Optional[int] = None) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -990,6 +1026,7 @@ def update_company_limits(firma_id: int, limit_dok: Optional[int] = None) -> Non
 #  IDENTIFIER SEARCH
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.find_company_by_identifier')
 def find_company_by_identifier(identifier: str) -> List[Dict[str, Any]]:
     if not identifier:
         return []
@@ -1011,6 +1048,7 @@ def find_company_by_identifier(identifier: str) -> List[Dict[str, Any]]:
 #  STATUS COUNTS
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.count_companies_by_status')
 def count_companies_by_status() -> Dict[str, int]:
     conn = get_conn()
     cur = conn.cursor()
@@ -1028,6 +1066,7 @@ def count_companies_by_status() -> Dict[str, int]:
 #  RECENT COMPANIES
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.recent_companies')
 def recent_companies(limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -1100,6 +1139,7 @@ def ensure_company_columns_exist():
 #  EXPORT / IMPORT
 # ============================================================
 
+@office_endpoint('app.db.dao_companies.export_companies_csv')
 def export_companies_csv(path: str) -> None:
     import csv
     conn = get_conn()
@@ -1117,6 +1157,7 @@ def export_companies_csv(path: str) -> None:
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.import_companies_from_rows')
 def import_companies_from_rows(rows: List[Dict[str, Any]]) -> int:
     count = 0
     for r in rows:
@@ -1143,6 +1184,7 @@ PARTNER_FIELDS = [
 ]
 
 
+@office_endpoint('app.db.dao_companies.count_zdrowotna_units')
 def count_zdrowotna_units(firma_id: int) -> int:
     """Liczba sztuk zdrowotnej do faktury: tylu, ilu wspólników; jednoosobowa = 1."""
     conn = get_conn()
@@ -1155,6 +1197,7 @@ def count_zdrowotna_units(firma_id: int) -> int:
         conn.close()
 
 
+@office_endpoint('app.db.dao_companies.get_partners')
 def get_partners(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -1169,6 +1212,7 @@ def get_partners(firma_id: int) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+@office_endpoint('app.db.dao_companies.save_partner')
 def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -1198,6 +1242,7 @@ def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.delete_partner')
 def delete_partner(partner_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -1213,6 +1258,7 @@ def delete_partner(partner_id: int) -> None:
 CONTACT_FIELDS = ["imie", "nazwisko", "email", "telefon", "rola"]
 
 
+@office_endpoint('app.db.dao_companies.get_contacts')
 def get_contacts(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -1227,6 +1273,7 @@ def get_contacts(firma_id: int) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+@office_endpoint('app.db.dao_companies.save_contact')
 def save_contact(firma_id: int, data: Dict[str, Any]) -> None:
     conn = get_conn()
     cur = conn.cursor()
@@ -1250,6 +1297,7 @@ def save_contact(firma_id: int, data: Dict[str, Any]) -> None:
     conn.close()
 
 
+@office_endpoint('app.db.dao_companies.delete_contact')
 def delete_contact(contact_id: int) -> None:
     conn = get_conn()
     cur = conn.cursor()

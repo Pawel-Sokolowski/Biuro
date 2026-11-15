@@ -1,4 +1,5 @@
 """Shared worker controls; credentials remain in the existing program settings."""
+from app.remote.boundary import endpoint as office_endpoint
 from copy import deepcopy
 import json
 from app.db.dao_app_settings import get_setting, set_setting
@@ -11,6 +12,7 @@ DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
             'checking_refresh': True, 'checking_refresh_interval':30,'enova_time': '02:00'}
 
 
+@office_endpoint('app.services.worker_settings.load_settings')
 def load_settings():
     value = deepcopy(DEFAULTS)
     value.update(json.loads(get_setting(KEY) or '{}'))
@@ -30,6 +32,7 @@ def validate(value):
             raise ValueError('Odstęp workera musi wynosić 30–86400 sekund.')
 
 
+@office_endpoint('app.services.worker_settings.save_settings')
 def save_settings(value, *, actor_id):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):

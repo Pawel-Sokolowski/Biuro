@@ -1,5 +1,6 @@
-﻿"""ReguĹ‚y filtrĂłw wiadomoĹ›ci: import z Thunderbirda (msgFilterRules JSON) i stosowanie do poczty."""
+"""ReguĹ‚y filtrĂłw wiadomoĹ›ci: import z Thunderbirda (msgFilterRules JSON) i stosowanie do poczty."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -90,6 +91,7 @@ def parse_thunderbird_filters(data: Any, delimiter: Optional[str] = ".") -> Tupl
     return rules, skipped
 
 
+@office_endpoint('app.email.email_rules.import_thunderbird_filters')
 def import_thunderbird_filters(konto_id: int, data: Any) -> Tuple[int, int, List[str]]:
     """Zapisuje reguĹ‚y dla konta; zwraca (dodane, duplikaty, pominiÄ™te)."""
     conn = get_conn()
@@ -240,6 +242,7 @@ def apply_rules(konto_id: int, folder: str, headers: List[Dict[str, Any]], *, ex
     return moved
 
 
+@office_endpoint('app.email.email_rules.apply_rules_to_folder')
 def apply_rules_to_folder(konto_id: int, folder: str) -> int:
     """Stosuje reguĹ‚y do wszystkich wiadomoĹ›ci folderu zapisanych lokalnie."""
     conn = get_conn()

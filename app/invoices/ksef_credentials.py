@@ -1,6 +1,7 @@
 """Import i przechowywanie certyfikatu oraz klucza prywatnego KSeF (zaszyfrowane w ustawieniach)."""
 
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Any, Dict, Optional
 
@@ -52,6 +53,7 @@ def _store(cert: x509.Certificate, key, password: Optional[str]) -> None:
     set_setting(KEY_PASSWORD_KEY, encrypt_password(password) if password else "")
 
 
+@office_endpoint('app.invoices.ksef_credentials.import_pkcs12')
 def import_pkcs12(data: bytes, password: Optional[str]) -> None:
     try:
         key, cert, _ = pkcs12.load_key_and_certificates(data, password.encode() if password else None)
@@ -62,6 +64,7 @@ def import_pkcs12(data: bytes, password: Optional[str]) -> None:
     _store(cert, key, password)
 
 
+@office_endpoint('app.invoices.ksef_credentials.import_cert_and_key')
 def import_cert_and_key(cert_data: bytes, key_data: bytes, key_password: Optional[str]) -> None:
     cert = _load_certificate(cert_data)
     key = _load_private_key(key_data, key_password)
@@ -70,11 +73,13 @@ def import_cert_and_key(cert_data: bytes, key_data: bytes, key_password: Optiona
     _store(cert, key, key_password)
 
 
+@office_endpoint('app.invoices.ksef_credentials.clear_certificate')
 def clear_certificate() -> None:
     for k in (CERT_KEY, PRIVATE_KEY_KEY, KEY_PASSWORD_KEY):
         set_setting(k, "")
 
 
+@office_endpoint('app.invoices.ksef_credentials.get_certificate_info')
 def get_certificate_info() -> Optional[Dict[str, Any]]:
     enc = get_setting(CERT_KEY)
     if not enc:

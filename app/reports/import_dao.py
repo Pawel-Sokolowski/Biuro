@@ -1,5 +1,6 @@
 # app/reports/import_dao.py
 """Import czasu pracy i faktur z Excela oraz raport rentowności (czas × stawka vs cena usługi)."""
+from app.remote.boundary import endpoint as office_endpoint
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from dataclasses import dataclass
 from decimal import Decimal
@@ -106,6 +107,7 @@ def _same_legacy_invoice_line(stored, row) -> bool:
             and Decimal(str(stored["wartosc_netto"])) == Decimal(str(row["wartosc_netto"])))
 
 
+@office_endpoint('app.reports.import_dao.import_work_file')
 def import_work_file(path: str) -> Dict[str, int]:
     source = read_sheet_rows(path)
     rows = iter_work_rows(source)
@@ -149,6 +151,7 @@ def import_work_file(path: str) -> Dict[str, int]:
 
 
 
+@office_endpoint('app.reports.import_dao.import_invoices_file')
 def import_invoices_file(path: str, default_month: Optional[str], overwrite: bool = False) -> Dict[str, int]:
     source = read_sheet_rows(path)
     rows = iter_invoice_rows(source, default_month)
@@ -385,6 +388,7 @@ def _apply_kadry_prices(conn, totals: Dict[Tuple[int, str, str], float]) -> int:
     return changed
 
 
+@office_endpoint('app.reports.import_dao.list_employee_rates')
 def list_employee_rates() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -400,6 +404,7 @@ def list_employee_rates() -> List[Dict[str, Any]]:
     ]
 
 
+@office_endpoint('app.reports.import_dao.set_employee_rates')
 def set_employee_rates(rates: Dict[int, Optional[float]]) -> None:
     conn = get_conn()
     try:
@@ -410,6 +415,7 @@ def set_employee_rates(rates: Dict[int, Optional[float]]) -> None:
         conn.close()
 
 
+@office_endpoint('app.reports.import_dao.delete_imported')
 def delete_imported(
     what: str, months: List[str], firma_ids: Optional[List[int]] = None, include_unmatched: bool = False
 ) -> int:
@@ -508,6 +514,7 @@ def _live_invoices(conn, firma_ids: List[int], months: List[str], skip: set) -> 
     return result
 
 
+@office_endpoint('app.reports.import_dao.build_profitability_report')
 def build_profitability_report(
     firma_ids: List[int], months: List[str], pracownik_id: Optional[int] = None
 ) -> List[Dict[str, Any]]:

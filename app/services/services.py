@@ -1,7 +1,9 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/global/services.py
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.services.services.pobierz_uslugi_globalne')
 def pobierz_uslugi_globalne():
     conn = get_conn()
     cur = conn.cursor()
@@ -11,6 +13,7 @@ def pobierz_uslugi_globalne():
     return rows
 
 
+@office_endpoint('app.services.services.pobierz_uslugi_firmy')
 def pobierz_uslugi_firmy(firma_id: int, miesiac: str):
     conn = get_conn()
     cur = conn.cursor()

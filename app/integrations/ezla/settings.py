@@ -1,4 +1,5 @@
 """Shared payer-service credentials for the office's configured ZUS reports."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_conn import get_conn
@@ -7,11 +8,13 @@ from app.utils.crypto import encrypt_password, decrypt_password
 KEY = 'ezla_service'
 
 
+@office_endpoint('app.integrations.ezla.settings.load_settings')
 def load_settings():
     return {'enabled': False, 'login': '', 'password_enc': '', 'zip_password_enc': '', 'companies': [], 'pause_seconds': 2, 'error_pause_seconds': 30,
             **json.loads(get_setting(KEY) or '{}')}
 
 
+@office_endpoint('app.integrations.ezla.settings.save_settings')
 def save_settings(value, *, actor_id, password='', zip_password=''):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):

@@ -1,5 +1,6 @@
 # app/db/dao_app_settings.py
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Dict, Iterable, Optional
 
@@ -10,6 +11,7 @@ from app.utils.request_cache import cached, clear_request_cache
 TRUTHY_VALUES = {"1", "true", "tak", "t", "yes", "y", "x"}
 
 
+@office_endpoint('app.db.dao_app_settings.get_setting')
 @cached
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     conn = get_conn()
@@ -24,6 +26,7 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_app_settings.get_setting_first')
 def get_setting_first(keys: Iterable[str], default: Optional[str] = None) -> Optional[str]:
     for key in keys:
         val = get_setting(key, None)
@@ -32,6 +35,7 @@ def get_setting_first(keys: Iterable[str], default: Optional[str] = None) -> Opt
     return default
 
 
+@office_endpoint('app.db.dao_app_settings.get_setting_bool')
 def get_setting_bool(keys: Iterable[str], default: bool = False) -> bool:
     val = get_setting_first(keys, None)
     if val is None:
@@ -39,6 +43,7 @@ def get_setting_bool(keys: Iterable[str], default: bool = False) -> bool:
     return str(val).strip().lower() in TRUTHY_VALUES
 
 
+@office_endpoint('app.db.dao_app_settings.set_setting')
 def set_setting(key: str, value: str) -> None:
     clear_request_cache()
     conn = get_conn()
@@ -57,6 +62,7 @@ def set_setting(key: str, value: str) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_app_settings.delete_setting')
 def delete_setting(key: str) -> None:
     clear_request_cache()
     conn = get_conn()
@@ -68,6 +74,7 @@ def delete_setting(key: str) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_app_settings.list_settings')
 def list_settings() -> Dict[str, str]:
     conn = get_conn()
     try:

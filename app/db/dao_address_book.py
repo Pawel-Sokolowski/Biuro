@@ -1,4 +1,5 @@
 """Shared address-book storage; company records are not modified."""
+from app.remote.boundary import endpoint as office_endpoint
 import psycopg
 from psycopg.types.json import Jsonb
 
@@ -28,6 +29,7 @@ def _details(contact):
     return {key: value for key, value in contact.items() if key not in CORE_FIELDS and key not in ('id', 'version', 'total_count')}
 
 
+@office_endpoint('app.db.dao_address_book.list_contacts')
 def list_contacts(actor_id, query='', limit=200):
     needle = str(query or '').strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
     conn = get_conn()
@@ -44,6 +46,7 @@ def list_contacts(actor_id, query='', limit=200):
         conn.close()
 
 
+@office_endpoint('app.db.dao_address_book.find_contact')
 def find_contact(actor_id, address):
     address = normalize_email(address)
     conn = get_conn()
@@ -57,6 +60,7 @@ def find_contact(actor_id, address):
         conn.close()
 
 
+@office_endpoint('app.db.dao_address_book.save_contact')
 def save_contact(actor_id, values, contact_id=None, expected_version=None):
     contact = normalize_contact(values)
     conn = get_conn()
@@ -92,6 +96,7 @@ def save_contact(actor_id, values, contact_id=None, expected_version=None):
         conn.close()
 
 
+@office_endpoint('app.db.dao_address_book.delete_contact')
 def delete_contact(actor_id, contact_id, expected_version):
     conn = get_conn()
     try:
@@ -108,6 +113,7 @@ def delete_contact(actor_id, contact_id, expected_version):
         conn.close()
 
 
+@office_endpoint('app.db.dao_address_book.import_contacts')
 def import_contacts(actor_id, values):
     # Lock contacts in the same order in concurrent imports. Fill missing values
     # against the current database row, not the earlier preview snapshot.

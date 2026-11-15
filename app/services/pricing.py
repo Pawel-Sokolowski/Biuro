@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/global/pricing.py
 from typing import Optional, Dict, Any
 from app.db.dao_conn import get_conn
@@ -21,6 +22,7 @@ def _extract_limit_from_key(klucz: str) -> Optional[int]:
     return None
 
 
+@office_endpoint('app.services.pricing.wybierz_cennik')
 def wybierz_cennik(typ: str, vat_czynny: bool, limit_dokumentow: int) -> Optional[Dict[str, Any]]:
     """
     Wybiera najlepszy cennik z tabeli `cenniki` dla podanych parametrów:

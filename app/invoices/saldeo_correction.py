@@ -1,9 +1,11 @@
 """Rejestracja korekty wystawionej w Saldeo, bez udawania importu zwykłej faktury."""
+from app.remote.boundary import endpoint as office_endpoint
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice, _reserve_number
 from app.security.authorization import can_manage_invoices
 
 
+@office_endpoint('app.invoices.saldeo_correction.confirm_saldeo_correction')
 def confirm_saldeo_correction(invoice_id: int, number: str, actor_id: int) -> None:
     number = (number or '').strip()
     if not number or len(number) > 256:

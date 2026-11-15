@@ -1,4 +1,5 @@
 """Annual office worksheet, kept independently of replaceable Płatnik snapshots."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -30,6 +31,7 @@ def decode_notes(raw):
     return json.loads(decrypt_password(json.loads(raw)['fields_enc']))
 
 
+@office_endpoint('app.integrations.platnik.holiday_tracking.read_tracking_year')
 def read_tracking_year(actor_id, year):
     validate_year(year)
     payload = read_year(actor_id, year)
@@ -69,6 +71,7 @@ def read_tracking_year(actor_id, year):
             'current_initials': employee_initials(actor['imie'], actor['nazwisko']) if actor else ''}
 
 
+@office_endpoint('app.integrations.platnik.holiday_tracking.save_field')
 def save_field(actor_id, year, company_id, field, value, expected_revision):
     """Per-field optimistic edit under a DB lock; NULL restores source/default.
 

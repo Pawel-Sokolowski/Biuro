@@ -1,12 +1,15 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/global/settings.py
 from app.db.dao_conn import get_conn
 
 
+@office_endpoint('app.services.settings.is_admin')
 def is_admin(pracownik_id: int) -> bool:
     from app.security.authorization import is_administrator
     return is_administrator(pracownik_id)
 
 
+@office_endpoint('app.services.settings.get_global_roles')
 def get_global_roles():
     conn = get_conn()
     cur = conn.cursor()
@@ -16,6 +19,7 @@ def get_global_roles():
     return rows
 
 
+@office_endpoint('app.services.settings.get_email_settings')
 def get_email_settings():
     conn = get_conn()
     cur = conn.cursor()

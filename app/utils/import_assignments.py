@@ -5,6 +5,7 @@ Reguły: 1 osoba -> obie role; CZK jest kadrową, pozostali księgowymi; przy 3+
 jest ignorowana. Kolumny form prawnych (sp. z o.o. itd.) są pomijane.
 """
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,6 +41,7 @@ def choose_roles(marked: List[str]) -> Tuple[Optional[str], Optional[str]]:
     return (others[0] if others else None), kadrowa
 
 
+@office_endpoint('app.utils.import_assignments.import_role_assignments_from_file')
 def import_role_assignments_from_file(filepath: str) -> Dict[str, Any]:
     from app.db.dao_companies import _sync_assignees
 

@@ -17,12 +17,10 @@ def _import_cennik(path, parent):
 
 
 def _count(table):
-    from app.db.dao_conn import get_conn
-    conn = get_conn()
-    try:
-        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-    finally:
-        conn.close()
+    if table != 'cenniki':
+        raise ValueError('Nieprawidłowy katalog.')
+    from app.remote.screen_data import catalogue_count
+    return catalogue_count()
 
 
 def _import_urzedy(path, parent):

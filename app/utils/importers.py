@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import csv
 import hashlib
 import io
@@ -250,6 +251,7 @@ def _load_rows_from_file(filepath: str) -> Tuple[List[str], Iterable[Any]]:
     return headers, rows
 
 
+@office_endpoint('app.utils.importers.import_tax_offices_from_excel')
 @scoped
 def import_tax_offices_from_excel(filepath: str) -> int:
     """Importuje lub aktualizuje katalog urzędów skarbowych z XLSX/CSV."""
@@ -547,6 +549,7 @@ def _build_payload_from_row(
 # ============================================================
 # IMPORT DO PAYLOADÓW (DLA WIZARDU)
 # ============================================================
+@office_endpoint('app.utils.importers.import_companies_from_excel_file_payloads')
 @scoped
 def import_companies_from_excel_file_payloads(filepath: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     try:
@@ -1014,6 +1017,7 @@ def _ensure_contact(cursor: psycopg.Cursor, firma_id: int, payload: Dict[str, An
 # ============================================================
 # IMPORTERY FIRM
 # ============================================================
+@office_endpoint('app.utils.importers.import_companies_from_excel_file')
 @scoped
 def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = None) -> Dict[str, Any]:
     try:
@@ -1054,6 +1058,7 @@ def import_companies_from_excel_file(filepath: str, db_path: Optional[str] = Non
         conn.close()
 
 
+@office_endpoint('app.utils.importers.save_imported_payload')
 @scoped
 def save_imported_payload(
     payload: Dict[str, Any],
@@ -1072,6 +1077,7 @@ def save_imported_payload(
         conn.close()
 
 
+@office_endpoint('app.utils.importers.import_companies_fast_from_excel_file')
 @scoped
 def import_companies_fast_from_excel_file(
     filepath: str,
@@ -1168,6 +1174,7 @@ def build_pricing_key(base_key: str, price: Any) -> str:
     return f"{key}_{price_key}"
 
 
+@office_endpoint('app.utils.importers.import_cennik_from_excel')
 @scoped
 def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     del db_path
@@ -1222,6 +1229,7 @@ def import_cennik_from_excel(filepath: str, db_path: Optional[str] = None) -> Li
 
     return payloads
 
+@office_endpoint('app.utils.importers.import_ceny_za_dokument_from_excel')
 @scoped
 def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     del db_path
@@ -1255,6 +1263,7 @@ def import_ceny_za_dokument_from_excel(filepath: str, db_path: Optional[str] = N
     return payloads
 
 
+@office_endpoint('app.utils.importers.preview_company_import')
 @scoped
 def preview_company_import(filepath: str, *, prepared=None) -> Dict[str, Any]:
     """Read-only, streaming plan. Do not enrich or write until it is accepted."""
@@ -1309,6 +1318,7 @@ def preview_company_import(filepath: str, *, prepared=None) -> Dict[str, Any]:
     return plan
 
 
+@office_endpoint('app.utils.importers.prepare_company_import')
 def prepare_company_import(filepath):
     from app.utils.import_source import PreparedCompanyImport
     prepared = PreparedCompanyImport(filepath)

@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import psycopg
 import json
 from decimal import Decimal
@@ -48,6 +49,7 @@ def _row_to_dict(row: Optional[Row]) -> Optional[Dict[str, Any]]:
     return result
 
 
+@office_endpoint('app.db.dao_invoices.get_invoice_by_id')
 def get_invoice_by_id(invoice_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -59,6 +61,7 @@ def get_invoice_by_id(invoice_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.get_invoice_for_company_month')
 def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -74,6 +77,7 @@ def get_invoice_for_company_month(firma_id: int, miesiac: str) -> Optional[Dict[
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.list_invoices_for_company')
 def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
@@ -88,6 +92,7 @@ def list_invoices_for_company(firma_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.get_exported_invoices')
 def get_exported_invoices(pracownik_id: Optional[int] = None) -> List[Dict[str, Any]]:
     if pracownik_id is not None and not can_manage_invoices(pracownik_id):
         return []
@@ -190,6 +195,7 @@ def _backfill_extra_service_allocations(conn, firma_id: int, miesiac: str) -> No
                 break
 
 
+@office_endpoint('app.db.dao_invoices.generate_extra_services_invoice')
 def generate_extra_services_invoice(firma_id: int, miesiac: str, actor_id: Optional[int] = None) -> dict:
     """Dopisuje wyłącznie nowe wykonane czynności do osobnego szkicu faktury.
 
@@ -338,6 +344,7 @@ def _recalculate_invoice_totals(conn: psycopg.Connection, invoice_id: int):
     )
 
 
+@office_endpoint('app.db.dao_invoices.add_invoice_item_for_service')
 def add_invoice_item_for_service(
     firma_id: int,
     usluga_id: int,
@@ -498,6 +505,7 @@ def add_invoice_item_for_service(
             conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.add_custom_invoice_item')
 def add_custom_invoice_item(
     invoice_id: int,
     opis: str,
@@ -530,6 +538,7 @@ def add_custom_invoice_item(
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.create_manual_invoice')
 def create_manual_invoice(
     buyer_type: str,
     buyer_id: int,
@@ -637,6 +646,7 @@ def create_draft_after_payment(conn, source_id: int) -> Optional[int]:
     return int(cur.fetchone()[0])
 
 
+@office_endpoint('app.db.dao_invoices.create_or_update_invoice')
 def create_or_update_invoice(
     firma_id: int,
     miesiac: str,
@@ -740,6 +750,7 @@ def create_or_update_invoice(
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.validate_invoice_extra_services_ready')
 def validate_invoice_extra_services_ready(invoice_ids: List[int], *, conn=None, lock: bool = False) -> None:
     """Sprawdza wykonanie czynności przed tworzeniem pliku eksportu faktur.
 
@@ -780,6 +791,7 @@ def validate_invoice_extra_services_ready(invoice_ids: List[int], *, conn=None, 
             conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.mark_exported')
 def mark_exported(invoice_ids: List[int], pracownik_id: Optional[int] = None):
     if not invoice_ids:
         return
@@ -916,6 +928,7 @@ def _preserve_legacy_extra_services(conn: psycopg.Connection, invoice: Dict[str,
         )
 
 
+@office_endpoint('app.db.dao_invoices.delete_invoice_keep_positions')
 def delete_invoice_keep_positions(invoice_id: int) -> bool:
     conn = get_conn()
     cur = conn.cursor()
@@ -945,6 +958,7 @@ def delete_invoice_keep_positions(invoice_id: int) -> bool:
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.generate_monthly_invoices_for_month')
 def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[int, Any]]]:
     report = {"generated": [], "skipped": [], "errors": []}
 
@@ -1072,12 +1086,14 @@ INVOICE_LIST_SQL = """
 """
 
 
+@office_endpoint('app.db.dao_invoices.can_access_invoice')
 def can_access_invoice(pracownik_id: Optional[int], firma_id: Optional[int]) -> bool:
     # Office invoices include manual contractors, individuals and archived company snapshots.
     # Their access follows the invoice module, not the separate payments/finance capability.
     return can_manage_invoices(pracownik_id)
 
 
+@office_endpoint('app.db.dao_invoices.list_invoices')
 def list_invoices(
     pracownik_id: Optional[int],
     wystawione: Optional[bool],
@@ -1116,6 +1132,7 @@ def list_invoices(
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.get_invoice_positions')
 def get_invoice_positions(invoice_id: int) -> List[Dict[str, Any]]:
     invoice = get_invoice_by_id(invoice_id)
     if not invoice:
@@ -1127,6 +1144,7 @@ def get_invoice_positions(invoice_id: int) -> List[Dict[str, Any]]:
     return positions if isinstance(positions, list) else []
 
 
+@office_endpoint('app.db.dao_invoices.update_invoice_draft')
 def update_invoice_draft(
     invoice_id: int,
     pozycje: List[Dict[str, Any]],
@@ -1226,6 +1244,7 @@ def _delete_dodatkowe(invoice_id: int, *, draft_only: bool) -> None:
     _delete_invoice_preserving_services(invoice_id, draft_only=draft_only)
 
 
+@office_endpoint('app.db.dao_invoices.delete_issued_invoice')
 def delete_issued_invoice(invoice_id: int) -> None:
     """Wycofuje dokument, pozostawiając wszystkie zarejestrowane usługi dodatkowe."""
     invoice = get_invoice_by_id(invoice_id)
@@ -1237,15 +1256,18 @@ def delete_issued_invoice(invoice_id: int) -> None:
     raise InvoiceLockedError("Wystawionej faktury nie można usunąć. Użyj anulowania lub korekty.")
 
 
+@office_endpoint('app.db.dao_invoices.delete_draft_invoice')
 def delete_draft_invoice(invoice_id: int) -> None:
     """Usuwa roboczą fakturę bez usuwania ewidencji usług dodatkowych."""
     _delete_invoice_preserving_services(invoice_id, draft_only=True)
 
+@office_endpoint('app.db.dao_invoices.delete_dodatkowe')
 def delete_dodatkowe(invoice_id: int) -> None:
     """Usuwa roboczą fakturę bez usuwania ewidencji usług dodatkowych."""
     _delete_dodatkowe(invoice_id, draft_only=True)
 
 
+@office_endpoint('app.db.dao_invoices.create_correction')
 def create_correction(invoice_id: int, przyczyna: str = "", *, actor_id: Optional[int] = None) -> int:
     """Tworzy roboczą korektę wystawionej faktury (pozycje 'do zera', do edycji)."""
     original = get_invoice_by_id(invoice_id)
@@ -1288,6 +1310,7 @@ def create_correction(invoice_id: int, przyczyna: str = "", *, actor_id: Optiona
         conn.close()
 
 
+@office_endpoint('app.db.dao_invoices.set_ksef_number')
 def set_ksef_number(invoice_id: int, ksef_numer: str) -> None:
     ksef_numer = (ksef_numer or "").strip()
     if ksef_numer.casefold() in {"nan", "none", "null", "<na>", "n/a"}:
@@ -1303,6 +1326,7 @@ def set_ksef_number(invoice_id: int, ksef_numer: str) -> None:
     finally:
         conn.close()
 
+@office_endpoint('app.db.dao_invoices.list_issued_without_ksef')
 def list_issued_without_ksef() -> List[Dict[str, Any]]:
     """Wystawione faktury bez numeru KSeF, z NIP-em firmy, do dopasowania po firmie i kwocie."""
     conn = get_conn()
@@ -1360,11 +1384,13 @@ def _reserve_number(conn, invoice_id, numer):
     conn.execute("INSERT INTO invoice_number_ledger(numer, invoice_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (numer, invoice_id))
 
 
+@office_endpoint('app.db.dao_invoices.assign_invoice_number')
 def assign_invoice_number(invoice_id: int) -> Optional[str]:
     with get_conn() as conn:
         return _assign_invoice_number(conn, invoice_id)
 
 
+@office_endpoint('app.db.dao_invoices.set_invoice_number')
 def set_invoice_number(invoice_id: int, numer: str) -> None:
     with get_conn() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(748202)")
@@ -1394,6 +1420,7 @@ def _release_trashed_numbers(conn):
     """)
 
 
+@office_endpoint('app.db.dao_invoices.trash_invoice')
 def trash_invoice(invoice_id: int, actor_id: int) -> None:
     """Przenosi fakturę (także wystawioną lub z KSeF) do kosza; tylko administrator."""
     if not is_administrator(actor_id):
@@ -1425,6 +1452,7 @@ def trash_invoice(invoice_id: int, actor_id: int) -> None:
         )
 
 
+@office_endpoint('app.db.dao_invoices.list_trashed_invoices')
 def list_trashed_invoices(actor_id: int) -> List[Dict[str, Any]]:
     if not is_administrator(actor_id):
         raise PermissionError("Tylko administrator ma dostęp do kosza faktur.")
@@ -1436,6 +1464,7 @@ def list_trashed_invoices(actor_id: int) -> List[Dict[str, Any]]:
             "WHERE k.restored_at IS NULL ORDER BY k.id DESC").fetchall()]
 
 
+@office_endpoint('app.db.dao_invoices.restore_trashed_invoice')
 def restore_trashed_invoice(trash_id: int, actor_id: int) -> int:
     """Przywraca fakturę z kosza z oryginalnym id, numerem i pozycjami."""
     if not is_administrator(actor_id):
@@ -1469,6 +1498,7 @@ def restore_trashed_invoice(trash_id: int, actor_id: int) -> int:
         return int(entry["faktura_id"])
 
 
+@office_endpoint('app.db.dao_invoices.cancel_invoice')
 def cancel_invoice(invoice_id: int, actor_id: int, reason: str) -> None:
     if not can_manage_invoices(actor_id):
         raise PermissionError("Brak uprawnień do anulowania faktur.")

@@ -1,4 +1,5 @@
 """Explicitly queued PDF delivery, only after confirmed KSeF acceptance."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 import base64
 import hashlib
@@ -17,6 +18,7 @@ def parse_recipients(value):
     return addresses
 
 
+@office_endpoint('app.invoices.invoice_delivery.delivery_plan')
 def delivery_plan(invoice_ids, actor_id):
     from app.invoices.ksef_submission import _authorized_invoice
     from app.db.dao_companies import get_company
@@ -40,6 +42,7 @@ def delivery_plan(invoice_ids, actor_id):
     return result
 
 
+@office_endpoint('app.invoices.invoice_delivery.queue_deliveries')
 def queue_deliveries(plans, actor_id, account_id):
     from app.email.email_storage import get_email_accounts_for_employee
     from app.invoices.ksef_submission import _authorized_invoice
@@ -130,6 +133,7 @@ def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
         conn.close()
 
 
+@office_endpoint('app.invoices.invoice_delivery.deliver_if_queued')
 def deliver_if_queued(invoice_id, actor_id, xml_path):
     from app.invoices.ksef_submission import _authorized_invoice
     from app.email.email_storage import get_email_accounts_for_employee

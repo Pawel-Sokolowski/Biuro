@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from contextlib import contextmanager
 from datetime import datetime
@@ -34,6 +35,7 @@ def sql_operation(config,operation):
         raise PlatnikSqlError(diagnostic,config,operation) from None
 
 
+@office_endpoint('app.integrations.platnik.holidays.load')
 def load():
     return {'enabled':False,'server':'','database':'platnik','username':'','password_enc':'',
             'declarations_enabled':True,'declarations_query':'','annual_declarations_query':'',
@@ -41,6 +43,7 @@ def load():
             **json.loads(get_setting(KEY) or '{}')}
 
 
+@office_endpoint('app.integrations.platnik.holidays.save')
 def save(value, actor_id, password=''):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):
@@ -85,6 +88,7 @@ def connect(config):
     return connection
 
 
+@office_endpoint('app.integrations.platnik.holidays.check_connection')
 def check_connection(config):
     connection = connect(config)
     with sql_operation(config,'Sprawdzenie bazy Płatnika'):
@@ -200,6 +204,7 @@ def _import_year(year, actor_id=None, *, progress=None, company_ids=None):
     return {'year':year,'rows':len(rows)}
 
 
+@office_endpoint('app.integrations.platnik.holidays.import_year')
 def import_year(year, actor_id=None, *, progress=None, company_ids=None):
     from app.db.dao_conn import get_coordination_conn
     from app.security.authorization import is_administrator
@@ -222,6 +227,7 @@ def import_year(year, actor_id=None, *, progress=None, company_ids=None):
         return result
 
 
+@office_endpoint('app.integrations.platnik.holidays.read_year')
 def read_year(actor_id,year):
     from app.integrations.enova.accounting import require_access
     from app.security.authorization import assigned_company_ids,is_administrator

@@ -1,9 +1,11 @@
 """Read-only shared worker status; no credentials or report contents in the snapshot."""
+from app.remote.boundary import endpoint as office_endpoint
 import json
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting
 
 
+@office_endpoint('app.services.worker_monitor.snapshot')
 def snapshot(actor_id):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):

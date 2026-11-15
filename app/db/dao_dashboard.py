@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List
@@ -15,6 +16,7 @@ def _scalar(conn, query: str, params: tuple = ()) -> int:
     return int(row[0] or 0) if row else 0
 
 
+@office_endpoint('app.db.dao_dashboard.get_dashboard_data')
 def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str, Any]:
     """Zbiera wszystkie dane widoczne na stronie głównej dla danego pracownika."""
     today = today or date.today()
@@ -110,11 +112,13 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
     return data
 
 
+@office_endpoint('app.db.dao_dashboard.format_duration')
 def format_duration(seconds: int) -> str:
     hours, rest = divmod(int(seconds or 0), 3600)
     return f"{hours} h {rest // 60:02d} min"
 
 
+@office_endpoint('app.db.dao_dashboard.format_event_time')
 def format_event_time(event: Dict[str, Any]) -> str:
     start = event["start"]
     day = datetime.fromisoformat(start[:10]).strftime("%d.%m")

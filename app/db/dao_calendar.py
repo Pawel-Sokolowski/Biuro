@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +12,7 @@ EVENT_FIELDS = (
 )
 
 
+@office_endpoint('app.db.dao_calendar.list_events')
 def list_events(pracownik_id: int, start: str, end: str) -> List[Dict[str, Any]]:
     """Wydarzenia nachodzące na przedział [start, end) (ISO 8601)."""
     conn = get_conn()
@@ -37,6 +39,7 @@ def list_events(pracownik_id: int, start: str, end: str) -> List[Dict[str, Any]]
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.get_event_access')
 def get_event_access(event_id: int) -> List[int]:
     conn = get_conn()
     try:
@@ -77,6 +80,7 @@ def _sync_event_tasks(event_id: int, recipients: List[int]) -> None:
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.set_event_access')
 def set_event_access(event_id: int, pracownik_ids: List[int]) -> None:
     """Zastępuje listę pracowników z dostępem do wydarzenia (właściciel jest pomijany)."""
     conn = get_conn()
@@ -97,6 +101,7 @@ def set_event_access(event_id: int, pracownik_ids: List[int]) -> None:
     _sync_event_tasks(event_id, recipients)
 
 
+@office_endpoint('app.db.dao_calendar.get_event')
 def get_event(event_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -108,6 +113,7 @@ def get_event(event_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.get_event_by_google_id')
 def get_event_by_google_id(pracownik_id: int, google_event_id: str, calendar_id: str | None = None) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -123,6 +129,7 @@ def get_event_by_google_id(pracownik_id: int, google_event_id: str, calendar_id:
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.get_event_by_caldav_uid')
 def get_event_by_caldav_uid(pracownik_id: int, uid: str, calendar_id: str | None = None) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -136,6 +143,7 @@ def get_event_by_caldav_uid(pracownik_id: int, uid: str, calendar_id: str | None
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.list_caldav_events')
 def list_caldav_events(pracownik_id: int, calendar_id: str | None = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -149,6 +157,7 @@ def list_caldav_events(pracownik_id: int, calendar_id: str | None = None) -> Lis
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.list_events_without_caldav')
 def list_events_without_caldav(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -162,6 +171,7 @@ def list_events_without_caldav(pracownik_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.set_caldav_uid')
 def set_caldav_uid(event_id: int, uid: Optional[str], zrodlo: str = "caldav", *, calendar_id=None) -> None:
     conn = get_conn()
     try:
@@ -176,6 +186,7 @@ def set_caldav_uid(event_id: int, uid: Optional[str], zrodlo: str = "caldav", *,
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.list_unsynced_events')
 def list_unsynced_events(pracownik_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
@@ -190,6 +201,7 @@ def list_unsynced_events(pracownik_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.save_event')
 def save_event(pracownik_id: int, data: Dict[str, Any], *, from_remote=False) -> int:
     values = {k: data.get(k) for k in EVENT_FIELDS}
     values["caly_dzien"] = 1 if values["caly_dzien"] else 0
@@ -235,6 +247,7 @@ def save_event(pracownik_id: int, data: Dict[str, Any], *, from_remote=False) ->
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.set_google_event_id')
 def set_google_event_id(
     event_id: int, google_event_id: Optional[str], google_calendar_id: Optional[str] = None, *, expected_calendar_id=None
 ) -> None:
@@ -252,6 +265,7 @@ def set_google_event_id(
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.remove_local_duplicates')
 def remove_local_duplicates(pracownik_id: int) -> int:
     """Usuwa lokalne wydarzenia (np. z importu .ics), które mają identyczny odpowiednik z Google."""
     conn = get_conn()
@@ -278,6 +292,7 @@ def remove_local_duplicates(pracownik_id: int) -> int:
         conn.close()
 
 
+@office_endpoint('app.db.dao_calendar.delete_event')
 def delete_event(event_id: int, pracownik_id: int, *, from_remote=False) -> None:
     conn = get_conn()
     try:

@@ -1,3 +1,4 @@
+from app.remote.boundary import endpoint as office_endpoint
 # app/utils/saldeo_exporter.py
 import json
 import re
@@ -77,6 +78,7 @@ def _invoice_positions(invoice):
     return positions
 
 
+@office_endpoint('app.utils.saldeo_exporter.validate_saldeo_invoices')
 def validate_saldeo_invoices(invoices: List[Dict[str, Any]]) -> None:
     """Kontroluje cały zestaw przed utworzeniem/nadpisaniem pliku i zmianą statusów.
 
@@ -197,6 +199,7 @@ def _fmt_paid(value: Any) -> str:
         return str(value)
 
 
+@office_endpoint('app.utils.saldeo_exporter.export_saldeo_xlsx')
 def export_saldeo_xlsx(
     invoices: List[Dict[str, Any]],
     output_path: str,

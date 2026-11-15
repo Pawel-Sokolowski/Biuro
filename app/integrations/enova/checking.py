@@ -1,4 +1,5 @@
 """Independent checking snapshots; never update workflow stages or invoice counters."""
+from app.remote.boundary import endpoint as office_endpoint
 from datetime import date, datetime
 from pathlib import Path
 import json
@@ -234,6 +235,7 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
             'payroll_configured': payroll is not None, 'declarations_configured': declarations is not None, 'hr_configured': events is not None}
 
 
+@office_endpoint('app.integrations.enova.checking.run_checking_import')
 def run_checking_import(config, *, apply=False, today=None, months=None, force=False):
     from app.db.dao_conn import get_conn
     from app.integrations.enova.document_counts import find_company

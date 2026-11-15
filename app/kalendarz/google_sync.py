@@ -1,5 +1,6 @@
 """Dwukierunkowa synchronizacja kalendarza z Google Calendar (REST + google-auth OAuth2)."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import hashlib
 import json
@@ -36,6 +37,7 @@ class GoogleCalendarError(Exception):
 
 
 # ---------- dostęp pracowników do kalendarzy ----------
+@office_endpoint('app.kalendarz.google_sync.get_access')
 def get_access() -> Dict[str, Dict[str, Any]]:
     """{calendar_id: {"nazwa": str, "pracownicy": [id, ...]}} – kto widzi który kalendarz Google."""
     raw = get_setting(ACCESS_KEY) or "{}"
@@ -55,10 +57,12 @@ def get_access() -> Dict[str, Dict[str, Any]]:
     return out
 
 
+@office_endpoint('app.kalendarz.google_sync.save_access')
 def save_access(access: Dict[str, Dict[str, Any]]) -> None:
     set_setting(ACCESS_KEY, json.dumps(access))
 
 
+@office_endpoint('app.kalendarz.google_sync.calendars_for')
 def calendars_for(pracownik_id: int) -> List[Dict[str, str]]:
     """Kalendarze Google widoczne dla pracownika: przypisane lub wszystkie, jeśli ma zakładkę Kalendarz."""
     if not is_account_connected():
@@ -76,6 +80,7 @@ def calendars_for(pracownik_id: int) -> List[Dict[str, str]]:
     return [cal for _, cal in sorted(result, key=lambda r: r[0])]
 
 
+@office_endpoint('app.kalendarz.google_sync.has_calendar_access')
 def has_calendar_access(pracownik_id: int, calendar_id: Optional[str]) -> bool:
     return bool(calendar_id) and any(c["id"] == calendar_id for c in calendars_for(pracownik_id))
 
@@ -91,6 +96,7 @@ def _pending_changes(pracownik_id: int) -> Dict[str, Dict[str, str]]:
             for op in outbox.operations(pracownik_id, "google")}
 
 
+@office_endpoint('app.kalendarz.google_sync.mark_event_pending')
 def mark_event_pending(pracownik_id: int, calendar_id: str, google_event_id: str,
                        action: str = "upsert") -> None:
     if action not in {"upsert", "delete"}:
@@ -116,21 +122,25 @@ def get_client_credentials() -> tuple[str, str]:
     return client_id, secret
 
 
+@office_endpoint('app.kalendarz.google_sync.save_client_credentials')
 def save_client_credentials(client_id: str, client_secret: str) -> None:
     set_setting("google_client_id", client_id.strip())
     if client_secret:
         set_setting("google_client_secret", encrypt_password(client_secret.strip()))
 
 
+@office_endpoint('app.kalendarz.google_sync.is_account_connected')
 def is_account_connected() -> bool:
     return bool(get_setting(TOKEN_KEY))
 
 
+@office_endpoint('app.kalendarz.google_sync.is_connected')
 def is_connected(pracownik_id: int) -> bool:
     """Prawda, gdy konto firmowe jest połączone i pracownik ma przypisany choć jeden kalendarz."""
     return bool(calendars_for(pracownik_id))
 
 
+@office_endpoint('app.kalendarz.google_sync.disconnect')
 def disconnect() -> None:
     delete_setting(TOKEN_KEY)
     _token_cache.update(value=None, expires=0.0)
@@ -276,6 +286,7 @@ def _send_operation(op):
     outbox.acknowledge(op)
 
 
+@office_endpoint('app.kalendarz.google_sync.push_event')
 def push_event(pracownik_id: int, event: Dict[str, Any]) -> None:
     calendar_id = _require_access(pracownik_id, event.get("google_calendar_id"))
     with outbox.calendar_lock(pracownik_id, "google", calendar_id):
@@ -284,6 +295,7 @@ def push_event(pracownik_id: int, event: Dict[str, Any]) -> None:
             _send_operation(op)
 
 
+@office_endpoint('app.kalendarz.google_sync.delete_remote')
 def delete_remote(pracownik_id: int, calendar_id: str, google_event_id: str) -> None:
     _require_access(pracownik_id, calendar_id)
     with outbox.calendar_lock(pracownik_id, "google", calendar_id):
@@ -297,6 +309,7 @@ def delete_remote(pracownik_id: int, calendar_id: str, google_event_id: str) -> 
 
 
 # ---------- test połączenia i lista kalendarzy ----------
+@office_endpoint('app.kalendarz.google_sync.list_account_calendars')
 def list_account_calendars() -> List[Dict[str, str]]:
     """Kalendarze konta firmowego, do których można zapisywać."""
     calendars: List[Dict[str, str]] = []
@@ -319,6 +332,7 @@ def list_account_calendars() -> List[Dict[str, str]]:
         params["pageToken"] = token
 
 
+@office_endpoint('app.kalendarz.google_sync.test_connection')
 def test_connection() -> str:
     """Zwraca komunikat o powodzeniu albo rzuca GoogleCalendarError."""
     client_id, client_secret = get_client_credentials()
@@ -333,6 +347,7 @@ def test_connection() -> str:
     return f"Połączono z Google. Dostępne kalendarze do zapisu: {len(calendars)}."
 
 
+@office_endpoint('app.kalendarz.google_sync.sync')
 def sync(pracownik_id: int, days_back: int = 30, days_ahead: int = 365) -> Dict[str, int]:
     """Wysyła lokalne zmiany, a następnie pobiera zmiany z kalendarzy Google przypisanych pracownikowi."""
     stats = {"wyslane": 0, "pobrane": 0, "usuniete": 0}

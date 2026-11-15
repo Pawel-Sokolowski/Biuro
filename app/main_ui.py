@@ -472,6 +472,15 @@ class OfficeManagerApp(QMainWindow):
         self.btn_general_timer.setToolTip("Uruchom stoper dla zadań ogólnych (bez firmy)")
         self.btn_general_timer.clicked.connect(self._toggle_general_timer)
         header_layout.addWidget(self.btn_general_timer)
+        self.btn_employee_timers = QPushButton("Mój czas")
+        self.btn_employee_timers.setToolTip("Przeglądaj i poprawiaj swój czas we wszystkich firmach")
+        self.btn_employee_timers.clicked.connect(self._open_employee_timers)
+        header_layout.addWidget(self.btn_employee_timers)
+        from app.remote.state import client
+        if client() is not None:
+            logout = QPushButton('Wyloguj')
+            logout.clicked.connect(self._logout_server)
+            header_layout.addWidget(logout)
 
         content_layout.addWidget(header)
 
@@ -774,6 +783,30 @@ class OfficeManagerApp(QMainWindow):
             self.sidebar_panel.setFixedWidth(240)
             self.sidebar_toggle.setText("☰  Menu")
             self.sidebar_toggle.setToolTip("Zwiń lub rozwiń menu")
+
+    def _logout_server(self):
+        from app.remote.state import client
+        from app.remote import credential_store
+        connection = client()
+        if connection is None:
+            return
+        # Save running timers before revoking the session used for the writes.
+        try:
+            self.page_monthly.logic.stop_all_timers()
+            connection.logout()
+            credential_store.delete(connection.server)
+        except Exception as exc:
+            QMessageBox.warning(self,'Wylogowanie',str(exc))
+            return
+        self.close()
+
+    def _open_employee_timers(self):
+        from app.monthly_view.timer_records_dialog import TimerRecordsDialog
+        try:
+            TimerRecordsDialog(None, self.pracownik_id, self, employee_view=True).exec()
+            self.page_monthly._reload_rows()
+        except Exception as exc:
+            QMessageBox.warning(self, 'Czas pracownika', str(exc))
 
     def _toggle_general_timer(self):
         logic = getattr(self.page_monthly, "logic", None)

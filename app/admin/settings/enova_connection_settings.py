@@ -88,8 +88,8 @@ class EnovaConnectionSettings(QWidget):
                       'Hasło jest szyfrowane kluczem BIO_ENCRYPTION_KEY wspólnym dla aplikacji i serwera importu.')
         note.setWordWrap(True)
         layout.addWidget(note)
-        with get_conn() as conn:
-            self.companies = conn.execute('SELECT id,nazwa,nip,forma_dzialalnosci,forma_opodatkowania,status_vat FROM firmy ORDER BY nazwa').fetchall()
+        from app.remote.screen_data import company_identities
+        self.companies = company_identities()
         sources = {s['nip']: s['database'] for s in config['sources']}
         self.table = QTableWidget(len(self.companies), 3)
         self.table.setHorizontalHeaderLabels(['Firma', 'NIP', 'Baza Enova'])

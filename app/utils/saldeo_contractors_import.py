@@ -1,5 +1,6 @@
 """Import nazw skróconych kontrahentów z Saldeo bez zmiany nazw rejestrowych."""
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 import csv
 import io
@@ -108,6 +109,7 @@ def read_saldeo_contractors(path: str) -> list[dict[str, str]]:
     return records
 
 
+@office_endpoint('app.utils.saldeo_contractors_import.import_saldeo_contractors')
 def import_saldeo_contractors(path: str, actor_id: int) -> dict[str, Any]:
     """Dopasowuje wyłącznie istniejące firmy po NIP; wymaga roli administratora.
 
@@ -248,6 +250,7 @@ def read_saldeo_company_names(path: str) -> list[dict[str, str]]:
     return records
 
 
+@office_endpoint('app.utils.saldeo_contractors_import.import_saldeo_company_names')
 def import_saldeo_company_names(path: str, actor_id: int) -> dict[str, Any]:
     """Zapisuje firmy.nazwa_saldeo_firmy (nazwa używana w mailach Saldeo).
 

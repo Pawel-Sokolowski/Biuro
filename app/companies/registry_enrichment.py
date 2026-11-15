@@ -4,6 +4,7 @@ Nie modyfikuje cen, kadrowych ilości umów, statusu obsługi ani danych miesię
 Każda firma jest zapisywana w osobnej transakcji, po powtórnym odczycie z bazy.
 """
 from __future__ import annotations
+from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Any, Callable, Dict, Optional
 
@@ -139,6 +140,7 @@ def build_missing_registry_updates(
     return updates
 
 
+@office_endpoint('app.companies.registry_enrichment.enrich_all_companies')
 def enrich_all_companies(
     progress: Optional[Callable[[int, int, str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,

@@ -133,13 +133,17 @@ class OfficeHttpsTests(DbTestCase):
         script = r"""
 import os,sys,faulthandler
 faulthandler.dump_traceback_later(25,repeat=True)
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication,QMessageBox
 from PyQt6.QtCore import QTimer,QThreadPool
 from app.remote.client import OfficeClient
 from app.remote.state import configure
 assert 'DB_URL' not in os.environ
 assert 'BIO_ENCRYPTION_KEY' not in os.environ
 application = QApplication(['biuro-keyless-ci'])
+def unexpected_dialog(parent,title,text,*args,**kwargs):
+    raise AssertionError(str(title)+': '+str(text))
+for method in ('warning','critical','information'):
+    setattr(QMessageBox,method,unexpected_dialog)
 connection = OfficeClient(sys.argv[1],verify=sys.argv[2])
 connection.login('admin@biuro.pl','Admin12345')
 configure(connection)

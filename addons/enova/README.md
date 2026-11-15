@@ -7,7 +7,7 @@ Wymaga serwera HTTPS Biuro z endpointem `/api/v1/enova/ezla` (zmiany usługi ser
 ## Instalacja i podgląd
 
 1. Pobierz artefakt `Biuro.Ezla-enova-2512.11.13` z zielonego przebiegu GitHub Actions. Umieść obie DLL w katalogu dodatków używanym przez instalację enova. Zainstaluj je także przy SonetaServer/HZ. Uruchom ponownie odpowiednie procesy, aby załadowały DLL.
-2. Otwórz firmę enova. Jej NIP w pieczątce firmy musi jednoznacznie odpowiadać firmie w Biuro. NIP jest odczytywany z enova, nie wpisywany swobodnie w oknie importu. Biuro weryfikuje także NIP płatnika, w tym indywidualny NIP wspólnika zapisany przy spółce cywilnej.
+2. Otwórz firmę enova. Jej NIP w pieczątce firmy musi jednoznacznie odpowiadać firmie w Biuro. Spółka cywilna ma **jedną bazę enova**. Indywidualne NIP-y wspólników identyfikują płatnika raportu, a nie osobne bazy JDG. Wszystkie zwolnienia wspólników są pobierane pod NIP-em spółki i trafiają do jej otwartej bazy; nie trzeba tworzyć firm ani baz indywidualnych. NIP jest odczytywany z enova, nie wpisywany swobodnie w oknie importu. Biuro weryfikuje także NIP płatnika, w tym indywidualny NIP wspólnika zapisany przy spółce cywilnej.
 3. Na liście pracowników wybierz **Czynności → Biuro → e-ZLA — pobierz i sprawdź**. Podaj adres `https://serwer:8443`, e-mail i hasło Biuro, zakres miesięcy i istniejącą definicję nieobecności. Domyślnie **Tylko podgląd** jest włączone. Hasło nie jest zapisywane w ustawieniach operatora ani bazie enova.
 4. Sprawdź wyniki. Aby zapisać nieobecności, uruchom ponownie z wyłączonym podglądem. Dodatek ponownie pobierze raporty i zweryfikuje stan bazy w nowej transakcji. Nie zapisuje innych zmian z otwartego formularza.
 

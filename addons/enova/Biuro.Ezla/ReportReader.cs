@@ -41,6 +41,10 @@ public static class ReportReader
         if (Text(Node(header, "platnik"), "nip").Replace("-", "").Replace(" ", "") != report.PayerNip) throw Invalid();
         var rows = root.Elements("dokumentyEzla").ToArray();
         if (!int.TryParse(Text(header, "liczbaDokumentowEzla"), out int count) || count != rows.Length || count > 20000) throw Invalid();
+        var correctionRows = root.Elements("dokumentyEzlaK").Count();
+        string declaredCorrections = Text(header, "liczbaDokumentowEzlaK", false);
+        if (declaredCorrections.Length > 0 && (!int.TryParse(declaredCorrections, out int corrections) || corrections != correctionRows))
+            throw new InvalidDataException("Raport wykazuje e-ZLA/K bez zgodnych szczegółów. Pobierz pełny raport z Biuro.".Translate());
         var result = new List<EzlaDocument>();
         foreach (var row in root.Elements().Where(e => e.Name == "dokumentyEzla" || e.Name == "dokumentyEzlaK"))
         {
@@ -90,7 +94,7 @@ public static class ReportReader
                         review.Add("Nieprawidłowy okres pobytu w szpitalu.".Translate());
                 }
             }
-            string identity = Hash(string.Join("|", report.PayerNip, kind, id, series, number));
+            string identity = Hash(string.Join("|", kind, id, series, number));
             string fingerprint = Hash(string.Join("|", identity, status, start.ToString("O"), end.ToString("O"), issued.ToString("O"), codes, hospitalStart?.ToString("O"), hospitalEnd?.ToString("O"), care, cancelled));
             string source = new XElement("biuroEzla", new XAttribute("id", identity), new XAttribute("fingerprint", fingerprint), new XElement(row)).ToString(SaveOptions.DisableFormatting);
             result.Add(new EzlaDocument { Identity = identity, Identifier = id, Number = series + number,
@@ -103,6 +107,10 @@ public static class ReportReader
 
     public static IReadOnlyList<EzlaDocument> Consolidate(IEnumerable<EzlaDocument> documents)
     {
+        var correctionRows = root.Elements("dokumentyEzlaK").Count();
+        string declaredCorrections = Text(header, "liczbaDokumentowEzlaK", false);
+        if (declaredCorrections.Length > 0 && (!int.TryParse(declaredCorrections, out int corrections) || corrections != correctionRows))
+            throw new InvalidDataException("Raport wykazuje e-ZLA/K bez zgodnych szczegółów. Pobierz pełny raport z Biuro.".Translate());
         var result = new List<EzlaDocument>();
         foreach (var group in documents.GroupBy(d => d.Identity))
         {
@@ -124,7 +132,8 @@ public static class ReportReader
         if (value.Length > 256 || (required && value.Length == 0)) throw Invalid();
         return value;
     }
-    private static DateTime Date(string value) => DateTime.ParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+    private static DateTime Date(string value) => DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+        DateTimeStyles.None, out var date) ? date : throw new InvalidDataException("Nieprawidłowa data e-ZLA.".Translate());
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     private static InvalidDataException Invalid() => new("Nieprawidłowa struktura raportu e-ZLA.".Translate());
 }

@@ -55,6 +55,22 @@ public sealed class ReportReaderTests
     }
 
     [Test]
+    public void SameCertificateAcrossCompanyAndPartnerNipsIsOneDocumentAndAnnulmentBlocksIt()
+    {
+        var original = Report();
+        SourceReport ForPartner(SourceReport report)
+        {
+            string xml = Encoding.UTF8.GetString(Convert.FromBase64String(report.Xml)).Replace("1112223344", "9999999999");
+            return report with { PayerNip = "9999999999", Xml = Convert.ToBase64String(Encoding.UTF8.GetBytes(xml)) };
+        }
+        var company = ReportReader.Read(original).Single();
+        var partner = ReportReader.Read(ForPartner(original)).Single();
+        Assert.That(ReportReader.Consolidate(new[] { company, partner }).Count, Is.EqualTo(1));
+        var annulled = ReportReader.Read(ForPartner(Report("Anulowane"))).Single();
+        Assert.That(ReportReader.Consolidate(new[] { company, annulled }).Single().Review, Is.Not.Empty);
+    }
+
+    [Test]
     public void CareAndOutOfRangeHospitalDatesRequireReview()
     {
         Assert.That(ReportReader.Read(Report(extra: "<kodPokrewienstwa>1</kodPokrewienstwa>")).Single().Review, Is.Not.Empty);

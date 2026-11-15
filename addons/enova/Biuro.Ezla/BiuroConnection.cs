@@ -96,4 +96,7 @@ public sealed class BiuroConnection : IDisposable
 }
 
 public sealed record SourceReport(string Id, string Sha256,
-    [property: JsonPropertyName("payer_nip")] string PayerNip, string Xml);
+    [property: JsonPropertyName("payer_nip")] string PayerNip, string Xml)
+{
+    public override string ToString() => "Raport e-ZLA";
+}

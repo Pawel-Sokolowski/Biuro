@@ -52,6 +52,21 @@ class EnovaEzlaExportTests(DbTestCase):
         with self.assertRaises(ValueError):
             export_reports(1, {'company_nip':'1112223344','month':'2018-04'})
 
+    def test_civil_partners_reports_share_the_single_company_database(self):
+        from app.db.dao_companies import save_partner
+        company = self.make_company('Spółka cywilna', nip='1112223344', forma_dzialalnosci='Spółka cywilna')
+        save_partner(company, {'imie':'Wspólnik A', 'nazwisko':'Test', 'nip':'9999999999'})
+        save_partner(company, {'imie':'Wspólnik B', 'nazwisko':'Test', 'nip':'8888888888'})
+        for payer in ('9999999999','8888888888'):
+            self.save_report(company, report(certificate()).replace(b'1112223344',payer.encode()))
+        # There are no JDG company rows/databases. The add-on asks with the civil company's NIP.
+        result = export_reports(1, {'company_nip':'1112223344','month':'2018-04'})
+        self.assertEqual(result['company_nip'], '1112223344')
+        self.assertEqual({r['payer_nip'] for r in result['reports']}, {'9999999999','8888888888'})
+        for payer in ('9999999999','8888888888'):
+            with self.assertRaises(PermissionError):
+                export_reports(1, {'company_nip':payer,'month':'2018-04'})
+
     def test_annulment_reports_are_returned_even_outside_selected_month(self):
         company = self.make_company(nip='1112223344')
         self.save_report(company, report(certificate(status='Anulowane')), needs_review=True)

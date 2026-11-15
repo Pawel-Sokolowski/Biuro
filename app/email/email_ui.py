@@ -38,7 +38,7 @@ from PyQt6.QtWebEngineCore import (
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-from app.email.email_helpers import attachment_name, is_pdf_payload, pdf_save_path
+from app.email.email_helpers import attachment_name, attachment_save_path, viewable_attachment_extension
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_employees import list_employees
 from app.email.email_labels import (
@@ -2511,7 +2511,7 @@ class EmailPage(QWidget):
             )
             if not path:
                 return
-            path = pdf_save_path(path, part.get_payload(decode=True))
+            path = attachment_save_path(path, part.get_payload(decode=True))
             self._remember_save_dir(os.path.dirname(path))
             saved = 1 if self._write_attachment(part, path) else 0
         else:
@@ -2583,26 +2583,23 @@ class EmailPage(QWidget):
         index = item.data(Qt.ItemDataRole.UserRole)
         parts = self._attachment_parts()
         part = parts[index] if isinstance(index, int) and 0 <= index < len(parts) else None
-        is_pdf = part is not None and self._is_safe_pdf_part(part)
-        if is_pdf and self._open_attachment_externally(part):
+        if part is not None and self._open_attachment_externally(part):
             return
         self.save_attachments([index])
 
     @staticmethod
     def _is_safe_pdf_part(part) -> bool:
         """Otwieramy PDF rozpoznany po nagłówku; nie ufamy samemu rozszerzeniu/MIME."""
-        if is_risky_attachment(part.get_filename()):
-            return False
-        payload = part.get_payload(decode=True)
-        return is_pdf_payload(payload) and len(payload) <= 50 * 1024 * 1024
+        return viewable_attachment_extension(part.get_filename(),part.get_payload(decode=True)) == '.pdf'
 
 
     def _open_attachment_externally(self, part) -> bool:
-        # Nazwa pliku od nadawcy nigdy nie trafia na dysk – zawsze stała nazwa .pdf.
-        if not self._is_safe_pdf_part(part):
+        # Fixed local name and content-derived extension; no executable is launched.
+        extension = viewable_attachment_extension(part.get_filename(),part.get_payload(decode=True))
+        if extension is None:
             return False
         directory = tempfile.mkdtemp(prefix="biuro_zal_")
-        path = os.path.join(directory, "zalacznik.pdf")
+        path = os.path.join(directory, "zalacznik" + extension)
         if not self._write_attachment(part, path):
             shutil.rmtree(directory, ignore_errors=True)
             return False

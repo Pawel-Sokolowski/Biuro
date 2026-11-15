@@ -90,3 +90,45 @@ class PdfAttachmentTests(unittest.TestCase):
                 forwarded = email_ui.EmailPage._save_attachments_to_temp(msg)
                 self.assertEqual(Path(forwarded[0]).name,'Faktura.pdf')
                 self.assertEqual(Path(forwarded[0]).read_bytes(),PDF)
+
+
+class ImageAttachmentTests(unittest.TestCase):
+    def test_images_are_detected_from_content_and_keep_existing_suffixes(self):
+        from app.email.email_helpers import attachment_extension,attachment_save_path
+        samples = [(b'\xff\xd8\xff\xe0JPEG','.jpg'),(b'\x89PNG\r\n\x1a\nPNG','.png'),
+                   (b'\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic','.heic')]
+        for content,extension in samples:
+            with self.subTest(extension=extension):
+                self.assertEqual(attachment_extension(content),extension)
+                self.assertEqual(attachment_name('zdjecie',content),'zdjecie'+extension)
+                for suffix in (extension,extension.upper()):
+                    self.assertEqual(attachment_name('zdjecie'+suffix,content),'zdjecie'+suffix)
+                    self.assertEqual(attachment_save_path('/tmp/zdjecie'+suffix,content),'/tmp/zdjecie'+suffix)
+                self.assertEqual(attachment_save_path('/tmp/zdjecie',content),'/tmp/zdjecie'+extension)
+        self.assertEqual(attachment_name('zdjecie.jpeg',samples[0][0]),'zdjecie.jpeg')
+
+    def test_images_open_in_the_system_application_with_the_correct_real_extension(self):
+        from app.email import email_ui
+        for content,extension in [(b'\xff\xd8\xffJPEG','.jpg'),(b'\x89PNG\r\n\x1a\nPNG','.png'),
+                (b'\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic','.heic')]:
+            part = list(message('zdjecie',content).iter_attachments())[0]
+            page = SimpleNamespace()
+            page._write_attachment=lambda part,path: email_ui.EmailPage._write_attachment(page,part,path)
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(email_ui.tempfile,'mkdtemp',return_value=directory), \
+                    mock.patch.object(email_ui.QTimer,'singleShot'), \
+                    mock.patch.object(email_ui.QDesktopServices,'openUrl',return_value=True) as opened:
+                self.assertTrue(email_ui.EmailPage._open_attachment_externally(page,part))
+                path = Path(opened.call_args.args[0].toLocalFile())
+                self.assertEqual(path.suffix,extension)
+                self.assertEqual(path.read_bytes(),content)
+
+    def test_other_file_types_remain_saveable_without_guessing_an_extension(self):
+        from app.email.email_helpers import attachment_extension,attachment_save_path,viewable_attachment_extension
+        data = b'unknown data'
+        self.assertIsNone(attachment_extension(data))
+        self.assertEqual(attachment_name('dane.xyz',data),'dane.xyz')
+        self.assertEqual(attachment_save_path('/tmp/dane.xyz',data),'/tmp/dane.xyz')
+        self.assertIsNone(viewable_attachment_extension('plik.exe',b'\x89PNG\r\n\x1a\n'))
+        # A misleading MIME declaration or ftyp string is not sufficient.
+        self.assertIsNone(attachment_extension(b'fakeftypheic'))

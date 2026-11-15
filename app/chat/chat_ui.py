@@ -635,11 +635,11 @@ class ChatPage(QWidget):
         if not data:
             QMessageBox.warning(self, "Brak pliku", "Załącznik nie istnieje.")
             return
-        from app.email.email_helpers import attachment_name, pdf_save_path
+        from app.email.email_helpers import attachment_name, attachment_save_path
         path, _ = QFileDialog.getSaveFileName(self, "Zapisz plik", attachment_name(data["nazwa"],data["dane"]))
         if not path:
             return
-        path = pdf_save_path(path,data["dane"])
+        path = attachment_save_path(path,data["dane"])
         try:
             with open(path, "wb") as fh:
                 fh.write(data["dane"])

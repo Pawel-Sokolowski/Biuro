@@ -41,16 +41,47 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def handle_one_request(self):
+        # Idle keep-alive clients must release bounded connection threads quickly.
+        self.connection.settimeout(5)
+        super().handle_one_request()
+
     def do_GET(self):
         self._answer(405,{'message':'Użyj aplikacji Biuro.'})
 
     def do_POST(self):
+        large_body = False
         try:
+            self.connection.settimeout(20)
+            public_routes = {'/api/v1/login','/api/v1/reset','/api/v1/redeem'}
+            private_routes = {'/api/v1/session','/api/v1/logout','/api/v1/operations','/api/v1/jobs','/api/v1/files','/api/v1/download'}
+            if self.path not in public_routes|private_routes:
+                self._answer(404,{'message':'Nieznana operacja.'})
+                return
+            # Authenticate before allocating or parsing an upload body.
+            if self.path in private_routes:
+                header = self.headers.get('Authorization','')
+                if not header.startswith('Bearer '):
+                    self._answer(401,{'message':'Zaloguj się do serwera biura.'})
+                    return
+                try:
+                    self.server.office_service.identity(header[7:])
+                except PermissionError:
+                    self._answer(401,{'message':'Sesja wygasła. Zaloguj się ponownie.'})
+                    return
             if self.headers.get('Transfer-Encoding') or self.headers.get('Content-Type','').split(';',1)[0]!='application/json':
                 raise ValueError('Nieprawidłowy format żądania.')
             size = int(self.headers.get('Content-Length','0'))
-            if not 0<size<=MAX_BODY:
+            if len(self.headers.get_all('Content-Length',[]))!=1:
                 raise ValueError('Nieprawidłowy rozmiar żądania.')
+            limit = 16*1024 if self.path in public_routes else MAX_BODY
+            if not 0<size<=limit:
+                raise ValueError('Nieprawidłowy rozmiar żądania.')
+            if size>1024*1024:
+                large_body = self.server.large_bodies.acquire(blocking=False)
+                if not large_body:
+                    self._answer(429,{'message':'Trwają inne przesyłania plików. Spróbuj ponownie.'})
+                    return
             raw = self.rfile.read(size)
             if len(raw)!=size:
                 raise ValueError('Niepełne żądanie.')
@@ -131,6 +162,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             logger.exception('office_http_request_failed')
             self._answer(500,{'message':'Błąd serwera biura. Sprawdź logi serwera.'})
+        finally:
+            if large_body:
+                self.server.large_bodies.release()
 
 
 class Server(ThreadingHTTPServer):
@@ -139,7 +173,8 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self,address,service):
         self.office_service = service
-        self.slots = threading.BoundedSemaphore(32)
+        self.slots = threading.BoundedSemaphore(64)
+        self.large_bodies = threading.BoundedSemaphore(4)
         super().__init__(address,Handler)
 
     def process_request(self,request,client_address):

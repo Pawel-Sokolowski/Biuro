@@ -24,7 +24,7 @@ class OfficeService:
         self.files = FileStore(Path(directory)/'api-files')
         self.jobs,self.objects,self.preparations = {},{},{}
         self.lock = threading.RLock()
-        self.executor = ThreadPoolExecutor(max_workers=8,thread_name_prefix='office-api')
+        self.executor = ThreadPoolExecutor(max_workers=4,thread_name_prefix='office-api')
         with service_scope():
             auth.initialize()
 

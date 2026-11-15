@@ -160,3 +160,19 @@ print('KEYLESS_DESKTOP_READY')
                                 env=env,text=True,capture_output=True,timeout=90)
         self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
         self.assertIn('KEYLESS_DESKTOP_READY',result.stdout)
+
+    def test_unauthenticated_upload_is_rejected_before_waiting_for_its_body(self):
+        import http.client,ssl
+        context = ssl.create_default_context(cafile=str(self.cert))
+        connection = http.client.HTTPSConnection('127.0.0.1',self.server.server_address[1],context=context,timeout=3)
+        try:
+            connection.putrequest('POST','/api/v1/files')
+            connection.putheader('Content-Type','application/json')
+            connection.putheader('Content-Length',str(32*1024*1024))
+            connection.endheaders()
+            # Do not transmit a body: the server must respond immediately.
+            response = connection.getresponse()
+            self.assertEqual(response.status,401)
+            response.read()
+        finally:
+            connection.close()

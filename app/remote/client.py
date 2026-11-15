@@ -27,6 +27,8 @@ class OfficeClient:
         self.token = None
         self.employee_id = None
         self._local = threading.local()
+        self._sessions = set()
+        self._sessions_lock = threading.Lock()
 
     def _request(self,path,payload=None,*,authenticated=True):
         session = getattr(self._local,'session',None)
@@ -40,6 +42,8 @@ class OfficeClient:
                     options['ssl_context'] = context
                     return host,options
             session.mount('https://',OfficeTLS())
+            with self._sessions_lock:
+                self._sessions.add(session)
         headers = {'Accept':'application/json'}
         if authenticated:
             if not self.token:
@@ -66,6 +70,13 @@ class OfficeClient:
         if response.status_code>=400:
             raise ValueError(value.get('message','Operacja na serwerze nie powiodła się.'))
         return value
+
+    def close(self):
+        with self._sessions_lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        for session in sessions:
+            session.close()
 
     def login(self,email,password,remember=False):
         result = self._request('login',{'email':email,'password':password,'remember':bool(remember)},authenticated=False)

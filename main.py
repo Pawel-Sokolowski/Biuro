@@ -111,6 +111,10 @@ if __name__ == "__main__":
         from app.main_ui import OfficeManagerApp
         window = OfficeManagerApp(pracownik_id)
         window.restore_window_state()
-        sys.exit(app.exec())
+        exit_code = app.exec()
+        from app.remote.state import client
+        if client() is not None:
+            client().close()
+        sys.exit(exit_code)
     else:
         sys.exit()

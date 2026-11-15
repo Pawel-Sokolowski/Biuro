@@ -40,6 +40,7 @@ class OfficeHttpsTests(DbTestCase):
         self.client = OfficeClient('https://127.0.0.1:'+str(self.server.server_address[1]),verify=str(self.cert))
 
     def tearDown(self):
+        self.client.close()
         self.server.shutdown()
         self.server.server_close()
         self.server.office_service.close()
@@ -159,6 +160,7 @@ QTimer.singleShot(1500,application.quit)
 application.exec()
 window.close()
 QThreadPool.globalInstance().waitForDone(10000)
+connection.close()
 print('KEYLESS_DESKTOP_READY')
 """
         env = dict(os.environ,BIO_CLIENT_MODE='1',QT_QPA_PLATFORM='offscreen')

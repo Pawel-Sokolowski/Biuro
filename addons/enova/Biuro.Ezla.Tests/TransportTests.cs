@@ -36,8 +36,10 @@ public sealed class TransportTests
             Assert.That(request.Headers.TransferEncodingChunked, Is.Not.True);
             Assert.That(request.Content, Is.Not.Null);
             Assert.That(request.Content!.Headers.ContentType!.MediaType, Is.EqualTo("application/json"));
+            long? knownLength = request.Content.Headers.ContentLength;
+            Assert.That(knownLength, Is.Not.Null, "Length must be known before the transport reads or buffers the body.");
             string body = await request.Content.ReadAsStringAsync(cancellationToken);
-            Assert.That(request.Content.Headers.ContentLength, Is.EqualTo(Encoding.UTF8.GetByteCount(body)));
+            Assert.That(knownLength, Is.EqualTo(Encoding.UTF8.GetByteCount(body)));
             using var json = JsonDocument.Parse(body);
             var root = json.RootElement;
             string path = request.RequestUri.AbsolutePath;

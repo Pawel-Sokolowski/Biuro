@@ -19,7 +19,7 @@ def check(capability,actor_id):
 def bind(function,values,spec,actor_id):
     signature = inspect.signature(function)
     arguments = dict(values)
-    if any(arguments.get(key) is not None for key in ('conn','connection','cur','cursor')):
+    if any(arguments.get(key) is not None for key in ('conn','connection','cur','cursor','client','calendar')):
         raise PermissionError('Połączenia z bazą pozostają na serwerze.')
     # Even an authenticated desktop cannot select the acting identity.
     for name in spec.get('actors',[]):
@@ -46,6 +46,26 @@ def bind(function,values,spec,actor_id):
 
 def resource_access(operation,values,actor_id):
     from app.security.authorization import is_administrator
+    if values.get('from_remote'):
+        raise PermissionError('Tę operację wykonuje synchronizacja serwera.')
+    # Remote calendar mutations must refer to a local event or a queued deletion.
+    if operation.startswith('app.kalendarz.') and operation.endswith(('.push_event','.delete_remote','.mark_event_pending')):
+        from app.db.dao_conn import get_conn
+        with get_conn() as conn:
+            event = values.get('event')
+            if event is not None:
+                saved = conn.execute('SELECT * FROM wydarzenia WHERE id=%s AND pracownik_id=%s',
+                                     (event.get('id'),actor_id)).fetchone()
+                if not saved:
+                    raise PermissionError('Brak dostępu do wydarzenia.')
+                values['event'] = dict(saved)
+            else:
+                provider = 'google' if '.google_sync.' in operation else 'caldav'
+                remote_id = values.get('google_event_id',values.get('uid'))
+                queued = conn.execute("SELECT 1 FROM calendar_outbox WHERE pracownik_id=%s AND provider=%s AND remote_id=%s AND action='delete'",
+                                      (actor_id,provider,remote_id)).fetchone()
+                if not queued:
+                    raise PermissionError('Brak zatwierdzonego usunięcia wydarzenia.')
     if is_administrator(actor_id):
         return
     if operation.startswith(('app.email.','app.db.dao_email')) or operation=='app.remote.screen_data.mail_view_snapshot':

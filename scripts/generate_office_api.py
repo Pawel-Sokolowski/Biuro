@@ -130,7 +130,7 @@ def capability(module,name):
             return 'admin'
         return 'tab:E-mail'
     if module.startswith(('app.kalendarz.','app.db.dao_calendar')):
-        return 'admin' if name.startswith(('save_config','save_access','save_client')) or name in ('disconnect','get_config','list_account_calendars','list_calendars','test_connection') else 'tab:Kalendarz'
+        return 'admin' if name.startswith(('save_config','save_access','save_client')) or name in ('disconnect','list_account_calendars','list_calendars','test_connection') else 'tab:Kalendarz'
     if module.startswith('app.reports.'):
         return 'admin' if name.startswith(('import_','set_employee_rates','delete_imported')) else 'tab:Raporty|Widok miesięczny'
     if module=='app.employees.authority_profiles':
@@ -141,6 +141,8 @@ def capability(module,name):
         return 'tab:Sprawdzanie|Klienci'
     if module.startswith('app.integrations.'):
         return 'authenticated' if read and name not in ('load_settings','load_connection') else 'admin'
+    if module=='app.utils.backup_status' and name in ('get_backup_status','stored_backup_dates'):
+        return 'authenticated'
     if module.startswith(('app.services.worker','app.services.email_reminders','app.utils.backup')):
         return 'admin'
     if module=='app.services.manual_reminders':

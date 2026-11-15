@@ -89,6 +89,11 @@ def resource_access(operation,values,actor_id):
                 if {row[0] for row in owned}!=set(row_ids):
                     raise PermissionError('Wiadomość jest niedostępna.')
                 ids.update(row[1] for row in owned)
+            if values.get('filter_id') is not None:
+                rule = conn.execute('SELECT konto_id FROM reguly_filtrow WHERE id=%s',(values['filter_id'],)).fetchone()
+                if not rule:
+                    raise PermissionError('Reguła poczty jest niedostępna.')
+                ids.add(rule[0])
             for key in ('folder_id','src_folder_id','dest_folder_id','source_folder_id','target_folder_id'):
                 if values.get(key) is not None:
                     row = conn.execute('SELECT konto_id FROM foldery_email WHERE id=%s',(values[key],)).fetchone()
@@ -142,4 +147,10 @@ def public_result(operation,result,actor_id):
         if not is_administrator(actor_id):
             from app.email.email_storage import get_email_accounts_for_employee
             result = get_email_accounts_for_employee(actor_id)
+    if operation.endswith('.get_email_filters_for_company'):
+        from app.security.authorization import is_administrator
+        if not is_administrator(actor_id):
+            from app.email.email_storage import get_email_accounts_for_employee
+            allowed = {row['id'] for row in get_email_accounts_for_employee(actor_id)}
+            result = [row for row in result if row.get('konto_id') in allowed]
     return public(result)

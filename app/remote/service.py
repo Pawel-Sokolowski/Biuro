@@ -229,6 +229,11 @@ class OfficeService:
                 bound.arguments['prepared'] = item['value']
                 for field in ('filepath','file_path'):
                     if field in bound.arguments:
+                        import hashlib
+                        incoming = Path(bound.arguments[field]).read_bytes()
+                        accepted = Path(item['value'].path).read_bytes()
+                        if hashlib.sha256(incoming).digest()!=hashlib.sha256(accepted).digest():
+                            raise ValueError('Plik zmienił się po sprawdzeniu. Wybierz go ponownie i sprawdź import.')
                         bound.arguments[field] = item['value'].path
         setting_key = bound.arguments.get('key',bound.arguments.get('klucz'))
         if name in ('set_setting','delete_setting') and setting_key:

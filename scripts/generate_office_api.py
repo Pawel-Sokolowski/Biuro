@@ -100,6 +100,8 @@ def capability(module,name):
             return 'authenticated'
         return 'admin'
     if module.endswith('dao_employees'):
+        if name=='get_email_assignments':
+            return 'permission:can_manage_users'
         return 'authenticated' if name.startswith(('get_','list_')) else 'permission:can_manage_users'
     if module.endswith('dao_audit') or module in ('app.utils.system_mailbox','app.services.settings'):
         return 'admin'
@@ -126,6 +128,8 @@ def capability(module,name):
     if module.startswith('app.chat.'):
         return 'tab:Czat'
     if module.startswith(('app.email.','app.db.dao_email')):
+        if name=='ensure_contact_email_filters':
+            return 'permission:can_edit_companies'
         if module=='app.email.email_connection' or name=='save_template':
             return 'admin'
         return 'tab:E-mail'

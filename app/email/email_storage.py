@@ -255,16 +255,21 @@ def get_known_sender_addresses(konto_id: Optional[int] = None) -> List[str]:
 
 
 @office_endpoint('app.email.email_storage.ensure_contact_email_filters')
-def ensure_contact_email_filters(firma_id: int, folder_name: str) -> None:
+def ensure_contact_email_filters(firma_id: int, folder_name: str, actor_id: Optional[int] = None) -> None:
     """Create a filter for each company contact e-mail that has none yet."""
     conn = get_conn()
     try:
         contacts = conn.execute(
             "SELECT email FROM company_contacts WHERE firma_id = %s", (firma_id,)
         ).fetchall()
-        account = conn.execute(
-            "SELECT id FROM konta_email WHERE COALESCE(aktywne, 1) = 1 AND COALESCE(systemowe, 0) = 0 ORDER BY id LIMIT 1"
-        ).fetchone()
+        if actor_id is None:
+            account = conn.execute(
+                "SELECT id FROM konta_email WHERE COALESCE(aktywne,1)=1 AND COALESCE(systemowe,0)=0 ORDER BY id LIMIT 1"
+            ).fetchone()
+        else:
+            account = conn.execute("""SELECT k.id FROM konta_email k JOIN pracownik_konto_email p ON p.konto_id=k.id
+                WHERE p.pracownik_id=%s AND COALESCE(k.aktywne,1)=1 AND COALESCE(k.systemowe,0)=0 ORDER BY k.id LIMIT 1""",
+                (actor_id,)).fetchone()
         if not account:
             return
         existing = {

@@ -39,7 +39,7 @@ class EzlaReportTests(TestCase):
         self.assertEqual(value.certificates[0].employee_name, 'JAN PRZYKŁAD')
         self.assertEqual(value.certificates[0].start, '2018-04-20')
         self.assertEqual(value.certificates[0].masked_identifier, '*******0000')
-        self.assertIn('nie zaimportowano', value.certificates[0].review)
+        self.assertIn('sprawdź wynik importu', value.certificates[0].review)
         self.assertIn('anulowania', value.certificates[1].review)
         self.assertIn('powiązany', value.certificates[2].review)
         self.assertNotIn('00000000000', repr(value.certificates[0]))
@@ -125,6 +125,20 @@ class EzlaPreviewTests(TestCase):
                  patch('app.integrations.ezla.preview.get_conn', self._connection(companies)), \
                  self.assertRaises(ValueError):
                 preview_report(5, 'local.xml')
+
+    def test_civil_owner_report_uses_partnership_company_and_database_without_jdg_records(self):
+        parsed = parse_report(report(certificate()).replace(b'1112223344', b'9999999999'))
+        company = {'id':9, 'nazwa':'Spółka testowa', 'nip':'1112223344', 'forma_dzialalnosci':'Spółka cywilna'}
+        with patch('app.integrations.ezla.preview.require_access'), \
+             patch('app.integrations.ezla.preview.read_report',return_value=parsed), \
+             patch('app.integrations.ezla.preview.assigned_company_ids',return_value={9}), \
+             patch('app.integrations.ezla.preview.get_conn',self._connection([company])), \
+             patch('app.integrations.ezla.preview.get_partners',return_value=[{'nip':'9999999999'},{'nip':'8888888888'}]), \
+             patch('app.integrations.enova.connection_settings.load_connection',return_value={
+                 'sources':[{'nip':'1112223344','database':'EnovaSC'}]}):
+            result = preview_report(5,'local.xml')
+        self.assertEqual(result['company']['id'],9)
+        self.assertEqual(result['database'],'EnovaSC')
 
     def test_access_is_checked_before_reading_the_report(self):
         with patch('app.integrations.ezla.preview.require_access', side_effect=PermissionError), \

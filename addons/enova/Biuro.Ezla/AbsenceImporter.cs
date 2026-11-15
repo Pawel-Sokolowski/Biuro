@@ -2,11 +2,12 @@ using Soneta.Business;
 using Soneta.Kadry;
 using Soneta.Kalend;
 using Soneta.Langs;
+using Soneta.Tools;
 using Soneta.Types;
 
 namespace Biuro.Ezla;
 
-public sealed record ImportLine(string EmployeeCode, string CertificateNumber, string Decision, int Added);
+public sealed record ImportLine(string EmployeeCode, string CertificateNumber, string Decision, int Added, bool NeedsReview = false);
 
 /// <summary>Caller owns the session and transaction. This class neither commits nor saves.</summary>
 public static class AbsenceImporter
@@ -20,9 +21,9 @@ public static class AbsenceImporter
         var lines = new List<ImportLine>();
         foreach (var doc in ReportReader.Consolidate(input))
         {
-            if (doc.Review.Length > 0) { lines.Add(new("", doc.Number, doc.Review, 0)); continue; }
+            if (doc.Review.Length > 0) { lines.Add(new("", doc.Number, doc.Review, 0, true)); continue; }
             var employees = session.GetKadry().Pracownicy.WgPESEL[doc.Identifier].Cast<Pracownik>().ToArray();
-            if (employees.Length != 1) { lines.Add(new("", doc.Number, "Brak jednego pracownika o zgodnym PESEL.".Translate(), 0)); continue; }
+            if (employees.Length != 1) { lines.Add(new("", doc.Number, "Brak jednego pracownika o zgodnym PESEL.".Translate(), 0, true)); continue; }
             var employee = employees[0];
             Date start = ToDate(doc.Start), end = ToDate(doc.End);
             var overlapping = employee.Nieobecnosci.GetIntersectedRows(new FromTo(start, end)).Cast<Nieobecnosc>().ToArray();
@@ -35,13 +36,13 @@ public static class AbsenceImporter
                     n.Zwolnienie.ZwolnienieWystawione == ToDate(doc.Issued) &&
                     n.Zwolnienie.LeczenieSzpitalne == s.Hospital && n.Zwolnienie.Przyczyna == Cause(doc)));
                 lines.Add(new(employee.Kod, doc.Number, identical ? "Już zaimportowano.".Translate()
-                    : "Konflikt z istniejącą nieobecnością — sprawdź ręcznie.".Translate(), 0));
+                    : "Konflikt z istniejącą nieobecnością — sprawdź ręcznie.".Translate(), 0, !identical));
                 continue;
             }
             // Also detect the same certificate moved to another period in an earlier import.
             // The employee's keyed subtable bounds this read; never scan all employees/absences.
             if (employee.Nieobecnosci.Cast<Nieobecnosc>().Any(n => n.Zwolnienie.Numer == doc.Number))
-            { lines.Add(new(employee.Kod, doc.Number, "Ten numer ZLA istnieje z innym okresem.".Translate(), 0)); continue; }
+            { lines.Add(new(employee.Kod, doc.Number, "Ten numer ZLA istnieje z innym okresem.".Translate(), 0, true)); continue; }
             if (!preview)
                 foreach (var segment in segments)
                 {
@@ -57,7 +58,7 @@ public static class AbsenceImporter
                     // Leave ZwolnienieDostarczone at the platform default for explicit review.
                     absence.ZLA.Wersja = WersjaZLA.PUEService;
                     absence.ZLA.Data = ToDate(doc.Issued);
-                    absence.ZLA.Zrodlo = new MemoText(doc.Source);
+                    absence.ZLA.Zrodlo = doc.Source;
                 }
             lines.Add(new(employee.Kod, doc.Number, preview ? "Gotowe do importu.".Translate() : "Dodano nieobecność.".Translate(), preview ? 0 : segments.Length));
         }

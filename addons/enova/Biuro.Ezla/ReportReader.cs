@@ -4,6 +4,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using Soneta.Langs;
+using Soneta.Tools;
 
 namespace Biuro.Ezla;
 

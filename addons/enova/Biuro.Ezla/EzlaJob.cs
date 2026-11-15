@@ -4,6 +4,7 @@ using System.Text;
 using Soneta.Business;
 using Soneta.Core;
 using Soneta.Langs;
+using Soneta.Tools;
 
 namespace Biuro.Ezla;
 
@@ -52,8 +53,8 @@ public static class EzlaJob
             }
             session.Save(); // Save conflicts propagate: never report success after a failed write.
             var log = new Log("Biuro e-ZLA", true);
-            log.WriteLine("Import e-ZLA: raporty {0}, dokumenty {1}, dodane odcinki nieobecności {2}.".TranslateFormat(
-                reports.Count, lines.Count, lines.Sum(l => l.Added)));
+            log.WriteLine("Import e-ZLA: raporty {0}, dokumenty {1}, dodane odcinki nieobecności {2}, wymagają sprawdzenia {3}.".TranslateFormat(
+                reports.Count, lines.Count, lines.Sum(l => l.Added), lines.Count(l => l.NeedsReview)));
             return lines;
         }
         finally { mutex.ReleaseMutex(); }

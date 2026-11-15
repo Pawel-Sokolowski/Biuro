@@ -3,6 +3,7 @@ using Biuro.Ezla.UI;
 using Soneta.Business;
 using Soneta.Kadry;
 using Soneta.Langs;
+using Soneta.Tools;
 using Soneta.Types;
 
 [assembly: Worker(typeof(ScheduleWorker), typeof(Pracownicy))]

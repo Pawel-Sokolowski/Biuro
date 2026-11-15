@@ -79,7 +79,7 @@ class CompanySearchMetadataTests(unittest.TestCase):
         self.addCleanup(self.page.close)
         self.page._reads.submit = lambda read, done, error: done(read())
         self.row = {'id': 7, 'nazwa': 'Full legal name', 'nazwa_skrocona': 'Surname Name', 'nip': '1234563218'}
-        for target, value in (('get_dsn', 'review database'), ('get_schema', 'test schema')):
+        for target, value in (('get_database', 'review database'), ('get_schema', 'test schema')):
             patcher = mock.patch.object(company_ui, target, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)

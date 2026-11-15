@@ -26,7 +26,8 @@ public static class EzlaJob
     public static IReadOnlyList<ImportLine> Run(Session owner, string address, string email, string password,
         DateTime from, DateTime to, string definition, bool preview)
     {
-        if (from > to || to > from.AddMonths(12)) throw new ArgumentException("Wybierz okres do 12 miesięcy.".Translate());
+        if (from > to || to >= new DateTime(from.Year, from.Month, 1).AddMonths(12))
+            throw new ArgumentException("Wybierz okres do 12 miesięcy.".Translate());
         // Own a clean session: never save unrelated edits from the caller's screen/config session.
         using var session = owner.Login.CreateSession(false, false, "Biuro e-ZLA");
         string nip = new string(session.GetCore().Config.Firma.Pieczątka.NIP.Where(char.IsDigit).ToArray());
@@ -45,7 +46,7 @@ public static class EzlaJob
                 months.Add(month.ToString("yyyy-MM", CultureInfo.InvariantCulture));
             var reports = connection.Download(nip, months);
             // Read all pages/statuses before any database modification.
-            var documents = reports.SelectMany(ReportReader.Read).ToArray();
+            var documents = ReportReader.SelectMonths(reports.SelectMany(ReportReader.Read), from, to);
             if (preview) return AbsenceImporter.Import(session, documents, definition, true);
             IReadOnlyList<ImportLine> lines;
             using (var transaction = session.Logout(true))

@@ -126,6 +126,15 @@ public static class ReportReader
         }
         return result;
     }
+
+    public static IReadOnlyList<EzlaDocument> SelectMonths(IEnumerable<EzlaDocument> documents, DateTime from, DateTime to)
+    {
+        var first = new DateTime(from.Year, from.Month, 1);
+        var last = new DateTime(to.Year, to.Month, 1).AddMonths(1).AddDays(-1);
+        // Consolidate before filtering: an annulment or changed version must still
+        // block its original even if the newer document lies outside the period.
+        return Consolidate(documents).Where(d => d.Review.Length > 0 || (d.Start <= last && d.End >= first)).ToArray();
+    }
     private static XElement Node(XElement parent, string name) => parent.Elements(name).SingleOrDefault() ?? throw Invalid();
     private static string Text(XElement parent, string name, bool required = true)
     {

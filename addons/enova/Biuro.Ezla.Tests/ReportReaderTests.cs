@@ -106,6 +106,21 @@ public sealed class ReportReaderTests
     }
 
     [Test]
+    public void SelectedMonthsExcludeUnrelatedCertificatesButKeepBlockingStatusChanges()
+    {
+        var original = Report();
+        string xml = Encoding.UTF8.GetString(Convert.FromBase64String(original.Xml))
+            .Replace("2025-12", "2026-01").Replace("123456", "654321");
+        var unrelated = original with { Xml = Convert.ToBase64String(Encoding.UTF8.GetBytes(xml)) };
+        var all = ReportReader.Read(original).Concat(ReportReader.Read(unrelated));
+        var from = new DateTime(2025,12,1);
+        var to = new DateTime(2025,12,31);
+        Assert.That(ReportReader.SelectMonths(all, from, to).Select(d => d.Number), Is.EqualTo(new[] { "ZZ123456" }));
+        var annulled = ReportReader.Read(Report("Anulowane"));
+        Assert.That(ReportReader.SelectMonths(all.Concat(annulled), from, to).Single().Review, Is.Not.Empty);
+    }
+
+    [Test]
     public void UnknownMedicalFieldsAreNeverSilentlyDiscarded()
     {
         var document = ReportReader.Read(Report(extra: "<wypadekPrzyPracy>Tak</wypadekPrzyPracy>")).Single();

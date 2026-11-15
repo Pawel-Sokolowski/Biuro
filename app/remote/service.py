@@ -72,6 +72,8 @@ class OfficeService:
         owner = auth.digest(token)
         with self.lock:
             self._expire()
+            if len(self.jobs)>=1000:
+                raise ValueError('Zbyt wiele oczekujących wyników. Poczekaj na zakończenie odczytów.')
             if sum(j['state']=='running' for j in self.jobs.values())>=32 or sum(j['owner']==owner and j['state']=='running' for j in self.jobs.values())>=4:
                 raise ValueError('Trwają już inne operacje. Poczekaj na ich zakończenie.')
             key = secrets.token_urlsafe(24)
@@ -83,8 +85,12 @@ class OfficeService:
         except TimeoutError:
             pass
         if job['state']=='done':
+            with self.lock:
+                self.jobs.pop(key,None)
             return {'completed':True,'result':job['result'],'events':list(job['events'])}
         if job['state']=='failed':
+            with self.lock:
+                self.jobs.pop(key,None)
             if job.get('permission'):
                 raise PermissionError(job['message'])
             raise ValueError(job['message'])

@@ -146,8 +146,8 @@ class OfficeServiceTests(DbTestCase):
         from app.remote.secrets import PRESENT
         account = {'id':50,'email':'mail@example.com','serwer_imap':'imap.example.com','port_imap':993,
                    'ssl_imap':'SSL/TLS','serwer_smtp':'smtp.example.com','port_smtp':465,'ssl_smtp':'SSL/TLS','haslo_enc':'private-ciphertext'}
-        def check_connection(value,timeout=15):
-            self.assertEqual(value['haslo_enc'],'private-ciphertext')
+        def check_connection(account,timeout=15):
+            self.assertEqual(account['haslo_enc'],'private-ciphertext')
             return True,'OK'
         # The service restores the secret internally; no plaintext or ciphertext is returned.
         with mock.patch('app.email.email_storage.get_account_info',return_value=account), \

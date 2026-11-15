@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Soneta.Business;
 using Soneta.Kadry;
 using Soneta.Kalend;
@@ -49,6 +52,9 @@ public static class AbsenceImporter
                 foreach (var segment in segments)
                 {
                     var absence = session.AddRow(new NieobecnośćPracownika(employee));
+                    // GuidedRow uses a unique database GUID. Two hosts importing the same
+                    // certificate/segment must collide at Save(), never create two absences.
+                    absence.Guid = ImportGuid(employee.Guid, doc.Identity, segment.Start, segment.End);
                     absence.Definicja = definition;
                     absence.Okres = new FromTo(ToDate(segment.Start), ToDate(segment.End));
                     absence.Zwolnienie.Numer = doc.Number;
@@ -74,6 +80,15 @@ public static class AbsenceImporter
         if (doc.Start < hs) yield return (doc.Start, hs.AddDays(-1), false);
         yield return (hs, he, true);
         if (he < doc.End) yield return (he.AddDays(1), doc.End, false);
+    }
+    public static Guid ImportGuid(Guid employee, string document, DateTime start, DateTime end)
+    {
+        string name = string.Join("|", "Biuro.eZLA.v1", employee.ToString("D"), document,
+            start.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), end.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(name));
+        hash[6] = (byte)((hash[6] & 0x0f) | 0x80); // UUID v8, RFC 9562 variant.
+        hash[8] = (byte)((hash[8] & 0x3f) | 0x80);
+        return new Guid(hash.AsSpan(0, 16), bigEndian: true);
     }
     private static Date ToDate(DateTime value) => new(value.Year, value.Month, value.Day);
     private static PrzyczynaZwolnienia Cause(EzlaDocument doc) => doc.Codes.Contains('B')

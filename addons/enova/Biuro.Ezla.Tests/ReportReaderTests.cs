@@ -93,6 +93,19 @@ public sealed class ReportReaderTests
     }
 
     [Test]
+    public void DatabaseImportIdentityIsStableAcrossHostsAndDistinctPerEmployeeAndSegment()
+    {
+        var employee = new Guid("a57a1da6-bc8b-41d7-89f5-f210d59e08c0");
+        var start = new DateTime(2025,12,1);
+        var end = new DateTime(2025,12,10);
+        var id = AbsenceImporter.ImportGuid(employee, "document", start, end);
+        Assert.That(id, Is.EqualTo(AbsenceImporter.ImportGuid(employee, "document", start, end)));
+        Assert.That(id, Is.Not.EqualTo(AbsenceImporter.ImportGuid(employee, "other", start, end)));
+        Assert.That(id, Is.Not.EqualTo(AbsenceImporter.ImportGuid(employee, "document", start, end.AddDays(1))));
+        Assert.That(id, Is.Not.EqualTo(AbsenceImporter.ImportGuid(Guid.Empty, "document", start, end)));
+    }
+
+    [Test]
     public void UnknownMedicalFieldsAreNeverSilentlyDiscarded()
     {
         var document = ReportReader.Read(Report(extra: "<wypadekPrzyPracy>Tak</wypadekPrzyPracy>")).Single();

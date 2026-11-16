@@ -69,12 +69,12 @@ def discover(config, *, password='', progress=None):
         try:
             conn = connect(database)
             cursor = conn.cursor()
-            cursor.execute("SELECT COL_LENGTH('dbo.OddzialyFirmy','DeklaracjeNIP')")
+            cursor.execute("SELECT COL_LENGTH('dbo.HstDanychFirmy','NIP')")
             if not cursor.fetchone()[0]:
                 record['reason'] = 'Brak rozpoznanej struktury Enovy lub dostępu do metadanych.'
                 continue  # Other application / inaccessible identity metadata; do not inspect contractors.
             scanned += 1
-            cursor.execute('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
+            cursor.execute('SELECT DISTINCT NIP FROM dbo.HstDanychFirmy WHERE Termin=(SELECT MAX(Termin) FROM dbo.HstDanychFirmy WHERE Termin<=CONVERT(date,GETDATE()))')
             nips = set()
             rows = cursor.fetchmany(1001)
             if len(rows)>1000:

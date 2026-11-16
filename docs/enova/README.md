@@ -22,9 +22,12 @@ zaokrąglenie sumy wykonuje worker. Przykład: 95 dokumentów, w tym 3 nagłówk
 daje `round(92 + 190/3) = 155`. Nie dobiera się wykluczeń do wcześniejszej,
 ręcznie obliczonej wartości.
 
-Zapytania zwracają pełny zakres miesięcy, także zera, oraz NIP z
-`OddzialyFirmy.DeklaracjeNIP`. Brak NIP, kilka różnych NIP-ów lub uszkodzone
-powiązanie nagłówka WBEW powodują błąd walidacji zamiast zapisu zera.
+Zapytania zwracają pełny zakres miesięcy, także zera. Worker porównuje NIP z
+`HstDanychFirmy.NIP` z zapisanym powiązaniem bazy z firmą. Jeśli pole
+jest puste lub nie zawiera dziesięciocyfrowego NIP-u, wbudowane adaptery używają
+NIP-u ze wskazanego powiązania. Nie odczytują PESEL-u ani nie traktują go jak NIP.
+Poprawnie sformatowany inny NIP lub kilka różnych NIP-ów powodują konflikt,
+a uszkodzone powiązanie WBEW nadal powoduje błąd zamiast zapisu zera.
 Jeżeli inna baza używa innych definicji bankowych niż WBEW, trzeba je najpierw
 zidentyfikować i dostosować plik zapytania dla tego klienta.
 
@@ -597,3 +600,27 @@ odczyt. Zapis ustawień nie utrwala ścieżek domyślnych z komputera administra
 jako zamienników firmy. Wartość dziedziczona z ustawienia globalnego nadal
 podlega późniejszym zmianom globalnego SQL. Rzeczywisty zamiennik firmy zachowuje
 pierwszeństwo. Rewizja adapterów unieważnia dzienne znaczniki po aktualizacji SQL.
+
+## Ręczne powiązanie przy braku NIP-u historii firmy
+
+Dla wbudowanych adapterów worker sprawdza identyfikatory historii firmy przed
+odczytem i przekazuje NIP zapisanego powiązania jako parametr sesji SQL Server
+`biuro_company_nip` przez `sys.sp_set_session_context`. Dotyczy to wyłącznie
+tej sesji; nie zmienia rekordów Enovy i zachowuje konto tylko do odczytu.
+Zapytania nadal mają dwa parametry dat. Fallback działa tylko wtedy, gdy
+kolumna `NIP` historii firmy nie dostarcza żadnego dziesięciocyfrowego NIP-u.
+Gdy istnieje inny NIP, worker odrzuca import przed odczytem dokumentów.
+
+Ręczne przypisanie bazy w Biuro jest więc używane również do odczytu danych,
+a nie tylko do wyświetlenia bazy w konfiguracji. Nie trzeba zmieniać danych
+właściciela w Enovie, żeby obejść puste pole historii firmy. Puste wyniki liczników
+nadal są błędem, a nie automatycznymi zerami. Zamienniki SQL użytkownika nie
+są przepisywane i zachowują własny kontrakt.
+
+
+Dane oddziałów nie są tożsamością całej firmy. Import i wyszukiwanie baz
+korzystają z `HstDanychFirmy.NIP` dla najnowszego `Termin` niepóźniejszego
+niż bieżąca data serwera SQL. Nie wybierają NIP-ów z `OddzialyFirmy` ani
+`HstDanychOddzial`. Historia może być pusta; wtedy działa zapisane mapowanie.
+Bieżąca pieczątka w API Sonety jest dostępna przez
+`session.GetCore().Config.Firma.Pieczątka.NIP` (tak korzysta z niej dodatek e-ZLA).

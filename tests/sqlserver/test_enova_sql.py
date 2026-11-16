@@ -29,6 +29,9 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         cls.writer = pyodbc.connect(DSN + ';DATABASE=' + cls.database, autocommit=True, timeout=15)
         cls.writer.execute('''
             CREATE TABLE dbo.OddzialyFirmy (DeklaracjeNIP nvarchar(64));
+            CREATE TABLE dbo.HstDanychFirmy (Termin datetime, NIP nvarchar(64));
+            CREATE TABLE dbo.DokEwidencja (ID int PRIMARY KEY, Definicja int);
+            CREATE TABLE dbo.Dziennik (ID int PRIMARY KEY, Data datetime, KPiRLp int, Ewidencja int);
             CREATE TABLE dbo.DefDokumentow (ID int PRIMARY KEY, Symbol nvarchar(64));
             CREATE TABLE dbo.Deklaracje (ID int PRIMARY KEY, OkresTo datetime, NumerNumer int,
                 Bufor bit, Definicja int, NumerSymbol nvarchar(64), Deklaracja int);
@@ -55,10 +58,12 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         cls.master.close()
 
     def setUp(self):
-        for table in ('OddzialyFirmy', 'DefDokumentow', 'Deklaracje', 'EDeklaracje', 'ETransmisje',
-                      'JednolitePK', 'DefListPlac', 'ListyPlac', 'Wyplaty'):
+        self.reader.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=NULL")
+        for table in ('OddzialyFirmy', 'HstDanychFirmy', 'DefDokumentow', 'Deklaracje', 'EDeklaracje', 'ETransmisje',
+                      'JednolitePK', 'DefListPlac', 'ListyPlac', 'Wyplaty','Dziennik','DokEwidencja'):
             self.writer.execute('DELETE FROM dbo.' + table)
-        self.writer.execute("INSERT INTO dbo.OddzialyFirmy VALUES (N'PL 111-222-33-44')")
+        self.writer.execute("INSERT INTO dbo.OddzialyFirmy VALUES (N'999-888-77-66')")
+        self.writer.execute("INSERT INTO dbo.HstDanychFirmy VALUES ('2000-01-01',N'PL 111-222-33-44')")
         self.writer.execute("INSERT INTO dbo.DefDokumentow VALUES (1, N'custom')")
 
     def query(self, name, start=date(2026, 11, 1), end=date(2026, 12, 1)):
@@ -158,6 +163,34 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         self.assertEqual((rows[0]['miesiac'], rows[0]['liczba']), ('2026-10', 0))
         self.assertEqual(sum(row['liczba'] for row in rows[1:]), 3)
         self.assertTrue(any('bufor' in (row['rodzaj'] or '') for row in rows))
+
+    def test_saved_mapping_restores_counts_and_declarations_with_missing_or_pesel_identity(self):
+        self.declaration(confirmation=receipt())
+        self.jpk(confirmation=receipt())
+        self.writer.execute("INSERT INTO dbo.DokEwidencja VALUES (91,1)")
+        self.writer.execute("INSERT INTO dbo.Dziennik VALUES (91,'2026-11-05',1,91)")
+        for identity in (None,'','90010112345'):
+            with self.subTest(identity=identity):
+                self.writer.execute('UPDATE dbo.HstDanychFirmy SET NIP=?',identity)
+                self.reader.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=?",'1112223344')
+                for name in ('kpir.sql','declarations.sql','jpk.sql','payroll.sql'):
+                    rows = self.query(name)
+                    self.assertTrue(rows,name)
+                    self.assertEqual({row['nip'] for row in rows},{'1112223344'})
+                self.assertEqual(self.query('kpir.sql')[0]['dokumenty'],1)
+
+    def test_missing_identity_without_explicit_mapping_is_not_invented(self):
+        self.writer.execute('UPDATE dbo.HstDanychFirmy SET NIP=NULL')
+        self.assertEqual(self.query('jpk.sql'),[])
+
+    def test_mapping_never_replaces_a_different_valid_database_nip(self):
+        self.reader.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=?",'9998887766')
+        self.assertEqual(self.query('jpk.sql')[0]['nip'],'1112223344')
+
+    def test_company_history_ignores_old_future_and_branch_nips(self):
+        self.writer.execute("INSERT INTO dbo.HstDanychFirmy VALUES ('1999-01-01',N'2223334455'),('2099-01-01',N'3334445566')")
+        # The seeded branch has a different NIP; it must never identify this company.
+        self.assertEqual(self.query('jpk.sql')[0]['nip'],'1112223344')
 
     def test_reader_cannot_write(self):
         import pyodbc

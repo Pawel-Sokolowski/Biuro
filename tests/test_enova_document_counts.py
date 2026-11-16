@@ -64,6 +64,22 @@ class EnovaRulesTests(TestCase):
             self.assertIn('TrustServerCertificate={no}', driver.connect.call_args.args[0])
             self.assertIn('PWD={secret;value}}}', driver.connect.call_args.args[0])
 
+    def test_saved_mapping_can_fill_empty_or_pesel_fields_but_never_override_conflicting_nip(self):
+        from app.integrations.enova.document_counts import _bind_company_identity
+        for identities in ([],[(None,),('',)],[('90010112345',)],[('PL 123-456-78-90',)]):
+            with self.subTest(identities=identities):
+                cursor = Mock()
+                cursor.fetchmany.return_value = identities
+                _bind_company_identity(cursor,SOURCE)
+                self.assertIn('sp_set_session_context',cursor.execute.call_args.args[0])
+                self.assertEqual(cursor.execute.call_args.args[1],'1234567890')
+        for identities in ([('1112223344',)],[('1234567890',),('1112223344',)]):
+            cursor = Mock()
+            cursor.fetchmany.return_value = identities
+            with self.assertRaisesRegex(ValueError,'sprzeczny'):
+                _bind_company_identity(cursor,SOURCE)
+            self.assertEqual(cursor.execute.call_count,1)
+
     def test_invalid_source_columns_still_close_odbc_connection(self):
         with tempfile.TemporaryDirectory() as directory:
             query = Path(directory) / 'counts.sql'

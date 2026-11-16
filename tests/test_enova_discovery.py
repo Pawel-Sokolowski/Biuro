@@ -93,7 +93,7 @@ class EnovaDiscoveryTests(TestCase):
              patch('app.integrations.enova.discovery.resolve_driver',return_value='ODBC Driver 18 for SQL Server'):
             result = discover({'server':r'ENOVA\SQLEXPRESS','database':'Biuro_rachunkowe','username':'reader'},password='secret')
         self.assertEqual(result['matches'],{'1112223344':['ALFA']})
-        company.cursor.return_value.execute.assert_any_call('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
+        company.cursor.return_value.execute.assert_any_call('SELECT DISTINCT NIP FROM dbo.HstDanychFirmy WHERE Termin=(SELECT MAX(Termin) FROM dbo.HstDanychFirmy WHERE Termin<=CONVERT(date,GETDATE()))')
         root.close.assert_called_once()
         company.close.assert_called_once()
         self.assertEqual(driver.connect.call_args.kwargs['attrs_before'],{101:1})

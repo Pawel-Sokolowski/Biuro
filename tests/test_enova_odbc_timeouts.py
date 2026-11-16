@@ -57,15 +57,15 @@ class OdbcTimeoutTests(TestCase):
         self.assertEqual(self.connection.timeout, 1200)
         self.assertEqual(self.driver.connect.call_args.kwargs['timeout'], 15)
 
-    def test_empty_bundled_result_identifies_missing_owner_nip_instead_of_claiming_zero_documents(self):
-        self.cursor.description = [('nip',), ('miesiac',), ('dokumenty',), ('pozycje_bankowe',), ('rodzaje',)]
-        self.cursor.fetchmany.side_effect = [[], [(None,), ('',)]]
-        source = {'database':'ClientA','nip':'1234567890','count_query':str(Path(__file__).resolve().parents[1]/'docs/enova/queries/checking.sql')}
+    def test_empty_bundled_result_does_not_claim_zero_after_binding_mapping(self):
+        self.cursor.description = [('nip',),('miesiac',),('dokumenty',),('pozycje_bankowe',)]
+        self.cursor.fetchmany.side_effect = [[(None,),('',)],[]]
+        query = Path(__file__).resolve().parents[1]/'docs/enova/queries/kpir.sql'
+        source = {'database':'ClientA','nip':'1234567890','count_query':str(query)}
         with patch('app.integrations.enova.document_counts.sql_credentials',return_value=('reader','secret')):
-            with self.assertRaisesRegex(ValueError,'OddzialyFirmy.DeklaracjeNIP') as caught:
+            with self.assertRaisesRegex(ValueError,'mimo ustalonego powiązania'):
                 fetch_counts(self.config,source,['2026-11'])
-        self.assertIn('1234567890',str(caught.exception))
-        self.assertNotIn('secret',str(caught.exception))
+        self.assertTrue(any('sp_set_session_context' in call.args[0] for call in self.cursor.execute.call_args_list))
         self.connection.close.assert_called_once()
 
     def test_metadata_export_uses_connection_query_timeout(self):

@@ -13,6 +13,7 @@ from app.remote.files import FileStore
 from app.remote.policy import check,bind,resource_access,public_result
 from app.remote.secrets import safe_error
 from app.remote.state import service_scope
+from app.utils.request_cache import request_scope
 from contextvars import ContextVar
 _operation_owner = ContextVar("office_operation_owner")
 
@@ -110,9 +111,10 @@ class OfficeService:
                 del self.objects[key]
 
     def _execute(self,job,token,actor,operation,spec,values,object_id):
+        started = time.perf_counter()
         try:
             _operation_owner.set(job['owner'])
-            with service_scope(actor):
+            with service_scope(actor), request_scope():
                 if self.identity(token)!=actor:
                     raise PermissionError('Sesja wygasła.')
                 check(spec['capability'],actor)
@@ -207,6 +209,10 @@ class OfficeService:
                 logger.exception('office_operation_failed operation=%s employee_id=%s',operation,actor)
             with self.lock:
                 job.update(state='failed',message=safe_error(error),permission=isinstance(error,PermissionError))
+        finally:
+            duration = time.perf_counter()-started
+            if duration >= .25:
+                logger.info('office_operation_slow operation=%s duration=%.3f',operation,duration)
 
     def _invoke(self,function,bound,spec,operation,actor):
         from app.remote.secrets import restore,secret_name,PRESENT

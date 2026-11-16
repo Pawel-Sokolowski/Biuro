@@ -11,7 +11,6 @@ from app.invoices.positions import decimal_value, money
 def _get_company_basic(firma_id: int) -> Dict[str, Any]:
     """
     Pobiera podstawowe dane firmy potrzebne do wyliczeń:
-    - typ_rozliczenia (Ryczałt / KPIR / KH)
     - vat_czynny (0/1)
     - limit_dokumentow
     - glowny_cennik (klucz cennika)
@@ -22,7 +21,6 @@ def _get_company_basic(firma_id: int) -> Dict[str, Any]:
     cur.execute("""
         SELECT
             id,
-            typ_rozliczenia,
             vat_czynny,
             limit_dokumentow,
             glowny_cennik
@@ -34,14 +32,12 @@ def _get_company_basic(firma_id: int) -> Dict[str, Any]:
 
     if not row:
         return {
-            "typ_rozliczenia": "Ryczałt",
             "vat_czynny": 0,
             "limit_dokumentow": 0,
             "glowny_cennik": None
         }
 
     return {
-        "typ_rozliczenia": row["typ_rozliczenia"] or "Ryczałt",
         "vat_czynny": int(row["vat_czynny"] or 0),
         "limit_dokumentow": int(row["limit_dokumentow"] or 0),
         "glowny_cennik": row["glowny_cennik"]

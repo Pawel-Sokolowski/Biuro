@@ -28,12 +28,12 @@ def client_addresses(value):
     return tuple(addresses)
 
 
-def filter_companies(rows, *, query='', activity=None, settlement=None, tax=None, active_only=True):
+def filter_companies(rows, *, query='', activity=None, tax=None, active_only=True):
     needle = query.strip().casefold()
     def match(row):
         if active_only and str(row.get('status') or 'Aktywne').strip().casefold() not in ('aktywne', 'aktywna', 'aktywny'):
             return False
-        for field, expected in (('forma_dzialalnosci', activity), ('typ_rozliczenia', settlement), ('forma_opodatkowania', tax)):
+        for field, expected in (('forma_dzialalnosci', activity), ('forma_opodatkowania', tax)):
             if expected is not None and str(row.get(field) or '').strip() != expected:
                 return False
         return needle in ' '.join(str(row.get(field) or '') for field in ('nazwa', 'nazwa_skrocona', 'nip', 'adres_email')).casefold()

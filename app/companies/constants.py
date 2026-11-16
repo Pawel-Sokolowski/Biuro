@@ -203,7 +203,7 @@ FIRMA_FIELDS = [
     "uop_ilosc", "uz_ilosc", "uod_ilosc",
     "uop_cennik", "uz_cennik", "uod_cennik",
 
-    "typ_rozliczenia", "vat_czynny", "status", "uslugi_zawieszone",
+    "vat_czynny", "status", "uslugi_zawieszone",
 
     "cennik_kpir_auto", "cena_ksiegowosc_auto",
     "cennik_kpir_manual", "manual_cennik_override",

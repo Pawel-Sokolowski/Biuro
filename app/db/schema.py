@@ -8,7 +8,7 @@ from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
 
-SCHEMA_VERSION = "2026-11-13.1"
+SCHEMA_VERSION = "2026-11-16.1"
 
 
 def init_db():
@@ -33,6 +33,8 @@ def init_db():
         apply_monthly_counts(conn)
         from app.db.saldeo_web_schema import apply as apply_saldeo_web
         apply_saldeo_web(conn)
+        from app.db.billing_label_schema import apply as remove_billing_label
+        remove_billing_label(conn)
 
 
 @office_endpoint('app.db.schema.schema_is_current')

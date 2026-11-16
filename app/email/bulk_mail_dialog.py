@@ -73,9 +73,8 @@ class BulkMailDialog(QDialog):
         layout.addLayout(form)
 
         filters = QHBoxLayout()
-        self.activity, self.settlement, self.tax = QComboBox(), QComboBox(), QComboBox()
+        self.activity, self.tax = QComboBox(), QComboBox()
         for label, widget, field in (('Działalność:', self.activity, 'forma_dzialalnosci'),
-                                      ('Rozliczanie:', self.settlement, 'typ_rozliczenia'),
                                       ('Opodatkowanie:', self.tax, 'forma_opodatkowania')):
             widget.addItem('Wszystkie', None)
             for value in sorted({str(row.get(field) or '').strip() for row in self.companies}, key=str.casefold):
@@ -115,9 +114,9 @@ class BulkMailDialog(QDialog):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._render)
         layout.addWidget(self.search)
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(['Wyślij', 'Firma', 'Kontaktowy e-mail', 'Działalność', 'Rozliczanie', 'Opodatkowanie','Wakacje ZUS — osoby / wynik'])
-        self.table.setColumnHidden(6,True)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(['Wyślij', 'Firma', 'Kontaktowy e-mail', 'Działalność', 'Opodatkowanie','Wakacje ZUS — osoby / wynik'])
+        self.table.setColumnHidden(5,True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -182,7 +181,7 @@ class BulkMailDialog(QDialog):
         self.sender = BulkMailSender(self)
         self.sender.progress.connect(self._progress)
         self.sender.finished.connect(self._finished)
-        self._controls = (self.account, self.subject, self.body, self.activity, self.settlement, self.tax,
+        self._controls = (self.account, self.subject, self.body, self.activity, self.tax,
                           self.active_only, self.search, self.table, self.select_all, self.select_none, self.batch_size, self.pause,
                           self.holiday_filter,self.holiday_year,self.holiday_month,self.holiday_mode,self.holiday_edit)
         self.holiday_filter.toggled.connect(self._holiday_changed)
@@ -204,7 +203,7 @@ class BulkMailDialog(QDialog):
         enabled = self.holiday_filter.isChecked()
         for widget in (self.holiday_year,self.holiday_month,self.holiday_mode):
             widget.setEnabled(enabled)
-        self.table.setColumnHidden(6,not enabled)
+        self.table.setColumnHidden(5,not enabled)
         self.holiday_reader.invalidate()
         self.holiday_payload = None
         self.holiday_loading = enabled
@@ -255,7 +254,7 @@ class BulkMailDialog(QDialog):
             rows = [{**row,'adres_email':row['holiday_addresses'][mode]} for row in payload['companies']
                     if any(p['status']==mode for p in row['holiday_people'])]
         return filter_companies(rows, query=self.search.text(), activity=self.activity.currentData(),
-                                settlement=self.settlement.currentData(), tax=self.tax.currentData(),
+                                tax=self.tax.currentData(),
                                 active_only=self.active_only.isChecked())
 
     def _render(self, *_):
@@ -279,12 +278,12 @@ class BulkMailDialog(QDialog):
                 check.setToolTip(self._errors[row['id']])
             self.table.setItem(index, 0, check)
             for column, value in enumerate((row.get('nazwa_skrocona') or row['nazwa'], row.get('adres_email') or 'Brak e-maila',
-                                              row.get('forma_dzialalnosci'), row.get('typ_rozliczenia'), row.get('forma_opodatkowania')), 1):
+                                              row.get('forma_dzialalnosci'), row.get('forma_opodatkowania')), 1):
                 self.table.setItem(index, column, QTableWidgetItem(str(value or '—')))
             detail = '\n'.join(p['name']+': '+'; '.join(p['reasons']) for p in row.get('holiday_people',[]))
             item = QTableWidgetItem(detail)
             item.setToolTip(detail)
-            self.table.setItem(index,6,item)
+            self.table.setItem(index,5,item)
         self.table.blockSignals(False)
         self._update_count()
 

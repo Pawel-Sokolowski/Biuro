@@ -32,6 +32,12 @@ rozdział 4.3. Prywatne eksporty schematów nie są publikowane.
 
 # Klienci i poczta
 
+Usunięto dawne pole `typ_rozliczenia` z danych firm, list i eksportów oraz filtrów
+mailingu. Domyślne „Ryczałt” w tym polu opisywało opłatę biura, a nie podatek
+klienta. Migracja usuwa samo stare pole. Cenę nadal wylicza stała opłata z cennika
+oraz dopłata za dokumenty ponad limit. Rzeczywista forma opodatkowania klienta,
+w tym podatkowy ryczałt, pozostaje odrębną informacją.
+
 Przy odczycie listy folderów program wiąże istniejący folder z klientem, jeśli
 pasuje jednoznacznie jego nazwa, nazwa skrócona, NIP albo dane wspólnika.
 Uwzględnia kodowanie IMAP i polskie znaki. Tworzy reguły dla głównego adresu,

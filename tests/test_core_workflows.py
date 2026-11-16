@@ -62,7 +62,7 @@ class MonthlyCostTests(DbTestCase):
         finally:
             conn.close()
         firma = self.make_company(
-            "Firma", typ_rozliczenia="KPIR", vat_czynny=1, limit_dokumentow=1, glowny_cennik="basic"
+            "Firma", vat_czynny=1, limit_dokumentow=1, glowny_cennik="basic",forma_opodatkowania='Ryczałt'
         )
         conn = get_conn()
         try:
@@ -72,6 +72,17 @@ class MonthlyCostTests(DbTestCase):
         finally:
             conn.close()
         self.assertEqual(oblicz_miesieczny_koszt(firma, "2026-02")["netto"], 100.0)
+        from app.db.billing_label_schema import apply
+        with get_conn() as conn:
+            conn.execute("ALTER TABLE firmy ADD COLUMN typ_rozliczenia TEXT DEFAULT 'Ryczałt'")
+            conn.execute("INSERT INTO dokumenty (firma_id,data_wyst) VALUES (%s,'2026-02-12')",(firma,))
+            apply(conn)
+            apply(conn)
+            company = conn.execute('SELECT * FROM firmy WHERE id=%s',(firma,)).fetchone()
+        self.assertNotIn('typ_rozliczenia',company.keys())
+        self.assertEqual(company['forma_opodatkowania'],'Ryczałt')
+        self.assertEqual((company['glowny_cennik'],company['limit_dokumentow']),('basic',1))
+        self.assertEqual(oblicz_miesieczny_koszt(firma,'2026-02')['netto'],110.0)
 
 
 if __name__ == "__main__":

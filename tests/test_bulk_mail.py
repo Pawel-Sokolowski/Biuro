@@ -16,9 +16,9 @@ from tests.test_review_optimizations import wait_until
 _app = QApplication.instance() or QApplication(['bulk-mail-tests'])
 COMPANIES = [
     {'id': 1, 'nazwa': 'JDG', 'adres_email': 'first@example.com', 'forma_dzialalnosci': 'JDG',
-     'typ_rozliczenia': 'Miesięczne', 'forma_opodatkowania': 'Ryczałt', 'status': 'Aktywne'},
+     'forma_opodatkowania': 'Ryczałt', 'status': 'Aktywne'},
     {'id': 2, 'nazwa': 'Spółka', 'adres_email': 'second@example.com', 'forma_dzialalnosci': 'Spółka z o.o.',
-     'typ_rozliczenia': 'Kwartalne', 'forma_opodatkowania': 'CIT', 'status': 'Aktywne'},
+     'forma_opodatkowania': 'CIT', 'status': 'Aktywne'},
     {'id': 3, 'nazwa': 'Bez maila', 'adres_email': '', 'forma_dzialalnosci': 'JDG', 'status': 'Aktywne'},
     {'id': 4, 'nazwa': 'Nieaktywna', 'adres_email': 'old@example.com', 'status': 'Zakończone'},
 ]
@@ -37,8 +37,8 @@ class BulkMailTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 client_addresses(value)
 
-    def test_company_filters_combine_activity_settlement_tax_and_status(self):
-        rows = filter_companies(COMPANIES, activity='JDG', settlement='Miesięczne', tax='Ryczałt', query='FIRST@')
+    def test_company_filters_combine_activity_tax_and_status(self):
+        rows = filter_companies(COMPANIES, activity='JDG', tax='Ryczałt', query='FIRST@')
         self.assertEqual([row['id'] for row in rows], [1])
         self.assertEqual([row['id'] for row in filter_companies(COMPANIES, activity='Spółka z o.o.')], [2])
         self.assertEqual(len(filter_companies(COMPANIES, active_only=False)), 4)
@@ -162,12 +162,15 @@ class BulkMailTests(unittest.TestCase):
 
     def test_dialog_filters_drop_hidden_selections_and_exclude_missing_addresses(self):
         dialog = self.dialog()
+        self.assertFalse(hasattr(dialog,'settlement'))
+        self.assertEqual(dialog.table.horizontalHeaderItem(4).text(),'Opodatkowanie')
+        self.assertEqual(dialog.table.item(0,4).text(),'Ryczałt')
         dialog._select_visible()
         self.assertEqual(dialog._selected, {1, 2})
         dialog.activity.setCurrentIndex(dialog.activity.findData('Spółka z o.o.'))
         self.assertEqual(dialog._selected, {2})
         self.assertEqual(dialog.table.rowCount(), 1)
-        dialog.settlement.setCurrentIndex(dialog.settlement.findData('Miesięczne'))
+        dialog.tax.setCurrentIndex(dialog.tax.findData('Ryczałt'))
         self.assertEqual(dialog._selected, set())
         self.assertEqual(dialog.table.rowCount(), 0)
 
@@ -259,12 +262,12 @@ class MailingCompanyQueryTests(DbTestCase):
             contact = connection.execute('SELECT email FROM company_contacts WHERE firma_id = %s', (row['id'],)).fetchone()
         self.assertEqual(contact['email'], 'client@example.com')
 
-    def test_contact_query_returns_activity_and_settlement_fields_and_no_anonymous_rows(self):
+    def test_contact_query_returns_activity_and_tax_fields_and_no_anonymous_rows(self):
         from app.db.dao_companies import list_mailing_companies
         company = self.make_company('Spółka', adres_email='office@example.com', forma_dzialalnosci='Spółka z o.o.',
-                                    typ_rozliczenia='Kwartalne', forma_opodatkowania='CIT')
+                                    forma_opodatkowania='CIT')
         row = next(row for row in list_mailing_companies(1) if row['id'] == company)
         self.assertEqual(row['adres_email'], 'office@example.com')
         self.assertEqual(row['forma_dzialalnosci'], 'Spółka z o.o.')
-        self.assertEqual(row['typ_rozliczenia'], 'Kwartalne')
+        self.assertNotIn('typ_rozliczenia', row)
         self.assertEqual(list_mailing_companies(None), [])

@@ -474,7 +474,10 @@ class EmailPage(QWidget):
     def __init__(self, pracownik_id: int):
         super().__init__()
         self.pracownik_id = pracownik_id
-        self._office_folder_prefix = str(get_setting('email_folder_prefix') or '')
+        from app.remote.state import client
+        remote_mode = client() is not None
+        self._office_folder_prefix = '' if remote_mode else str(get_setting('email_folder_prefix') or '')
+        self._sidebar_reads = TaskRunner(self)
         self._list_jobs = TaskRunner(self)
         self._message_jobs = TaskRunner(self)
         self._command_jobs = CommandRunner(self)
@@ -508,7 +511,8 @@ class EmailPage(QWidget):
         self.label_numbers: Dict[int, int] = {}
         self.hidden_folders: Dict[str, set[str]] = self._load_hidden_folders()
         self.show_hidden_folders = False
-        self._reload_employees()
+        if not remote_mode:
+            self._reload_employees()
         self._chips_signature = None
         self._loading_message_key = None
 
@@ -931,7 +935,39 @@ class EmailPage(QWidget):
         button.clicked.connect(callback)
         return button
 
+    def _refresh_sidebar_async(self):
+        from app.remote.screen_data import mail_sidebar_snapshot
+        actor = self.pracownik_id
+        def loaded(snapshot):
+            previous = self.current_account['id'] if self.current_account else None
+            self.accounts = snapshot['accounts']
+            self.current_account = next((a for a in self.accounts if a['id']==previous),self.accounts[0] if self.accounts else None)
+            self._office_folder_prefix = snapshot['folder_prefix']
+            self.employees = snapshot['employees']
+            self.label_numbers = snapshot['labels']
+            self.employees.sort(key=lambda e:(self.label_numbers.get(e['id'],99),e['id']))
+            data = []
+            for account in self.accounts:
+                key = account['id']
+                folders = snapshot['folders'].get(key,[])
+                unread = filter_visible_unread_counts(folders,snapshot['unread'].get(key,{}),self.hidden_folders.get(str(key),set()))
+                if not any(f['server_name'].upper()=='INBOX' for f in folders):
+                    folders = [*folders,{'server_name':'INBOX','display_name':'INBOX','delimiter':None,'attributes':'','id':None}]
+                data.append((account,folders,unread))
+            if not self.accounts:
+                self.folder_tree.clear()
+                self.mail_list.clear()
+                self._clear_view()
+                return
+            self._render_folder_snapshot(data)
+        self._sidebar_reads.submit(lambda:mail_sidebar_snapshot(actor),loaded,
+            lambda error:logger.warning('Nie można odświeżyć folderów poczty: %s',error),key=('mail-sidebar',actor))
+
     def load_folders_from_db(self) -> None:
+        from app.remote.state import client
+        if client() is not None:
+            self._refresh_sidebar_async()
+            return
         if not self.accounts:
             self.folder_tree.clear()
             return
@@ -963,6 +999,9 @@ class EmailPage(QWidget):
 
             data.append((account, folders, unread))
 
+        self._render_folder_snapshot(data)
+
+    def _render_folder_snapshot(self,data):
         current_id = self.current_account["id"] if self.current_account else None
 
         signature = (
@@ -2675,7 +2714,16 @@ class EmailPage(QWidget):
             QMessageBox.warning(self, 'Kontakt', f'Nie udało się wczytać książki adresowej: {exc}')
         self._contact_jobs.submit(lambda: find_contact(self.pracownik_id, address), loaded, failed)
 
+    def refresh_async(self):
+        self.refresh_all()
+
     def refresh_all(self) -> None:
+        from app.remote.state import client
+        if client() is not None:
+            self._refresh_sidebar_async()
+            if self.current_folder_local:
+                self._load_mail_async(keep_view=True)
+            return
         self._reload_employees()
         self.load_folders_from_db()
         if self.current_folder_local:

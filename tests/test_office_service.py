@@ -196,6 +196,37 @@ class OfficeServiceTests(DbTestCase):
         config = caldav_sync.get_config()
         self.assertEqual((config['url'],config['login'],config['haslo']),('https://trusted.example/','reader','old-password'))
 
+    def test_calendar_snapshot_uses_authenticated_actor_and_contains_batch_sharing_flags(self):
+        from app.db.dao_calendar import save_event
+        own = save_event(self.employee,{'tytul':'Own','start':'2026-11-05T10:00','koniec':'2026-11-05T11:00'})
+        private = save_event(self.other,{'tytul':'Private','start':'2026-11-05T10:00','koniec':'2026-11-05T11:00'})
+        with get_conn() as conn:
+            conn.execute('INSERT INTO wydarzenia_dostep(wydarzenie_id,pracownik_id) VALUES (%s,%s)',(own,self.other))
+        with mock.patch('app.kalendarz.google_sync.is_connected',return_value=False), \
+             mock.patch('app.kalendarz.caldav_sync.is_configured',return_value=False):
+            snapshot = self.call('app.remote.screen_data.calendar_view_snapshot',
+                {'actor_id':self.other,'start':'2026-11-01','end':'2026-12-01'})
+        events = {row['id']:row for row in snapshot['events']}
+        self.assertIn(own,events)
+        self.assertNotIn(private,events)
+        self.assertTrue(events[own]['ma_udostepnienia'])
+        self.assertEqual(snapshot['sources'],[('Lokalne (import ICS)','lokalne')])
+
+    def test_mail_sidebar_reads_only_the_actors_accounts_without_per_account_reads(self):
+        from app.email.email_storage import save_folder
+        with get_conn() as conn:
+            conn.execute("INSERT INTO konta_email(id,email) VALUES (91,'own@example.com'),(92,'private@example.com')")
+        own_folder = save_folder(91,'INBOX')
+        save_folder(92,'Secret')
+        with mock.patch('app.email.email_storage.get_email_accounts_for_employee',return_value=[{'id':91,'email':'own@example.com'}]) as accounts, \
+             mock.patch('app.email.email_storage.get_folders_for_account',side_effect=AssertionError('per-account folders')), \
+             mock.patch('app.email.email_storage.get_unread_counts',side_effect=AssertionError('per-account counts')):
+            snapshot = self.call('app.remote.screen_data.mail_sidebar_snapshot',{'actor_id':self.other})
+        accounts.assert_called_with(self.employee)
+        self.assertEqual(set(snapshot['folders']),{91})
+        self.assertEqual(snapshot['folders'][91][0]['id'],own_folder)
+        self.assertNotIn(92,snapshot['folders'])
+
     def test_client_calendar_data_cannot_choose_someone_elses_remote_identity(self):
         from app.db.dao_calendar import get_event
         event = self.call('app.db.dao_calendar.save_event',{'pracownik_id':1,'data':{

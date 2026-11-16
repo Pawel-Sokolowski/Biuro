@@ -117,6 +117,17 @@ class EnovaStageRuleTests(DbTestCase):
         self.assertEqual([call.args[2] for call in self.fetch.call_args_list], [['2026-09']])
         self.assertEqual(self.count('2026-11'), 0)
 
+    def test_adjacent_completed_months_use_one_source_batch(self):
+        self.config['months_back'] = 3
+        self.config['monthly_counts_from'] = '2026-09'
+        for month in ('2026-09','2026-10'):
+            self.set_stage(month,'Wysłane wyniki')
+        result = self.run_job()[0]
+        self.assertTrue(result['ok'])
+        self.assertEqual(self.fetch.call_count,1)
+        self.assertEqual(self.fetch.call_args.args[2],['2026-09','2026-10','2026-11'])
+        self.assertEqual(set(result['counts']),{'2026-09','2026-10','2026-11'})
+
     def test_reopened_stage_during_source_read_prevents_write(self):
         original = self.fetch.side_effect
         def fetch(*args):

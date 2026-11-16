@@ -55,3 +55,43 @@ jako przyjęty do wysyłki. Po błędzie IMAP raport wskazuje, że wysyłka SMTP
 powiodła, lecz kopia nie została potwierdzona. Nie wolno wtedy ponawiać mailingu
 tylko w celu odtworzenia kopii. Odpowiedź SMTP nie dowodzi doręczenia do skrzynki
 odbiorczej; produkcyjne doręczenie potwierdzają logi serwera poczty i zwrotki.
+
+## Globalny import bieżącego roku
+
+Opcja **Pobierz wszystkie deklaracje za rok — Enova i Płatnik** jest dostępna:
+
+- w konfiguracji workera, zakładka **Deklaracje — import roczny**;
+- w konfiguracji Płatnika i połączenia Enovy;
+- w Sprawdzaniu, przycisk pobrania deklaracji za cały rok.
+
+Lista obejmuje wszystkie firmy, niezależnie od aktualnego raportu/filtra w
+Sprawdzaniu. Domyślnie zaznaczone są wszystkie; można zmienić rok i zaznaczenie.
+Worker czyta Płatnika dla całego wyboru i 12 miesięcy zbiorczo, a Enovę osobno
+z każdej przypisanej bazy, z rocznym zakresem. Wymagane są zapisane ustawienia
+źródeł i włączone zadanie ręcznych pobrań. Wynik rozróżnia powodzenie obu źródeł.
+Dodaje wykryte deklaracje do miesięcznych ustawień firm, zachowując ręczne
+wybory. Nie pobiera kwot ani nie zmienia etapów pracy. Brak dokumentu nie
+wyłącza obowiązku. Przycisk Płatnika dotyczący RWS jest teraz nazwany wprost
+**Pobierz wakacje składkowe (RWS)**, aby nie mylić go z importem deklaracji.
+
+## Automatyczny odczyt Enovy
+
+Automatyczny odczyt następuje po zmianie `etap` lub `etap_kadry` firmy w Biuro.
+Zmiana zapisuje żądanie w tej samej transakcji co etap. Ponowny zapis tego
+samego etapu lub edycja samej liczby dokumentów nie tworzy żądania.
+Worker sprawdza lokalną kolejkę co 30 sekund; bez zmian nie łączy się z SQL
+Enovy. Kilka zmian tej samej firmy/miesiąca łączy się w jedno żądanie; sąsiednie
+miesiące trafiają do wspólnych odczytów. Odczyt nie obejmuje innych baz firm.
+Zmiana podczas odczytu zostaje do następnego przebiegu; błędy nie kasują kolejki.
+Włączenie zadania Enovy i połączenia nadal jest wymagane. Bez zmiany etapu
+status deklaracji zmieniony później w Enovie wymaga ręcznego odświeżenia.
+
+## e-ZLA raz w tygodniu
+
+Automatyczne pobieranie działa w poniedziałki od ustawionej godziny
+(domyślnie 02:00, Europe/Warsaw). Udany przebieg zapisuje poniedziałek tygodnia
+w bazie, więc restart workera nie powoduje drugiego pobrania. Błędy i zajęte
+blokady pozwalają na ponowienie w poniedziałek z dotychczasowym odstępem zadania.
+Gdy worker jest wyłączony przez cały poniedziałek, następny automatyczny termin
+to kolejny poniedziałek; pobranie ręczne pozostaje dostępne. Poczta zachowuje
+obecny harmonogram i sposób działania.

@@ -69,37 +69,9 @@ def invoices_job():
     return {'queued': len(rows), 'sent': sent}
 
 
-def enova_job(now=None):
-    from app.integrations.enova.connection_settings import load_connection
-    from app.integrations.enova.document_counts import run_import
-    now = now or datetime.now(ZoneInfo('Europe/Warsaw'))
-    settings = load_settings()
-    config = load_connection()
-    day = now.date().isoformat()
-    from app.integrations.enova.query_defaults import ADAPTER_REVISION
-    checking_signature = json.dumps({'day': day, 'version': 4, 'adapter_revision': ADAPTER_REVISION, 'months_back': config.get('months_back', 3), 'server': config.get('server'),
-        'sources': [{key: source.get(key) for key in ('database', 'nip', 'payroll_query', 'declarations_query', 'hr_events_query', 'jpk_query')}
-                    for source in config.get('sources', [])]}, sort_keys=True, default=str)
-    # Checking adapters/configuration changes invalidate the daily marker.
-    # Failures do not consume it and retry at the interval.
-    if not config['enabled'] or now.time().replace(tzinfo=None) < time.fromisoformat(settings['enova_time']):
-        return {'mode': 'waiting'}
-    if not config.get('sources'):
-        raise ValueError('Połączenie Enovy zapisane, ale brak przypisanych baz firm. Uzupełnij mapowanie w panelu workera.')
-    if (get_setting('worker_enova_completed') == day
-            and (not config.get('checking_enabled', False) or get_setting('worker_enova_checking_completed') == checking_signature)):
-        return {'mode': 'checked_today'}
-    results = run_import(config, apply=True, today=now.date())
-    if config.get('checking_enabled', False):
-        from app.integrations.enova.checking import run_checking_import
-        checking = run_checking_import(config, apply=True, today=now.date())
-        results.extend(checking)
-    if any(not result['ok'] for result in results):
-        raise RuntimeError('Import Enova nieukończony. Sprawdź audyt importów i połączenie SQL.')
-    set_setting('worker_enova_completed', day)
-    if config.get('checking_enabled', False):
-        set_setting('worker_enova_checking_completed', checking_signature)
-    return {'companies': len(config['sources']) if 'sources' in config else len(results)}
+def enova_job(stop=None):
+    from app.services.enova_stage import run
+    return run(stop)
 
 
 def ksef_import_job():
@@ -113,11 +85,23 @@ def ksef_import_job():
     return {'months': 2}
 
 
-def ezla_job(stop=None):
+def ezla_job(stop=None,now=None):
     from app.integrations.ezla.sync import run_sync
+    now = now or datetime.now(ZoneInfo('Europe/Warsaw'))
+    settings = load_settings()
+    if now.weekday()!=0 or now.time().replace(tzinfo=None)<time.fromisoformat(settings['ezla_time']):
+        return {'mode':'waiting','companies':0,'failed':0}
+    week = now.date().isoformat()
+    if get_setting('worker_ezla_completed_week')==week:
+        return {'mode':'checked_this_week','companies':0,'failed':0}
     result = run_sync(stop=stop)
+    if result.get('mode') in ('disabled','busy','cancelled') or (stop is not None and stop.is_set()):
+        return result
+    if any(row.get('state')=='busy' for row in result.get('results',[])):
+        return {**result,'mode':'busy'}
     if result['failed']:
         raise RuntimeError('Nie pobrano e-ZLA dla części firm. Szczegóły w raporcie e-ZLA.')
+    set_setting('worker_ezla_completed_week',week)
     return {**{key: result[key] for key in ('companies', 'failed')}, 'mode': result.get('mode', 'completed')}
 
 
@@ -152,7 +136,7 @@ def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
         return {'mail': lambda: mail_job(stop), 'reminders': reminders_job,
-                'invoices': invoices_job, 'enova': enova_job, 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
+                'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
                 'checking_refresh':lambda:checking_refresh_job(stop)}[name]()
 
 
@@ -207,7 +191,7 @@ def serve(*, once=False, stop=None):
                 try:
                     outcome = future.result()
                     statuses[name] = {'state': 'skipped' if isinstance(outcome, dict) and outcome.get('mode') in
-                                      ('waiting', 'checked_today', 'disabled', 'not_configured', 'busy', 'idle', 'empty', 'cancelled') else 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                                      ('waiting', 'checked_today', 'checked_this_week', 'disabled', 'not_configured', 'busy', 'idle', 'empty', 'cancelled') else 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
                 except Exception as exc:
                     # Avoid logging arbitrary third-party exception strings/credentials.
                     logger.error('worker_job_failed job=%s error_type=%s', name, type(exc).__name__)
@@ -223,7 +207,7 @@ def serve(*, once=False, stop=None):
                 del running[name]
             for name in JOBS:
                 if settings['enabled'] and settings[name] and name not in running:
-                    due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= settings[name + '_interval'])
+                    due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= (30 if name=='enova' else settings[name + '_interval']))
                     if due:
                         last_started[name] = clock.monotonic()
                         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
@@ -236,8 +220,15 @@ def serve(*, once=False, stop=None):
                 set_setting('background_worker_events', json.dumps(events))
             for name, status in statuses.items():
                 if status['state'] != 'running' and settings['enabled'] and settings[name]:
-                    delay = max(0, settings[name + '_interval'] - (clock.monotonic() - last_started[name]))
-                    status['next_run_at'] = (datetime.now(ZoneInfo('Europe/Warsaw')) + timedelta(seconds=delay)).isoformat()
+                    delay = max(0, (30 if name=='enova' else settings[name + '_interval']) - (clock.monotonic() - last_started[name]))
+                    now = datetime.now(ZoneInfo('Europe/Warsaw'))
+                    next_run = now+timedelta(seconds=delay)
+                    if name=='ezla' and (status.get('result') or {}).get('mode') in ('waiting','checked_this_week'):
+                        at = time.fromisoformat(settings['ezla_time'])
+                        next_run = now.replace(hour=at.hour,minute=at.minute,second=0,microsecond=0)+timedelta(days=(-now.weekday())%7)
+                        if next_run<=now:
+                            next_run += timedelta(days=7)
+                    status['next_run_at'] = next_run.isoformat()
                 else:
                     status.pop('next_run_at', None)
             set_setting('background_worker_heartbeat', json.dumps({

@@ -7,9 +7,9 @@ from app.db.dao_app_settings import get_setting, set_setting
 KEY = 'background_worker'
 DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
             'enova': True, 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
-            'reminders_interval': 60, 'invoices_interval': 60, 'enova_interval': 900,
+            'reminders_interval': 60, 'invoices_interval': 60, 'enova_interval': 30,
             'ezla_interval': 3600, 'ksef_import_interval': 3600, 'saldeo': False, 'saldeo_interval': 300, 'platnik': False, 'platnik_interval': 3600,
-            'checking_refresh': True, 'checking_refresh_interval':30,'enova_time': '02:00'}
+            'checking_refresh': True, 'checking_refresh_interval':30,'enova_time': '02:00','ezla_time':'02:00'}
 
 
 @office_endpoint('app.services.worker_settings.load_settings')
@@ -23,6 +23,7 @@ def load_settings():
 def validate(value):
     from datetime import time
     time.fromisoformat(value['enova_time'])
+    time.fromisoformat(value.get('ezla_time','02:00'))
     for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
         if type(value[key]) is not bool:
             raise ValueError('Nieprawidłowy przełącznik workera.')
@@ -37,5 +38,6 @@ def save_settings(value, *, actor_id):
     from app.security.authorization import is_administrator
     if not is_administrator(actor_id):
         raise PermissionError('Tylko administrator może zmieniać ustawienia workera.')
+    value = {**DEFAULTS,**value}
     validate(value)
     set_setting(KEY, json.dumps({key: value[key] for key in DEFAULTS}))

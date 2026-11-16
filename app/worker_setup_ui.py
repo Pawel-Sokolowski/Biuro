@@ -220,11 +220,16 @@ class WorkerSetupWindow(QMainWindow):
             9: lambda: SaldeoWebSettings(actor_id),
             10: lambda: PlatnikSettings(actor_id),
             11: self.server_page,
+            12: lambda: self.declaration_year_page(actor_id),
         }
         for title in ('Panel i logi', 'Zadania', 'e-ZLA', 'Odczyt z Enovy', 'Konta poczty',
-                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa HTTPS'):
+                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa HTTPS', 'Deklaracje — import roczny'):
             self.tabs.addTab(QWidget(), title)
         self.tabs.currentChanged.connect(self.open_tab)
+
+    def declaration_year_page(self,actor_id):
+        from app.accounting.declaration_year_ui import AnnualDeclarationImport
+        return AnnualDeclarationImport(actor_id,self)
 
     def server_page(self):
         from app.remote.server_settings_ui import ServerSettings

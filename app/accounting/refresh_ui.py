@@ -13,10 +13,11 @@ STATES = {'queued':'W kolejce workera','running':'Pobieranie','completed':'Zako�
 
 
 class CheckingRefreshControls(QWidget):
-    def __init__(self,actor_id,companies,selected,period,refresh,parent=None):
+    def __init__(self,actor_id,companies,selected,period,refresh,parent=None,*,annual_only=False):
         super().__init__(parent)
         self.actor_id,self.companies,self.selected,self.period,self.refresh_view = actor_id,companies,selected,period,refresh
         self.reader,self.writer = TaskRunner(self),CommandRunner(self)
+        self.annual_only = annual_only
         self.result = None
         self._observed = None
         layout = QVBoxLayout(self)
@@ -25,10 +26,13 @@ class CheckingRefreshControls(QWidget):
         for kind,label in (('enova','Pobierz z Enovy…'),('ezla','Pobierz e-ZLA z ZUS…'),
                            ('platnik','Pobierz z Płatnika…'),('platnik_declarations','Pobierz formularze ZUS z Płatnika…'),
                            ('platnik_annual','Pobierz IWA/ZSWA z Płatnika…')):
-            button = QPushButton(label)
+            button = QPushButton(label,self)
             button.clicked.connect(lambda _,kind=kind:self.choose(kind))
             self.buttons[kind] = button
-            bar.addWidget(button)
+            if not annual_only:
+                bar.addWidget(button)
+            else:
+                button.hide()
         self.details = QPushButton('Wynik pobierania…')
         self.details.clicked.connect(self.show_details)
         self.details.setEnabled(False)
@@ -48,6 +52,10 @@ class CheckingRefreshControls(QWidget):
         self.timer.timeout.connect(self.poll)
 
     def choose(self,kind):
+        if kind=='declaration_year' and not self.annual_only:
+            from app.accounting.declaration_year_ui import open_declaration_year
+            open_declaration_year(self.actor_id,self,self.refresh_view)
+            return
         companies = self.companies()
         if not companies:
             QMessageBox.information(self,'Pobieranie danych','Najpierw odśwież zestawienie firm.')
@@ -93,6 +101,18 @@ class CheckingRefreshControls(QWidget):
                 item.setHidden(text.casefold() not in item.text().casefold())
         search.textChanged.connect(filter_items)
         layout.addWidget(listing)
+        selection = QHBoxLayout()
+        select_all = QPushButton('Zaznacz wszystkie widoczne firmy')
+        clear = QPushButton('Odznacz wszystkie')
+        def select_visible():
+            for index in range(listing.count()):
+                item = listing.item(index)
+                item.setSelected(not item.isHidden())
+        select_all.clicked.connect(select_visible)
+        clear.clicked.connect(listing.clearSelection)
+        selection.addWidget(select_all)
+        selection.addWidget(clear)
+        layout.addLayout(selection)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText('Zleć pobranie wybranych firm')
         buttons.accepted.connect(dialog.accept)
@@ -129,9 +149,14 @@ class CheckingRefreshControls(QWidget):
 
     def loaded(self,value):
         if value is None:
+            self.timer.stop()
             return
         self.result = value
         state = value['state']
+        if state in ('queued','running'):
+            self.timer.start()
+        else:
+            self.timer.stop()
         count = len(value['company_ids'])
         message = f"{LABELS[value['kind']]}: {STATES[state]}; firm: {count}; okres: {value['period']}."
         if state=='queued':

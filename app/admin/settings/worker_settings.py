@@ -25,8 +25,8 @@ class WorkerSettings(QWidget):
         form = QFormLayout()
         self.toggles, self.intervals = {}, {}
         for key, name in [('mail', 'Sprawdzanie i pobieranie poczty'), ('reminders', 'Przypomnienia e-mail'),
-                          ('invoices', 'Kolejka faktur PDF / sprawdzanie KSeF'), ('enova', 'Odczyt z Enovy do Biuro'),
-                          ('ezla', 'Pobieranie raportów e-ZLA z ZUS'),
+                          ('invoices', 'Kolejka faktur PDF / sprawdzanie KSeF'), ('enova', 'Enova — tylko po zmianie etapu firmy w Biuro'),
+                          ('ezla', 'e-ZLA — raz w tygodniu, w poniedziałek'),
                           ('checking_refresh', 'Ręczne pobrania ze Sprawdzania — wybrane firmy'),
                           ('saldeo', 'Historia powiadomień Saldeo — komplet dokumentów'),
                           ('platnik', 'Płatnik — wakacje składkowe (bieżący i poprzedni rok)'),
@@ -38,10 +38,19 @@ class WorkerSettings(QWidget):
             interval.setSuffix(' s')
             interval.setValue(settings[key + '_interval'])
             self.toggles[key], self.intervals[key] = toggle, interval
+            if key=='enova':
+                interval.setValue(30)
+                interval.setEnabled(False)
+                interval.setToolTip('Sprawdza lokalną kolejkę zmian; bez zmiany etapu nie łączy się z Enovą.')
+            if key=='ezla':
+                interval.setToolTip('Odstęp sprawdzania harmonogramu/ponowienia po błędzie, nie częstotliwość pobierania.')
             form.addRow(toggle, interval)
         self.enova_time = QTimeEdit(QTime.fromString(settings['enova_time'], 'HH:mm'))
         self.enova_time.setDisplayFormat('HH:mm')
-        form.addRow('Import Enova raz dziennie od (Europe/Warsaw)', self.enova_time)
+        self.enova_time.hide()
+        self.ezla_time = QTimeEdit(QTime.fromString(settings['ezla_time'],'HH:mm'))
+        self.ezla_time.setDisplayFormat('HH:mm')
+        form.addRow('e-ZLA — poniedziałek od (Europe/Warsaw)',self.ezla_time)
         layout.addLayout(form)
         from app.admin.settings.worker_monitor import WorkerMonitor
         self.monitor = WorkerMonitor(actor_id, self)
@@ -62,6 +71,7 @@ class WorkerSettings(QWidget):
         settings = load_settings()
         settings['enabled'] = self.enabled.isChecked()
         settings['enova_time'] = self.enova_time.time().toString('HH:mm')
+        settings['ezla_time'] = self.ezla_time.time().toString('HH:mm')
         for key, toggle in self.toggles.items():
             settings[key] = toggle.isChecked()
             settings[key + '_interval'] = self.intervals[key].value()
@@ -80,9 +90,10 @@ class WorkerSettings(QWidget):
         settings = load_settings()
         self.enabled.setChecked(settings['enabled'])
         self.enova_time.setTime(QTime.fromString(settings['enova_time'],'HH:mm'))
+        self.ezla_time.setTime(QTime.fromString(settings['ezla_time'],'HH:mm'))
         for key,toggle in self.toggles.items():
             toggle.setChecked(settings[key])
-            self.intervals[key].setValue(settings[key+'_interval'])
+            self.intervals[key].setValue(30 if key=='enova' else settings[key+'_interval'])
         self._saved_state = self.form_settings()
 
     def save(self):

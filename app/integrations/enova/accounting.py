@@ -55,7 +55,6 @@ def list_accounting(actor_id, month):
     return result
 
 
-@office_endpoint('app.integrations.enova.accounting.documents')
 def documents(row, department):
     report = decoded(row.get('checking'))
     if report:
@@ -66,13 +65,11 @@ def documents(row, department):
     return None
 
 
-@office_endpoint('app.integrations.enova.accounting.active_types')
 def active_types(row, department):
     return {kind for report in row.get('history', [])
             for kind, count in (report.get('documents', {}).get(department) or {}).items() if count > 0}
 
 
-@office_endpoint('app.integrations.enova.accounting.declaration_entries')
 def declaration_entries(row, department):
     from app.companies.checking_obligations import report_applies
     report = decoded(row.get('checking'))
@@ -90,7 +87,6 @@ def declaration_entries(row, department):
     return [entry for entry in result if report_applies(row, entry['form'])]
 
 
-@office_endpoint('app.integrations.enova.accounting.declarations')
 def declarations(row, department):
     groups = {}
     for entry in declaration_entries(row, department):

@@ -33,7 +33,7 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         payload["data_dostarczenia"] = payload.get("data_dostarczenia") or datetime.date.today().isoformat()
     conn = get_conn()
     cur = conn.cursor()
-    before = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
+    before = conn.execute('SELECT ilosc_dok,etap,etap_kadry FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
                           (firma_id, miesiac)).fetchone()
     manual_count = payload.pop('_manual_document_count', False) or (
         'ilosc_dok' in payload and before is not None and payload['ilosc_dok'] != before[0])
@@ -69,6 +69,9 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         payload.get("etap_kadry"),
         payload.get("etap_kadry"),
     ))
+
+    from app.services.enova_stage import record_change
+    record_change(conn,firma_id,miesiac,before,payload)
 
     if manual_count:
         conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '

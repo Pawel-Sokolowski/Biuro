@@ -53,6 +53,7 @@ class DashboardPage(QWidget):
         self.pracownik_id = pracownik_id
         self.cards: dict[str, QLabel] = {}
         self._refresh_jobs = TaskRunner(self)
+        self._backup_reads = TaskRunner(self)
 
         layout = QVBoxLayout(self)
         header = QHBoxLayout()
@@ -122,7 +123,8 @@ class DashboardPage(QWidget):
         self._mail_timer = QTimer(self)
         self._mail_timer.timeout.connect(self.refresh_backup_from_mail)
         self._mail_timer.start(BACKUP_MAIL_INTERVAL_MS)
-        self.refresh()
+        from app.remote.state import client
+        self.refresh_async() if client() is not None else self.refresh()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -146,7 +148,14 @@ class DashboardPage(QWidget):
     def _refresh_backup(self):
         if not self.is_admin:
             return
-        status = get_backup_status()
+        from app.remote.state import client
+        if client() is not None:
+            self._backup_reads.submit(get_backup_status,self._render_backup,
+                lambda exc: logger.warning('Nie można odświeżyć statusu kopii: %s',exc),key='backup-status')
+            return
+        self._render_backup(get_backup_status())
+
+    def _render_backup(self,status):
         colors = {"ok": "#1e8449", "nieaktualna": "#c0392b", "blad": "#c0392b"}
         self.backup_label.setText(status["komunikat"])
         self.backup_label.setStyleSheet(f"font-weight: bold; color: {colors.get(status['stan'], '#7f8c8d')};")

@@ -317,14 +317,27 @@ def _eligible_months(conn, company_id, months, signature, *, apply):
     return eligible
 
 
+def month_batches(months):
+    """Two-bound SQL adapters can batch adjacent months without reading gaps."""
+    batches = []
+    for month in sorted(set(months)):
+        if batches and month_bounds(batches[-1][-1])[1][:7] == month:
+            batches[-1].append(month)
+        else:
+            batches.append([month])
+    return batches
+
+
 @office_endpoint('app.integrations.enova.document_counts.run_import')
-def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
+def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=None):
     if apply and not config.get('enabled', False):
         raise ValueError('Import wyłączony. Najpierw sprawdź podgląd, następnie ustaw enabled=true.')
     if not config.get('sources'):
         raise ValueError('Połączenie Enovy można zapisać bez baz firm. Przed importem znajdź bazy po NIP lub przypisz je ręcznie i zapisz ustawienia.')
     run_day = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
-    months = requested_months(run_day, config.get('months_back', 3))
+    months = requested_months(run_day, config.get('months_back', 3)) if months is None else list(months)
+    for month in months:
+        month_bounds(month)
     # Historical counts belong to Sprawdzanie. Only periods starting with this
     # deployment's activation month may feed the monthly billing counter.
     first_month = config.get('monthly_counts_from') or run_day.strftime('%Y-%m')
@@ -354,25 +367,22 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts):
                         jpk_result = import_jpk(conn, config, source, company['id'], months, run_day, apply=apply)
                     eligible = _eligible_months(conn, company['id'], monthly_months, signature, apply=apply)
                     counts = []
-                    # Query each eligible month separately: do not query uncompleted gaps.
-                    for month in eligible:
-                        # A previous month's remote read may have taken time; recheck before each contact.
-                        if not conn.execute("SELECT 1 FROM statusy_miesieczne WHERE firma_id=%s "
-                                            "AND miesiac=%s AND etap='Wysłane wyniki'",
-                                            (company['id'], month)).fetchone():
-                            continue
-                        counts.extend(validate_rows(fetch(config, source, [month]), source, [month], divisor))
+                    # Batch adjacent months, preserving the adapter's two date bounds.
+                    for batch in month_batches(eligible):
+                        ready_months = [row[0] for row in conn.execute(
+                            "SELECT miesiac FROM statusy_miesieczne WHERE firma_id=%s "
+                            "AND miesiac=ANY(%s) AND etap='Wysłane wyniki' ORDER BY miesiac",
+                            (company['id'],batch)).fetchall()]
+                        for ready_batch in month_batches(ready_months):
+                            counts.extend(validate_rows(fetch(config,source,ready_batch),source,ready_batch,divisor))
                     changes = []
                     if apply:
-                        ready = []
-                        for count in counts:
-                            # Recheck after SQL Server reads and keep the row locked through the write.
-                            status = conn.execute("SELECT etap FROM statusy_miesieczne WHERE firma_id=%s "
-                                                  "AND miesiac=%s AND etap='Wysłane wyniki' FOR UPDATE",
-                                                  (company['id'], count.month)).fetchone()
-                            if status:
-                                ready.append(count)
-                        counts = ready
+                        # Recheck once after the remote read and lock the accepted rows through the write.
+                        still_ready = {row[0] for row in conn.execute(
+                            "SELECT miesiac FROM statusy_miesieczne WHERE firma_id=%s "
+                            "AND miesiac=ANY(%s) AND etap='Wysłane wyniki' FOR UPDATE",
+                            (company['id'],[count.month for count in counts])).fetchall()} if counts else set()
+                        counts = [count for count in counts if count.month in still_ready]
                         if counts:
                             changes = apply_counts(conn, company, source, counts, bank_divisor=divisor)
                             for count in counts:

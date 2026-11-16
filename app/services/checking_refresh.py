@@ -19,7 +19,7 @@ def stamp():
 
 def scope(actor_id, company_ids):
     require_access(actor_id)
-    if (not isinstance(company_ids, list) or not company_ids or len(company_ids)>500
+    if (not isinstance(company_ids, list) or not company_ids or len(company_ids)>10000
             or any(type(fid) is not int or fid<=0 for fid in company_ids)):
         raise ValueError('Wybierz jedną lub kilka firm.')
     ids = sorted(set(company_ids))

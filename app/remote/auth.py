@@ -85,3 +85,12 @@ def authenticate(token):
 def logout(token):
     with get_conn() as conn:
         conn.execute('DELETE FROM office_api_sessions WHERE token_hash=%s', (digest(token),))
+
+
+def ui_authorization(employee_id):
+    """Login-time UI hints only; business operations still authorize on the server."""
+    from app.remote.state import service_scope
+    from app.security.authorization import is_administrator,get_permissions,allowed_tabs
+    with service_scope(employee_id):
+        return {'administrator':is_administrator(employee_id),
+                'permissions':get_permissions(employee_id),'tabs':allowed_tabs(employee_id)}

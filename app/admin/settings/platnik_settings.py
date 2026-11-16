@@ -91,11 +91,15 @@ class PlatnikSettings(QWidget):
         self.buttons = []
         for title,action in (('Zapisz połączenie Płatnika',self.save),
                              ('Sprawdź połączenie SQL (bez importu)',self.check),
-                             ('Pobierz wybrany rok — zapisane ustawienia',self.download)):
+                             ('Pobierz wakacje składkowe (RWS) za wybrany rok',self.download)):
             button = QPushButton(title)
             button.clicked.connect(action)
             self.buttons.append(button)
             layout.addWidget(button)
+        annual = QPushButton('Pobierz wszystkie deklaracje za rok — Płatnik i Enova…')
+        from app.accounting.declaration_year_ui import open_declaration_year
+        annual.clicked.connect(lambda:open_declaration_year(self.actor_id,self))
+        layout.addWidget(annual)
         self.error_button = QPushButton('Pokaż szczegóły błędu SQL…')
         self.error_button.clicked.connect(self.show_error_details)
         self.error_button.hide()

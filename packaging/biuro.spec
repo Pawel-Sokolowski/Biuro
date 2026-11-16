@@ -64,6 +64,21 @@ for pkg in CALDAV_PACKAGES:
     datas += collect_data_files(pkg)
 # psycopg 3 + wbudowana libpq (psycopg_binary) - bez tego aplikacja nie polaczy sie z PostgreSQL
 binaries = []
+# QtCore depends on the MSVC runtime, including MSVCP140_1 which can be
+# present on CI but absent on a clean worker machine. Ship these app-local
+# rather than relying on a globally installed Visual C++ redistributable.
+if sys.platform == "win32":
+    import os
+    import PyQt6
+    qt_bin = Path(PyQt6.__file__).resolve().parent / "Qt6" / "bin"
+    system32 = Path(os.environ["SystemRoot"]) / "System32"
+    for dll in ("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+                "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll"):
+        source = next((directory / dll for directory in (qt_bin, system32)
+                       if (directory / dll).is_file()), None)
+        if source is None:
+            raise SystemExit(f"Missing Qt MSVC dependency: {dll}. Install the x64 Visual C++ runtime on the build machine.")
+        binaries.append((str(source), "."))
 # Include Playwright driver, but use the server-installed Edge/Chrome (no browser download).
 pw_datas, pw_binaries, pw_hidden = collect_all("playwright")
 datas += pw_datas

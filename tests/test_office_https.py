@@ -53,6 +53,22 @@ class OfficeHttpsTests(DbTestCase):
         company = self.make_company('HTTPS firma')
         result = self.client.call('app.db.dao_companies.get_company',(company,))
         self.assertEqual(result['nazwa'],'HTTPS firma')
+        from app.companies import holiday_eligibility
+        values = {**dict.fromkeys(holiday_eligibility.CONDITIONS,True),
+                  'insurance_code':'051000','insured_count':1}
+        payer = self.make_company('Wakacje HTTPS',nip='1112223344',adres_email='owner@example.com',forma_dzialalnosci='JDG')
+        with mock.patch.object(holiday_eligibility,'current_month',return_value='2026-11'):
+            saved = self.client.call('app.companies.holiday_eligibility.save_conditions',
+                                     (999,payer,'2026-12','company',values,0))
+            self.assertEqual(saved['revision'],1)
+            conditions = self.client.call('app.companies.holiday_eligibility.read_conditions',(999,payer,'2026-12'))
+            self.assertEqual(conditions['people'][0]['values']['actor_id'],1)
+            candidates = self.client.call('app.companies.holiday_eligibility.list_candidates',(999,'2026-12'))
+            self.assertEqual(next(c for c in candidates['companies'] if c['id']==payer)['holiday_addresses']['eligible'],
+                             'owner@example.com')
+        raw = self.client.call('app.db.dao_app_settings.get_setting',(f'zus_holiday_mailing_2026-12_{payer}',))
+        self.assertNotIn('gAAAAA',raw)
+        self.assertNotIn('051000',raw)
         session = self.client._request('session')
         self.assertEqual(set(session),{'employee_id','version'})
         target = Path(self.temporary.name)/'companies.csv'

@@ -176,7 +176,7 @@ class CheckingRefreshControls(QWidget):
             message += f" Przetworzono: {value.get('processed',0)}."
         if state in ('completed','partial','failed') and value.get('results'):
             results = value['results']
-            platnik = [row for row in results if row.get('source')=='platnik' and row.get('ok')]
+            platnik = [row for row in results if row.get('source')=='platnik' and (row.get('ok') or row.get('monthly_imported'))]
             if platnik:
                 message += f" Płatnik: firm {len(platnik)}, dokumentów miesięcznych {platnik[0].get('batch_documents',0)}, rocznych {platnik[0].get('batch_annual_documents',0)}."
             failed = [row for row in results if not row.get('ok',row.get('state')=='ok')]

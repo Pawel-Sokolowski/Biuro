@@ -53,6 +53,14 @@ def _request(actor_id,kind,company_ids,period):
     return value
 
 
+def _result_state(results):
+    failed = sum(not row.get('ok',row.get('state')=='ok') for row in results)
+    partial = any(row.get('monthly_imported') for row in results)
+    if not results or (failed==len(results) and not partial):
+        return 'failed'
+    return 'partial' if failed else 'completed'
+
+
 @office_endpoint('app.services.checking_refresh.run_now')
 def run_now(actor_id,kind,company_ids,period,sources=None):
     value = _request(actor_id,kind,company_ids,period)
@@ -69,9 +77,7 @@ def run_now(actor_id,kind,company_ids,period,sources=None):
             results = _execute(value,None)
             if results is None:
                 raise ValueError('Źródło danych jest zajęte przez inny odczyt. Ponów pobranie po jego zakończeniu.')
-            failed = sum(not row.get('ok',row.get('state')=='ok') for row in results)
-            state = 'failed' if not results or failed==len(results) else 'partial' if failed else 'completed'
-            value.update(state=state,results=results,finished_at=stamp())
+            value.update(state=_result_state(results),results=results,finished_at=stamp())
         except Exception as error:
             from app.remote.secrets import safe_error
             value.update(state='failed',finished_at=stamp(),error=safe_error(error))
@@ -205,9 +211,7 @@ def process_next(stop=None):
             if results is None:
                 value.update(state='queued')
             else:
-                failed = sum(not row.get('ok',row.get('state')=='ok') for row in results)
-                state = 'failed' if not results or failed==len(results) else 'partial' if failed else 'completed'
-                value.update(state=state,results=results,finished_at=stamp())
+                value.update(state=_result_state(results),results=results,finished_at=stamp())
         except Exception as exc:
             value.update(state='failed',finished_at=stamp(),
                          error=str(exc) if isinstance(exc,(ValueError,PermissionError)) else type(exc).__name__)

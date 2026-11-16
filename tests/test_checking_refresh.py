@@ -140,6 +140,16 @@ class CheckingRefreshTests(DbTestCase):
         self.assertEqual(latest(self.admin)['state'],'completed')
         self.assertIsNone(get_setting('background_worker'))
 
+    def test_direct_monthly_success_is_visible_when_annual_reports_fail(self):
+        from app.services.checking_refresh import run_now
+        with patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':17}), \
+             patch('app.integrations.platnik.declarations.import_year',side_effect=ValueError('Brak IWA/ZSWA')):
+            value = run_now(self.admin,'declaration_year',[self.company],2026,['platnik'])
+        self.assertEqual(value['state'],'partial')
+        self.assertTrue(value['results'][0]['monthly_imported'])
+        self.assertEqual(value['results'][0]['batch_documents'],17)
+        self.assertIn('IWA',value['results'][0]['error'])
+
     def test_direct_busy_source_returns_a_failure_instead_of_leaving_a_queued_request(self):
         from app.services.checking_refresh import run_now
         with patch('app.services.checking_refresh._execute',return_value=None):

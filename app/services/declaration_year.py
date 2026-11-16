@@ -70,6 +70,8 @@ def run(value, stop):
                 return None
             yearly = import_year(value['period'],company_ids=value['company_ids'])
             if yearly.get('mode')=='busy':
+                if value.get('execution')=='direct':
+                    raise ValueError('Odczyt miesięczny zapisano, ale źródło IWA/ZSWA jest zajęte. Ponów pobranie raportów rocznych.')
                 return None
             if yearly.get('mode')=='disabled':
                 raise ValueError('Odczyt IWA/ZSWA jest wyłączony.')
@@ -81,6 +83,8 @@ def run(value, stop):
                 record('platnik','failed',company_id=company['id'],error_type=type(error).__name__)
                 results.append({'company_id':company['id'],'source':'platnik','ok':False,
                                 'monthly_imported':monthly_applied,
+                                'batch_documents':result.get('documents',0) if monthly_applied else 0,
+                                'batch_annual_documents':0,
                                 'error':str(error) if isinstance(error,(ValueError,PlatnikSqlError)) else type(error).__name__})
     # A broken Enova configuration must not suppress a successful Płatnik read.
     if 'enova' not in sources:

@@ -35,8 +35,15 @@ class ImportAndMailTests(DbTestCase):
             self.assertEqual({r['od'] for r in rules},{'client@example.com','owner@example.com','contact@example.com'})
             self.assertEqual({r['folder_docelowy'] for r in rules},{'INBOX.Firma Zolw'})
             self.assertEqual(conn.execute('SELECT count(*) FROM foldery_email').fetchone()[0],3)
+        from app.email.email_rules import find_rule
+        self.assertIsNone(find_rule(rules,{'sender':'notclient@example.com','recipient':'office@example.com'}))
+        self.assertIsNotNone(find_rule(rules,{'sender':'Jan <CLIENT@example.com>','recipient':'office@example.com'}))
 
     def test_ambiguous_names_are_skipped_unique_nip_wins_and_manual_rules_are_preserved(self):
+        save_folder(10,'Archiwum.Firma Zolw','Firma Zolw','.','')
+        self.assertEqual(link_account(10),0)
+        with get_conn() as conn:
+            conn.execute("DELETE FROM foldery_email WHERE server_name='Archiwum.Firma Zolw'")
         self.make_company('Firma Zolw',adres_email='other@example.com')
         self.assertEqual(link_account(10),0)
         save_folder(10,'INBOX.1112223344','1112223344','.','')
@@ -45,7 +52,14 @@ class ImportAndMailTests(DbTestCase):
         with get_conn() as conn:
             conn.execute("UPDATE reguly_filtrow SET folder_docelowy='INBOX.Manual',aktywna=0")
         self.assertEqual(link_account(10),0)
-        self.assertEqual(get_setting('unrelated'),None)
+        from app.db.dao_companies import save_contact
+        other = self.make_company('Inne',adres_email='shared@example.com')
+        save_contact(self.company,{'email':'shared@example.com'})
+        save_folder(10,'INBOX.Inne','Inne','.','')
+        link_account(10)
+        with get_conn() as conn:
+            self.assertFalse(conn.execute("SELECT 1 FROM reguly_filtrow WHERE od='shared@example.com' AND firma_id=ANY(%s)",
+                                          ([self.company,other],)).fetchone())
 
     def test_yearly_declarations_fill_twelve_months_and_add_only_without_amounts(self):
         company_id = self.company
@@ -108,6 +122,22 @@ class ImportAndMailTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(read_codes(conn,[self.company],'2026-10'),{})
 
+    def test_civil_partner_declarations_keep_all_payers_in_one_company_snapshot(self):
+        from app.db.dao_companies import save_company,save_partner
+        from app.integrations.platnik.declarations import import_months,decoded_snapshot
+        from tests.test_platnik_declarations import ROW
+        save_company({'id':self.company,'forma_dzialalnosci':'Spółka cywilna'})
+        for nip in ('2223334455','3334445566'):
+            save_partner(self.company,{'imie_pierwsze':'Wspólnik','nazwisko':nip,'nip':nip})
+        rows = [{**ROW,'nip':nip,'payer_id':number,'source_id':number,'insurance_code':'051000'}
+                for number,nip in enumerate(('1112223344','2223334455','3334445566'),1)]
+        with patch('app.integrations.platnik.declarations.load',return_value={'enabled':False}), \
+             patch('app.integrations.platnik.declarations.fetch',return_value=rows):
+            import_months(['2026-11'],company_ids=[self.company])
+        entries = decoded_snapshot(get_setting(f'platnik_declarations_{self.company}_2026-11'))['declarations']
+        self.assertEqual({e['payer_nip'] for e in entries},{'1112223344','2223334455','3334445566'})
+        self.assertEqual(len(entries),3)
+
     def test_smtp_wire_has_no_bcc_and_copies_are_appended_to_imap_sent_and_client(self):
         from app.email.email_actions import send_email_smtp
         link_account(10)
@@ -134,6 +164,19 @@ class ImportAndMailTests(DbTestCase):
         copies = {call.args[0]:BytesParser(policy=policy.default).parsebytes(call.args[3]) for call in imap.append.call_args_list}
         self.assertEqual(set(copies),{'"INBOX.Sent"','"INBOX.Firma Zolw"'})
         self.assertTrue(all(msg['Bcc']=='client@example.com' for msg in copies.values()))
+        smtp.send_message.return_value = {'refused@example.com':(550,b'Rejected')}
+        imap.append.reset_mock()
+        with patch('app.email.email_actions.get_smtp_config_for_account',return_value=config), \
+             patch('app.email.email_actions.open_smtp',side_effect=smtp_session), \
+             patch('app.email.email_sync._shared_session',side_effect=imap_session), \
+             patch('app.email.email_sync.sync_folder'):
+            ok,info = send_email_smtp(10,['office@example.com'],'Notice','Body',
+                                     bcc=['client@example.com','refused@example.com'],save_copy=True)
+        self.assertFalse(ok)
+        self.assertIn('refused@example.com',info)
+        for call in imap.append.call_args_list:
+            archive = BytesParser(policy=policy.default).parsebytes(call.args[3])
+            self.assertNotIn('refused@example.com',archive['Bcc'])
 
     def test_imap_failure_warns_after_successful_smtp_and_does_not_resend(self):
         from app.email.email_actions import send_email_smtp

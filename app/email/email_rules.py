@@ -3,6 +3,8 @@ from __future__ import annotations
 from app.remote.boundary import endpoint as office_endpoint
 
 import logging
+import re
+from email.utils import getaddresses
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
@@ -163,7 +165,11 @@ def rule_matches(rule: Dict[str, Any], header: Dict[str, Any], via_recipient: bo
         needle = _norm(rule.get(field)).strip()
         if needle:
             used = True
-            if needle not in _norm(haystack):
+            if field in ('od','do') and re.fullmatch(r'[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+',needle):
+                matched = needle in {address.casefold() for _,address in getaddresses([str(haystack or '').replace(';',',')])}
+            else:
+                matched = needle in _norm(haystack)
+            if not matched:
                 return False
     return used
 

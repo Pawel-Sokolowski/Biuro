@@ -37,7 +37,7 @@ def read_enova(config, source, company_id, months):
                 conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                              'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                              (f'enova_jpk_{company_id}_{month}',json.dumps({**jpk[month],'imported_at':stamp,'database':source['database']})))
-                if jpk[month].get('form_variant'):
+                if jpk[month].get('form_variant') or jpk[month]['status'] not in ('unknown','not_applicable'):
                     add_imported(conn,company_id,month,[{'form':'JPK_VAT',**jpk[month]}],'enova-jpk')
     return {'company_id':company_id,'source':'enova','ok':True,'months':months,
             'documents':sum(len(entries) for entries in declarations.values())}

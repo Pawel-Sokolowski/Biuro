@@ -172,7 +172,7 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         if not mapped:
             return {'mode': 'empty', 'companies': 0}
         from app.services.worker_activity import batch
-        with batch('platnik', mapped.values()):
+        with batch('platnik', sorted(set(mapped.values()))):
             rows = fetch(config, months, annual=True) if annual else fetch(config, months)
             records = normalize(rows, months, mapped, annual=annual)
             stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()

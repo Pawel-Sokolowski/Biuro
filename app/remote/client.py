@@ -1,4 +1,4 @@
-"""HTTPS-only desktop transport with a revocable user session, never DB credentials."""
+"""HTTP/HTTPS desktop transport with a revocable user session, never DB credentials."""
 from pathlib import Path
 import threading
 import time
@@ -13,8 +13,8 @@ def normalize_server(value):
     if '://' not in value:
         value = 'https://' + value
     parsed = urlsplit(value)
-    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('Podaj adres HTTPS serwera biura, bez loginu i hasła.')
+    if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Podaj adres HTTP lub HTTPS serwera biura, bez loginu i hasła.')
     return value
 
 

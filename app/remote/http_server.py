@@ -194,6 +194,8 @@ class Server(ThreadingHTTPServer):
     def get_request(self):
         connection,address = super().get_request()
         connection.settimeout(10)
+        if self.tls_context is None:
+            return connection,address
         return self.tls_context.wrap_socket(connection,server_side=True,do_handshake_on_connect=False),address
 
     def process_request_thread(self,request,client_address):
@@ -203,12 +205,16 @@ class Server(ThreadingHTTPServer):
             self.slots.release()
 
 
-def create_server(host,port,certificate,private_key,directory):
-    if not certificate or not private_key:
-        raise ValueError('Skonfiguruj certyfikat HTTPS i jego klucz prywatny na serwerze biura.')
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(certificate,private_key)
+def create_server(host,port,certificate,private_key,directory,*,allow_http=False):
+    context = None
+    if not allow_http:
+        if not certificate or not private_key:
+            raise ValueError('Skonfiguruj certyfikat HTTPS lub włącz tymczasowy tryb HTTP.')
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(certificate,private_key)
+    else:
+        logger.warning('office_http_enabled: transport is unencrypted')
     service = OfficeService(directory)
     try:
         server = Server((host,int(port)),service)
@@ -223,7 +229,8 @@ def from_environment():
     import os
     from app.config import get_data_dir
     return create_server(os.getenv('BIO_API_BIND','0.0.0.0'),int(os.getenv('BIO_API_PORT','8443')),
-                         os.getenv('BIO_API_CERT',''),os.getenv('BIO_API_TLS_KEY',''),get_data_dir())
+                         os.getenv('BIO_API_CERT',''),os.getenv('BIO_API_TLS_KEY',''),get_data_dir(),
+                         allow_http=os.getenv('BIO_API_ALLOW_HTTP')=='1')
 
 
 def start_configured():

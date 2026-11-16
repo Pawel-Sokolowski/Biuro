@@ -222,7 +222,7 @@ class WorkerSetupWindow(QMainWindow):
             11: self.server_page,
         }
         for title in ('Panel i logi', 'Zadania', 'e-ZLA', 'Odczyt z Enovy', 'Konta poczty',
-                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa HTTPS'):
+                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa biura'):
             self.tabs.addTab(QWidget(), title)
         self.tabs.currentChanged.connect(self.open_tab)
 

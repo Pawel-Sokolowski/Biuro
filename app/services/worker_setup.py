@@ -68,7 +68,7 @@ def save_local_config(dsn, key, *, api_settings=None):
         set_key(str(temporary), 'DB_URL', dsn)
         set_key(str(temporary), 'BIO_ENCRYPTION_KEY', key.strip())
         for name,value in (api_settings or {}).items():
-            if name not in {'BIO_API_ENABLED','BIO_API_BIND','BIO_API_PORT','BIO_API_CERT','BIO_API_TLS_KEY'}:
+            if name not in {'BIO_API_ENABLED','BIO_API_BIND','BIO_API_PORT','BIO_API_CERT','BIO_API_TLS_KEY','BIO_API_ALLOW_HTTP'}:
                 raise ValueError('Nieprawidłowe ustawienie usługi biura.')
             set_key(str(temporary),name,value)
         # set_key replaces the file; reapply ACL to the resulting file before publishing it.

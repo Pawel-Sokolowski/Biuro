@@ -134,9 +134,30 @@ class OfficeHttpsTests(DbTestCase):
         finally:
             configure(None)
 
-    def test_cleartext_and_untrusted_certificates_are_not_accepted(self):
+    def test_explicit_http_mode_keeps_session_authentication(self):
+        server = create_server('127.0.0.1',0,'','',Path(self.temporary.name)/'http',allow_http=True)
+        thread = threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        client = OfficeClient('http://127.0.0.1:'+str(server.server_address[1]))
+        try:
+            with self.assertRaises(PermissionError):
+                client.resume('invalid-session')
+            employee_id = client.login('admin@biuro.pl','Admin12345')
+            self.assertEqual(client.resume(client.token),employee_id)
+            client.logout()
+            self.assertIsNone(client.token)
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            server.office_service.close()
+            thread.join(timeout=5)
+
+    def test_tls_still_requires_a_certificate(self):
         with self.assertRaises(ValueError):
-            OfficeClient('http://127.0.0.1')
+            create_server('127.0.0.1',0,'','',Path(self.temporary.name)/'no-tls')
+
+    def test_untrusted_certificates_are_not_accepted(self):
         with self.assertRaises(ValueError):
             OfficeClient('https://127.0.0.1',verify=False)
         other = OfficeClient(self.client.server)

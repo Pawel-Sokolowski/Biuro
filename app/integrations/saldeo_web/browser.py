@@ -99,6 +99,21 @@ def read_history(config, stop=None):
             context.close()
 
 
+def attempt_saved_login(page,config):
+    """Submit only unique visible controls on the configured HTTPS origin."""
+    selectors = ('username_selector','password_selector','submit_selector')
+    if not same_origin(page,config) or not config.get('username') or not config.get('password_enc') or not all(config.get(k) for k in selectors):
+        return False
+    controls = [page.locator(config[key]) for key in selectors]
+    if not all(control.count()==1 and control.is_visible() for control in controls):
+        return False
+    from app.utils.crypto import decrypt_password
+    controls[0].fill(config['username'])
+    controls[1].fill(decrypt_password(config['password_enc']))
+    controls[2].click()
+    return True
+
+
 def login_window(actor_id=None):
     """Interactive login under the same Windows account as the worker, max 15 minutes."""
     from playwright.sync_api import sync_playwright
@@ -117,11 +132,28 @@ def login_window(actor_id=None):
                 page.goto(config['login_url'], wait_until='domcontentloaded', timeout=45000)
                 deadline = time.monotonic() + 900
                 learned = False
+                attempted = False
+                page.set_default_timeout(15000)
                 while context.pages and time.monotonic() < deadline:
                     try:
-                        if actor_id and not learned and same_origin(context.pages[0],config):
-                            learned = remember_login_fields(context.pages[0],actor_id)
-                        context.pages[0].wait_for_timeout(500)
+                        page = context.pages[0]
+                        if same_origin(page,config):
+                            marker = config.get('logged_in_selector')
+                            if marker and page.locator(marker).first.is_visible():
+                                return True
+                            if actor_id and not learned:
+                                learned = remember_login_fields(page,actor_id)
+                                if learned:
+                                    config = load()
+                            if not attempted:
+                                try:
+                                    attempted = attempt_saved_login(page,config)
+                                except Exception as error:
+                                    # Never log Playwright errors: they can contain filled credentials.
+                                    attempted = True
+                                    import logging
+                                    logging.getLogger(__name__).warning('saldeo_interactive_login_failed error_type=%s',type(error).__name__)
+                        page.wait_for_timeout(500)
                     except Exception:
                         break
             finally:
@@ -129,6 +161,8 @@ def login_window(actor_id=None):
                     context.close()
                 except Exception:
                     pass  # Closing the browser manually already closes its context.
+
+    return False
 
 
 def remember_login_fields(page, actor_id):

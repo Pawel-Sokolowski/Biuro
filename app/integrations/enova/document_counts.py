@@ -155,6 +155,28 @@ def sql_connection_string(config, database, user, password):
     return ';'.join(f'{key}={_odbc_quote(value)}' for key, value in values.items())
 
 
+def _bind_company_identity(cursor,source):
+    """A saved database-to-company mapping can fill missing identity, never a conflict."""
+    expected = normalize_nip(source['nip'])
+    cursor.execute('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
+    identities = cursor.fetchmany(1001)
+    if len(identities)>1000:
+        raise ValueError('Za wiele identyfikatorów oddziałów w bazie Enovy.')
+    actual = set()
+    for identity in identities:
+        try:
+            actual.add(normalize_nip(identity[0]))
+        except ValueError:
+            pass  # Empty fields and PESEL are not company NIPs.
+    if actual and actual != {expected}:
+        raise ValueError(f"Baza {source['database']}: poprawny NIP w danych Enovy jest sprzeczny "
+                         'z powiązaniem firmy w Biuro. Nie zaimportowano danych.')
+    if not actual:
+        import logging
+        logging.getLogger(__name__).warning('enova_identity_from_saved_mapping database=%s',source['database'])
+    cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=?",expected)
+
+
 def fetch_counts(config, source, months, *, result_kind="counts"):
     """SQL Server credentials must be SELECT-only; readonly is also requested from ODBC."""
     from app.integrations.enova.odbc_support import load_odbc, resolve_driver
@@ -177,6 +199,11 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         cursor = connection.cursor()
         from app.integrations.enova.discovery import query_timeout
         connection.timeout = query_timeout(config)
+        from app.integrations.enova.query_defaults import bundled_directory
+        bundled = query_path.resolve().parent == bundled_directory().resolve() and query_path.name in (
+            'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql')
+        if bundled:
+            _bind_company_identity(cursor,source)
         # Exactly two positional date parameters: inclusive start, exclusive end.
         cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
                        date.fromisoformat(month_bounds(months[-1])[1]))
@@ -199,23 +226,9 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         rows = cursor.fetchmany(limit + 1)
         if len(rows) > limit:
             raise ValueError('Zapytanie zwróciło za wiele wierszy.')
-        if not rows and result_kind=='counts' and query_path.resolve().parent == (Path(__file__).resolve().parents[3] / 'docs/enova/queries').resolve():
-            cursor.execute('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
-            identities = cursor.fetchmany(1001)
-            nips = set()
-            for identity in identities:
-                try:
-                    nips.add(normalize_nip(identity[0]))
-                except ValueError:
-                    pass
-            expected = normalize_nip(source['nip'])
-            if not nips:
-                raise ValueError(f"Baza {source['database']}: zapytanie nie zwróciło żadnych miesięcy, ponieważ nie odczytano "
-                                 f'poprawnego NIP-u z dbo.OddzialyFirmy.DeklaracjeNIP. NIP firmy w Biuro: {expected}. '
-                                 'Sprawdź dane właściciela tej bazy w Enovie i ręczne powiązanie bazy z firmą. Nie zapisano zer.')
-            if nips!={expected}:
-                raise ValueError(f"Baza {source['database']}: NIP-y właściciela ({', '.join(sorted(nips))}) "
-                                 f'nie odpowiadają jednej firmie Biuro ({expected}). Sprawdź powiązanie bazy.')
+        if not rows and result_kind=='counts' and bundled:
+            raise ValueError(f"Baza {source['database']}: zapytanie nie zwróciło wymaganych miesięcy "
+                             'mimo ustalonego powiązania firmy. Nie zapisano zer; sprawdź adapter i okres importu.')
         return [dict(zip(columns, row)) for row in rows]
     finally:
         connection.close()

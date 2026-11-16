@@ -19,10 +19,19 @@ NormalizedNips AS (
     SELECT CASE WHEN LEFT(Value, 2) = N'PL' THEN SUBSTRING(Value, 3, 32) ELSE Value END AS nip
     FROM RawNips
 ),
-Company AS (
-    -- Zero or several distinct NIPs will fail worker validation instead of guessing.
+ValidNips AS (
     SELECT DISTINCT nip FROM NormalizedNips
     WHERE LEN(nip) = 10 AND nip NOT LIKE N'%[^0-9]%'
+),
+Company AS (
+    SELECT nip FROM ValidNips
+    UNION ALL
+    -- Worker supplies the saved company mapping only when Enova has no valid NIP.
+    -- Never reinterpret PESEL or replace a conflicting valid NIP.
+    SELECT mapped.nip
+    FROM (SELECT CONVERT(nvarchar(32), SESSION_CONTEXT(N'biuro_company_nip')) AS nip) mapped
+    WHERE LEN(mapped.nip) = 10 AND mapped.nip NOT LIKE N'%[^0-9]%'
+      AND NOT EXISTS (SELECT 1 FROM ValidNips)
 ),
 Entries AS (
     -- Confirmed invoice definitions: purchases, sales services, cash-method invoices.

@@ -215,6 +215,19 @@ class CalendarRefreshTests(DbTestCase):
         self.page.show()
         _app.processEvents()
 
+    def test_calendar_search_and_markers_reuse_received_events_without_rpc(self):
+        from app.db import dao_calendar
+        page = self.page
+        page._snapshot_events = list(page._events)
+        page._snapshot_key = page._snapshot_range()
+        with mock.patch('app.remote.state._client',object()), \
+             mock.patch.object(dao_calendar,'list_events',side_effect=AssertionError('calendar reload')), \
+             mock.patch.object(dao_calendar,'get_event_access',side_effect=AssertionError('per-event access')):
+            page.search.setText('Event 00')
+            page._mark_days()
+            self.assertEqual(len(page._events),1)
+            self.assertEqual(page._events[0]['tytul'],'Event 00')
+
     def test_refresh_keeps_unchecked_sources_and_reuses_source_items(self):
         local = self.page.calendars.item(0)
         local.setCheckState(Qt.CheckState.Unchecked)

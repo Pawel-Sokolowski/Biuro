@@ -22,6 +22,7 @@ def list_events(pracownik_id: int, start: str, end: str) -> List[Dict[str, Any]]
             """
             SELECT w.*, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa,
                    (w.pracownik_id != %s) AS udostepnione,
+                   EXISTS (SELECT 1 FROM wydarzenia_dostep shared_access WHERE shared_access.wydarzenie_id=w.id) AS ma_udostepnienia,
                    (SELECT imie || ' ' || nazwisko FROM pracownicy WHERE id = w.pracownik_id)
                        AS wlasciciel
             FROM wydarzenia w

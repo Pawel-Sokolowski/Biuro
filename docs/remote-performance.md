@@ -51,3 +51,22 @@ jest okresowe odpytywanie, żeby wykrywać zmiany wprowadzone przez inne osoby.
 Klient dopuszcza najwyżej dwa równoległe wywołania operacji w tle i trzy
 łącznie, pozostawiając miejsce dla akcji użytkownika w limicie serwera.
 Operacje nie są ponawiane automatycznie: zapisy pozostają pojedyncze.
+
+## Poczta i kalendarz
+
+`mail_sidebar_snapshot` pobiera konta pracownika, foldery wszystkich tych kont,
+zbiorcze liczniki nieprzeczytanych wiadomości i etykiety pracowników jednym
+żądaniem. Foldery i liczniki są czytane zapytaniami z ANY(lista kont), zamiast
+pętli żądań na każde konto. Panel boczny odświeża się w tle, zachowując bieżący
+widok podczas oczekiwania. Ładowanie treści wiadomości pozostaje osobnym odczytem.
+
+`calendar_view_snapshot` pobiera wydarzenia oraz źródła dla wspólnego zakresu
+widoku i miniatury miesiąca. Informacja o udostępnieniu jest częścią zapytania
+listy wydarzeń. Rysowanie nie odpytuje dostępu każdego wydarzenia. Wyszukiwanie,
+wybór źródeł i oznaczenia dni korzystają z pobranego zestawu; zmiana zakresu lub
+ponowne wejście/odświeżenie pobiera aktualne dane w tle. Nie jest to trwały cache.
+Sprawdzanie konfiguracji synchronizacji Google/CalDAV również odbywa się w tle.
+
+Wymagana jest aktualizacja workera/API oraz klientów: nowe zbiorcze operacje
+muszą być dostępne na serwerze. Pomiary z instalacji są potrzebne do oceny
+pozostałego czasu ładowania i ewentualnego kosztu zapytań bazy danych.

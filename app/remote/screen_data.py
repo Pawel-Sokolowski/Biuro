@@ -126,3 +126,46 @@ def google_client_metadata():
     from app.kalendarz.google_sync import get_client_credentials
     client_id, secret = get_client_credentials()
     return client_id, bool(secret)
+
+
+@office_endpoint('app.remote.screen_data.mail_sidebar_snapshot')
+def mail_sidebar_snapshot(actor_id):
+    from app.email.email_storage import get_email_accounts_for_employee
+    from app.db.dao_employees import list_employees
+    from app.email.email_labels import resolve_label_numbers
+    accounts = get_email_accounts_for_employee(actor_id)
+    ids = [account['id'] for account in accounts]
+    with get_conn() as conn:
+        folders = [dict(row) for row in conn.execute(
+            'SELECT * FROM foldery_email WHERE konto_id=ANY(%s) ORDER BY display_name,server_name',(ids,)).fetchall()]
+        counts = conn.execute('SELECT konto_id,folder_id,COUNT(*) AS n FROM wiadomosci_email '
+            'WHERE konto_id=ANY(%s) AND COALESCE(usunieta,0)=0 AND COALESCE(przeczytana,0)=0 '
+            'GROUP BY konto_id,folder_id',(ids,)).fetchall()
+    grouped,unread = {},{}
+    for folder in folders:
+        grouped.setdefault(folder['konto_id'],[]).append(folder)
+    for row in counts:
+        unread.setdefault(row['konto_id'],{})[row['folder_id']] = row['n']
+    employees = [row for row in list_employees() if row.get('aktywny',1)]
+    labels = resolve_label_numbers(employees)
+    from app.db.dao_app_settings import get_setting
+    return {'accounts':accounts,'folders':grouped,'unread':unread,'labels':labels,
+            'folder_prefix':str(get_setting('email_folder_prefix') or ''),
+            'employees':[{key:row.get(key) for key in ('id','email','imie','nazwisko','aktywny')} for row in employees]}
+
+
+@office_endpoint('app.remote.screen_data.calendar_view_snapshot')
+def calendar_view_snapshot(actor_id,start,end):
+    from datetime import date
+    from app.db.dao_calendar import list_events
+    from app.kalendarz import google_sync,caldav_sync
+    from urllib.parse import urlparse
+    first,last = date.fromisoformat(start),date.fromisoformat(end)
+    if not 0<(last-first).days<=400:
+        raise ValueError('Nieprawidłowy zakres kalendarza.')
+    sources = [('Lokalne (import ICS)','lokalne')]
+    if google_sync.is_connected(actor_id):
+        sources.append(('Google Calendar','google'))
+    if caldav_sync.is_configured():
+        sources.append(('CalDAV: '+(urlparse(caldav_sync.get_config()['url']).hostname or 'CalDAV'),'caldav'))
+    return {'events':list_events(actor_id,start,end),'sources':sources}

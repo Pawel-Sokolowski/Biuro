@@ -20,7 +20,7 @@ from app.db import dao_calendar
 from app.db.dao_companies import get_employees_list, list_companies
 from app.kalendarz import caldav_sync, google_sync, ics_import
 from app.kalendarz.caldav_identity import split_remote_key
-from app.utils.background import CommandRunner
+from app.utils.background import CommandRunner,TaskRunner
 from app.utils.view_state import preserve_view_state, reconcile_list
 
 DT_FORMAT = "yyyy-MM-ddTHH:mm"
@@ -267,6 +267,11 @@ class CalendarPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self._commands = CommandRunner(self)
+        self._snapshot_reads = TaskRunner(self)
+        self._snapshot_key = None
+        self._pending_snapshot_key = None
+        self._snapshot_events = []
+        self._source_entries = [('Lokalne (import ICS)','lokalne')]
         self.anchor = date.today()
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._auto_sync)
@@ -401,24 +406,31 @@ class CalendarPage(QWidget):
         self._rebuild()
 
     # ---------- kalendarze ----------
-    def _fill_calendar_list(self):
+    def _fill_calendar_list(self,entries=None):
         checks = getattr(self, "_source_checks", {})
         checks.update({self.calendars.item(i).data(Qt.ItemDataRole.UserRole): self.calendars.item(i).checkState()
                        for i in range(self.calendars.count())})
         self._source_checks = checks
-        entries = [("Lokalne (import ICS)", "lokalne")]
-        if google_sync.is_connected(self.pracownik_id):
-            entries.append(("Google Calendar", "google"))
-        if caldav_sync.is_configured():
-            host = urlparse(caldav_sync.get_config()["url"]).hostname or "CalDAV"
-            entries.append((f"CalDAV: {host}", "caldav"))
+        if entries is None:
+            from app.remote.state import client
+            entries = list(self._source_entries) if client() is not None else [('Lokalne (import ICS)','lokalne')]
+            if client() is None:
+                if google_sync.is_connected(self.pracownik_id):
+                    entries.append(('Google Calendar','google'))
+                if caldav_sync.is_configured():
+                    host = urlparse(caldav_sync.get_config()['url']).hostname or 'CalDAV'
+                    entries.append((f'CalDAV: {host}','caldav'))
         def render_source(item, entry):
             name, key = entry
             item.setText(name)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(checks.get(key, Qt.CheckState.Checked))
             item.setForeground(QColor(SOURCE_COLORS[key]))
-        reconcile_list(self.calendars, entries, lambda entry: entry[1], render_source)
+        blocked = self.calendars.blockSignals(True)
+        try:
+            reconcile_list(self.calendars, entries, lambda entry: entry[1], render_source)
+        finally:
+            self.calendars.blockSignals(blocked)
 
     def _enabled_sources(self) -> set:
         return {
@@ -485,9 +497,13 @@ class CalendarPage(QWidget):
     def _visible_events(self, first: date, last: date) -> list:
         sources = self._enabled_sources()
         needle = self.search.text().strip().lower()
-        rows = dao_calendar.list_events(self.pracownik_id, first.isoformat(), last.isoformat())
+        from app.remote.state import client
+        rows = (self._snapshot_events if client() is not None else
+                dao_calendar.list_events(self.pracownik_id, first.isoformat(), last.isoformat()))
         out = []
         for ev in rows:
+            if ev['start'][:10]>=last.isoformat() or ev['koniec'][:10]<first.isoformat():
+                continue
             source = ev.get("zrodlo") or "lokalne"
             if source not in SOURCE_COLORS or source not in sources:
                 continue
@@ -497,7 +513,52 @@ class CalendarPage(QWidget):
             out.append(ev)
         return out
 
+    def _snapshot_range(self):
+        first,last,_ = self._range()
+        year,month = self.calendar.yearShown(),self.calendar.monthShown()
+        mini_first = date(year,month,1)
+        mini_last = date(year+(month==12),month%12+1,1)
+        return min(first,mini_first).isoformat(),max(last,mini_last).isoformat()
+
+    def refresh_async(self):
+        self._snapshot_key = None
+        self._rebuild()
+
     def _rebuild(self):
+        from app.remote.state import client
+        if client() is None:
+            self._render_calendar()
+            return
+        key = self._snapshot_range()
+        if key == self._snapshot_key:
+            self._render_calendar()
+            return
+        if key == self._pending_snapshot_key:
+            return
+        self._pending_snapshot_key = key
+        self.tree.clear()
+        self._events = []
+        self._tree_rows = None
+        self.grid_scroll.hide()
+        self.status.setText('Wczytywanie kalendarza…')
+        from app.remote.screen_data import calendar_view_snapshot
+        actor = self.pracownik_id
+        def loaded(snapshot):
+            self._pending_snapshot_key = None
+            if key != self._snapshot_range():
+                return
+            self._snapshot_key = key
+            self._snapshot_events = snapshot['events']
+            self._source_entries = snapshot['sources']
+            self._fill_calendar_list(entries=self._source_entries)
+            self._render_calendar()
+            self.status.setText('')
+        def failed(error):
+            self._pending_snapshot_key = None
+            self.status.setText('Nie udało się wczytać kalendarza. Odśwież widok.')
+        self._snapshot_reads.submit(lambda:calendar_view_snapshot(actor,*key),loaded,failed,key=key)
+
+    def _render_calendar(self):
         first, last, weeks = self._range()
         a = self.anchor
         if self.view == 0:
@@ -545,7 +606,7 @@ class CalendarPage(QWidget):
             title = ev["tytul"]
             if ev.get("udostepnione"):
                 title += f"  (udostępnił: {ev['wlasciciel']})"
-            elif dao_calendar.get_event_access(ev["id"]):
+            elif ev.get("ma_udostepnienia"):
                 title += "  (udostępnione)"
             rendered.append((ev, [title, s, e, cat]))
         if rendered == getattr(self, "_tree_rows", None):
@@ -654,8 +715,16 @@ class CalendarPage(QWidget):
         year, month = self.calendar.yearShown(), self.calendar.monthShown()
         first = date(year, month, 1)
         nxt = date(year + (month == 12), month % 12 + 1, 1)
-        for ev in dao_calendar.list_events(self.pracownik_id, first.isoformat(), nxt.isoformat()):
-            d = date.fromisoformat(ev["start"][:10])
+        from app.remote.state import client
+        if client() is not None:
+            if self._snapshot_key != self._snapshot_range():
+                self._rebuild()
+                return
+            rows = self._snapshot_events
+        else:
+            rows = dao_calendar.list_events(self.pracownik_id,first.isoformat(),nxt.isoformat())
+        for ev in rows:
+            d = max(first,date.fromisoformat(ev["start"][:10]))
             end = date.fromisoformat(ev["koniec"][:10])
             while d <= end and d < nxt:
                 if d >= first:
@@ -731,6 +800,10 @@ class CalendarPage(QWidget):
             self._run(lambda: caldav_sync.delete_remote(self.pracownik_id, ev["caldav_uid"], calendar_id=ev.get("caldav_calendar_id")))
 
     def _refresh_all(self):
+        from app.remote.state import client
+        if client() is not None:
+            self.refresh_async()
+            return
         self._fill_calendar_list()
         self._rebuild()
 
@@ -758,23 +831,20 @@ class CalendarPage(QWidget):
     def _sync(self, silent: bool = False):
         if not self.btn_sync.isEnabled():
             return
-        if google_sync.is_connected(self.pracownik_id):
-            sync = lambda: google_sync.sync(self.pracownik_id)
-        elif caldav_sync.is_configured():
-            sync = lambda: caldav_sync.sync(self.pracownik_id)
-        elif silent:
-            return
-        else:
-            QMessageBox.information(
-                self, "Synchronizacja",
-                "Brak przypisanego kalendarza Google (administrator przypisuje go w Ustawieniach) "
-                "ani skonfigurowanego serwera CalDAV.",
-            )
-            return
+        actor = self.pracownik_id
+        def sync():
+            if google_sync.is_connected(actor):
+                return google_sync.sync(actor)
+            if caldav_sync.is_configured():
+                return caldav_sync.sync(actor)
+            return None
         self.btn_sync.setEnabled(False)
         self.status.setText("Synchronizacja…")
 
         def done(stats):
+            if stats is None:
+                self.status.setText('Brak skonfigurowanego kalendarza Google lub CalDAV.')
+                return
             self.status.setText(
                 f"Wysłano: {stats['wyslane']}, pobrano: {stats['pobrane']}, usunięto: {stats['usuniete']}"
             )

@@ -96,7 +96,7 @@ MANUAL = {
  'app.documents.contract_pack':'load_context office_context',
  'app.documents.power_of_attorney':'office_address office_email',
  'app.utils.crypto':'get_employee_info get_employee_assigned_companies get_employee_role is_admin',
- 'app.remote.screen_data':'activity_rows invoice_entities invoice_filter_entities reportable_employees search_company_buyers reminder_preview_jobs company_identities check_ezla_service mail_view_snapshot reminder_history catalogue_count release_preparation google_client_metadata',
+ 'app.remote.screen_data':'mail_sidebar_snapshot calendar_view_snapshot activity_rows invoice_entities invoice_filter_entities reportable_employees search_company_buyers reminder_preview_jobs company_identities check_ezla_service mail_view_snapshot reminder_history catalogue_count release_preparation google_client_metadata',
  'app.integrations.enova.schema_probe':'inspect_schema',
 }
 CLASSES = {'app.companies.company_logic':'CompanyLogic','app.monthly_view.monthly_view_logic':'MonthlyViewLogic',
@@ -134,8 +134,10 @@ def capability(module,name):
     if module=='app.remote.screen_data':
         if name in ('reminder_history','reminder_preview_jobs','check_ezla_service','catalogue_count','release_preparation','google_client_metadata'):
             return 'admin'
-        if name=='mail_view_snapshot':
+        if name in ('mail_view_snapshot','mail_sidebar_snapshot'):
             return 'tab:E-mail'
+        if name=='calendar_view_snapshot':
+            return 'tab:Kalendarz'
         if name.startswith('invoice_') or name=='search_company_buyers':
             return 'tab:Faktury'
         return 'authenticated' 

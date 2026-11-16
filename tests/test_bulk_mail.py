@@ -178,8 +178,9 @@ class BulkMailTests(unittest.TestCase):
         dialog.holiday_year.setValue(2026)
         dialog.holiday_month.setCurrentIndex(11)
         rows = [
-            {**COMPANIES[0], 'holiday_people':[{'name':'Owner','status':'eligible','reasons':['Potwierdzone']}],
-             'holiday_addresses':{'eligible':'owner@example.com','review':''}},
+            {**COMPANIES[0], 'holiday_people':[{'name':'Owner','status':'eligible','reasons':['Potwierdzone']},
+                                             {'name':'Other owner','status':'review','reasons':['Brak kodu']}],
+             'holiday_addresses':{'eligible':'owner@example.com','review':'other@example.com'}},
             {**COMPANIES[1], 'holiday_people':[{'name':'Partner','status':'review','reasons':['Brak kodu']}],
              'holiday_addresses':{'eligible':'','review':'partner@example.com'}},
         ]
@@ -202,7 +203,7 @@ class BulkMailTests(unittest.TestCase):
         accepted = start.call_args.args[0]
         self.assertEqual(accepted.holiday_month,'2026-12')
         self.assertEqual(accepted.holiday_mode,'review')
-        self.assertEqual(accepted.recipients,('partner@example.com',))
+        self.assertEqual(accepted.recipients,('other@example.com','partner@example.com'))
         self.assertFalse(dialog.holiday_filter.isEnabled())
 
     def test_dialog_requires_confirmation_and_freezes_the_accepted_plan(self):

@@ -188,12 +188,17 @@ class BulkMailDialog(QDialog):
         self.holiday_filter.toggled.connect(self._holiday_changed)
         self.holiday_year.valueChanged.connect(self._holiday_changed)
         self.holiday_month.currentIndexChanged.connect(self._holiday_changed)
-        self.holiday_mode.currentIndexChanged.connect(self._render)
+        self.holiday_mode.currentIndexChanged.connect(self._holiday_mode_changed)
         self._holiday_changed()
         self._render()
 
     def _holiday_period(self):
         return f'{self.holiday_year.value():04d}-{self.holiday_month.currentData():02d}'
+
+    def _holiday_mode_changed(self,*_):
+        # The same SC company can represent different partners in each mode.
+        self._selected.clear()
+        self._render()
 
     def _holiday_changed(self,*_):
         enabled = self.holiday_filter.isChecked()

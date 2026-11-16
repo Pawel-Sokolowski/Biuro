@@ -121,7 +121,7 @@ def assess(profile, rows, period, payer_nip, *, now_month=None, known_code=''):
         return 'ineligible', [reason]
     if not code:
         reasons.append('Brak potwierdzonego bazowego kodu ubezpieczenia.')
-    rejected = [label for field, label in CONDITIONS.items() if profile.get(field) is False]
+    rejected = ['Niespełniony warunek: '+label.lower()+'.' for field, label in CONDITIONS.items() if profile.get(field) is False]
     count = profile.get('insured_count')
     if rejected or (type(count) is int and not 1 <= count <= 10):
         return ('used' if profile.get('unused') is False else 'ineligible'), rejected + (

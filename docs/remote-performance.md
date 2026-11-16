@@ -70,3 +70,18 @@ Sprawdzanie konfiguracji synchronizacji Google/CalDAV również odbywa się w tl
 Wymagana jest aktualizacja workera/API oraz klientów: nowe zbiorcze operacje
 muszą być dostępne na serwerze. Pomiary z instalacji są potrzebne do oceny
 pozostałego czasu ładowania i ewentualnego kosztu zapytań bazy danych.
+
+## Zgodność klienta ze starszym workerem
+
+Logowanie i wznowienie sesji przekazują obsługiwane `ui_features`. Klient używa
+zbiorczych odczytów poczty/kalendarza dopiero, gdy serwer je zgłosi. Brak pola
+w starszym serwerze uruchamia dotychczasowe autoryzowane odczyty, wykonywane
+w zadaniu tła. Nie obejmuje to ponawiania zapisów ani obchodzenia odmowy dostępu:
+po odmowie uprawnień przez obsługiwaną operację nie ma próby inną ścieżką.
+W logu klienta jednorazowy `office_legacy_view_transport` wskazuje, że aktualizacja
+workera/API jest potrzebna dla pełnego przyspieszenia.
+
+Błędy odczytu są widoczne w statusie i logach jako `mail_sidebar_failed` lub
+`calendar_snapshot_failed` z typem i bezpiecznym komunikatem błędu. Nie wymagają
+odczytywania tokenów, kluczy ani danych logowania. W razie problemu potrzebne
+są wpisy z tej samej próby otwarcia widoku po stronie klienta i serwera.

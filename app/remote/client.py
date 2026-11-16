@@ -28,6 +28,7 @@ class OfficeClient:
         self.token = None
         self.employee_id = None
         self._ui_authorization = None
+        self.server_features = frozenset()
         # Leave server capacity for foreground actions and other sessions.
         self._operation_slots = threading.BoundedSemaphore(3)
         self._background_slots = threading.BoundedSemaphore(2)
@@ -109,6 +110,7 @@ class OfficeClient:
         result = self._request('login',{'email':email,'password':password,'remember':bool(remember)},authenticated=False)
         self.token,self.employee_id = result['token'],result['employee_id']
         self._ui_authorization = result.get('ui_authorization')
+        self.server_features = frozenset(result.get('ui_features') or ())
         return self.employee_id
 
     def resume(self,token):
@@ -116,6 +118,7 @@ class OfficeClient:
         result = self._request('session')
         self.employee_id = result['employee_id']
         self._ui_authorization = result.get('ui_authorization')
+        self.server_features = frozenset(result.get('ui_features') or ())
         return self.employee_id
 
     def logout(self):
@@ -125,6 +128,7 @@ class OfficeClient:
         finally:
             self.token,self.employee_id = None,None
             self._ui_authorization = None
+            self.server_features = frozenset()
 
     def _file(self,path,mode):
         path = Path(path)

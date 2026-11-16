@@ -541,7 +541,7 @@ class CalendarPage(QWidget):
         self._tree_rows = None
         self.grid_scroll.hide()
         self.status.setText('Wczytywanie kalendarza…')
-        from app.remote.screen_data import calendar_view_snapshot
+        from app.remote.view_reads import calendar_view_snapshot
         actor = self.pracownik_id
         def loaded(snapshot):
             self._pending_snapshot_key = None
@@ -555,7 +555,11 @@ class CalendarPage(QWidget):
             self.status.setText('')
         def failed(error):
             self._pending_snapshot_key = None
-            self.status.setText('Nie udało się wczytać kalendarza. Odśwież widok.')
+            from app.remote.secrets import safe_error
+            import logging
+            message = safe_error(error)
+            self.status.setText('Nie udało się wczytać kalendarza: '+message)
+            logging.getLogger(__name__).warning('calendar_snapshot_failed error_type=%s message=%s',type(error).__name__,message)
         self._snapshot_reads.submit(lambda:calendar_view_snapshot(actor,*key),loaded,failed,key=key)
 
     def _render_calendar(self):

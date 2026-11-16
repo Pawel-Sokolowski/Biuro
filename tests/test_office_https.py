@@ -70,7 +70,7 @@ class OfficeHttpsTests(DbTestCase):
         self.assertNotIn('gAAAAA',raw)
         self.assertNotIn('051000',raw)
         session = self.client._request('session')
-        self.assertEqual(set(session),{'employee_id','version','ui_authorization'})
+        self.assertEqual(set(session),{'employee_id','version','ui_authorization','ui_features'})
         self.assertEqual(set(session['ui_authorization']),{'administrator','permissions','tabs'})
         self.assertTrue(all(isinstance(value,bool) for value in session['ui_authorization']['permissions'].values()))
         target = Path(self.temporary.name)/'companies.csv'

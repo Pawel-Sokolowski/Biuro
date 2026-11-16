@@ -936,7 +936,7 @@ class EmailPage(QWidget):
         return button
 
     def _refresh_sidebar_async(self):
-        from app.remote.screen_data import mail_sidebar_snapshot
+        from app.remote.view_reads import mail_sidebar_snapshot
         actor = self.pracownik_id
         def loaded(snapshot):
             previous = self.current_account['id'] if self.current_account else None
@@ -960,8 +960,12 @@ class EmailPage(QWidget):
                 self._clear_view()
                 return
             self._render_folder_snapshot(data)
-        self._sidebar_reads.submit(lambda:mail_sidebar_snapshot(actor),loaded,
-            lambda error:logger.warning('Nie można odświeżyć folderów poczty: %s',error),key=('mail-sidebar',actor))
+        def failed(error):
+            from app.remote.secrets import safe_error
+            message = safe_error(error)
+            self.sync_status.setText('Nie udało się wczytać folderów poczty: '+message)
+            logger.warning('mail_sidebar_failed error_type=%s message=%s',type(error).__name__,message)
+        self._sidebar_reads.submit(lambda:mail_sidebar_snapshot(actor),loaded,failed,key=('mail-sidebar',actor))
 
     def load_folders_from_db(self) -> None:
         from app.remote.state import client

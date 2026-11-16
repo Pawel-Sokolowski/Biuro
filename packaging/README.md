@@ -78,3 +78,18 @@ the installer, then checks native ODBC detection from the installed executable.
 The ENOVA connection dialog also validates named-instance address syntax and
 shows SQLSTATE with expandable, password-redacted driver error details. A correct
 address does not alone establish TCP reachability, login validity or TLS trust.
+
+## Release payload verification
+
+The Windows spec explicitly bundles the app-local MSVC runtime needed by QtCore.
+Inno Setup rejects distributions missing QtCore, the Windows platform plugin or
+MSVCP140_1. Windows CI also checks the remaining MSVC DLLs, Qt GUI libraries and
+WebEngine helper before running the packaged and installed executable checks.
+The completed installer is downloadable as the `Biuro-Windows-installer` Actions
+artifact. The installer copies the complete distribution, including `_internal`.
+
+Enova's `Biuro.Ezla.dll` and `Biuro.Ezla.UI.dll` remain in the separate
+`Biuro.Ezla-enova-2512.11.13` artifact produced by `enova-addon.yml`; install those
+on the Enova/Harmonogram host. Private schema exports, server configuration,
+credentials and encryption/TLS keys are not release resources. Word/LibreOffice
+and Edge/Chrome are external applications used where needed, not bundled runtimes.

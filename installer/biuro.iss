@@ -11,6 +11,17 @@
   #error "Build dist\Biuro first: python -m PyInstaller --clean --noconfirm packaging\biuro.spec"
 #endif
 
+; Refuse to package an incomplete one-folder distribution.
+#ifnexist MyBuildDir + "\_internal\PyQt6\Qt6\bin\Qt6Core.dll"
+  #error "Qt6Core.dll missing from the PyInstaller distribution"
+#endif
+#ifnexist MyBuildDir + "\_internal\PyQt6\Qt6\plugins\platforms\qwindows.dll"
+  #error "Qt Windows platform plugin missing from the PyInstaller distribution"
+#endif
+#ifnexist MyBuildDir + "\_internal\msvcp140_1.dll"
+  #error "Qt MSVC runtime missing from the PyInstaller distribution"
+#endif
+
 #ifnexist MyOdbcMsi
   #error "Prepare the signed driver first: powershell -File scripts\prepare_odbc_prerequisite.ps1"
 #endif

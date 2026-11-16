@@ -1,6 +1,7 @@
 import os
 import traceback
 import unittest
+import faulthandler
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -12,6 +13,8 @@ from app.db.dao_companies import set_pelnomocnictwa
 from tests.base import DbTestCase
 
 _app = QApplication.instance() or QApplication(["biuro-tests"])
+faulthandler.dump_traceback_later(60,repeat=True)
+unittest.addModuleCleanup(faulthandler.cancel_dump_traceback_later)
 
 ENGLISH_MARKERS = {"Dashboard", "Save", "Cancel", "Delete", "Settings", "Password", "Login"}
 

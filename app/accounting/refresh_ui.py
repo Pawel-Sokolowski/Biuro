@@ -4,19 +4,20 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,QDialog,
     QDialogButtonBox,QListWidget,QListWidgetItem,QAbstractItemView,QLineEdit,QMessageBox,QSpinBox)
 from app.utils.background import TaskRunner,CommandRunner
-from app.services.checking_refresh import enqueue,latest
+from app.services.checking_refresh import run_now,latest
 
 LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik', 'platnik_declarations':'Płatnik — formularze ZUS',
-          'platnik_annual': 'Płatnik — IWA/ZSWA','declaration_year':'Deklaracje — Enova i Płatnik (rok)'}
+          'platnik_annual': 'Płatnik — IWA/ZSWA','declaration_year':'Deklaracje za cały rok'}
 STATES = {'queued':'W kolejce workera','running':'Pobieranie','completed':'Zakończono',
           'partial':'Zakończono z błędami części firm','failed':'Błąd pobierania'}
 
 
 class CheckingRefreshControls(QWidget):
-    def __init__(self,actor_id,companies,selected,period,refresh,parent=None,*,annual_only=False):
+    def __init__(self,actor_id,companies,selected,period,refresh,parent=None,*,annual_only=False,year_sources=None):
         super().__init__(parent)
         self.actor_id,self.companies,self.selected,self.period,self.refresh_view = actor_id,companies,selected,period,refresh
         self.reader,self.writer = TaskRunner(self),CommandRunner(self)
+        self.year_sources = list(year_sources or ('platnik','enova'))
         self.annual_only = annual_only
         self.result = None
         self._observed = None
@@ -43,7 +44,7 @@ class CheckingRefreshControls(QWidget):
         annual.clicked.connect(lambda:self.choose('declaration_year'))
         self.buttons['declaration_year'] = annual
         layout.addWidget(annual)
-        self.status = QLabel('Wybierz firmy i zleć pobranie. Dane odczyta worker na serwerze; „Odśwież” pokazuje zapisane dane.')
+        self.status = QLabel('Wybierz firmy i pobierz dane ze źródła. Pobranie uruchomi się od razu na serwerze; „Odśwież” pokazuje zapisane dane.')
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -74,7 +75,7 @@ class CheckingRefreshControls(QWidget):
             years.addWidget(QLabel('Rok deklaracji:'))
             years.addWidget(year)
             layout.addLayout(years)
-            note = QLabel('Pobierze deklaracje i kody ubezpieczenia dla 12 miesięcy oraz IWA/ZSWA. '
+            note = QLabel('Pobierze deklaracje dla 12 miesięcy z wybranego źródła oraz jego formularze roczne. '
                           'Doda wykryte deklaracje do ustawienia miesięcznego. Brak dokumentu nie wyłącza obowiązku; '
                           'ręczne ustawienia pozostają. Nie pobiera kwot ani nie zmienia etapów pracy.')
             note.setWordWrap(True)
@@ -114,7 +115,7 @@ class CheckingRefreshControls(QWidget):
         selection.addWidget(clear)
         layout.addLayout(selection)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('Zleć pobranie wybranych firm')
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('Pobierz teraz dla wybranych firm')
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
@@ -137,9 +138,19 @@ class CheckingRefreshControls(QWidget):
             self.loaded(value)
         def failed(error):
             finish()
-            QMessageBox.warning(self,'Pobieranie danych',str(error) if isinstance(error,(ValueError,PermissionError)) else 'Nie udało się zapisać żądania do kolejki workera.')
+            self.timer.stop()
+            QMessageBox.warning(self,'Pobieranie danych',str(error) if isinstance(error,(ValueError,PermissionError)) else 'Nie udało się pobrać danych. Sprawdź bieżące logi serwera.')
+        from app.remote.state import client
+        connection = client()
+        if connection is not None and 'checking_run_now' not in connection.server_features:
+            finish()
+            self.status.setText('Serwer wymaga aktualizacji do obsługi pobierania bez kolejki. Zaktualizuj worker/API i zaloguj się ponownie.')
+            return
+        self.status.setText(f'Pobieranie danych na serwerze: firm {len(ids)}, okres {period}…')
+        sources = self.year_sources if kind=='declaration_year' else None
+        self.timer.start()
         try:
-            self.writer.submit(lambda:enqueue(self.actor_id,kind,ids,period),done,failed)
+            self.writer.submit(lambda:run_now(self.actor_id,kind,ids,period,sources),done,failed)
         except Exception as error:
             failed(error)
 
@@ -160,9 +171,17 @@ class CheckingRefreshControls(QWidget):
         count = len(value['company_ids'])
         message = f"{LABELS[value['kind']]}: {STATES[state]}; firm: {count}; okres: {value['period']}."
         if state=='queued':
-            message += ' Wymagany uruchomiony i włączony worker z obsługą ręcznych pobrań.'
+            message += ' To wcześniejsze zlecenie oczekujące w kolejce. Nowe pobranie można uruchomić przyciskiem.'
         if state=='running':
             message += f" Przetworzono: {value.get('processed',0)}."
+        if state in ('completed','partial','failed') and value.get('results'):
+            results = value['results']
+            platnik = [row for row in results if row.get('source')=='platnik' and row.get('ok')]
+            if platnik:
+                message += f" Płatnik: firm {len(platnik)}, dokumentów miesięcznych {platnik[0].get('batch_documents',0)}, rocznych {platnik[0].get('batch_annual_documents',0)}."
+            failed = [row for row in results if not row.get('ok',row.get('state')=='ok')]
+            if failed:
+                message += ' Błędy źródeł: '+str(len(failed))+'. '+str(failed[0].get('error') or failed[0].get('error_type') or 'Sprawdź wynik pobrania.')
         if value.get('error'):
             message += ' '+value['error']
         self.status.setText(message)

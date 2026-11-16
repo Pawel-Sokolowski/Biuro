@@ -39,8 +39,7 @@ def _save(value):
                      (PREFIX+value['id'],json.dumps(value,ensure_ascii=False)))
 
 
-@office_endpoint('app.services.checking_refresh.enqueue')
-def enqueue(actor_id, kind, company_ids, period):
+def _request(actor_id,kind,company_ids,period):
     scope(actor_id,company_ids)
     if kind not in KINDS:
         raise ValueError('Nieprawidłowe źródło odczytu.')
@@ -51,6 +50,38 @@ def enqueue(actor_id, kind, company_ids, period):
         month_bounds(period)
     value = {'id':uuid.uuid4().hex,'actor_id':actor_id,'kind':kind,
              'company_ids':sorted(set(company_ids)),'period':period,'state':'queued','created_at':stamp()}
+    return value
+
+
+@office_endpoint('app.services.checking_refresh.run_now')
+def run_now(actor_id,kind,company_ids,period,sources=None):
+    value = _request(actor_id,kind,company_ids,period)
+    if sources is not None:
+        if kind!='declaration_year' or not sources or not isinstance(sources,(list,tuple)) or set(sources)-{'platnik','enova'}:
+            raise ValueError('Wybierz Płatnika lub Enovę jako źródło deklaracji.')
+        value['sources'] = sorted(set(sources))
+    with get_coordination_conn() as lock:
+        if not lock.execute('SELECT pg_try_advisory_xact_lock(748219)').fetchone()[0]:
+            raise ValueError('Trwa już pobieranie danych. Poczekaj na jego zakończenie i spróbuj ponownie.')
+        value.update(state='running',execution='direct',started_at=stamp())
+        _save(value)
+        try:
+            results = _execute(value,None)
+            if results is None:
+                raise ValueError('Źródło danych jest zajęte przez inny odczyt. Ponów pobranie po jego zakończeniu.')
+            failed = sum(not row.get('ok',row.get('state')=='ok') for row in results)
+            state = 'failed' if not results or failed==len(results) else 'partial' if failed else 'completed'
+            value.update(state=state,results=results,finished_at=stamp())
+        except Exception as error:
+            from app.remote.secrets import safe_error
+            value.update(state='failed',finished_at=stamp(),error=safe_error(error))
+        _save(value)
+        return value
+
+
+@office_endpoint('app.services.checking_refresh.enqueue')
+def enqueue(actor_id, kind, company_ids, period):
+    value = _request(actor_id,kind,company_ids,period)
     with get_conn() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(748218)')
         rows = conn.execute('SELECT wartosc FROM app_settings WHERE starts_with(klucz,%s)',(PREFIX,)).fetchall()
@@ -84,7 +115,7 @@ def recover_interrupted():
         rows = conn.execute('SELECT klucz,wartosc FROM app_settings WHERE starts_with(klucz,%s)',(PREFIX,)).fetchall()
         for row in rows:
             value = json.loads(row['wartosc'])
-            if value.get('state')=='running':
+            if value.get('state')=='running' and value.get('execution')!='direct':
                 value.update(state='queued',resumed_at=stamp())
                 conn.execute('UPDATE app_settings SET wartosc=%s WHERE klucz=%s',(json.dumps(value),row['klucz']))
 

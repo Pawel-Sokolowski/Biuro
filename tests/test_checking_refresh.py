@@ -125,6 +125,31 @@ class CheckingRefreshTests(DbTestCase):
         self.assertEqual(monthly.call_args.kwargs['company_ids'],[self.company,self.other])
         self.assertEqual([r['ok'] for r in latest(self.admin)['results']],[True,True,False,False])
 
+    def test_direct_full_year_platnik_starts_without_automatic_worker_flags(self):
+        from app.services.checking_refresh import run_now
+        with patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':17}) as monthly, \
+             patch('app.integrations.platnik.declarations.import_year',return_value={'mode':'applied','documents':2}) as annual, \
+             patch('app.integrations.enova.connection_settings.load_connection',side_effect=AssertionError('unselected source')):
+            value = run_now(self.admin,'declaration_year',[self.company,self.other],2026,['platnik'])
+        self.assertEqual(value['state'],'completed')
+        self.assertEqual(value['execution'],'direct')
+        self.assertEqual(monthly.call_args.args[0],[f'2026-{month:02d}' for month in range(1,13)])
+        self.assertEqual(monthly.call_args.kwargs['company_ids'],[self.company,self.other])
+        annual.assert_called_once_with(2026,company_ids=[self.company,self.other])
+        self.assertEqual(value['results'][0]['batch_documents'],17)
+        self.assertEqual(latest(self.admin)['state'],'completed')
+        self.assertIsNone(get_setting('background_worker'))
+
+    def test_direct_busy_source_returns_a_failure_instead_of_leaving_a_queued_request(self):
+        from app.services.checking_refresh import run_now
+        with patch('app.services.checking_refresh._execute',return_value=None):
+            value = run_now(self.admin,'declaration_year',[self.company],2026,['platnik'])
+        self.assertEqual(value['state'],'failed')
+        self.assertIn('zajęte',value['error'])
+        self.assertEqual(latest(self.admin)['state'],'failed')
+        recover_interrupted()
+        self.assertEqual(latest(self.admin)['state'],'failed')
+
     def test_staff_can_queue_reads_under_current_module_permissions_without_admin_credentials(self):
         employee = self.make_employee()
         request = enqueue(employee,'enova',[self.company],'2026-11')

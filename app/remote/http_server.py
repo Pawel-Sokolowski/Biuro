@@ -124,7 +124,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._answer(401,{'message':str(error)})
                     return
                 result['ui_authorization'] = auth.ui_authorization(result['employee_id'])
-                result['ui_features'] = ['mail_sidebar_snapshot','calendar_view_snapshot']
+                result['ui_features'] = ['mail_sidebar_snapshot','calendar_view_snapshot','checking_run_now']
                 self._answer(200,result)
                 return
             header = self.headers.get('Authorization','')
@@ -140,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/v1/session':
                 from app.version import __version__
                 result = {'employee_id':actor,'version':__version__,'ui_authorization':auth.ui_authorization(actor),
-                          'ui_features':['mail_sidebar_snapshot','calendar_view_snapshot']}
+                          'ui_features':['mail_sidebar_snapshot','calendar_view_snapshot','checking_run_now']}
             elif self.path=='/api/v1/logout':
                 service.forget(token)
                 result = {'ok':True}

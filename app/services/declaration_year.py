@@ -46,40 +46,45 @@ def read_enova(config, source, company_id, months):
 def run(value, stop):
     from app.services.checking_refresh import scope,_save
     from app.integrations.platnik.declarations import import_months,import_year
+    from app.integrations.platnik.holidays import PlatnikSqlError
     from app.integrations.enova.connection_settings import load_connection
     companies = scope(value['actor_id'],value['company_ids'])
     months = [f"{value['period']}-{number:02d}" for number in range(1,13)]
     results = []
     if stop is not None and stop.is_set():
         return None
-    # Płatnik is one shared database. Read the year once for the whole selection.
-    value.update(current_source='platnik',processed=0)
-    _save(value)
-    monthly_applied = False
-    try:
-        result = import_months(months,company_ids=value['company_ids'])
-        if result.get('mode')=='busy':
-            return None
-        if result.get('mode')=='disabled':
-            raise ValueError('Odczyt formularzy ZUS jest wyłączony.')
-        monthly_applied = result.get('mode')=='applied'
-        if stop is not None and stop.is_set():
-            return None
-        yearly = import_year(value['period'],company_ids=value['company_ids'])
-        if yearly.get('mode')=='busy':
-            return None
-        if yearly.get('mode')=='disabled':
-            raise ValueError('Odczyt IWA/ZSWA jest wyłączony.')
-        results += [{'company_id':company['id'],'source':'platnik','ok':True,'months':months,
-                     'batch_documents':result.get('documents',0),'batch_annual_documents':yearly.get('documents',0),
-                     'batch_companies':len(companies)} for company in companies]
-    except Exception as error:
-        for company in companies:
-            record('platnik','failed',company_id=company['id'],error_type=type(error).__name__)
-            results.append({'company_id':company['id'],'source':'platnik','ok':False,
-                            'monthly_imported':monthly_applied,
-                            'error':str(error) if isinstance(error,ValueError) else type(error).__name__})
+    sources = set(value.get('sources') or ('platnik','enova'))
+    if 'platnik' in sources:
+        # Płatnik is one shared database. Read the year once for the whole selection.
+        value.update(current_source='platnik',processed=0)
+        _save(value)
+        monthly_applied = False
+        try:
+            result = import_months(months,company_ids=value['company_ids'])
+            if result.get('mode')=='busy':
+                return None
+            if result.get('mode')=='disabled':
+                raise ValueError('Odczyt formularzy ZUS jest wyłączony.')
+            monthly_applied = result.get('mode')=='applied'
+            if stop is not None and stop.is_set():
+                return None
+            yearly = import_year(value['period'],company_ids=value['company_ids'])
+            if yearly.get('mode')=='busy':
+                return None
+            if yearly.get('mode')=='disabled':
+                raise ValueError('Odczyt IWA/ZSWA jest wyłączony.')
+            results += [{'company_id':company['id'],'source':'platnik','ok':True,'months':months,
+                         'batch_documents':result.get('documents',0),'batch_annual_documents':yearly.get('documents',0),
+                         'batch_companies':len(companies)} for company in companies]
+        except Exception as error:
+            for company in companies:
+                record('platnik','failed',company_id=company['id'],error_type=type(error).__name__)
+                results.append({'company_id':company['id'],'source':'platnik','ok':False,
+                                'monthly_imported':monthly_applied,
+                                'error':str(error) if isinstance(error,(ValueError,PlatnikSqlError)) else type(error).__name__})
     # A broken Enova configuration must not suppress a successful Płatnik read.
+    if 'enova' not in sources:
+        return results
     config,config_error = None,None
     try:
         config = load_connection()

@@ -1,10 +1,11 @@
 """Annual office worksheet with separate, read-only Płatnik evidence."""
+from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QSpinBox,QLineEdit,
-    QCheckBox,QPushButton,QTableWidget,QTableWidgetItem,QAbstractItemView,
+    QCheckBox,QPushButton,QTableWidgetItem,QAbstractItemView,
     QDialog,QDialogButtonBox,QPlainTextEdit,QMessageBox)
 from app.integrations.platnik.holidays import FIELDS,LABELS
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
@@ -54,7 +55,7 @@ class ContributionHolidays(QWidget):
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
-        self.table = QTableWidget(0,2+len(FIELDS))
+        self.table = FrozenFirstColumnTable(0,2+len(FIELDS))
         self.table.setHorizontalHeaderLabels(['Firma',*LABELS,'Status RWS (Płatnik)'])
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -151,7 +152,7 @@ class ContributionHolidays(QWidget):
         layout = QVBoxLayout(dialog)
         rows = self.payload.get('source_rows',[])
         fields = ('firma','nip','imiona_nazwiska','bazowy_kod_ubezpieczenia','kod_ulgi','rok','miesiac','status_zrodlowy','source_id')
-        table = QTableWidget(len(rows),len(fields))
+        table = FrozenFirstColumnTable(len(rows),len(fields))
         table.setHorizontalHeaderLabels(['Firma','NIP','Imię i nazwisko','Kod bazowy','Kod ulgi','Rok','Miesiąc','Status RWS','ID RWS'])
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         for index,row in enumerate(rows):

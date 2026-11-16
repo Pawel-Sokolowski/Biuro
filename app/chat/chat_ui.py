@@ -79,17 +79,27 @@ class ChatPage(QWidget):
         self._unread = {}
         self._pending_files = []
         self._build_ui()
-        self.refresh_chat_conversations()
+        self._conversation_reads = TaskRunner(self)
+        from app.remote.state import client
+        self.refresh_async() if client() is not None else self.refresh_chat_conversations()
         self._poll_timer = QTimer(self)
         self._reads = TaskRunner(self)
         self._writes = CommandRunner(self)
         self._acknowledged_ids = {}
         self._poll_busy = False
+        self._last_hidden_poll = None
         self._poll_timer.timeout.connect(self._poll_async)
         self._poll_timer.start(3000)
         self._poll_async()
 
     def _poll_async(self):
+        import time
+        if not self.isVisible() or self.window().isMinimized():
+            now = time.monotonic()
+            last = self._last_hidden_poll
+            if last is not None and now-last < 30:
+                return
+            self._last_hidden_poll = now
         if self._poll_busy:
             return
         ids = [self.chat_conversations.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.chat_conversations.count())]
@@ -116,7 +126,7 @@ class ChatPage(QWidget):
             latest, counts, messages, attachments, authorized = result
             if conversation != self.current_konwersacja or limit != self.offset + self.page_size:
                 return
-            if conversation and (not authorized or not is_participant(conversation, actor)):
+            if conversation and not authorized:
                 self._clear_revoked_conversation(conversation)
                 return
             if messages is not None and self.isVisible() and not self.window().isMinimized():
@@ -289,6 +299,16 @@ class ChatPage(QWidget):
     # ============================================================
     # CONVERSATIONS
     # ============================================================
+    def refresh_async(self):
+        actor = self.pracownik_id
+        def read():
+            return get_conversations(actor),get_direct_conversations(actor)
+        def loaded(result):
+            self._render_conversations(*result)
+            self._poll_async()
+        self._conversation_reads.submit(read,loaded,
+            lambda exc: self.setToolTip('Nie udało się odświeżyć rozmów: '+str(exc)),key=('conversations',actor))
+
     def refresh(self):
         current = self.current_konwersacja
         self.refresh_chat_conversations()
@@ -305,12 +325,14 @@ class ChatPage(QWidget):
                 break
 
     def refresh_chat_conversations(self, select_id: Optional[int] = None):
+        self._render_conversations(get_conversations(self.pracownik_id),
+                                   get_direct_conversations(self.pracownik_id),select_id)
+
+    def _render_conversations(self, conversations, directs, select_id=None):
         state = ItemViewState(self.chat_conversations, lambda index: index.data(Qt.ItemDataRole.UserRole))
         self.chat_conversations.blockSignals(True)
         self.chat_conversations.clear()
-        rows = [r for r in get_conversations(self.pracownik_id) if r.get("typ") != "prywatna"]
-        directs = get_direct_conversations(self.pracownik_id)
-        rows = rows + directs
+        rows = [r for r in conversations if r.get('typ') != 'prywatna'] + list(directs)
 
         def header(text):
             h = QListWidgetItem(text)

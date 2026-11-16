@@ -143,6 +143,29 @@ class OfficeHttpsTests(DbTestCase):
         with self.assertRaises(ValueError):
             other.login('admin@biuro.pl','Admin12345')
 
+    def test_login_ui_permissions_do_not_add_rpcs_but_data_still_checks_revocation(self):
+        actor = self.client.login('admin@biuro.pl','Admin12345')
+        with mock.patch.object(self.client,'_request',side_effect=AssertionError('UI permission RPC')):
+            for _ in range(20):
+                self.assertTrue(self.client.call('app.security.authorization.is_administrator',(actor,)))
+                self.assertIn('Pulpit',self.client.call('app.security.authorization.allowed_tabs',(actor,)))
+                self.client.call('app.security.authorization.get_permissions',(actor,))
+        self.server.office_service.forget(self.client.token)
+        with self.assertRaises(PermissionError):
+            self.client.call('app.db.dao_employees.list_employees')
+        self.assertIsNone(self.client._ui_authorization)
+
+    def test_changed_role_overrides_the_clients_login_time_ui_hint(self):
+        from app.db.dao_conn import get_conn
+        regular = self.make_employee('limited-ui@example.com')
+        actor = self.client.login('admin@biuro.pl','Admin12345')
+        with get_conn() as conn:
+            conn.execute('UPDATE pracownicy SET is_admin=0,rola_id=(SELECT rola_id FROM pracownicy WHERE id=%s) WHERE id=%s',
+                         (regular,actor))
+        self.assertTrue(self.client.call('app.security.authorization.is_administrator',(actor,)))
+        with self.assertRaises(PermissionError):
+            self.client.call('app.db.dao_app_settings.set_setting',(),{'key':'office_name','value':'denied'})
+
     def test_input_files_are_uploaded_and_output_paths_are_local(self):
         self.client.login('admin@biuro.pl','Admin12345')
         self.make_company('Przesylka')

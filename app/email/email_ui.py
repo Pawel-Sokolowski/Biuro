@@ -1797,11 +1797,28 @@ class EmailPage(QWidget):
     # Etykiety pracowników nad listą
     # ------------------------------------------------------------------
     def _refresh_chips(self) -> None:
+        from app.remote.state import client
+        if client() is not None:
+            from app.utils.background import TaskRunner
+            if not hasattr(self,'_chip_reads'):
+                self._chip_reads = TaskRunner(self)
+            account_id = self.current_account['id'] if self.current_account else None
+            def loaded(counts):
+                current = self.current_account['id'] if self.current_account else None
+                if current == account_id:
+                    self._render_chips(counts)
+            self._chip_reads.submit(
+                lambda: count_unread_assigned_by_employee(account_id) if account_id else {},loaded,
+                lambda exc: logger.warning('Nie można odświeżyć liczników poczty: %s',exc),key=('chips',account_id))
+            return
         try:
             unread_counts = count_unread_assigned_by_employee(self.current_account["id"]) if self.current_account else {}
         except Exception:
             logger.exception("Nie można pobrać liczników przypisanej poczty")
             unread_counts = {}
+        self._render_chips(unread_counts)
+
+    def _render_chips(self,unread_counts):
         signature = (
             tuple((e["id"], employee_name(e), self.label_numbers.get(e["id"])) for e in self.employees),
         )

@@ -123,6 +123,7 @@ class Handler(BaseHTTPRequestHandler):
                 except PermissionError as error:
                     self._answer(401,{'message':str(error)})
                     return
+                result['ui_authorization'] = auth.ui_authorization(result['employee_id'])
                 self._answer(200,result)
                 return
             header = self.headers.get('Authorization','')
@@ -137,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path=='/api/v1/session':
                 from app.version import __version__
-                result = {'employee_id':actor,'version':__version__}
+                result = {'employee_id':actor,'version':__version__,'ui_authorization':auth.ui_authorization(actor)}
             elif self.path=='/api/v1/logout':
                 service.forget(token)
                 result = {'ok':True}

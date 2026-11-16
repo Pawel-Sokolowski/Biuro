@@ -27,6 +27,10 @@ class OfficeClient:
         self.verify = verify
         self.token = None
         self.employee_id = None
+        self._ui_authorization = None
+        # Leave server capacity for foreground actions and other sessions.
+        self._operation_slots = threading.BoundedSemaphore(3)
+        self._background_slots = threading.BoundedSemaphore(2)
         self._local = threading.local()
         self._sessions = set()
         self._sessions_lock = threading.Lock()
@@ -86,6 +90,7 @@ class OfficeClient:
             raise ValueError('Nieprawidłowa odpowiedź serwera biura.') from None
         if response.status_code==401:
             self.token = None
+            self._ui_authorization = None
             raise PermissionError(value.get('message','Sesja wygasła. Zaloguj się ponownie.'))
         if response.status_code==403:
             raise PermissionError(value.get('message','Brak uprawnień.'))
@@ -103,12 +108,14 @@ class OfficeClient:
     def login(self,email,password,remember=False):
         result = self._request('login',{'email':email,'password':password,'remember':bool(remember)},authenticated=False)
         self.token,self.employee_id = result['token'],result['employee_id']
+        self._ui_authorization = result.get('ui_authorization')
         return self.employee_id
 
     def resume(self,token):
         self.token = token
         result = self._request('session')
         self.employee_id = result['employee_id']
+        self._ui_authorization = result.get('ui_authorization')
         return self.employee_id
 
     def logout(self):
@@ -117,6 +124,7 @@ class OfficeClient:
                 self._request('logout')
         finally:
             self.token,self.employee_id = None,None
+            self._ui_authorization = None
 
     def _file(self,path,mode):
         path = Path(path)
@@ -124,7 +132,40 @@ class OfficeClient:
         import base64
         return self._request('files',{'name':path.name,'data':base64.b64encode(data).decode() if data is not None else None})
 
+    def _ui_permission(self,operation,args,kwargs):
+        prefix = 'app.security.authorization.'
+        snapshot = self._ui_authorization
+        if not self.token or snapshot is None or not operation.startswith(prefix):
+            return False,None
+        name = operation[len(prefix):]
+        if name not in ('is_administrator','get_permissions','allowed_tabs','can','can_manage_invoices'):
+            return False,None
+        values = dict(zip(('pracownik_id','permission'),args))
+        values.update(kwargs or {})
+        if values.get('pracownik_id') != self.employee_id:
+            return False,None
+        if name=='is_administrator':
+            return True,snapshot['administrator']
+        if name=='get_permissions':
+            return True,dict(snapshot['permissions'])
+        if name=='allowed_tabs':
+            return True,list(snapshot['tabs'])
+        if name=='can_manage_invoices':
+            return True,'Faktury' in snapshot['tabs']
+        return True,bool(snapshot['administrator'] or snapshot['permissions'].get(values.get('permission'),False))
+
     def call(self,operation,args=(),kwargs=None,*,object_id=None):
+        hit,value = self._ui_permission(operation,args,kwargs)
+        if hit:
+            return value
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            if threading.current_thread() is not threading.main_thread():
+                stack.enter_context(self._background_slots)
+            stack.enter_context(self._operation_slots)
+            return self._call(operation,args,kwargs,object_id=object_id)
+
+    def _call(self,operation,args=(),kwargs=None,*,object_id=None):
         from app.remote.operations import OPERATIONS
         spec = OPERATIONS.get(operation)
         if spec is None:

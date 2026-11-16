@@ -13,6 +13,17 @@ SKIP_DAO = {'dao_conn','dao_calendar_sync','dao_active_timers'}
 DENY = {'login_employee','ensure_company_columns_exist','create_task_in_transaction','contracts_by_month',
         'set_google_event_id','set_caldav_uid','get_event_by_google_id','get_event_by_caldav_uid',
         'list_caldav_events','list_events_without_caldav','list_unsynced_events','remove_local_duplicates'}
+# These helpers only format/filter snapshots already authorized by the server.
+LOCAL_RENDERERS = {
+    'app.db.dao_dashboard.format_duration',
+    'app.db.dao_dashboard.format_event_time',
+    'app.integrations.enova.accounting.documents',
+    'app.integrations.enova.accounting.active_types',
+    'app.integrations.enova.accounting.declaration_entries',
+    'app.integrations.enova.accounting.declarations',
+    'app.companies.checking_obligations.profile',
+    'app.companies.checking_obligations.report_applies',
+}
 MANUAL = {
  'app.db.dao_conn':'database_context',
  'app.db.schema':'schema_is_current',
@@ -233,6 +244,8 @@ for path in (ROOT/'app').rglob('*.py'):
             if (arguments & {'conn','connection','cur','cursor'})-optional_names or node.name=='mail_read_snapshot':
                 continue
             name=module+'.'+node.name
+            if name in LOCAL_RENDERERS:
+                continue
             OPERATIONS[name]=spec_for(module,node.name,node)
             line=min([node.lineno]+[d.lineno for d in node.decorator_list])-1
             edits.append((line,'@office_endpoint('+repr(name)+')\n'))

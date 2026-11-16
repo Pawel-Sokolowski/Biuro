@@ -34,6 +34,7 @@ class ChatToaster(MailToaster):
         if self._closed:
             return
         self._last_id, messages = result
+        self.timer.setInterval(3000 if messages else min(30000,self.timer.interval()*2))
         grouped = {}
         for message in messages:
             grouped.setdefault(message['konwersacja_id'], []).append(message)

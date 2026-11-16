@@ -26,7 +26,6 @@ def load(company_id):
     return json.loads(get_setting(f'checking_obligations_{company_id}') or '{}') if company_id else {}
 
 
-@office_endpoint('app.companies.checking_obligations.profile')
 def profile(value, month):
     month_bounds(month)
     if isinstance(value, str):
@@ -106,7 +105,6 @@ def save(company_id, edits, actor_id):
     clear_request_cache()
 
 
-@office_endpoint('app.companies.checking_obligations.report_applies')
 def report_applies(company, form, month=None):
     month = month or company.get('checking_period') or datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
     selected = profile(company.get('checking_obligations'), month)

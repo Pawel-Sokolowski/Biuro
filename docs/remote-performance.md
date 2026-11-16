@@ -30,3 +30,24 @@ w tle rozpoczętych przez widok. Dużo czasu sieciowego oznacza oczekiwanie
 na API; długi czas przejścia przy małym czasie sieciowym wskazuje na lokalne
 budowanie/renderowanie widoku. Potrzebne są logi z komputera pracownika i
 serwera z tej samej próby przełączenia.
+
+## Interfejs po logowaniu
+
+Odpowiedzi logowania i wznowienia sesji zawierają `ui_authorization`: role,
+uprawnienia i zakładki bieżącego pracownika. Program przechowuje ten zestaw
+wyłącznie w pamięci sesji i używa go do rysowania interfejsu. Zmianę widoczności
+przycisków i zakładek po edycji roli pokaże ponowne logowanie. Serwer nadal
+sprawdza aktualną sesję i uprawnienia przy operacjach na danych; zestaw
+przechowywany przez klienta nie służy do autoryzacji po stronie serwera.
+Starszy serwer bez tego pola zachowuje dotychczasowy sposób działania.
+
+Formatowanie czasu i filtrowanie już pobranych deklaracji nie wykonuje RPC.
+Status kopii zapasowej, liczniki przypisanej poczty i lista rozmów przy
+przełączaniu zakładki pobierają się w tle. Ukryty czat sprawdza aktualizacje
+najwyżej co 30 s; niezależne powiadomienia czatu zwiększają odstęp z 3 do
+30 s przy braku nowych wiadomości. Bez powiadomień serwera nadal potrzebne
+jest okresowe odpytywanie, żeby wykrywać zmiany wprowadzone przez inne osoby.
+
+Klient dopuszcza najwyżej dwa równoległe wywołania operacji w tle i trzy
+łącznie, pozostawiając miejsce dla akcji użytkownika w limicie serwera.
+Operacje nie są ponawiane automatycznie: zapisy pozostają pojedyncze.

@@ -158,16 +158,17 @@ def sql_connection_string(config, database, user, password):
 def _bind_company_identity(cursor,source):
     """A saved database-to-company mapping can fill missing identity, never a conflict."""
     expected = normalize_nip(source['nip'])
-    cursor.execute('SELECT DISTINCT DeklaracjeNIP FROM dbo.OddzialyFirmy')
+    cursor.execute('SELECT DISTINCT NIP FROM dbo.HstDanychFirmy WHERE Termin='
+                   '(SELECT MAX(Termin) FROM dbo.HstDanychFirmy WHERE Termin<=CONVERT(date,GETDATE()))')
     identities = cursor.fetchmany(1001)
     if len(identities)>1000:
-        raise ValueError('Za wiele identyfikatorów oddziałów w bazie Enovy.')
+        raise ValueError('Za wiele identyfikatorów historii firmy w bazie Enovy.')
     actual = set()
     for identity in identities:
         try:
             actual.add(normalize_nip(identity[0]))
         except ValueError:
-            pass  # Empty fields and PESEL are not company NIPs.
+            pass  # Empty history fields and PESEL are not company NIPs.
     if actual and actual != {expected}:
         raise ValueError(f"Baza {source['database']}: poprawny NIP w danych Enovy jest sprzeczny "
                          'z powiązaniem firmy w Biuro. Nie zaimportowano danych.')

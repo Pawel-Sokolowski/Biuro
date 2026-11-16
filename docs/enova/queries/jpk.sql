@@ -14,9 +14,10 @@ Months AS (
     WHERE DATEADD(month, 1, m.MonthStart) < p.DateTo
 ),
 RawNips AS (
-    SELECT REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(DeklaracjeNIP))),
+    SELECT REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(NIP))),
            N'-', N''), N' ', N''), NCHAR(9), N''), NCHAR(10), N''), NCHAR(13), N''), NCHAR(160), N'') AS Value
-    FROM dbo.OddzialyFirmy
+    FROM dbo.HstDanychFirmy
+    WHERE Termin=(SELECT MAX(Termin) FROM dbo.HstDanychFirmy WHERE Termin<=CONVERT(date,GETDATE()))
 ),
 NormalizedNips AS (
     SELECT CASE WHEN LEFT(Value, 2) = N'PL' THEN SUBSTRING(Value, 3, 32) ELSE Value END AS nip
@@ -29,7 +30,7 @@ ValidNips AS (
 Company AS (
     SELECT nip FROM ValidNips
     UNION ALL
-    -- Worker supplies the saved company mapping only when Enova has no valid NIP.
+    -- Worker supplies the saved company mapping only when company history has no valid NIP.
     -- Never reinterpret PESEL or replace a conflicting valid NIP.
     SELECT mapped.nip
     FROM (SELECT CONVERT(nvarchar(32), SESSION_CONTEXT(N'biuro_company_nip')) AS nip) mapped

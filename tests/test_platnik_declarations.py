@@ -110,6 +110,20 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
             row = list_accounting(self.admin, '2026-11')[0]
         self.assertEqual({entry['form'] for entry in declaration_entries(row, 'payroll')}, {'PIT-11', 'ZUS DRA', 'ZUS RCA'})
 
+    def test_explicit_selection_reads_dra_and_rca_when_automatic_import_is_disabled(self):
+        rows = [ROW,{**ROW,'source_id':2,'form':'ZUS RCA','employee_id':12,'employee_name':'Test Person'}]
+        with patch('app.integrations.platnik.declarations.load',return_value={'enabled':False,'declarations_enabled':False}), \
+             patch('app.integrations.platnik.declarations.fetch',return_value=rows) as read:
+            result = import_months(['2026-11'],company_ids=[self.company])
+            self.assertEqual(result['documents'],2)
+            self.assertEqual(result['mode'],'applied')
+            self.assertEqual(import_months(['2026-11'])['mode'],'disabled')
+            self.assertEqual(read.call_count,1)
+        with get_conn() as conn:
+            stored = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
+                                 (f'platnik_declarations_{self.company}_2026-11',)).fetchone()[0]
+        self.assertEqual({entry['form'] for entry in decoded_snapshot(stored)['declarations']},{'ZUS DRA','ZUS RCA'})
+
     def test_failed_read_and_duplicate_nip_preserve_previous_snapshot(self):
         self.import_rows([ROW])
         with get_conn() as conn:

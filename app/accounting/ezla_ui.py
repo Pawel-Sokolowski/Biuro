@@ -1,8 +1,9 @@
 """All-company e-ZLA report, backed by local XML previews, never an Enova import."""
+from app.utils.frozen_table import FrozenFirstColumnTable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                            QFileDialog, QTableWidget, QTableWidgetItem, QAbstractItemView)
+                            QFileDialog,  QTableWidgetItem, QAbstractItemView)
 from app.utils.background import TaskRunner
 from app.integrations.ezla.preview import preview_reports
 from app.integrations.ezla.report import MAX_DOCUMENTS
@@ -32,7 +33,7 @@ class EzlaPreviewPanel(QWidget):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
-        self.table = QTableWidget(0, 9)
+        self.table = FrozenFirstColumnTable(0, 9)
         self.table.setHorizontalHeaderLabels(['Firma', 'Pracownik z XML', 'Identyfikator (ukryty)',
             'Dokument', 'Status ZUS', 'Data wystawienia', 'Od', 'Do', 'Do sprawdzenia / import'])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)

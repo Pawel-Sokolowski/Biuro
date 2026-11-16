@@ -142,9 +142,9 @@ class EnovaConnectionSettings(QWidget):
         year_form = QFormLayout()
         year_form.addRow('Rok jednorazowego importu', self.import_year)
         layout.addLayout(year_form)
-        annual = QPushButton('Pobierz wszystkie deklaracje za rok — Enova i Płatnik…')
+        annual = QPushButton('Pobierz wszystkie deklaracje za rok z Enovy…')
         from app.accounting.declaration_year_ui import open_declaration_year
-        annual.clicked.connect(lambda:open_declaration_year(self.actor_id,self))
+        annual.clicked.connect(lambda:open_declaration_year(self.actor_id,self,sources=['enova']))
         layout.addWidget(annual)
         self.import_button = QPushButton('Importuj jednorazowo liczbę dokumentów — cały rok do Sprawdzania')
         self.import_button.clicked.connect(self.import_year_counts)

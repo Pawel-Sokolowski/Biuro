@@ -128,7 +128,7 @@ def checking_refresh_job(stop=None):
     from app.services.checking_refresh import process_next
     result = process_next(stop)
     if result.get('state') in ('failed','partial'):
-        raise RuntimeError('Ręczny odczyt nieukończony. Sprawdź wynik pobierania w Sprawdzaniu.')
+        raise RuntimeError('Odczyt zleconych danych nieukończony. Sprawdź wynik pobierania w Sprawdzaniu.')
     return result
 
 

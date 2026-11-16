@@ -1,9 +1,10 @@
+from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDateEdit,
-    QPushButton, QLineEdit, QComboBox, QTabWidget, QTableWidget, QTableWidgetItem,
+    QPushButton, QLineEdit, QComboBox, QTabWidget,  QTableWidgetItem,
     QAbstractItemView, QCheckBox, QStackedWidget)
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
                                                 declaration_entries, declarations)
@@ -186,7 +187,7 @@ class AccountingPage(QWidget):
 
     @staticmethod
     def _new_table():
-        table = QTableWidget(0, 0)
+        table = FrozenFirstColumnTable(0, 0)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

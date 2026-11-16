@@ -1,5 +1,7 @@
 """Explicit service API catalogue. Unlisted operations are rejected before import/invocation."""
 OPERATIONS = {
+ 'app.services.checking_refresh.run_now': {'actors':['actor_id'],'arguments':['actor_id','kind','company_ids','period','sources'],'capability':'tab:Sprawdzanie','function':'run_now','module':'app.services.checking_refresh'},
+
  'app.remote.screen_data.mail_sidebar_snapshot': {'actors':['actor_id'],'arguments':['actor_id'],'capability':'tab:E-mail','function':'mail_sidebar_snapshot','module':'app.remote.screen_data'},
  'app.remote.screen_data.calendar_view_snapshot': {'actors':['actor_id'],'arguments':['actor_id','start','end'],'capability':'tab:Kalendarz','function':'calendar_view_snapshot','module':'app.remote.screen_data'},
  'app.admin.global_settings_logic.GlobalSettingsLogic.__new__': {'arguments': [],

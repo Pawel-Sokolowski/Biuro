@@ -134,7 +134,7 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         else:
             month_bounds(month)
     config = load()
-    if not config.get('declarations_enabled', True) or (not config['enabled'] and company_ids is None):
+    if company_ids is None and (not config.get('declarations_enabled',True) or not config['enabled']):
         return {'mode': 'disabled'}
     with get_coordination_conn() as lock:
         if not lock.execute('SELECT pg_try_advisory_xact_lock(748220)').fetchone()[0]:

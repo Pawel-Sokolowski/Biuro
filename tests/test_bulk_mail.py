@@ -171,6 +171,40 @@ class BulkMailTests(unittest.TestCase):
         self.assertEqual(dialog._selected, set())
         self.assertEqual(dialog.table.rowCount(), 0)
 
+    def test_holiday_filter_prunes_selection_and_freezes_person_specific_addresses(self):
+        from app.companies.holiday_eligibility import context
+        dialog = self.dialog()
+        dialog._select_visible()
+        dialog.holiday_year.setValue(2026)
+        dialog.holiday_month.setCurrentIndex(11)
+        rows = [
+            {**COMPANIES[0], 'holiday_people':[{'name':'Owner','status':'eligible','reasons':['Potwierdzone']}],
+             'holiday_addresses':{'eligible':'owner@example.com','review':''}},
+            {**COMPANIES[1], 'holiday_people':[{'name':'Partner','status':'review','reasons':['Brak kodu']}],
+             'holiday_addresses':{'eligible':'','review':'partner@example.com'}},
+        ]
+        with mock.patch.object(dialog.holiday_reader,'submit') as submit:
+            dialog.holiday_filter.setChecked(True)
+            self.assertEqual(dialog._selected,set())
+            self.assertEqual(dialog.table.rowCount(),0)
+            submit.call_args.args[1]({'context':context('2026-12'),'companies':rows})
+        self.assertEqual(dialog.table.rowCount(),1)
+        dialog._select_visible()
+        self.assertEqual(dialog._addresses[1],('owner@example.com',))
+        dialog.holiday_mode.setCurrentIndex(1)
+        self.assertEqual(dialog._selected,set())
+        dialog._select_visible()
+        dialog.subject.setText('Informacja')
+        dialog.body.setPlainText('Prosimy o sprawdzenie warunków')
+        with mock.patch.object(QMessageBox,'exec',return_value=QMessageBox.StandardButton.Yes), \
+                mock.patch.object(dialog.sender,'start') as start:
+            dialog._review_send()
+        accepted = start.call_args.args[0]
+        self.assertEqual(accepted.holiday_month,'2026-12')
+        self.assertEqual(accepted.holiday_mode,'review')
+        self.assertEqual(accepted.recipients,('partner@example.com',))
+        self.assertFalse(dialog.holiday_filter.isEnabled())
+
     def test_dialog_requires_confirmation_and_freezes_the_accepted_plan(self):
         dialog = self.dialog()
         dialog._select_visible()

@@ -53,8 +53,15 @@ class BulkMailPlan:
     batch_size: int = 25
     pause_seconds: int = 60
     attachments: tuple[str, ...] = field(default_factory=tuple)
+    holiday_month: str | None = None
+    holiday_mode: str = 'eligible'
 
     def __post_init__(self):
+        if self.holiday_month is not None:
+            from app.companies.holiday_eligibility import context
+            context(self.holiday_month)
+        if self.holiday_mode not in ('eligible','review'):
+            raise ValueError('Nieprawidłowy filtr wakacji ZUS.')
         if not self.subject.strip() or '\r' in self.subject or '\n' in self.subject or not self.body.strip():
             raise ValueError('Uzupełnij temat i treść wiadomości.')
 
@@ -99,15 +106,17 @@ def send_bulk_batch(plan, recipients):
         if not account or str(account.get('email') or '').casefold() != plan.sender.casefold():
             raise PermissionError('Konto nadawcze zmieniło się lub nie jest już dostępne.')
 
-        companies = {
-            row['id']: row
-            for row in list_mailing_companies(plan.actor_id)
-        }
+        if plan.holiday_month:
+            from app.companies.holiday_eligibility import list_candidates
+            rows = list_candidates(plan.actor_id,plan.holiday_month)['companies']
+            companies = {row['id']:{**row,'adres_email':row['holiday_addresses'][plan.holiday_mode]} for row in rows}
+        else:
+            companies = {row['id']:row for row in list_mailing_companies(plan.actor_id)}
 
         for company_id, confirmed in plan.companies:
             current = companies.get(company_id)
 
-            if current is None or client_addresses(current.get('adres_email')) != confirmed:
+            if current is None or not current.get('adres_email') or client_addresses(current.get('adres_email')) != confirmed:
                 raise PermissionError(
                     'Dane odbiorców zmieniły się. Zatrzymano wysyłkę; sprawdź listę firm.'
                 )

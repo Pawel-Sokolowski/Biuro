@@ -126,6 +126,25 @@ jobs:
         run: |
           python -m ruff check app tests
           python -m PyInstaller --clean --noconfirm packaging/biuro.spec
+      - name: Verify packaged Windows runtime files
+        shell: pwsh
+        run: |
+          $root = Join-Path $PWD 'dist\Biuro\_internal'
+          $required = @(
+            'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+            'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll',
+            'PyQt6\Qt6\bin\Qt6Core.dll',
+            'PyQt6\Qt6\bin\Qt6Gui.dll',
+            'PyQt6\Qt6\bin\Qt6Widgets.dll',
+            'PyQt6\Qt6\bin\Qt6WebEngineCore.dll',
+            'PyQt6\Qt6\bin\QtWebEngineProcess.exe',
+            'PyQt6\Qt6\plugins\platforms\qwindows.dll'
+          )
+          foreach ($relative in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) {
+              throw "Missing packaged runtime dependency: $relative"
+            }
+          }
       - name: Migrate twice and test packaged executable
         shell: pwsh
         run: |
@@ -194,6 +213,12 @@ jobs:
           if ($process.ExitCode) { throw 'Packaged worker preflight failed' }
           $process = Start-Process "$target\unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
           if ($process.ExitCode) { throw 'Uninstall failed' }
+      - name: Publish Windows installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: Biuro-Windows-installer
+          path: installer/output/Biuro-Setup-*.exe
+          if-no-files-found: error
       - name: Upload worker installation helpers
         uses: actions/upload-artifact@v6
         with:

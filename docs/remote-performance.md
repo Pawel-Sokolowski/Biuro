@@ -1,8 +1,7 @@
 # Przycięcia po połączeniu z serwerem
 
-Odczyty wykonywane przez API otrzymują osobny `request_scope`: powtarzające się
-odczyty ustawień i uprawnień mogą korzystać z istniejącego cache'u wewnątrz
-jednej operacji. Cache nie przechodzi między operacjami ani użytkownikami.
+Istniejący `service_scope` uruchamia cache na czas operacji. Cache nie jest
+współdzielony między operacjami ani użytkownikami; nie zmieniamy jego zakresu.
 Połączenia TCP serwera używają TCP_NODELAY, aby małe odpowiedzi HTTP/TLS nie
 czekały na buforowanie Nagle'a przy osobnym wysyłaniu nagłówków i treści.
 Weryfikacja certyfikatu i sesji pozostaje aktywna.
@@ -22,3 +21,12 @@ wykonywanych kolejno ani kosztu renderowania interfejsu.
 
 Te zmiany usuwają rozpoznane źródła narzutu. Bez logów z instalacji nie
 potwierdzają głównej przyczyny zgłoszonych przycięć ani skali poprawy.
+
+`office_navigation_slow` opisuje całe przełączenie zakładki: indeks widoku,
+czas, liczbę żądań sieciowych wykonanych synchronicznie, ich łączny czas i pięć
+najdroższych nazw operacji. Uwzględnia także żądania krótsze niż 250 ms,
+które mogą sumować się do długiego oczekiwania. Pomiar nie obejmuje odczytów
+w tle rozpoczętych przez widok. Dużo czasu sieciowego oznacza oczekiwanie
+na API; długi czas przejścia przy małym czasie sieciowym wskazuje na lokalne
+budowanie/renderowanie widoku. Potrzebne są logi z komputera pracownika i
+serwera z tej samej próby przełączenia.

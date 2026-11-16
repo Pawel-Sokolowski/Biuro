@@ -13,7 +13,6 @@ from app.remote.files import FileStore
 from app.remote.policy import check,bind,resource_access,public_result
 from app.remote.secrets import safe_error
 from app.remote.state import service_scope
-from app.utils.request_cache import request_scope
 from contextvars import ContextVar
 _operation_owner = ContextVar("office_operation_owner")
 
@@ -114,7 +113,7 @@ class OfficeService:
         started = time.perf_counter()
         try:
             _operation_owner.set(job['owner'])
-            with service_scope(actor), request_scope():
+            with service_scope(actor):
                 if self.identity(token)!=actor:
                     raise PermissionError('Sesja wygasła.')
                 check(spec['capability'],actor)

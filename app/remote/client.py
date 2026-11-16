@@ -37,18 +37,20 @@ class OfficeClient:
             return self._perform_request(path,payload,authenticated=authenticated)
         finally:
             duration = time.perf_counter()-started
+            # Identifiers only: never arguments, URLs, session tokens or firm data.
+            operation = '-'
+            if path=='operations' and isinstance(payload,dict):
+                from app.remote.operations import OPERATIONS
+                candidate = payload.get('operation')
+                if candidate in OPERATIONS:
+                    operation = candidate
+            route = path if path in ('operations','jobs','login','session','files','download','logout','reset','redeem') else '-'
+            from app.remote.performance import record_request
+            record_request(route,operation,duration)
             if duration >= .25:
-                # Log operation identifiers only, never arguments, URLs or tokens.
-                operation = '-'
-                if path=='operations' and isinstance(payload,dict):
-                    from app.remote.operations import OPERATIONS
-                    candidate = payload.get('operation')
-                    if candidate in OPERATIONS:
-                        operation = candidate
                 logging.getLogger(__name__).info(
                     'office_request_slow route=%s operation=%s duration=%.3f main_thread=%s',
-                    path if path in ('operations','jobs','login','session','files','download','logout','reset','redeem') else '-',
-                    operation,duration,threading.current_thread() is threading.main_thread())
+                    route,operation,duration,threading.current_thread() is threading.main_thread())
 
     def _perform_request(self,path,payload=None,*,authenticated=True):
         session = getattr(self._local,'session',None)

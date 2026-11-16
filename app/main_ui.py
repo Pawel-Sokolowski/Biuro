@@ -881,6 +881,11 @@ class OfficeManagerApp(QMainWindow):
                 self.lbl_live_timer.setText("00:00:00")
 
     def _refresh_current_page(self, index: int):
+        from app.remote.performance import navigation_timing
+        with navigation_timing(index):
+            self._refresh_page_contents(index)
+
+    def _refresh_page_contents(self, index: int):
         """Odświeża dane widoku po przełączeniu, żeby zmiany z innych widoków były widoczne."""
         page = self.pages.widget(index)
         for name, (row, _) in self._lazy_pages.items():

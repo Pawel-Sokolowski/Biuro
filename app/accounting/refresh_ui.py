@@ -2,12 +2,12 @@
 import json
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,QDialog,
-    QDialogButtonBox,QListWidget,QListWidgetItem,QAbstractItemView,QLineEdit,QMessageBox)
+    QDialogButtonBox,QListWidget,QListWidgetItem,QAbstractItemView,QLineEdit,QMessageBox,QSpinBox)
 from app.utils.background import TaskRunner,CommandRunner
 from app.services.checking_refresh import enqueue,latest
 
 LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik', 'platnik_declarations':'Płatnik — formularze ZUS',
-          'platnik_annual': 'Płatnik — IWA/ZSWA'}
+          'platnik_annual': 'Płatnik — IWA/ZSWA','declaration_year':'Deklaracje — Enova i Płatnik (rok)'}
 STATES = {'queued':'W kolejce workera','running':'Pobieranie','completed':'Zakończono',
           'partial':'Zakończono z błędami części firm','failed':'Błąd pobierania'}
 
@@ -35,6 +35,10 @@ class CheckingRefreshControls(QWidget):
         bar.addWidget(self.details)
         bar.addStretch()
         layout.addLayout(bar)
+        annual = QPushButton('Pobierz deklaracje za cały rok — Enova i Płatnik…')
+        annual.clicked.connect(lambda:self.choose('declaration_year'))
+        self.buttons['declaration_year'] = annual
+        layout.addWidget(annual)
         self.status = QLabel('Wybierz firmy i zleć pobranie. Dane odczyta worker na serwerze; „Odśwież” pokazuje zapisane dane.')
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
@@ -53,6 +57,20 @@ class CheckingRefreshControls(QWidget):
         dialog.setWindowTitle('Pobierz z '+LABELS[kind]+' — wybierz firmy')
         dialog.resize(700,500)
         layout = QVBoxLayout(dialog)
+        year = None
+        if kind=='declaration_year':
+            year = QSpinBox()
+            year.setRange(2000,2100)
+            year.setValue(int(str(self.period(kind))[:4]))
+            years = QHBoxLayout()
+            years.addWidget(QLabel('Rok deklaracji:'))
+            years.addWidget(year)
+            layout.addLayout(years)
+            note = QLabel('Pobierze deklaracje i kody ubezpieczenia dla 12 miesięcy oraz IWA/ZSWA. '
+                          'Doda wykryte deklaracje do ustawienia miesięcznego. Brak dokumentu nie wyłącza obowiązku; '
+                          'ręczne ustawienia pozostają. Nie pobiera kwot ani nie zmienia etapów pracy.')
+            note.setWordWrap(True)
+            layout.addWidget(note)
         layout.addWidget(QLabel('Zaznacz jedną lub kilka firm (Ctrl / Shift). Zaznaczenie z raportu jest przeniesione tutaj.'))
         if kind=='ezla':
             note = QLabel('Usługa ZUS udostępnia wygenerowane raporty z ostatnich 30 dni. '
@@ -86,7 +104,7 @@ class CheckingRefreshControls(QWidget):
         if not ids:
             QMessageBox.information(self,'Pobieranie danych','Nie wybrano firm.')
             return
-        self.submit(kind,ids,self.period(kind))
+        self.submit(kind,ids,year.value() if year is not None else self.period(kind))
 
     def submit(self,kind,ids,period):
         for button in self.buttons.values():

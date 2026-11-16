@@ -278,6 +278,10 @@ class MonthlyViewLogic:
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
+        from app.companies.monthly_insurance import read_codes
+        insurance = read_codes(conn,[r['id'] for r in rows],selected_month)
+        for row in rows:
+            row.update(insurance.get(row['id'],{}))
         from app.utils.polish_sort import polish_sort_key
 
         rows.sort(key=lambda row: polish_sort_key(row.get("nazwa") or ""))

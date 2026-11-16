@@ -25,6 +25,10 @@ class PlatnikSqlTests(unittest.TestCase):
             names = set(names)
             if table == 'DOKUMENT':
                 names.update(('ID_DOKUMENT', 'STATUSPT'))
+            if table == 'ZUSDRA':
+                names.update(('XI_1_1KODTYTUB','XI_1_2PRDOEM','XI_1_3STNIEP'))
+            if table == 'UBEZP_ZUSRCA':
+                names.update(('III_B_1_1KODTYTUB','III_B_1_2PRDOEM','III_B_1_3STNIEP'))
             columns = []
             for name in sorted(names):
                 kind = 'int' if name.startswith('ID_') else 'datetime' if name.endswith('DATAWYPEL') else 'nvarchar(64)'
@@ -94,11 +98,13 @@ class PlatnikSqlTests(unittest.TestCase):
         self.form('RCA', 1)
         self.document(2, parent=1, status='N')
         self.child('RCA', 2, 1)
+        self.writer.execute("UPDATE UBEZP_ZUSRCA SET III_B_1_1KODTYTUB='0510',III_B_1_2PRDOEM='0',III_B_1_3STNIEP='0'")
         rows = self.query()
         parent = next(row for row in rows if not row['employee_id'])
         child = next(row for row in rows if row['employee_id'])
         self.assertEqual((parent['raw_status'], child['raw_status']), ('P', 'N'))
         self.assertEqual(child['valid_link'], 1)
+        self.assertEqual(child['insurance_code'],'051000')
 
     def test_orphan_cross_payer_and_wrong_parent_document_links_are_rejected(self):
         self.document(1)

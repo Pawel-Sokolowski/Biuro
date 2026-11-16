@@ -46,6 +46,9 @@ class MonthlySetup(QWidget):
                       'Firma bez VAT nie pojawi się w JPK VAT. Ustawienia nie usuwają pobranych dokumentów.')
         note.setWordWrap(True)
         box.addWidget(note)
+        self.import_note = QLabel()
+        self.import_note.setWordWrap(True)
+        box.addWidget(self.import_note)
         self.vat.currentIndexChanged.connect(self.changed)
         self.month.dateChanged.connect(self.show_month)
         self.show_month()
@@ -55,7 +58,10 @@ class MonthlySetup(QWidget):
 
     def show_month(self, *_):
         self.loading = True
-        value = profile({'periods': {**self.saved.get('periods', {}), **self.edits}}, self.period())
+        value = profile({**self.saved,'periods': {**self.saved.get('periods', {}), **self.edits}}, self.period())
+        imported = value.get('_imported',{})
+        detected = ', '.join(dict(MONTHLY_FORMS).get(key,key) for key in imported.get('forms',{}))
+        self.import_note.setText('Wykryto w imporcie: '+detected+'. Brak dokumentu nie wyłącza pozostałych obowiązków; ręczne ustawienia mają pierwszeństwo.' if detected else 'Brak wykrytych deklaracji za wybrany miesiąc.')
         self.vat.setCurrentIndex(max(0, self.vat.findData(value['vat_period'])))
         for key, check in self.checks.items():
             cadence = value['forms'].get(key, 'none' if value.get('_configured') else 'monthly')

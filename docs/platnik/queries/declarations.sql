@@ -19,7 +19,7 @@ __RECORDS__
     FROM Periods r
 )
 SELECT r.form,r.source_id,r.payer_id,r.nip,r.report_id,
-       __PERIOD_RESULT__,r.employee_id,r.employee_name,r.raw_status,r.valid_link
+       __PERIOD_RESULT__,r.employee_id,r.employee_name,r.raw_status,r.valid_link,r.insurance_code
 FROM Dated r CROSS JOIN Parameters p
 WHERE (r.reporting_date>=p.DateFrom AND r.reporting_date<p.DateTo) OR r.reporting_date IS NULL
 ORDER BY r.payer_id,r.reporting_date,r.form,r.source_id;

@@ -73,7 +73,7 @@ Results AS (
     WHERE d.Position = 1
 )
 SELECT c.nip, CONVERT(char(7), d.OkresTo, 120) AS miesiac,
-       N'accounting' AS department, d.FormName AS form,
+       N'accounting' AS department, d.FormName AS form, d.FormKey AS form_variant,
        CASE WHEN d.StatusEDeklaracji = 100 THEN N'cancelled'
             WHEN d.StatusETransmisji BETWEEN 400 AND 499 THEN N'rejected'
             WHEN d.StatusEDeklaracji = 99 THEN N'failed'

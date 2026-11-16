@@ -27,7 +27,7 @@ Company AS (
     WHERE LEN(nip) = 10 AND nip NOT LIKE N'%[^0-9]%'
 ),
 Documents AS (
-    SELECT j.ID, j.OkresTo, j.NumerKorekty, j.StatusJPK, j.BramkaJPK,
+    SELECT j.ID, j.OkresTo, j.NumerKorekty, j.StatusJPK, j.BramkaJPK, j.FormCode,
            TRY_CONVERT(xml, CASE WHEN LEFT(CAST(j.UPO AS nvarchar(max)), 5) = N'<?xml' AND CHARINDEX(N'?>', CAST(j.UPO AS nvarchar(max))) > 0
                    THEN SUBSTRING(CAST(j.UPO AS nvarchar(max)), CHARINDEX(N'?>', CAST(j.UPO AS nvarchar(max))) + 2, 2147483647) ELSE CAST(j.UPO AS nvarchar(max)) END) AS Confirmation,
            ROW_NUMBER() OVER (PARTITION BY YEAR(j.OkresTo), MONTH(j.OkresTo)
@@ -42,6 +42,7 @@ Receipts AS (
     FROM Documents WHERE Position = 1
 )
 SELECT c.nip, CONVERT(char(7), m.MonthStart, 120) AS miesiac,
+       d.FormCode AS form_variant,
        CASE WHEN d.BramkaJPK <> 3 OR d.BramkaJPK IS NULL THEN N'unknown'
             WHEN d.StatusJPK = 100 AND NULLIF(d.Receipt, N'') IS NOT NULL THEN N'accepted'
             WHEN d.StatusJPK IN (10,15) THEN N'prepared'

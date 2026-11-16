@@ -48,7 +48,7 @@ FIRMA_FIELDS = [
     "uop_ilosc", "uz_ilosc", "uod_ilosc",
     "uop_cennik", "uz_cennik", "uod_cennik",
 
-    "typ_rozliczenia", "vat_czynny", "status", "uslugi_zawieszone",
+    "vat_czynny", "status", "uslugi_zawieszone",
 
     "cennik_kpir_auto", "cena_ksiegowosc_auto",
     "cennik_kpir_manual", "manual_cennik_override",
@@ -115,7 +115,7 @@ def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     sql = """
         SELECT f.id, f.nazwa, f.nazwa_skrocona, f.nip, f.miasto, f.status, f.uslugi_zawieszone,
                f.glowny_cennik, f.limit_dokumentow,
-               f.typ_rozliczenia, f.vat_czynny, f.forma_opodatkowania,
+               f.vat_czynny, f.forma_opodatkowania,
                TRIM(COALESCE(pk.imie, '') || ' ' || COALESCE(pk.nazwisko, '')) AS ksiegowa,
                TRIM(COALESCE(pd.imie, '') || ' ' || COALESCE(pd.nazwisko, '')) AS kadrowa
         FROM firmy f
@@ -153,7 +153,7 @@ def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
     try:
         rows = [dict(row) for row in conn.execute(
             "SELECT id, nazwa, nazwa_skrocona, nip, adres_email, forma_dzialalnosci, "
-            "typ_rozliczenia, forma_opodatkowania, status FROM firmy "
+            "forma_opodatkowania, status FROM firmy "
             "WHERE id = ANY(%s) ORDER BY LOWER(COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)), id",
             (ids,),
         ).fetchall()]
@@ -182,7 +182,7 @@ def get_companies_filtered(
     base_select = """
         SELECT f.id, f.nazwa, f.nazwa_skrocona, f.nip, f.miasto,
                COALESCE(f.status, 'Aktywne') AS status, f.uslugi_zawieszone,
-               f.glowny_cennik, f.limit_dokumentow, f.typ_rozliczenia, f.vat_czynny,
+               f.glowny_cennik, f.limit_dokumentow, f.vat_czynny,
                f.forma_opodatkowania,
                TRIM(COALESCE(pk.imie, '') || ' ' || COALESCE(pk.nazwisko, '')) AS ksiegowa,
                TRIM(COALESCE(pd.imie, '') || ' ' || COALESCE(pd.nazwisko, '')) AS kadrowa

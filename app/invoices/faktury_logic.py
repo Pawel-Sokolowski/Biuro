@@ -92,7 +92,6 @@ class FakturyLogic:
         company.setdefault("limit_dokumentow", int(company.get("limit_dokumentow") or 0))
         company.setdefault("zdrowotna", float(company.get("zdrowotna") or 0.0))
         company.setdefault("vat_czynny", int(company.get("vat_czynny") or 0))
-        company.setdefault("typ_rozliczenia", company.get("typ_rozliczenia", "Ryczałt"))
         company.setdefault("fakturowac", int(company.get("fakturowac") or 0))
 
         # pola kadrowe

@@ -153,6 +153,8 @@ def validate_declarations(rows, source, months):
                               'upo_at': _timestamp(row['upo_at'])})
         if row.get('raw_status'):
             result[month][-1]['raw_status'] = str(row['raw_status'])[:256]
+        if row.get('form_variant'):
+            result[month][-1]['form_variant'] = str(row['form_variant'])[:64]
     return result
 
 

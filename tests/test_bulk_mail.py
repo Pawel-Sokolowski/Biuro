@@ -16,9 +16,9 @@ from tests.test_review_optimizations import wait_until
 _app = QApplication.instance() or QApplication(['bulk-mail-tests'])
 COMPANIES = [
     {'id': 1, 'nazwa': 'JDG', 'adres_email': 'first@example.com', 'forma_dzialalnosci': 'JDG',
-     'typ_rozliczenia': 'Miesięczne', 'forma_opodatkowania': 'Ryczałt', 'status': 'Aktywne'},
+     'forma_opodatkowania': 'Ryczałt', 'status': 'Aktywne'},
     {'id': 2, 'nazwa': 'Spółka', 'adres_email': 'second@example.com', 'forma_dzialalnosci': 'Spółka z o.o.',
-     'typ_rozliczenia': 'Kwartalne', 'forma_opodatkowania': 'CIT', 'status': 'Aktywne'},
+     'forma_opodatkowania': 'CIT', 'status': 'Aktywne'},
     {'id': 3, 'nazwa': 'Bez maila', 'adres_email': '', 'forma_dzialalnosci': 'JDG', 'status': 'Aktywne'},
     {'id': 4, 'nazwa': 'Nieaktywna', 'adres_email': 'old@example.com', 'status': 'Zakończone'},
 ]
@@ -37,8 +37,8 @@ class BulkMailTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 client_addresses(value)
 
-    def test_company_filters_combine_activity_settlement_tax_and_status(self):
-        rows = filter_companies(COMPANIES, activity='JDG', settlement='Miesięczne', tax='Ryczałt', query='FIRST@')
+    def test_company_filters_combine_activity_tax_and_status(self):
+        rows = filter_companies(COMPANIES, activity='JDG', tax='Ryczałt', query='FIRST@')
         self.assertEqual([row['id'] for row in rows], [1])
         self.assertEqual([row['id'] for row in filter_companies(COMPANIES, activity='Spółka z o.o.')], [2])
         self.assertEqual(len(filter_companies(COMPANIES, active_only=False)), 4)
@@ -162,14 +162,52 @@ class BulkMailTests(unittest.TestCase):
 
     def test_dialog_filters_drop_hidden_selections_and_exclude_missing_addresses(self):
         dialog = self.dialog()
+        self.assertFalse(hasattr(dialog,'settlement'))
+        self.assertEqual(dialog.table.horizontalHeaderItem(4).text(),'Opodatkowanie')
+        self.assertEqual(dialog.table.item(0,4).text(),'Ryczałt')
         dialog._select_visible()
         self.assertEqual(dialog._selected, {1, 2})
         dialog.activity.setCurrentIndex(dialog.activity.findData('Spółka z o.o.'))
         self.assertEqual(dialog._selected, {2})
         self.assertEqual(dialog.table.rowCount(), 1)
-        dialog.settlement.setCurrentIndex(dialog.settlement.findData('Miesięczne'))
+        dialog.tax.setCurrentIndex(dialog.tax.findData('Ryczałt'))
         self.assertEqual(dialog._selected, set())
         self.assertEqual(dialog.table.rowCount(), 0)
+
+    def test_holiday_filter_prunes_selection_and_freezes_person_specific_addresses(self):
+        from app.companies.holiday_eligibility import context
+        dialog = self.dialog()
+        dialog._select_visible()
+        dialog.holiday_year.setValue(2026)
+        dialog.holiday_month.setCurrentIndex(11)
+        rows = [
+            {**COMPANIES[0], 'holiday_people':[{'name':'Owner','status':'eligible','reasons':['Potwierdzone']},
+                                             {'name':'Other owner','status':'review','reasons':['Brak kodu']}],
+             'holiday_addresses':{'eligible':'owner@example.com','review':'other@example.com'}},
+            {**COMPANIES[1], 'holiday_people':[{'name':'Partner','status':'review','reasons':['Brak kodu']}],
+             'holiday_addresses':{'eligible':'','review':'partner@example.com'}},
+        ]
+        with mock.patch.object(dialog.holiday_reader,'submit') as submit:
+            dialog.holiday_filter.setChecked(True)
+            self.assertEqual(dialog._selected,set())
+            self.assertEqual(dialog.table.rowCount(),0)
+            submit.call_args.args[1]({'context':context('2026-12'),'companies':rows})
+        self.assertEqual(dialog.table.rowCount(),1)
+        dialog._select_visible()
+        self.assertEqual(dialog._addresses[1],('owner@example.com',))
+        dialog.holiday_mode.setCurrentIndex(1)
+        self.assertEqual(dialog._selected,set())
+        dialog._select_visible()
+        dialog.subject.setText('Informacja')
+        dialog.body.setPlainText('Prosimy o sprawdzenie warunków')
+        with mock.patch.object(QMessageBox,'exec',return_value=QMessageBox.StandardButton.Yes), \
+                mock.patch.object(dialog.sender,'start') as start:
+            dialog._review_send()
+        accepted = start.call_args.args[0]
+        self.assertEqual(accepted.holiday_month,'2026-12')
+        self.assertEqual(accepted.holiday_mode,'review')
+        self.assertEqual(accepted.recipients,('other@example.com','partner@example.com'))
+        self.assertFalse(dialog.holiday_filter.isEnabled())
 
     def test_dialog_requires_confirmation_and_freezes_the_accepted_plan(self):
         dialog = self.dialog()
@@ -224,12 +262,12 @@ class MailingCompanyQueryTests(DbTestCase):
             contact = connection.execute('SELECT email FROM company_contacts WHERE firma_id = %s', (row['id'],)).fetchone()
         self.assertEqual(contact['email'], 'client@example.com')
 
-    def test_contact_query_returns_activity_and_settlement_fields_and_no_anonymous_rows(self):
+    def test_contact_query_returns_activity_and_tax_fields_and_no_anonymous_rows(self):
         from app.db.dao_companies import list_mailing_companies
         company = self.make_company('Spółka', adres_email='office@example.com', forma_dzialalnosci='Spółka z o.o.',
-                                    typ_rozliczenia='Kwartalne', forma_opodatkowania='CIT')
+                                    forma_opodatkowania='CIT')
         row = next(row for row in list_mailing_companies(1) if row['id'] == company)
         self.assertEqual(row['adres_email'], 'office@example.com')
         self.assertEqual(row['forma_dzialalnosci'], 'Spółka z o.o.')
-        self.assertEqual(row['typ_rozliczenia'], 'Kwartalne')
+        self.assertNotIn('typ_rozliczenia', row)
         self.assertEqual(list_mailing_companies(None), [])

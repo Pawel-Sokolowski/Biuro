@@ -76,7 +76,8 @@ def active_types(row, department):
 def declaration_entries(row, department):
     from app.companies.checking_obligations import report_applies
     report = decoded(row.get('checking'))
-    result = [entry for entry in report.get('declarations') or [] if entry['department'] == department]
+    result = [{**entry,'imported_at':report.get('declarations_imported_at') or report.get('imported_at')}
+              for entry in report.get('declarations') or [] if entry['department'] == department]
     if department == 'payroll':
         snapshot = decoded(row.get('platnik_declarations'))
         result += [{**entry, 'imported_at': snapshot.get('imported_at')}

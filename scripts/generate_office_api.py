@@ -21,6 +21,7 @@ MANUAL = {
  'app.security.authorization':'get_permissions is_administrator can allowed_tabs can_manage_invoices assigned_company_ids',
  'app.employees.authority_profiles':'load save',
  'app.companies.checking_obligations':'load profile save report_applies',
+ 'app.companies.holiday_eligibility':'list_candidates read_conditions save_conditions',
  'app.companies.registry_enrichment':'enrich_all_companies',
  'app.companies.company_lookup':'lookup_company_by_nip',
  'app.companies.ceidg_api':'get_ceidg_firma_by_nip',
@@ -143,6 +144,8 @@ def capability(module,name):
         return 'permission:can_manage_users' if name=='save' else 'tab:Klienci|Widok miesięczny|Ustawienia'
     if module=='app.companies.checking_obligations':
         return 'permission:can_edit_companies' if name=='save' else 'authenticated'
+    if module=='app.companies.holiday_eligibility':
+        return 'tab:E-mail'
     if module.startswith(('app.integrations.enova.accounting','app.integrations.ezla.preview')) or module in ('app.integrations.ezla.sync','app.integrations.platnik.holiday_tracking','app.integrations.platnik.declarations'):
         return 'tab:Sprawdzanie|Klienci'
     if module.startswith('app.integrations.'):

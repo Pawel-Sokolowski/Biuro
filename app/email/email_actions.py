@@ -231,8 +231,10 @@ def send_email_smtp(
             # BCC is archive metadata only. Never put it on the SMTP wire.
             from copy import deepcopy
             archive = deepcopy(msg)
-            if bcc:
-                archive['Bcc'] = ', '.join(bcc)
+            rejected = {address.casefold() for address in refused} if isinstance(refused,dict) else set()
+            accepted_bcc = [address for address in bcc or [] if address.casefold() not in rejected]
+            if accepted_bcc:
+                archive['Bcc'] = ', '.join(accepted_bcc)
             copy_warning = not store_sent_copy(konto_id, archive, copy_folder)
             if bcc:
                 # A BCC batch belongs to several clients; a move to only the first
@@ -241,7 +243,7 @@ def send_email_smtp(
                     from app.email.email_storage import find_special_folder
                     sent = copy_folder or find_special_folder(konto_id, 'sent')
                     folders = {}
-                    for recipient in bcc:
+                    for recipient in accepted_bcc:
                         target = choose_copy_folder(konto_id, cfg['user'], [recipient], subject)
                         if target and target != sent:
                             folders.setdefault(target, []).append(recipient)

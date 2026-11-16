@@ -1104,6 +1104,12 @@ def _store_folders(
             " ".join(info["flags"]),
         )
 
+    from app.email.company_folders import link_account
+    try:
+        link_account(konto_id)
+    except Exception:
+        logger.warning('Nie udało się powiązać folderów z klientami.',exc_info=True)
+
 
 @office_endpoint('app.email.email_sync.sync_account')
 def sync_account(konto_id: int) -> None:

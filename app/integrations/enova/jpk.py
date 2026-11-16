@@ -20,6 +20,8 @@ def validate_jpk(rows, source, months):
         found[month] = {'status': status, 'upo': upo}
         if row.get('raw_status'):
             found[month]['raw_status'] = str(row['raw_status'])[:256]
+        if row.get('form_variant'):
+            found[month]['form_variant'] = str(row['form_variant'])[:64]
     if set(found) != set(months):
         raise ValueError('Brak statusu JPK dla żądanego miesiąca nie oznacza niewysłanego JPK.')
     return found

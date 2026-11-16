@@ -237,6 +237,7 @@ class MonthlyViewLogic:
         if selected_employee is None:
             selected_employee = self.pracownik_id
 
+        permitted = assigned_company_ids(self.pracownik_id)
         conn = get_conn()
         cur = conn.cursor()
         month_start, month_end = month_bounds(selected_month)
@@ -278,6 +279,10 @@ class MonthlyViewLogic:
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
+        from app.companies.monthly_insurance import read_codes
+        insurance = read_codes(conn,[r['id'] for r in rows if r['id'] in permitted],selected_month)
+        for row in rows:
+            row.update(insurance.get(row['id'],{}))
         from app.utils.polish_sort import polish_sort_key
 
         rows.sort(key=lambda row: polish_sort_key(row.get("nazwa") or ""))

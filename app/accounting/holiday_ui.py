@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QSpinBox,QLi
 from app.integrations.platnik.holidays import FIELDS,LABELS
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
 from app.utils.background import TaskRunner,CommandRunner
+from app.utils.month_names import display_months
 
 
 class ContributionHolidays(QWidget):
@@ -96,20 +97,20 @@ class ContributionHolidays(QWidget):
     def filter_rows(self,*_):
         rows = list(self.payload.get('rows',[]))
         query = self.search.text().strip().casefold()
-        rows = [row for row in rows if query in ' '.join(str(row.get(k) or '') for k in ('firma','nip',*FIELDS)).casefold()
+        rows = [row for row in rows if query in ' '.join(str(display_months(row.get(k)) if k=='miesiac' else row.get(k) or '') for k in ('firma','nip',*FIELDS)).casefold()
                 and self.company_query in (str(row.get('firma',''))+' '+str(row.get('nip',''))).casefold()
                 and (not self.active.isChecked() or 'A' in row.get('statuses',[]))]
         self.displayed_rows = rows
         self.table.setRowCount(len(rows))
         for index,row in enumerate(rows):
             source_status = ', '.join(row.get('statuses',[])) or ('Brak wpisu RWS' if self.payload.get('imported_at') else 'Nie odczytano roku')
-            values = [row.get('firma'),*[row.get(key) for key in FIELDS],source_status]
+            values = [row.get('firma'),*[display_months(row.get(key)) if key=='miesiac' else row.get(key) for key in FIELDS],source_status]
             info = f"NIP: {row.get('nip','—')}\n"
             for source in row.get('sources',[]):
                 amounts = ', '.join(key.removeprefix('skladka_').upper()+': '+str(source.get(key) or '—')
                                    for key in ('skladka_em','skladka_ren','skladka_wyp','skladka_chor','skladka_fpfs'))
                 info += (f"Wpis RWS #{source.get('source_id')}: {source.get('imiona_nazwiska') or 'brak nazwiska'}; "
-                         f"miesiąc: {source.get('miesiac') or '—'}; status: {source.get('status_zrodlowy') or '—'}; "
+                         f"miesiąc: {display_months(source.get('miesiac')) or '—'}; status: {source.get('status_zrodlowy') or '—'}; "
                          f"kod ulgi: {source.get('kod_ulgi') or '—'}.\nKwoty RWS (nie dowód zapłaty): {amounts}\n")
                 info += '; '.join(source.get('issues',[]))+'\n'
             for column,value in enumerate(values):
@@ -155,7 +156,8 @@ class ContributionHolidays(QWidget):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         for index,row in enumerate(rows):
             for column,field in enumerate(fields):
-                item = QTableWidgetItem(str(row.get(field) or '—'))
+                value = display_months(row.get(field)) if field=='miesiac' else row.get(field)
+                item = QTableWidgetItem(str(value or '—'))
                 item.setToolTip('; '.join(row.get('issues',[])))
                 table.setItem(index,column,item)
         table.resizeColumnsToContents()
@@ -175,11 +177,14 @@ class ContributionHolidays(QWidget):
         dialog.setWindowTitle(f"{LABELS[column-1]} — {row['firma']} ({year})")
         layout = QVBoxLayout(dialog)
         source = row.get('source_values',{}).get(field)
+        if field=='miesiac':
+            source = display_months(source)
         label = QLabel('Płatnik: '+str(source or 'Brak danych'))
         label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)
         layout.addWidget(label)
-        edit = QPlainTextEdit(str(row.get(field) or ''))
+        value = display_months(row.get(field)) if field=='miesiac' else row.get(field)
+        edit = QPlainTextEdit(str(value or ''))
         layout.addWidget(edit)
         if field=='kto_wyslal':
             initials = self.payload.get('current_initials','')

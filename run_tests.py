@@ -40,7 +40,8 @@ def run_module(module: str, verbose: bool) -> tuple[int, str, float]:
             timeout=MODULE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:
-        partial = (exc.stdout or b"").decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        partial = ''.join(output.decode('utf-8','replace') if isinstance(output,bytes) else output or ''
+                          for output in (exc.stdout,exc.stderr))
         return 1, f"{partial}\nPrzekroczono limit czasu {MODULE_TIMEOUT_S}s — test zawisł.", time.perf_counter() - started
     return proc.returncode, proc.stdout + proc.stderr, time.perf_counter() - started
 

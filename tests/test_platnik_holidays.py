@@ -220,14 +220,17 @@ class YearlyPanelTests(TestCase):
         panel = ContributionHolidays(5)
         try:
             rows = normalize([source_row(),source_row(source_id=2,status_zrodlowy='N')],2026)
-            panel.loaded({'rows':[{'firma_id':1,'firma':'Firma A','nip':'1112223344','sources':rows,'statuses':['A','N']},
+            panel.loaded({'rows':[{'firma_id':1,'firma':'Firma A','nip':'1112223344','miesiac':'1; 10','sources':rows,'statuses':['A','N']},
                                   {'firma_id':2,'firma':'Firma B','nip':'2223334455','sources':[],'statuses':[]}],
                           'imported_at':'2026-11-13T10:00:00+01:00','configured':True})
             self.assertEqual(panel.table.rowCount(),2)
+            self.assertEqual(panel.table.item(0,5).text(),'styczeń; październik')
             self.assertEqual(panel.table.item(0,7).text(),'Brak danych')
             self.assertEqual(panel.table.item(0,10).text(),'A, N')
             self.assertEqual(panel.table.item(1,10).text(),'Brak wpisu RWS')
             panel.active.setChecked(True)
+            self.assertEqual(panel.table.rowCount(),1)
+            panel.search.setText('październik')
             self.assertEqual(panel.table.rowCount(),1)
         finally:
             panel.close()

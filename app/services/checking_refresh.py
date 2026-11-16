@@ -10,7 +10,7 @@ from app.security.authorization import assigned_company_ids
 from app.utils.months import month_bounds, previous_month
 
 PREFIX = 'checking_refresh_'
-KINDS = ('enova', 'ezla', 'platnik', 'platnik_declarations', 'platnik_annual')
+KINDS = ('enova', 'ezla', 'platnik', 'platnik_declarations', 'platnik_annual','declaration_year')
 
 
 def stamp():
@@ -44,7 +44,7 @@ def enqueue(actor_id, kind, company_ids, period):
     scope(actor_id,company_ids)
     if kind not in KINDS:
         raise ValueError('Nieprawidłowe źródło odczytu.')
-    if kind in ('platnik', 'platnik_annual'):
+    if kind in ('platnik', 'platnik_annual','declaration_year'):
         if type(period) is not int or not (2024 if kind == 'platnik' else 2000)<=period<=2100:
             raise ValueError('Wybierz rok zestawienia Płatnika.')
     else:
@@ -91,6 +91,9 @@ def recover_interrupted():
 
 def _execute(value, stop):
     companies = scope(value['actor_id'],value['company_ids'])  # Recheck after waiting in queue.
+    if value['kind']=='declaration_year':
+        from app.services.declaration_year import run
+        return run(value,stop)
     if value['kind'] == 'platnik_annual':
         from app.integrations.platnik.declarations import import_year
         result = import_year(value['period'], company_ids=value['company_ids'])

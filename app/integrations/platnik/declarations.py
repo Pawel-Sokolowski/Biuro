@@ -45,7 +45,7 @@ def source_query(cursor, config, *, annual=False):
         raise ValueError('Niekompletny standardowy schemat lub brak widoczności metadanych Płatnika: ' + ', '.join(missing))
     path = Path(__file__).resolve().parents[3] / 'docs/platnik/queries/declarations.sql'
     query = path.read_text(encoding='utf-8-sig')
-    records = records_sql(specs, document_key, 'STATUSPT' in columns['DOKUMENT'])
+    records = records_sql(specs, document_key, 'STATUSPT' in columns['DOKUMENT'],columns)
     period = "CONVERT(char(4),r.reporting_date,112) AS rok" if annual else "CONVERT(char(7),r.reporting_date,120) AS miesiac"
     return query.replace('__RECORDS__', records).replace('__PERIOD_RESULT__', period)
 
@@ -63,7 +63,7 @@ def fetch(config, months, *, annual=False):
             cursor.execute(query, start, end)
             columns = [column[0].lower() for column in cursor.description or []]
             expected = FIELDS - {'miesiac'} | {'rok'} if annual else FIELDS
-            if set(columns) != expected or len(columns) != len(expected):
+            if not expected<=set(columns) or set(columns)-expected-{'insurance_code'} or len(columns)!=len(set(columns)):
                 raise ValueError('Nieprawidłowy kontrakt kolumn formularzy ZUS.')
             rows = []
             while True:
@@ -105,11 +105,15 @@ def normalize(rows, months, selected_nips, *, annual=False):
             raise ValueError('Formularz osoby wymaga identyfikatora i nazwy ubezpieczonego.')
         code = str(row['raw_status']).strip() if row['raw_status'] is not None else ''
         entry = {'department': 'payroll', 'form': row['form'], 'source_system': 'platnik',
+                 'payer_nip':nip,
                  'employee_id': employee_id, 'employee_name': employee_name,
                  'source_id': source_id, 'report_id': str(row['report_id'] or '').strip(),
                  'raw_status': code, 'status': 'unknown',
                  'status_text': 'Status źródłowy: ' + code if code else 'Odczytano dokument; status wysyłki nieustalony',
                  'sent_at': None, 'upo': '', 'upo_at': None}
+        if row.get('insurance_code'):
+            from app.companies.holiday_eligibility import insurance_code
+            entry['insurance_code'] = insurance_code(row['insurance_code'])
         if annual:
             entry['reporting_year'] = month
         result[nip][month].append(entry)
@@ -136,45 +140,54 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         if not lock.execute('SELECT pg_try_advisory_xact_lock(748220)').fetchone()[0]:
             return {'mode': 'busy'}
         with get_conn() as conn:
-            companies = conn.execute('SELECT id,nip FROM firmy').fetchall()
+            companies = conn.execute('SELECT id,nip,forma_dzialalnosci FROM firmy').fetchall()
         selected = [row for row in companies if company_ids is None or row['id'] in company_ids]
         if company_ids is not None and {row['id'] for row in selected} != set(company_ids):
             raise ValueError('Nieznana firma w odczycie formularzy ZUS.')
         mapped = {}
+        from app.companies.identities import payer_nips,is_civil
+        from app.db.dao_companies import get_partners
+        def identities(row):
+            return payer_nips(row,get_partners(row['id']) if is_civil(row) else ())
         for row in selected:
             try:
-                nip = normalize_nip(row['nip'])
+                nips = identities(row)
             except ValueError:
                 if company_ids is not None:
                     raise
                 continue
-            if nip in mapped:
-                raise ValueError('Kilka firm Biuro ma ten sam NIP. Nie przypisano dokumentów formularzy ZUS.')
-            mapped[nip] = row['id']
+            for nip in nips:
+                if nip in mapped and mapped[nip]!=row['id']:
+                    raise ValueError('Kilka firm Biuro ma ten sam NIP płatnika. Nie przypisano formularzy ZUS.')
+                mapped[nip] = row['id']
         for row in companies:
             if row['id'] in mapped.values():
                 continue
             try:
-                nip = normalize_nip(row['nip'])
+                nips = identities(row)
             except ValueError:
                 continue
-            if nip in mapped:
+            if any(nip in mapped for nip in nips):
                 raise ValueError('NIP wybranej firmy jest przypisany także innej firmie Biuro.')
         if not mapped:
             return {'mode': 'empty', 'companies': 0}
         from app.services.worker_activity import batch
-        with batch('platnik', mapped.values()):
+        with batch('platnik', sorted(set(mapped.values()))):
             rows = fetch(config, months, annual=True) if annual else fetch(config, months)
             records = normalize(rows, months, mapped, annual=annual)
             stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
             with get_conn() as conn:
-                for nip, fid in mapped.items():
-                    for month, entries in records[nip].items():
+                for fid in set(mapped.values()):
+                    for month in months:
+                        entries = [entry for nip in mapped if mapped[nip]==fid for entry in records[nip][month]]
                         snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
                         conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                                      'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                                      (f"platnik_declarations_{fid}_{'year_' if annual else ''}{month}", encrypt_password(snapshot)))
-        return {'mode': 'applied', 'companies': len(mapped), 'months': months,
+                        if not annual:
+                            from app.companies.checking_obligations import add_imported
+                            add_imported(conn,fid,month,entries,'platnik')
+        return {'mode': 'applied', 'companies': len(set(mapped.values())), 'months': months,
                 'documents': sum(len(entries) for by_month in records.values() for entries in by_month.values())}
 
 

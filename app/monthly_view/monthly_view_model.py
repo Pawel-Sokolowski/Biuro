@@ -102,7 +102,7 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 14 if self._mode == "ksiegowosc" else 11
+        return 14 if self._mode == "ksiegowosc" else 12
 
     def _vat_cols(self):
         return (12, 13) if self._mode == "ksiegowosc" else ()
@@ -149,6 +149,9 @@ class MonthlyViewModel(QAbstractTableModel):
         if self._mode == "ksiegowosc" and col in (1, 2) and role == Qt.ItemDataRole.ToolTipRole:
             return row.get("faktura_platnosci_tooltip", "")
 
+        if self._mode == 'kadry' and col == 11 and role == Qt.ItemDataRole.ToolTipRole:
+            return row.get('insurance_details') or 'Brak kodów z dokumentów Płatnika za ten miesiąc. Zleć pobranie formularzy ZUS.'
+
         if col in self._vat_cols():
             if role == Qt.ItemDataRole.BackgroundRole:
                 return self._row_background(row)
@@ -183,6 +186,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 8: row.get("note_full", row.get("note_snippet", "")),
                 9: "➕",
                 10: "✏️",
+                11: row.get('insurance_codes') or '—',
             }
             return mapping.get(col, "")
 
@@ -233,7 +237,7 @@ class MonthlyViewModel(QAbstractTableModel):
             if self._mode == "ksiegowosc":
                 headers = ["Firma", "Nr faktury", "Zapłacona", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
-                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj"]
+                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "Kody ubezpieczenia"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()

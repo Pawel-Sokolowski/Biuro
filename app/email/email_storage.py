@@ -256,38 +256,17 @@ def get_known_sender_addresses(konto_id: Optional[int] = None) -> List[str]:
 
 @office_endpoint('app.email.email_storage.ensure_contact_email_filters')
 def ensure_contact_email_filters(firma_id: int, folder_name: str, actor_id: Optional[int] = None) -> None:
-    """Create a filter for each company contact e-mail that has none yet."""
-    conn = get_conn()
-    try:
-        contacts = conn.execute(
-            "SELECT email FROM company_contacts WHERE firma_id = %s", (firma_id,)
-        ).fetchall()
+    """Link contacts only to existing, uniquely identified client folders."""
+    from app.email.company_folders import link_account
+    with get_conn() as conn:
         if actor_id is None:
-            account = conn.execute(
-                "SELECT id FROM konta_email WHERE COALESCE(aktywne,1)=1 AND COALESCE(systemowe,0)=0 ORDER BY id LIMIT 1"
-            ).fetchone()
+            accounts = conn.execute('SELECT id FROM konta_email WHERE COALESCE(aktywne,1)=1 AND COALESCE(systemowe,0)=0').fetchall()
         else:
-            account = conn.execute("""SELECT k.id FROM konta_email k JOIN pracownik_konto_email p ON p.konto_id=k.id
-                WHERE p.pracownik_id=%s AND COALESCE(k.aktywne,1)=1 AND COALESCE(k.systemowe,0)=0 ORDER BY k.id LIMIT 1""",
-                (actor_id,)).fetchone()
-        if not account:
-            return
-        existing = {
-            (r[0] or "").strip().lower()
-            for r in conn.execute(
-                "SELECT od FROM reguly_filtrow WHERE firma_id = %s", (firma_id,)
-            )
-        }
-    finally:
-        conn.close()
-
-    for (email,) in contacts:
-        email = (email or "").strip()
-        if "@" in email and email.lower() not in existing:
-            add_email_filter(
-                account[0], firma_id, email, None, None, None, None, folder_name
-            )
-            existing.add(email.lower())
+            accounts = conn.execute('SELECT k.id FROM konta_email k JOIN pracownik_konto_email p ON p.konto_id=k.id '
+                                    'WHERE p.pracownik_id=%s AND COALESCE(k.aktywne,1)=1 AND COALESCE(k.systemowe,0)=0',
+                                    (actor_id,)).fetchall()
+    for account in accounts:
+        link_account(account[0],[firma_id])
 
 
 def save_folder(

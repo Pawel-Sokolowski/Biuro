@@ -103,6 +103,28 @@ class CheckingRefreshTests(DbTestCase):
             self.assertEqual(process_next()['state'], 'completed')
         importer.assert_called_once_with(2025, company_ids=[self.company])
 
+    def test_full_year_filing_read_uses_twelve_months_and_keeps_source_failures_separate(self):
+        enqueue(self.admin,'declaration_year',[self.company],2026)
+        with patch('app.integrations.enova.connection_settings.load_connection',return_value=self.config), \
+             patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':3}) as monthly, \
+             patch('app.integrations.platnik.declarations.import_year',return_value={'mode':'applied','documents':1}) as annual, \
+             patch('app.services.declaration_year.read_enova',side_effect=ValueError('Brak odczytu')):
+            self.assertEqual(process_next()['state'],'partial')
+        monthly.assert_called_once_with([f'2026-{n:02d}' for n in range(1,13)],company_ids=[self.company])
+        annual.assert_called_once_with(2026,company_ids=[self.company])
+        self.assertEqual([r['ok'] for r in latest(self.admin)['results']],[True,False])
+
+    def test_full_year_platnik_is_one_batch_for_all_companies_even_when_enova_config_is_broken(self):
+        enqueue(self.admin,'declaration_year',[self.company,self.other],2026)
+        with patch('app.integrations.enova.connection_settings.load_connection',side_effect=ValueError('Błąd konfiguracji')), \
+             patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied'}) as monthly, \
+             patch('app.integrations.platnik.declarations.import_year',return_value={'mode':'applied'}) as annual:
+            self.assertEqual(process_next()['state'],'partial')
+        monthly.assert_called_once()
+        annual.assert_called_once()
+        self.assertEqual(monthly.call_args.kwargs['company_ids'],[self.company,self.other])
+        self.assertEqual([r['ok'] for r in latest(self.admin)['results']],[True,True,False,False])
+
     def test_staff_can_queue_reads_under_current_module_permissions_without_admin_credentials(self):
         employee = self.make_employee()
         request = enqueue(employee,'enova',[self.company],'2026-11')

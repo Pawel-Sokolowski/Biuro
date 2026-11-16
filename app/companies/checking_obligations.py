@@ -32,9 +32,47 @@ def profile(value, month):
     if isinstance(value, str):
         value = json.loads(value)
     periods = (value or {}).get('periods', {})
+    imported = (value or {}).get('imported',{}).get(month,{})
     eligible = [period for period in periods if period <= month]
     # Unconfigured legacy companies stay visible until their scope is specified.
-    return {**periods[max(eligible)], '_configured': True} if eligible else {'vat_period': 'auto', 'forms': {}}
+    if eligible:
+        manual = periods[max(eligible)]
+        return {**manual,'forms':{**imported.get('forms',{}),**manual['forms']},'_configured':True,
+                '_imported':imported}
+    return {'vat_period':imported.get('vat_period','auto'),'forms':imported.get('forms',{}),'_imported':imported}
+
+
+def add_imported(conn, company_id, month, entries, source):
+    """Positive evidence only. Missing documents never disable an obligation."""
+    month_bounds(month)
+    supported = dict(MONTHLY_FORMS)
+    forms = set()
+    for entry in entries:
+        key = form_key(entry.get('form'))
+        if key in ('JPKV7','JPKV7M','JPKV7K','VAT','VAT7','VAT7K'):
+            key = 'JPKVAT'
+        if key in supported:
+            forms.add(key)
+    if not forms:
+        return
+    key = f'checking_obligations_{company_id}'
+    conn.execute('SELECT pg_advisory_xact_lock(748221,%s)',(company_id,))
+    row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE',(key,)).fetchone()
+    value = json.loads(row[0]) if row else {}
+    imported = value.setdefault('imported',{}).setdefault(month,{'forms':{},'sources':{}})
+    imported['forms'].update(dict.fromkeys(sorted(forms),'monthly'))
+    imported.setdefault('sources',{})[source] = {'forms':sorted(forms),
+        'at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+    variants = {form_key(entry.get('form_variant')) for entry in entries}
+    cadences = ({'quarterly'} if variants & {'JPKV7K','VAT7K','VAT7D'} else set()) | (
+                {'monthly'} if variants & {'JPKV7M','VAT7'} else set())
+    imported['sources'][source]['vat_periods'] = sorted(cadences)
+    cadences = {cadence for detail in imported['sources'].values() for cadence in detail.get('vat_periods',[])}
+    imported.pop('vat_period',None)
+    if len(cadences)==1:
+        imported['vat_period'] = next(iter(cadences))
+    conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                 'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',(key,json.dumps(value)))
 
 
 @office_endpoint('app.companies.checking_obligations.save')

@@ -1,7 +1,9 @@
 """Company selection and review for paced office announcements."""
 import csv
+from datetime import datetime
 from math import ceil
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -12,6 +14,9 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_companies import list_mailing_companies
 from app.email.bulk_mail import BulkMailPlan, BulkMailSender, client_addresses, filter_companies
+from app.companies.holiday_eligibility import list_candidates
+from app.utils.background import TaskRunner
+from app.utils.month_names import MONTHS_PL
 
 STATUS_LABELS = {'sent': 'Wysłano', 'blocked': 'Zablokowano przed wysłaniem',
                  'uncertain': 'Wynik niepotwierdzony', 'not_sent': 'Niewysłano'}
@@ -33,6 +38,9 @@ class BulkMailDialog(QDialog):
         self._errors = {}
         self._result = None
         self.attachments = []
+        self.holiday_reader = TaskRunner(self)
+        self.holiday_payload = None
+        self.holiday_loading = False
         for company in self.companies:
             try:
                 self._addresses[company['id']] = client_addresses(company.get('adres_email'))
@@ -65,9 +73,8 @@ class BulkMailDialog(QDialog):
         layout.addLayout(form)
 
         filters = QHBoxLayout()
-        self.activity, self.settlement, self.tax = QComboBox(), QComboBox(), QComboBox()
+        self.activity, self.tax = QComboBox(), QComboBox()
         for label, widget, field in (('Działalność:', self.activity, 'forma_dzialalnosci'),
-                                      ('Rozliczanie:', self.settlement, 'typ_rozliczenia'),
                                       ('Opodatkowanie:', self.tax, 'forma_opodatkowania')):
             widget.addItem('Wszystkie', None)
             for value in sorted({str(row.get(field) or '').strip() for row in self.companies}, key=str.casefold):
@@ -80,13 +87,36 @@ class BulkMailDialog(QDialog):
         self.active_only.toggled.connect(self._render)
         filters.addWidget(self.active_only)
         layout.addLayout(filters)
+        holidays = QHBoxLayout()
+        self.holiday_filter = QCheckBox('Wakacje ZUS — niewykorzystane')
+        self.holiday_year = QSpinBox()
+        self.holiday_year.setRange(2024,2100)
+        today = datetime.now(ZoneInfo('Europe/Warsaw'))
+        self.holiday_year.setValue(today.year + (today.month==12))
+        self.holiday_month = QComboBox()
+        for number,name in enumerate(MONTHS_PL,1):
+            self.holiday_month.addItem(name,number)
+        self.holiday_month.setCurrentIndex(today.month % 12)
+        self.holiday_mode = QComboBox()
+        self.holiday_mode.addItem('Warunki potwierdzone','eligible')
+        self.holiday_mode.addItem('Do weryfikacji','review')
+        self.holiday_edit = QPushButton('Sprawdź / uzupełnij warunki…')
+        self.holiday_edit.clicked.connect(self._edit_holiday_conditions)
+        for widget in (self.holiday_filter,QLabel('Rok ulgi:'),self.holiday_year,QLabel('Miesiąc ulgi:'),self.holiday_month,self.holiday_mode,self.holiday_edit):
+            holidays.addWidget(widget)
+        layout.addLayout(holidays)
+        self.holiday_note = QLabel()
+        self.holiday_note.setWordWrap(True)
+        self.holiday_note.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.holiday_note)
         self.search = QLineEdit()
         self.search.setPlaceholderText('Szukaj firmy po nazwie, NIP-ie lub adresie e-mail…')
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._render)
         layout.addWidget(self.search)
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(['Wyślij', 'Firma', 'Kontaktowy e-mail', 'Działalność', 'Rozliczanie', 'Opodatkowanie'])
+        self.table.setHorizontalHeaderLabels(['Wyślij', 'Firma', 'Kontaktowy e-mail', 'Działalność', 'Opodatkowanie','Wakacje ZUS — osoby / wynik'])
+        self.table.setColumnHidden(5,True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -151,17 +181,90 @@ class BulkMailDialog(QDialog):
         self.sender = BulkMailSender(self)
         self.sender.progress.connect(self._progress)
         self.sender.finished.connect(self._finished)
-        self._controls = (self.account, self.subject, self.body, self.activity, self.settlement, self.tax,
-                          self.active_only, self.search, self.table, self.select_all, self.select_none, self.batch_size, self.pause)
+        self._controls = (self.account, self.subject, self.body, self.activity, self.tax,
+                          self.active_only, self.search, self.table, self.select_all, self.select_none, self.batch_size, self.pause,
+                          self.holiday_filter,self.holiday_year,self.holiday_month,self.holiday_mode,self.holiday_edit)
+        self.holiday_filter.toggled.connect(self._holiday_changed)
+        self.holiday_year.valueChanged.connect(self._holiday_changed)
+        self.holiday_month.currentIndexChanged.connect(self._holiday_changed)
+        self.holiday_mode.currentIndexChanged.connect(self._holiday_mode_changed)
+        self._holiday_changed()
         self._render()
 
+    def _holiday_period(self):
+        return f'{self.holiday_year.value():04d}-{self.holiday_month.currentData():02d}'
+
+    def _holiday_mode_changed(self,*_):
+        # The same SC company can represent different partners in each mode.
+        self._selected.clear()
+        self._render()
+
+    def _holiday_changed(self,*_):
+        enabled = self.holiday_filter.isChecked()
+        for widget in (self.holiday_year,self.holiday_month,self.holiday_mode):
+            widget.setEnabled(enabled)
+        self.table.setColumnHidden(5,not enabled)
+        self.holiday_reader.invalidate()
+        self.holiday_payload = None
+        self.holiday_loading = enabled
+        if not enabled:
+            self.holiday_note.clear()
+            self._render()
+            return
+        month = self._holiday_period()
+        self.holiday_note.setText('Sprawdzanie kodów, warunków i wpisów RWS…')
+        self._render()
+        self.holiday_reader.submit(lambda:list_candidates(self.actor_id,month),self._holiday_loaded,self._holiday_failed)
+
+    def _holiday_loaded(self,payload):
+        self.holiday_payload = payload
+        self.holiday_loading = False
+        from app.email.holiday_conditions_dialog import month_label
+        period = payload['context']
+        self.holiday_note.setText(f"Ulga: {month_label(period['month'])}; wniosek: {month_label(period['application_month'])}; "
+            f"liczba osób i E/R/W: {month_label(period['reference_month'])}. "
+            'Brak danych trafia do weryfikacji. Dla SC wybierani są osobno wspólnicy według indywidualnego NIP-u i e-maila. '
+            'Kolumna wyniku wyjaśnia warunki. Przed każdą partią program ponownie sprawdza odbiorców.')
+        self._render()
+
+    def _holiday_failed(self,_):
+        self.holiday_loading = False
+        self.holiday_payload = None
+        self.holiday_note.setText('Nie udało się sprawdzić uprawnień. Lista jest pusta; wyłącz i włącz filtr, aby ponowić odczyt.')
+        self._render()
+
+    def _edit_holiday_conditions(self):
+        index = self.table.currentRow()
+        if index<0:
+            QMessageBox.information(self,'Wakacje ZUS','Wybierz wiersz firmy. W trybie „Do weryfikacji” uzupełnisz brakujące warunki.')
+            return
+        company_id = self.table.item(index,0).data(Qt.ItemDataRole.UserRole)
+        from app.email.holiday_conditions_dialog import HolidayConditionsDialog
+        dialog = HolidayConditionsDialog(self.actor_id,company_id,self._holiday_period(),self)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            self._holiday_changed()
+
     def _visible(self):
-        return filter_companies(self.companies, query=self.search.text(), activity=self.activity.currentData(),
-                                settlement=self.settlement.currentData(), tax=self.tax.currentData(),
+        rows = self.companies
+        if self.holiday_filter.isChecked():
+            mode = self.holiday_mode.currentData()
+            payload = self.holiday_payload or {}
+            if payload.get('context',{}).get('month')!=self._holiday_period():
+                return []
+            rows = [{**row,'adres_email':row['holiday_addresses'][mode]} for row in payload['companies']
+                    if any(p['status']==mode for p in row['holiday_people'])]
+        return filter_companies(rows, query=self.search.text(), activity=self.activity.currentData(),
+                                tax=self.tax.currentData(),
                                 active_only=self.active_only.isChecked())
 
     def _render(self, *_):
         rows = self._visible()
+        self._addresses,self._errors = {},{}
+        for row in rows:
+            try:
+                self._addresses[row['id']] = client_addresses(row.get('adres_email'))
+            except ValueError as error:
+                self._errors[row['id']] = str(error)
         self._selected.intersection_update(row['id'] for row in rows if row['id'] in self._addresses)
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
@@ -175,8 +278,12 @@ class BulkMailDialog(QDialog):
                 check.setToolTip(self._errors[row['id']])
             self.table.setItem(index, 0, check)
             for column, value in enumerate((row.get('nazwa_skrocona') or row['nazwa'], row.get('adres_email') or 'Brak e-maila',
-                                              row.get('forma_dzialalnosci'), row.get('typ_rozliczenia'), row.get('forma_opodatkowania')), 1):
+                                              row.get('forma_dzialalnosci'), row.get('forma_opodatkowania')), 1):
                 self.table.setItem(index, column, QTableWidgetItem(str(value or '—')))
+            detail = '\n'.join(p['name']+': '+'; '.join(p['reasons']) for p in row.get('holiday_people',[]))
+            item = QTableWidgetItem(detail)
+            item.setToolTip(detail)
+            self.table.setItem(index,5,item)
         self.table.blockSignals(False)
         self._update_count()
 
@@ -222,7 +329,9 @@ class BulkMailDialog(QDialog):
                 ),
                 self.batch_size.value(),
                 self.pause.value(),
-                tuple(self.attachments)
+                tuple(self.attachments),
+                self._holiday_period() if self.holiday_filter.isChecked() else None,
+                self.holiday_mode.currentData()
             )
 
         except ValueError as exc:
@@ -276,6 +385,7 @@ class BulkMailDialog(QDialog):
         if review.exec() != QMessageBox.StandardButton.Yes:
             return
 
+        self.holiday_reader.invalidate()
         for control in self._controls:
             control.setEnabled(False)
 
@@ -351,6 +461,7 @@ class BulkMailDialog(QDialog):
         if self.sender.running:
             self._stop()
             return
+        self.holiday_reader.invalidate()
         super().reject()
 
     def closeEvent(self, event):
@@ -358,4 +469,5 @@ class BulkMailDialog(QDialog):
             self._stop()
             event.ignore()
             return
+        self.holiday_reader.invalidate()
         super().closeEvent(event)

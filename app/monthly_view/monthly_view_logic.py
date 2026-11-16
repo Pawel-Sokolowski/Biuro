@@ -279,7 +279,8 @@ class MonthlyViewLogic:
 
         rows = [dict(r) for r in cur.fetchall()]
         from app.companies.monthly_insurance import read_codes
-        insurance = read_codes(conn,[r['id'] for r in rows],selected_month)
+        permitted = assigned_company_ids(self.pracownik_id)
+        insurance = read_codes(conn,[r['id'] for r in rows if r['id'] in permitted],selected_month)
         for row in rows:
             row.update(insurance.get(row['id'],{}))
         from app.utils.polish_sort import polish_sort_key

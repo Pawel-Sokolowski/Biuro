@@ -118,6 +118,9 @@ class ImportAndMailTests(DbTestCase):
         model = MonthlyViewModel([row],'kadry')
         self.assertEqual(model.data(model.index(0,11)),'051000')
         self.assertIn('ZUS DRA',model.data(model.index(0,11),Qt.ItemDataRole.ToolTipRole))
+        with patch('app.monthly_view.monthly_view_logic.assigned_company_ids',return_value=set()):
+            hidden = logic.get_monthly_rows(selected_month='2026-11',selected_employee=0,selected_status='Wszystkie')
+        self.assertTrue(all('insurance_details' not in r and 'insurance_codes' not in r for r in hidden))
         from app.companies.monthly_insurance import read_codes
         with get_conn() as conn:
             self.assertEqual(read_codes(conn,[self.company],'2026-10'),{})

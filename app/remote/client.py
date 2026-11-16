@@ -1,6 +1,7 @@
 """HTTPS-only desktop transport with a revocable user session, never DB credentials."""
 from pathlib import Path
 import threading
+import logging
 import time
 from urllib.parse import urlsplit
 
@@ -31,6 +32,27 @@ class OfficeClient:
         self._sessions_lock = threading.Lock()
 
     def _request(self,path,payload=None,*,authenticated=True):
+        started = time.perf_counter()
+        try:
+            return self._perform_request(path,payload,authenticated=authenticated)
+        finally:
+            duration = time.perf_counter()-started
+            # Identifiers only: never arguments, URLs, session tokens or firm data.
+            operation = '-'
+            if path=='operations' and isinstance(payload,dict):
+                from app.remote.operations import OPERATIONS
+                candidate = payload.get('operation')
+                if candidate in OPERATIONS:
+                    operation = candidate
+            route = path if path in ('operations','jobs','login','session','files','download','logout','reset','redeem') else '-'
+            from app.remote.performance import record_request
+            record_request(route,operation,duration)
+            if duration >= .25:
+                logging.getLogger(__name__).info(
+                    'office_request_slow route=%s operation=%s duration=%.3f main_thread=%s',
+                    route,operation,duration,threading.current_thread() is threading.main_thread())
+
+    def _perform_request(self,path,payload=None,*,authenticated=True):
         session = getattr(self._local,'session',None)
         if session is None:
             session = self._local.session = requests.Session()

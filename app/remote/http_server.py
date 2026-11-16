@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import json
 import logging
 import ssl
+import socket
 import threading
 
 from app.remote import auth
@@ -193,6 +194,7 @@ class Server(ThreadingHTTPServer):
 
     def get_request(self):
         connection,address = super().get_request()
+        connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
         connection.settimeout(10)
         return self.tls_context.wrap_socket(connection,server_side=True,do_handshake_on_connect=False),address
 

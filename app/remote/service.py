@@ -110,6 +110,7 @@ class OfficeService:
                 del self.objects[key]
 
     def _execute(self,job,token,actor,operation,spec,values,object_id):
+        started = time.perf_counter()
         try:
             _operation_owner.set(job['owner'])
             with service_scope(actor):
@@ -207,6 +208,10 @@ class OfficeService:
                 logger.exception('office_operation_failed operation=%s employee_id=%s',operation,actor)
             with self.lock:
                 job.update(state='failed',message=safe_error(error),permission=isinstance(error,PermissionError))
+        finally:
+            duration = time.perf_counter()-started
+            if duration >= .25:
+                logger.info('office_operation_slow operation=%s duration=%.3f',operation,duration)
 
     def _invoke(self,function,bound,spec,operation,actor):
         from app.remote.secrets import restore,secret_name,PRESENT

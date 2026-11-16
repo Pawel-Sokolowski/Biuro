@@ -45,6 +45,21 @@ class OfficeServiceTests(DbTestCase):
             time.sleep(.01)
         self.fail('Service operation did not complete')
 
+    def test_operation_cache_is_shared_within_job_but_not_between_jobs(self):
+        from app.utils.request_cache import cached_value
+        loader = mock.Mock(side_effect=['first','second'])
+        def company(firma_id):
+            first = cached_value('office-cache-regression',loader)
+            second = cached_value('office-cache-regression',loader)
+            self.assertEqual(first,second)
+            return {'id':firma_id,'nazwa':first}
+        with mock.patch('app.db.dao_companies.get_company',new=company):
+            first = self.call('app.db.dao_companies.get_company',{'firma_id':self.company},token=self.admin)
+            second = self.call('app.db.dao_companies.get_company',{'firma_id':self.company},token=self.admin)
+        self.assertEqual(first['nazwa'],'first')
+        self.assertEqual(second['nazwa'],'second')
+        self.assertEqual(loader.call_count,2)
+
     def test_database_uses_hashed_session_tokens_and_revokes_on_password_change(self):
         with get_conn() as conn:
             value = conn.execute('SELECT token_hash FROM office_api_sessions WHERE employee_id=%s',(self.employee,)).fetchone()[0]

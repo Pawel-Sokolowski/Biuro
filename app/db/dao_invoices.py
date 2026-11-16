@@ -550,18 +550,18 @@ def create_manual_invoice(
     rodzaj: str = "faktura",
     *, actor_id: Optional[int] = None,
 ) -> int:
-    """Tworzy robocz\u0105 faktur\u0119 r\u0119czn\u0105 (zwyk\u0142\u0105, zaliczkow\u0105 lub proforma) dla firmy lub kontrahenta."""
+    """Tworzy roboczą fakturę ręczną (zwykłą, zaliczkową lub proforma) dla firmy lub kontrahenta."""
     if actor_id is not None and not can_manage_invoices(actor_id):
         raise PermissionError('Brak dostępu do obsługi faktur.')
     if rodzaj not in ("faktura", "zaliczkowa", "proforma"):
-        raise ValueError("Nieobs\u0142ugiwany rodzaj dokumentu.")
+        raise ValueError("Nieobsługiwany rodzaj dokumentu.")
     if buyer_type not in ("firma", "kontrahent"):
-        raise ValueError("Wybierz nabywc\u0119 faktury.")
+        raise ValueError("Wybierz nabywcę faktury.")
     if not positions:
-        raise ValueError("Faktura musi zawiera? co najmniej jedn? pozycj?.")
+        raise ValueError("Faktura musi zawierać co najmniej jedną pozycję.")
     normalized = [normalize_position(position) for position in positions]
     if any(not item.get("nazwa") for item in normalized):
-        raise ValueError("Ka\u017Cda pozycja musi mie\u0107 nazw\u0119.")
+        raise ValueError("Każda pozycja musi mieć nazwę.")
     netto, brutto = totals(normalized)
     conn = get_conn()
     try:

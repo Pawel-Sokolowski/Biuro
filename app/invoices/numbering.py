@@ -4,7 +4,8 @@ from string import Formatter
 
 KEY = 'faktury_wzor_numeracji'
 DEFAULT = '{prefix}/{number:04d}/{month:02d}/{year}'
-
+FZAL = 'ZAL/{number:04d}/{month:02d}/{year}'
+FKOR = 'KOR/{number:04d}/{month:02d}/{year}'
 
 def compile_pattern(template, prefix, issued):
     if not template or len(template) > 160 or any(ord(c) < 32 for c in template):

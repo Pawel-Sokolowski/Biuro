@@ -27,6 +27,21 @@ logger = logging.getLogger(__name__)
 JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh')
 
 
+def _env_int(name, default, minimum, maximum):
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, value))
+
+
+# Nine jobs do not need nine concurrent database clients. A smaller executor leaves
+# pool capacity for UI/API requests and avoids a startup connection storm.
+WORKER_THREADS = _env_int('BIO_WORKER_THREADS', 4, 1, len(JOBS))
+HEARTBEAT_SECONDS = _env_int('BIO_WORKER_HEARTBEAT_SECONDS', 10, 5, 60)
+LEADER_CHECK_SECONDS = _env_int('BIO_WORKER_LEADER_CHECK_SECONDS', 15, 5, 60)
+
+
 def mail_job(stop=None):
     from app.email.email_storage import get_all_email_accounts
     from app.email.email_sync import sync_automatic_accounts
@@ -145,7 +160,16 @@ def leadership():
     """A dedicated session lock prevents two workers for the same database/schema."""
     import psycopg
     from psycopg import sql
-    conn = psycopg.connect(get_dsn(), connect_timeout=10, autocommit=True)
+    conn = psycopg.connect(
+        get_dsn(),
+        connect_timeout=10,
+        autocommit=True,
+        application_name='biuro-worker-leader',
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
+    )
     key = None
     acquired = False
     try:
@@ -170,7 +194,7 @@ def serve(*, once=False, stop=None):
     stop = stop or threading.Event()
     running, last_started, statuses = {}, {}, {}
     events = json.loads(get_setting('background_worker_events') or '[]')[-200:]
-    with leadership() as leader, ThreadPoolExecutor(max_workers=len(JOBS)) as pool:
+    with leadership() as leader, ThreadPoolExecutor(max_workers=WORKER_THREADS, thread_name_prefix='biuro-job') as pool:
         from app.services.checking_refresh import recover_interrupted
         recover_interrupted()
         from app.version import __version__
@@ -179,8 +203,13 @@ def serve(*, once=False, stop=None):
                     'version':__version__,'executable':str(Path(sys.executable).resolve()),
                     'config_file':str(worker_env_path()),
                     'started_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+        last_leader_check = 0.0
+        last_heartbeat_write = 0.0
         while not stop.is_set():
-            leader.execute('SELECT 1')  # Stop scheduling immediately if leadership disconnects.
+            now_monotonic = clock.monotonic()
+            if now_monotonic - last_leader_check >= LEADER_CHECK_SECONDS:
+                leader.execute('SELECT 1')  # Detect a lost leadership session before scheduling more work.
+                last_leader_check = now_monotonic
             settings = load_settings()
             settings_checked_at = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
             events_changed = False
@@ -231,10 +260,14 @@ def serve(*, once=False, stop=None):
                     status['next_run_at'] = next_run.isoformat()
                 else:
                     status.pop('next_run_at', None)
-            set_setting('background_worker_heartbeat', json.dumps({
-                'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
-                'instance':instance,'settings_checked_at':settings_checked_at,
-                'enabled': settings['enabled'], 'jobs': statuses}))
+            now_monotonic = clock.monotonic()
+            if (now_monotonic - last_heartbeat_write >= HEARTBEAT_SECONDS or
+                    events_changed or (once and not running)):
+                set_setting('background_worker_heartbeat', json.dumps({
+                    'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
+                    'instance':instance,'settings_checked_at':settings_checked_at,
+                    'enabled': settings['enabled'], 'jobs': statuses}))
+                last_heartbeat_write = now_monotonic
             if once and not running:
                 return int(any(value['state'] == 'failed' for value in statuses.values()))
             stop.wait(1 if once else 5)

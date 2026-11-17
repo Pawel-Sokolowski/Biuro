@@ -64,3 +64,5 @@ worker.env
 *.p12
 enova-schema-*.json
 platnik-schema*.json
+/app/email/email_sync.py.before_email_speed_fix
+/scripts/measure_imap.py.before_email_speed_fix

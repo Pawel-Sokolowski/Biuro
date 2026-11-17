@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import threading
 from contextlib import contextmanager
 from time import perf_counter
@@ -70,7 +71,25 @@ def _row_factory(cursor):
     )
 
 
-_POOL_MAX = 8
+# Keep one connection warm so the first UI/worker query after an idle period does
+# not pay for DNS, TCP/TLS and PostgreSQL authentication.  Values remain bounded
+# and can be tuned per installation without a code change.
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, value))
+
+
+_POOL_MIN = _env_int("BIO_DB_POOL_MIN", 1, 0, 8)
+_POOL_MAX = _env_int("BIO_DB_POOL_MAX", 8, 1, 32)
+_POOL_IDLE = _env_int("BIO_DB_POOL_IDLE", 300, 30, 3600)
+_POOL_TIMEOUT = _env_int("BIO_DB_POOL_TIMEOUT", 10, 1, 60)
+
+# Never allow min_size to exceed max_size if an administrator supplied
+# inconsistent environment values.
+_POOL_MIN = min(_POOL_MIN, _POOL_MAX)
 
 _pool: dict[
     tuple[str, str | None],
@@ -362,15 +381,16 @@ def _get_connection(
 
             pool = ConnectionPool(
                 dsn,
-                min_size=0,
+                min_size=min(_POOL_MIN, max_size),
                 max_size=max_size,
-                timeout=10,
-                max_idle=60,
+                timeout=_POOL_TIMEOUT,
+                max_idle=_POOL_IDLE,
                 max_lifetime=1800,
                 kwargs={
                     "row_factory": _row_factory,
                     "options": options,
-                    "connect_timeout": 10,
+                    "connect_timeout": _POOL_TIMEOUT,
+                    "application_name": "biuro",
                 },
                 check=ConnectionPool.check_connection,
                 open=True,

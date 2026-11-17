@@ -63,7 +63,7 @@ from app.utils.sync_lock import account_sync_lock
 logger = logging.getLogger(__name__)
 
 HEADER_BATCH = 100
-INCREMENTAL_PREFETCH_LIMIT = 20
+INCREMENTAL_PREFETCH_LIMIT = 5
 
 # Synchronizacje tego samego konta nie mogą pobierać równocześnie tych samych wiadomości.
 _ACCOUNT_SYNC_LOCKS = {}
@@ -288,17 +288,15 @@ def list_folder_infos(
         )
         return []
 
-    imap_conn = _connect_imap(account, timeout)
+    with _shared_session(konto_id, timeout) as session:
+        if session is None:
+            logger.debug(
+                "list_folder_infos: brak połączenia IMAP dla konta %s",
+                konto_id,
+            )
+            return []
 
-    if not imap_conn:
-        logger.debug(
-            "list_folder_infos: brak połączenia IMAP dla konta %s",
-            konto_id,
-        )
-        return []
-
-    try:
-        typ, folders = imap_conn.list()
+        typ, folders = session.conn.list()
 
         logger.info(
             "IMAP LIST konto=%s typ=%s folders=%s",
@@ -352,15 +350,6 @@ def list_folder_infos(
             result.values(),
             key=lambda i: i["name"],
         )
-
-    finally:
-        try:
-            imap_conn.logout()
-        except Exception:
-            logger.warning(
-                "Zignorowany błąd logout",
-                exc_info=True,
-            )
 
 
 @office_endpoint('app.email.email_sync.list_folders')
@@ -1273,19 +1262,22 @@ def _sync_folder_once(konto_id: int, folder: str, full_sync: bool, entire_mailbo
         **_revision_args(flags.get("account_revision")),
     )
 
-    try:
-        backfill_refs(
-            konto_id,
-            folder,
-            folder_id,
-        )
-    except MailboxGenerationChanged:
-        raise
-    except Exception:
-        logger.warning(
-            "Nie udało się pobrać nagłówków wątków",
-            exc_info=True,
-        )
+    # Uzupełnianie referencji historycznych jest kosztowne. Nie wykonuj go
+    # podczas zwykłego odpytywania o nowe wiadomości.
+    if full_sync or entire_mailbox:
+        try:
+            backfill_refs(
+                konto_id,
+                folder,
+                folder_id,
+            )
+        except MailboxGenerationChanged:
+            raise
+        except Exception:
+            logger.warning(
+                "Nie udało się pobrać nagłówków wątków",
+                exc_info=True,
+            )
 
     if "all" in flags:
         cutoff = (
@@ -1753,7 +1745,7 @@ def rename_folder(konto_id: int, old: str, new_name: str) -> str:
 
 
 _STATUS_RE = re.compile(r"(UIDVALIDITY|UIDNEXT|MESSAGES|UNSEEN)\s+(\d+)", re.IGNORECASE)
-FULL_SWEEP_EVERY = 10
+FULL_SWEEP_EVERY = 60
 _auto_runs: Dict[int, int] = {}
 
 
@@ -1852,9 +1844,13 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Synchronizacja przerwana.")
-            if not list_folders_from_imap_and_store(konto_id):
-                raise ConnectionError("Nie udało się odświeżyć listy folderów IMAP.")
+            # Lista folderów jest przechowywana w PostgreSQL. Nie wykonuj LIST
+            # podczas każdego pollingu. Odśwież ją tylko, gdy baza nie ma folderów.
             folders = selectable_folder_names(konto_id)
+            if not folders:
+                if not list_folders_from_imap_and_store(konto_id):
+                    raise ConnectionError("Nie udało się odświeżyć listy folderów IMAP.")
+                folders = selectable_folder_names(konto_id)
             priority = [current_folder] if konto_id == current_account_id and current_folder in folders else []
             if "INBOX" in folders:
                 priority.append("INBOX")
@@ -1867,9 +1863,15 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
             full_sweep = get_setting(sweep_key) != today or run_number % FULL_SWEEP_EVERY == 0
             changed, snapshot = _changed_folders(konto_id, folders, force_full=full_sweep)
             logger.info("Konto %s: zmienione foldery %s z %s", konto_id, len(changed), len(folders))
-            # STATUS is only a header-discovery optimization. Flag changes from
-            # another IMAP client may leave its aggregate counts unchanged.
-            for folder in folders:
+            # SEARCH ALL/UNSEEN jest najdroższą częścią pollingu. W zwykłym
+            # przebiegu sprawdzaj flagi tylko w folderach zmienionych według STATUS
+            # oraz w aktualnie otwartym folderze i INBOX. Pełny przegląd pozostaje
+            # okresowym zabezpieczeniem spójności.
+            priority_folders = [folder for folder in priority if folder]
+            flag_folders = folders if full_sweep else list(
+                dict.fromkeys(priority_folders + changed)
+            )
+            for folder in flag_folders:
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("Synchronizacja przerwana.")
                 if sync_folder_flags(konto_id, folder) and on_headers:
@@ -1908,26 +1910,40 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         futures = [pool.submit(copy_context().run, headers, account) for account in ordered]
         jobs = [future.result() for future in futures]
     errors = [error for _, _, error in jobs if error]
-    # Body prefetch cannot postpone other accounts' header/unread updates.
-    for konto_id, folders, error in jobs:
+
+    def prefetch_job(konto_id, folder):
         if cancel_event is not None and cancel_event.is_set():
-            break
+            return None
+        try:
+            lock = _account_sync_lock(konto_id)
+            if not lock.acquire(blocking=False):
+                return None
+            try:
+                with account_sync_lock(konto_id) as leader:
+                    if leader:
+                        prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
+            finally:
+                lock.release()
+        except Exception as exc:
+            return f"Konto #{konto_id}, {folder}: {exc}"
+        return None
+
+    # Treści różnych kont pobieraj równolegle. Wolne konto nie blokuje szybkiego.
+    body_jobs = []
+    for konto_id, folders, error in jobs:
         if error:
             continue
-        wanted = [folder for folder in folders if folder == "INBOX" or (konto_id == current_account_id and folder == current_folder)]
-        for folder in wanted:
-            try:
-                lock = _account_sync_lock(konto_id)
-                if not lock.acquire(blocking=False):
-                    continue
-                try:
-                    with account_sync_lock(konto_id) as leader:
-                        if leader:
-                            prefetch_recent(konto_id, folder, INCREMENTAL_PREFETCH_LIMIT)
-                finally:
-                    lock.release()
-            except Exception as exc:
-                errors.append(f"Konto #{konto_id}, {folder}: {exc}")
+        wanted = [
+            folder for folder in folders
+            if folder == "INBOX"
+            or (konto_id == current_account_id and folder == current_folder)
+        ]
+        body_jobs.extend((konto_id, folder) for folder in wanted)
+
+    if body_jobs:
+        with ThreadPoolExecutor(max_workers=min(4, len(body_jobs))) as pool:
+            futures = [pool.submit(prefetch_job, konto_id, folder) for konto_id, folder in body_jobs]
+            errors.extend(error for error in (future.result() for future in futures) if error)
     return errors
 
 

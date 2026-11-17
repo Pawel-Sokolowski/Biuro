@@ -99,6 +99,42 @@ class InvoiceSettings(QWidget):
         layout.addWidget(self.number_preview)
         self.number_pattern.textChanged.connect(self._preview_number)
         self._preview_number()
+        layout.addWidget(QLabel("Wzór numeracji faktur korekt:"))
+        self.number_pattern = QLineEdit(self.logic.get_setting(NUMBER_KEY) or NUMBER_DEFAULT)
+        layout.addWidget(self.number_pattern)
+        layout.addWidget(QLabel("Pola: {prefix}, {number:04d}, {month:02d}, {year}. "
+                                "Bez pola month numeracja jest roczna. Dotychczasowe numery pozostają bez zmian."))
+        self.number_preview = QLabel()
+        layout.addWidget(self.number_preview)
+        self.number_pattern.textChanged.connect(self._preview_number)
+        self._preview_number()
+        layout.addWidget(QLabel("Wzór numeracji nowych faktur zaliczkowych:"))
+        self.number_pattern = QLineEdit(self.logic.get_setting(NUMBER_KEY) or NUMBER_DEFAULT)
+        layout.addWidget(self.number_pattern)
+        layout.addWidget(QLabel("Pola: {prefix}, {number:04d}, {month:02d}, {year}. "
+                                "Bez pola month numeracja jest roczna. Dotychczasowe numery pozostają bez zmian."))
+        self.number_preview = QLabel()
+        layout.addWidget(self.number_preview)
+        self.number_pattern.textChanged.connect(self._preview_number)
+        self._preview_number()
+        layout.addWidget(QLabel("Wzór numeracji faktur korekt:"))
+        self.number_pattern = QLineEdit(self.logic.get_setting(NUMBER_KEY) or NUMBER_DEFAULT)
+        layout.addWidget(self.number_pattern)
+        layout.addWidget(QLabel("Pola: {prefix}, {number:04d}, {month:02d}, {year}. "
+                                "Bez pola month numeracja jest roczna. Dotychczasowe numery pozostają bez zmian."))
+        self.number_preview = QLabel()
+        layout.addWidget(self.number_preview)
+        self.number_pattern.textChanged.connect(self._preview_number)
+        self._preview_number()
+        layout.addWidget(QLabel("Wzór numeracji nowych faktur zaliczkowych:"))
+        self.number_pattern = QLineEdit(self.logic.get_setting(NUMBER_KEY) or NUMBER_DEFAULT)
+        layout.addWidget(self.number_pattern)
+        layout.addWidget(QLabel("Pola: {prefix}, {number:04d}, {month:02d}, {year}. "
+                                "Bez pola month numeracja jest roczna. Dotychczasowe numery pozostają bez zmian."))
+        self.number_preview = QLabel()
+        layout.addWidget(self.number_preview)
+        self.number_pattern.textChanged.connect(self._preview_number)
+        self._preview_number()
         # -------------------------
         # Metoda kasowa
         # -------------------------

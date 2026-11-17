@@ -143,6 +143,7 @@ a = Analysis(
           for m in collect_submodules(
               pkg, filter=lambda name: runtime_module(name) and not name.startswith(("caldav.jmap", "niquests.extensions.pyodide")))],
         "PyQt6.QtCharts",
+        "PyQt6.QtCore",
         "PyQt6.QtWebEngineCore",
         "PyQt6.QtWebEngineWidgets",
         "openpyxl",

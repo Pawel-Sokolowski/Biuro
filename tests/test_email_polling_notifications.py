@@ -56,10 +56,14 @@ class AutomaticSyncTests(unittest.TestCase):
         worker.start()
         self.assertTrue(acquired.wait(2))
         try:
-            with patch.object(email_sync, 'list_folders_from_imap_and_store', return_value=True) as discovery, patch.object(email_sync, 'selectable_folder_names', return_value=['INBOX']), patch.object(email_sync, 'sync_and_prefetch') as sync, patch.object(email_sync, 'prefetch_recent') as bodies:
+            with patch.object(email_sync,'get_folders_for_account',return_value=[{'server_name':'INBOX'}]), \
+                 patch.object(email_sync,'list_folders_from_imap_and_store',return_value=True) as discovery, \
+                 patch.object(email_sync,'selectable_folder_names',return_value=['INBOX']), \
+                 patch.object(email_sync,'sync_and_prefetch') as sync, \
+                 patch.object(email_sync,'prefetch_recent') as bodies:
                 for _ in range(2):
                     self.assertEqual(email_sync.sync_automatic_accounts([{'id':901},{'id':902}]), [])
-                self.assertEqual([call.args[0] for call in discovery.call_args_list], [902,902])
+                discovery.assert_not_called()
                 self.assertEqual([call.args[0] for call in sync.call_args_list], [902,902])
                 self.assertEqual([call.args[0] for call in bodies.call_args_list], [902,902])
         finally:
@@ -99,29 +103,27 @@ class AutomaticSyncTests(unittest.TestCase):
         class Ctx:
             def __enter__(self): return object()
             def __exit__(self, *a): return False
-        def run():
-            with patch.object(email_sync, 'list_folders_from_imap_and_store', return_value=True), \
-                 patch.object(email_sync, 'selectable_folder_names', return_value=list(status)), \
-                 patch.object(email_sync, '_shared_session', return_value=Ctx()), \
-                 patch.object(email_sync, '_folder_status', side_effect=lambda s, f: status[f]), \
-                 patch.object(email_sync, 'get_setting', side_effect=lambda k: saved.get(k)), \
-                 patch.object(email_sync, 'set_setting', side_effect=lambda k, v: saved.__setitem__(k, v)), \
-                 patch.object(email_sync, 'sync_folder_flags', return_value=0) as flags, \
-                 patch.object(email_sync, 'sync_and_prefetch') as sync, \
-                 patch.object(email_sync, 'prefetch_recent', return_value=0):
-                self.assertEqual(email_sync.sync_automatic_accounts([{'id': 77}]), [])
-                self.assertEqual([call.args[1] for call in flags.call_args_list], list(status))
+        def run(expected_flags):
+            with patch.object(email_sync,'get_folders_for_account',return_value=[{'server_name':name,'attributes':''} for name in status]), \
+                 patch.object(email_sync,'list_folders_from_imap_and_store',return_value=True), \
+                 patch.object(email_sync,'selectable_folder_names',return_value=list(status)), \
+                 patch.object(email_sync,'_shared_session',return_value=Ctx()), \
+                 patch.object(email_sync,'_folder_status',side_effect=lambda s,f:status[f]), \
+                 patch.object(email_sync,'get_setting',side_effect=lambda k:saved.get(k)), \
+                 patch.object(email_sync,'set_setting',side_effect=lambda k,v:saved.__setitem__(k,v)), \
+                 patch.object(email_sync,'sync_folder_flags',return_value=0) as flags, \
+                 patch.object(email_sync,'sync_and_prefetch') as sync, \
+                 patch.object(email_sync,'prefetch_recent',return_value=0):
+                self.assertEqual(email_sync.sync_automatic_accounts([{'id':77}]),[])
+                self.assertEqual([call.args[1] for call in flags.call_args_list],expected_flags)
                 return [call.args[1] for call in sync.call_args_list]
-        self.assertEqual(run(), [['INBOX', 'Clients', 'Archive']])
-        self.assertEqual(run(), [])
-        status['Clients'] = 'MESSAGES=3,UIDNEXT=4'
-        self.assertEqual(run(), [['Clients']])
-        # Read flags were checked on every pass above. The periodic header
-        # sweep still runs after ten passes even without a STATUS change.
-        for _ in range(7):
-            self.assertEqual(run(), [])
-        self.assertEqual(run(), [['INBOX', 'Clients', 'Archive']])
-
+        self.assertEqual(run(['INBOX','Clients','Archive']),[['INBOX','Clients','Archive']])
+        self.assertEqual(run(['INBOX']),[])
+        status['Clients']='MESSAGES=3,UIDNEXT=4'
+        self.assertEqual(run(['INBOX','Clients']),[['Clients']])
+        for _ in range(email_sync.FULL_SWEEP_EVERY - 3):
+            self.assertEqual(run(['INBOX']),[])
+        self.assertEqual(run(['INBOX','Clients','Archive']),[['INBOX','Clients','Archive']])
 
     def test_manual_sync_requests_all_two_year_messages_only_for_selected_accounts(self):
         with patch.object(email_sync,'set_setting') as setting, patch.object(email_sync,'sync_and_prefetch') as sync:
@@ -138,7 +140,12 @@ class AutomaticSyncTests(unittest.TestCase):
         with patch.object(email_sync,'delete_missing_folders') as delete:
             email_sync._store_folders(1,[])
             delete.assert_not_called()
-        with patch.object(email_sync,'list_folders_from_imap_and_store',side_effect=lambda account:account!=1), \
+        def cached_folders(account_id):
+            if account_id==1:
+                return []
+            return [{'server_name':'INBOX','attributes':''}]
+        with patch.object(email_sync,'get_folders_for_account',side_effect=cached_folders), \
+             patch.object(email_sync,'list_folders_from_imap_and_store',side_effect=lambda account:account!=1), \
              patch.object(email_sync,'selectable_folder_names',return_value=['INBOX']), \
              patch.object(email_sync,'sync_and_prefetch') as sync, \
              patch.object(email_sync,'prefetch_recent',return_value=0):

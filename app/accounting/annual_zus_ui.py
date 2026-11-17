@@ -1,8 +1,9 @@
 """Annual source evidence, kept separate from manually completed year-end filings."""
+from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QTableWidget, QTableWidgetItem, QAbstractItemView
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,  QTableWidgetItem, QAbstractItemView
 from app.integrations.platnik.declarations import read_year
 from app.accounting.report_types import form_key
 from app.utils.background import TaskRunner
@@ -32,7 +33,7 @@ class AnnualZusPanel(QWidget):
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
-        self.table = QTableWidget(0, 8)
+        self.table = FrozenFirstColumnTable(0, 8)
         self.table.setHorizontalHeaderLabels(['Firma', 'NIP', 'Dokument', 'Identyfikator raportu',
                                              'Osoba', 'Status źródłowy', 'UPO', 'Odczyt'])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

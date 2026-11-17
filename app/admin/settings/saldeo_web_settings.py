@@ -76,7 +76,7 @@ class SaldeoWebSettings(QWidget):
         layout = QVBoxLayout(self)
         note = QLabel('Monitoring odczytuje historię wewnątrz Saldeo, również przeczytane wpisy. '
                       'Edge lub Chrome musi być zainstalowany na serwerze. Sesja przeglądarki jest lokalna '
-                      'dla konta Windows workera. Po pierwszym logowaniu zamknij okno przeglądarki. '
+                      'dla konta Windows workera. Po potwierdzeniu zalogowania okno przeglądarki zamknie się automatycznie. '
                       'Selektory CSS muszą odpowiadać rzeczywistemu widokowi historii Saldeo; nie są zgadywane. '
                       'Nie wskazuj listy pokazującej wyłącznie nieprzeczytane wpisy. '
                       'Podczas ręcznego logowania rozpoznajemy jednoznaczne pola formularza, bez odczytu wpisanych haseł. '
@@ -139,15 +139,18 @@ class SaldeoWebSettings(QWidget):
             layout.addWidget(button)
         layout.addWidget(SaldeoHistory(actor_id))
 
+    def persist(self):
+        config = {key:field.text().strip() for key,field in self.fields.items()}
+        config.update(enabled=self.enabled.isChecked(),channel=self.channel.currentData(),executable_path=self.executable.text().strip(),
+                      max_pages=self.pages.value(),pause_seconds=self.pause.value())
+        save(config,self.actor_id,self.password.text())
+        self.password.clear()
+
     def save(self):
         try:
-            config = {key: field.text().strip() for key, field in self.fields.items()}
-            config.update(enabled=self.enabled.isChecked(), channel=self.channel.currentData(), executable_path=self.executable.text().strip(),
-                          max_pages=self.pages.value(), pause_seconds=self.pause.value())
-            save(config, self.actor_id, self.password.text())
-            self.password.clear()
+            self.persist()
             self.status.setText('Zapisano. Skonfiguruj i sprawdź widok na koncie Saldeo przed włączeniem automatu.')
-        except (ValueError, PermissionError) as error:
+        except (ValueError,PermissionError) as error:
             self.status.setText(str(error))
 
     def choose_browser(self):
@@ -176,6 +179,11 @@ class SaldeoWebSettings(QWidget):
         if client() is not None:
             self.status.setText('Pierwsze logowanie Saldeo i 2FA wykonaj w panelu workera na serwerze.')
             return
+        try:
+            self.persist()
+        except (ValueError,PermissionError) as error:
+            self.status.setText('Nie otwarto logowania: '+str(error))
+            return
         args = [sys.executable, '--saldeo-login'] if getattr(sys,'frozen',False) else [sys.executable, '-m', 'app.integrations.saldeo_web.login']
         try:
             process = subprocess.Popen(args)
@@ -192,11 +200,20 @@ class SaldeoWebSettings(QWidget):
             for key in ('username_selector','password_selector','submit_selector'):
                 if not self.fields[key].text().strip() and config.get(key):
                     self.fields[key].setText(config[key])
-            self.status.setText('Zamknięto okno logowania. Wczytano rozpoznane pola, jeśli formularz był jednoznaczny. '
-                                'Wykrywanie historii powiadomień nadal wymaga dopasowania widoku.')
+            if process.returncode==0:
+                self.status.setText('Potwierdzono zalogowanie w Saldeo. Sesję zapisano dla tego konta Windows. Możesz sprawdzić monitoring.')
+            elif process.returncode==2:
+                self.status.setText('Nie potwierdzono zalogowania. Dokończ 2FA/CAPTCHA albo sprawdź dane logowania i selektor zalogowanej strony.')
+            else:
+                self.status.setText('Nie ukończono logowania. Sprawdź komunikat okna logowania, konto administratora i dostęp do profilu przeglądarki.')
         self.login_timer.timeout.connect(completed)
         self.login_timer.start()
-        self.status.setText('Otwieranie przeglądarki. Sesja dotyczy tego konta Windows. Worker zaczeka, jeśli profil jest zajęty.')
+        saved = load()
+        if saved.get('username') and saved.get('password_enc'):
+            message = 'Program spróbuje raz użyć zapisanego loginu i hasła. 2FA/CAPTCHA dokończ ręcznie.'
+        else:
+            message = 'Brak zapisanego loginu lub hasła — zaloguj się ręcznie w otwartej przeglądarce.'
+        self.status.setText(message+' Po potwierdzeniu sesji okno zamknie się automatycznie.')
 
     def check(self):
         from app.integrations.saldeo_web.sync import run

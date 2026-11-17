@@ -13,8 +13,8 @@ def main():
         return 1
     try:
         from .browser import login_window
-        login_window(actor_id=login.pracownik_id)
-        return 0
+        connected = login_window(actor_id=login.pracownik_id)
+        return 0 if connected else 2
     except ValueError as error:
         QMessageBox.warning(None, 'Saldeo', str(error))
         return 1

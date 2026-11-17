@@ -51,7 +51,7 @@ MANUAL = {
  'app.services.settings':'is_admin get_global_roles get_email_settings',
  'app.services.worker_settings':'load_settings save_settings',
  'app.services.worker_monitor':'snapshot',
- 'app.services.checking_refresh':'enqueue latest',
+ 'app.services.checking_refresh':'enqueue latest run_now',
  'app.services.email_reminders':'load_settings save_settings',
  'app.services.manual_reminders':'prepare send',
  'app.email.email_actions':'send_email_smtp send_batch_emails choose_copy_folder store_sent_copy add_filter mark_read mark_unread delete_email',

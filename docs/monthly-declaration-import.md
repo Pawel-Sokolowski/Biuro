@@ -95,3 +95,29 @@ blokady pozwalają na ponowienie w poniedziałek z dotychczasowym odstępem zada
 Gdy worker jest wyłączony przez cały poniedziałek, następny automatyczny termin
 to kolejny poniedziałek; pobranie ręczne pozostaje dostępne. Poczta zachowuje
 obecny harmonogram i sposób działania.
+
+## Pobierz teraz — bez kolejki
+
+Przyciski pobierania w Sprawdzaniu uruchamiają operację od razu na serwerze
+przez API Biura. Nie zależą od głównego przełącznika automatycznych zadań
+ani od obsługi wcześniejszych zleceń kolejki. Interfejs pozostaje aktywny,
+a serwer wykonuje odczyt z zapisanymi danymi dostępu.
+
+W ustawieniach Płatnika przycisk **Pobierz wszystkie deklaracje za rok z Płatnika**
+obejmuje wszystkie zaznaczone firmy, 12 miesięcy DRA/RCA/RSA/RPA/RZA i formularzy
+zgłoszeniowych oraz IWA/ZSWA. Nie próbuje łączyć się z Enovą. Odpowiedni przycisk
+Enovy pobiera wyłącznie Enovę. Globalny przycisk w konfiguracji workera i
+Sprawdzaniu nadal obejmuje oba źródła. Domyślnie wybrany jest bieżący rok i
+wszystkie firmy; ręczne ustawienia obowiązków nie są wyłączane ani nadpisywane.
+Wynik pokazuje liczbę dokumentów miesięcznych i rocznych Płatnika oraz błędy.
+
+Wyłączenie automatycznego odczytu formularzy nie blokuje jawnie uruchomionego
+pobrania dla wybranych firm. Zajęte źródło lub inny trwający import daje
+konkretny błąd do ponowienia, bez pozostawiania nowego żądania w kolejce.
+Starsze zlecenia kolejki zachowują dotychczasową obsługę. Nowy klient sprawdza
+przy logowaniu możliwość `checking_run_now`; starszy serwer wyświetla potrzebę
+aktualizacji workera/API zamiast bezskutecznie przyjmować nowy import.
+
+W tabelach Sprawdzania pierwsza kolumna jest przypięta. Nazwa firmy i zaznaczenie
+wiersza pozostają widoczne podczas przewijania poziomego; dane i widok przypięty
+korzystają z tego samego modelu, bez osobnej kopii wyników.

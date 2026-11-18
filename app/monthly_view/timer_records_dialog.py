@@ -1,3 +1,4 @@
+import calendar
 from datetime import datetime
 from PyQt6.QtCore import QDateTime, Qt
 from PyQt6.QtWidgets import (
@@ -6,8 +7,8 @@ from PyQt6.QtWidgets import (
 )
 
 from app.db.dao_timers import (
-    DEPARTMENTS, SOURCE_IMPORT, add_extra_service_to_catalogue, delete_company_timers, list_company_timers,
-    list_extra_service_catalogue, list_employee_timers, update_company_timer,
+    DEPARTMENTS, SOURCE_IMPORT, add_extra_service_to_catalogue, add_manual_time, delete_company_timers,
+    list_company_timers, list_extra_service_catalogue, list_employee_timers, update_company_timer,
 )
 
 _DEPARTMENT_NAMES = dict(DEPARTMENTS)
@@ -168,6 +169,124 @@ class EditTimerRecordDialog(QDialog):
         return self.activity.currentText() if self.activity_id() else ""
 
 
+class AddManualTimeDialog(QDialog):
+    def __init__(self, actor_id: int, employees, parent=None, *, selected_employee=None, selected_month=None):
+        super().__init__(parent)
+        self.actor_id = actor_id
+        self.setWindowTitle("Dodaj czas ręcznie")
+        self.setMinimumWidth(560)
+        form = QFormLayout(self)
+
+        self.employee = QComboBox()
+        for employee_id, label in employees:
+            self.employee.addItem(label, employee_id)
+        index = self.employee.findData(selected_employee or actor_id)
+        self.employee.setCurrentIndex(max(index, 0))
+
+        self.month = MonthPicker(selected_month or datetime.now().strftime("%Y-%m"))
+        self.company = QComboBox()
+        self.company.addItem("— bez firmy —", None)
+        from app.remote.screen_data import company_identities
+        for company in company_identities(short_names=True):
+            self.company.addItem(company["nazwa"], company["id"])
+
+        self.department = QComboBox()
+        for key, label in DEPARTMENTS:
+            self.department.addItem(label, key)
+
+        self.activity = QComboBox()
+        self.activity.addItem("— wybierz czynność —", None)
+        for item in list_extra_service_catalogue():
+            self.activity.addItem(item["nazwa"], item["id"])
+        self.activity_label = QLabel("Czynność dodatkowa:")
+
+        now = QDateTime.currentDateTime()
+        if selected_month:
+            parsed = QDateTime.fromString(selected_month + "-01T09:00:00", "yyyy-MM-ddTHH:mm:ss")
+            if parsed.isValid():
+                now = parsed
+        self.started_at = QDateTimeEdit(now)
+        self.started_at.setCalendarPopup(True)
+        self.started_at.setDisplayFormat("dd.MM.yyyy HH:mm:ss")
+
+        self.hours = QSpinBox()
+        self.hours.setRange(0, 999)
+        self.minutes = QSpinBox()
+        self.minutes.setRange(0, 59)
+        self.seconds = QSpinBox()
+        self.seconds.setRange(0, 59)
+        time_row = QHBoxLayout()
+        time_row.addWidget(self.hours)
+        time_row.addWidget(QLabel("godz."))
+        time_row.addWidget(self.minutes)
+        time_row.addWidget(QLabel("min"))
+        time_row.addWidget(self.seconds)
+        time_row.addWidget(QLabel("sek."))
+
+        self.description = QLineEdit()
+        self.description.setPlaceholderText("Opis (opcjonalnie)")
+
+        form.addRow("Pracownik:", self.employee)
+        form.addRow("Miesiąc rozliczeniowy:", self.month)
+        form.addRow("Firma:", self.company)
+        form.addRow("Dział:", self.department)
+        form.addRow(self.activity_label, self.activity)
+        form.addRow("Początek:", self.started_at)
+        form.addRow("Czas trwania:", time_row)
+        form.addRow("Opis:", self.description)
+
+        self.department.currentIndexChanged.connect(self._department_changed)
+        self._department_changed()
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _department_changed(self):
+        visible = self.department.currentData() == "dodatkowe"
+        self.activity_label.setVisible(visible)
+        self.activity.setVisible(visible)
+        if not visible:
+            self.activity.setCurrentIndex(0)
+
+    def _save(self):
+        seconds = self.hours.value() * 3600 + self.minutes.value() * 60 + self.seconds.value()
+        if seconds <= 0:
+            QMessageBox.warning(self, "Dodaj czas", "Podaj czas większy od zera.")
+            return
+        if self.department.currentData() != "ogolne" and self.company.currentData() is None:
+            QMessageBox.warning(self, "Dodaj czas", "Dla księgowości, kadr lub czynności dodatkowej wybierz firmę.")
+            return
+        if self.department.currentData() == "dodatkowe" and self.activity.currentData() is None:
+            QMessageBox.warning(self, "Dodaj czas", "Wybierz czynność dodatkową.")
+            return
+        selected = self.started_at.dateTime().toPyDateTime()
+        year, month = (int(part) for part in self.month.monthText().split("-", 1))
+        selected = selected.replace(
+            year=year,
+            month=month,
+            day=min(selected.day, calendar.monthrange(year, month)[1]),
+        )
+        try:
+            add_manual_time(
+                self.employee.currentData(),
+                self.company.currentData(),
+                self.department.currentData(),
+                self.description.text().strip(),
+                seconds,
+                self.actor_id,
+                self.activity.currentData(),
+                started_at=selected.isoformat(timespec="seconds"),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Dodaj czas", f"Nie udało się dodać czasu: {exc}")
+            return
+        self.accept()
+
+
 class TimerRecordsDialog(QDialog):
     """Rekordy firmy lub wybranego pracownika; serwer sprawdza prawo do edycji."""
 
@@ -184,7 +303,8 @@ class TimerRecordsDialog(QDialog):
             from app.remote.screen_data import reportable_employees
             filters = QHBoxLayout()
             self.employee = QComboBox()
-            for employee_id, label in reportable_employees(actor_id):
+            self._employees = list(reportable_employees(actor_id))
+            for employee_id, label in self._employees:
                 self.employee.addItem(label, employee_id)
             self.employee.setCurrentIndex(max(0, self.employee.findData(actor_id)))
             self.month = QDateTimeEdit(QDateTime.currentDateTime())
@@ -208,12 +328,16 @@ class TimerRecordsDialog(QDialog):
         self.total = QLabel("")
         layout.addWidget(self.total)
         buttons = QHBoxLayout()
+        self.btn_add = QPushButton("Dodaj czas ręcznie")
         self.btn_edit = QPushButton("Zmień czas / czynność")
         self.btn_delete = QPushButton("Usuń zaznaczone")
         self.btn_close = QPushButton("Zamknij")
+        self.btn_add.clicked.connect(self.add_manual_time)
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.btn_close.clicked.connect(self.accept)
+        if self.employee_view:
+            buttons.addWidget(self.btn_add)
         for button in (self.btn_edit, self.btn_delete):
             buttons.addWidget(button)
         buttons.addStretch()
@@ -240,6 +364,22 @@ class TimerRecordsDialog(QDialog):
 
     def _selected_rows(self):
         return sorted({index.row() for index in self.table.selectedIndexes()})
+
+    def add_manual_time(self):
+        if not self.employee_view:
+            return
+        dialog = AddManualTimeDialog(
+            self.actor_id,
+            self._employees,
+            self,
+            selected_employee=self.employee.currentData(),
+            selected_month=self.month.dateTime().toString("yyyy-MM"),
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.employee.setCurrentIndex(max(0, self.employee.findData(dialog.employee.currentData())))
+        self.month.setCurrentText(dialog.month.monthText())
+        self.reload()
 
     def edit_selected(self):
         selected = self._selected_rows()

@@ -1,7 +1,7 @@
 from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, Qt, QSignalBlocker
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDateEdit,
     QPushButton, QLineEdit, QComboBox, QTabWidget,  QTableWidgetItem,
@@ -39,13 +39,15 @@ class AccountingPage(QWidget):
         self.actor_id = actor_id
         self.reader = TaskRunner(self)
         self.rows = []
-        self.period = QDate.currentDate().toString('yyyy-MM')
+        from app.utils.months import default_month_for_department
+        self.period = default_month_for_department(department or 'accounting')
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         bar.addWidget(QLabel('Sprawdzanie'))
-        self.month = QDateEdit(QDate.currentDate())
+        self.month = QDateEdit()
         self.month.setDisplayFormat('yyyy-MM')
         self.month.setCalendarPopup(True)
+        self.set_month(self.period)
         bar.addWidget(self.month)
         self.tax_filter = QComboBox()
         for label, value in [('Wszystkie formy', ''), ('KPiR', 'KPIR'), ('Ryczałt', 'RYCZALT'),
@@ -156,6 +158,17 @@ class AccountingPage(QWidget):
             self.tabs.tabBar().hide()
             self.tabs.currentChanged.connect(self.apply_department_default)
         self.filter_rows()
+
+    def set_month(self, month: str):
+        try:
+            year, number = (int(part) for part in month.split('-', 1))
+            value = QDate(year, number, 1)
+        except (TypeError, ValueError):
+            raise ValueError('Nieprawidłowy miesiąc.') from None
+        if not value.isValid():
+            raise ValueError('Nieprawidłowy miesiąc.')
+        with QSignalBlocker(self.month):
+            self.month.setDate(value)
 
     def _add_report(self, department, label, key, widget):
         stack = self.report_stacks[department]

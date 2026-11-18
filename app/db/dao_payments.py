@@ -200,52 +200,121 @@ def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, A
 
 @office_endpoint('app.db.dao_payments.import_mt940_file')
 def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> dict[str, int]:
+    """Import an ING MT940 statement with one set-based PostgreSQL upsert.
+
+    The parser and reconciliation rules are unchanged.  The previous
+    implementation issued a locking SELECT and an INSERT for every transaction;
+    this version sends the statement as one JSON value and lets PostgreSQL do the
+    conflict handling in a single round trip.
+    """
     if not _allowed(actor_id):
         raise PermissionError("Brak uprawnień do importu operacji bankowych.")
     source = Path(path)
     if source.stat().st_size > 20 * 1024 * 1024:
         raise PaymentError("Wyciąg przekracza 20 MB.")
-    records = parse_ing_mt940(source.read_bytes(), encoding=encoding)
+
+    parsed = parse_ing_mt940(source.read_bytes(), encoding=encoding)
+    records_all = len(parsed)
     conn = get_conn()
-    inserted = 0
     try:
-        # Przelewy własne: kontrahent to jeden z rachunków biura (z plików lub już zaimportowanych).
-        own_accounts = {_normalize_account(e["account"]) for e in records} - {""}
-        own_accounts |= {_normalize_account(r[0]) for r in
-                         conn.execute("SELECT DISTINCT rachunek FROM bank_transakcje").fetchall()} - {""}
-        own = [e for e in records if e["contractor_account"] in own_accounts and e["contractor_account"] != _normalize_account(e["account"])]
-        records_all = len(records)
-        records = [e for e in records if e not in own]
-        for entry in records:
-            # Rozliczenie również blokuje ten wiersz. Kolejne zapytanie widzi
-            # już zatwierdzone wpłaty po ewentualnym oczekiwaniu na ich commit.
-            conn.execute("SELECT id FROM bank_transakcje WHERE hash = %s FOR UPDATE", (entry["hash"],)).fetchone()
-            cur = conn.execute(
-                """
+        # Przelewy własne: kontrahent to jeden z rachunków biura (z pliku lub
+        # wcześniej zaimportowanych transakcji).  Partition in one pass rather
+        # than repeatedly comparing dictionaries against a second list.
+        own_accounts = {_normalize_account(entry["account"]) for entry in parsed} - {""}
+        own_accounts |= {
+            _normalize_account(row[0])
+            for row in conn.execute("SELECT DISTINCT rachunek FROM bank_transakcje").fetchall()
+        } - {""}
+        records = []
+        own_count = 0
+        for entry in parsed:
+            account = _normalize_account(entry["account"])
+            contractor_account = entry["contractor_account"]
+            if contractor_account in own_accounts and contractor_account != account:
+                own_count += 1
+            else:
+                records.append(entry)
+
+        if not records:
+            conn.commit()
+            return {"all": records_all, "new": 0, "duplicates": 0, "own": own_count}
+
+        # PostgreSQL rejects an INSERT that affects the same conflict key twice.
+        # MT940 files can repeat records, so retain the final representation for
+        # each hash.  Duplicate reporting still uses the original record count.
+        unique = {entry["hash"]: entry for entry in records}
+        payload = json.dumps([
+            {
+                "hash": entry["hash"],
+                "rachunek": entry["account"],
+                "data_operacji": str(entry["date"]),
+                "data_waluty": str(entry["value_date"]),
+                "kwota": str(entry["amount"]),
+                "waluta": entry["currency"],
+                "kierunek": entry["direction"],
+                "kontrahent": entry.get("contractor", ""),
+                "tytul": entry["title"],
+                "referencja": entry["reference"],
+                "kontrahent_nip": entry["contractor_nip"],
+                "kontrahent_rachunek": entry["contractor_account"],
+                "opis_surowy": entry["raw_title"],
+            }
+            for entry in unique.values()
+        ], ensure_ascii=False)
+
+        # ON CONFLICT takes the same row lock that the old SELECT FOR UPDATE
+        # acquired.  The WHERE clause continues to protect transactions already
+        # linked in faktury_platnosci.  xmax reports which returned rows were
+        # newly inserted; updated rows and protected rows count as duplicates.
+        inserted = conn.execute(
+            """
+            WITH incoming AS (
+                SELECT *
+                FROM jsonb_to_recordset(%s::jsonb) AS x(
+                    hash text, rachunek text, data_operacji date, data_waluty date,
+                    kwota numeric, waluta text, kierunek text, kontrahent text,
+                    tytul text, referencja text, kontrahent_nip text,
+                    kontrahent_rachunek text, opis_surowy text
+                )
+            ), upserted AS (
                 INSERT INTO bank_transakcje
-                  (hash, rachunek, data_operacji, data_waluty, kwota, waluta, kierunek, kontrahent, tytul, referencja,
-                   kontrahent_nip, kontrahent_rachunek, opis_surowy)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(hash) DO UPDATE SET kontrahent = EXCLUDED.kontrahent, tytul = EXCLUDED.tytul,
-                    kontrahent_nip = EXCLUDED.kontrahent_nip, kontrahent_rachunek = EXCLUDED.kontrahent_rachunek,
+                  (hash, rachunek, data_operacji, data_waluty, kwota, waluta,
+                   kierunek, kontrahent, tytul, referencja, kontrahent_nip,
+                   kontrahent_rachunek, opis_surowy)
+                SELECT hash, rachunek, data_operacji, data_waluty, kwota, waluta,
+                       kierunek, kontrahent, tytul, referencja, kontrahent_nip,
+                       kontrahent_rachunek, opis_surowy
+                FROM incoming
+                ON CONFLICT(hash) DO UPDATE SET
+                    kontrahent = EXCLUDED.kontrahent,
+                    tytul = EXCLUDED.tytul,
+                    kontrahent_nip = EXCLUDED.kontrahent_nip,
+                    kontrahent_rachunek = EXCLUDED.kontrahent_rachunek,
                     opis_surowy = EXCLUDED.opis_surowy
-                WHERE NOT EXISTS (SELECT 1 FROM faktury_platnosci p WHERE p.transakcja_id = bank_transakcje.id)
-                RETURNING (xmax = 0) AS inserted
-                """,
-                (entry["hash"], entry["account"], entry["date"], entry["value_date"], entry["amount"],
-                 entry["currency"], entry["direction"], entry.get("contractor", ""), entry["title"], entry["reference"],
-                 entry["contractor_nip"], entry["contractor_account"], entry["raw_title"]),
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM faktury_platnosci p
+                    WHERE p.transakcja_id = bank_transakcje.id
+                )
+                RETURNING (xmax = 0) AS was_inserted
             )
-            outcome = cur.fetchone()
-            if outcome and outcome[0]:
-                inserted += 1
+            SELECT COUNT(*) FILTER (WHERE was_inserted) FROM upserted
+            """,
+            (payload,),
+        ).fetchone()[0]
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-    return {"all": records_all, "new": inserted, "duplicates": len(records) - inserted, "own": len(own)}
+
+    inserted = int(inserted or 0)
+    return {
+        "all": records_all,
+        "new": inserted,
+        "duplicates": len(records) - inserted,
+        "own": own_count,
+    }
 
 
 @office_endpoint('app.db.dao_payments.bank_import_summary')

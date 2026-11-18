@@ -18,6 +18,5 @@ def main() -> int:
     print("Błąd: baza nie została oznaczona jako aktualna.")
     return 1
 
-
 if __name__ == "__main__":
     sys.exit(main())

@@ -57,6 +57,8 @@ class DepartmentPage(QWidget):
         title = self.tabs.tabText(self.tabs.currentIndex())
         if host is None or title not in allowed_tabs(self.actor_id):
             return
+        from app.utils.months import default_month_for_department
+        default_month = default_month_for_department(self.department)
         if title == 'Widok miesięczny':
             # Reparent the same editor: no duplicate timers, pending edits or logic.
             if self.monthly_page.parentWidget() is not host:
@@ -74,4 +76,5 @@ class DepartmentPage(QWidget):
                 else:
                     self.checking_page = self._checking_factory(self.actor_id, self.department)
                 host.layout().addWidget(self.checking_page)
+            self.checking_page.set_month(default_month)
             self.checking_page.refresh_async()

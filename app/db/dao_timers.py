@@ -127,6 +127,56 @@ DEPARTMENTS = [
 ]
 
 
+@office_endpoint('app.db.dao_timers.add_manual_time')
+def add_manual_time(employee_id: int, firma_id: Optional[int], dzial: str, opis: str,
+                    sekundy: int, actor_id: Optional[int], usluga_id: Optional[int] = None,
+                    *, started_at: Optional[str] = None) -> int:
+    if not actor_id:
+        raise PermissionError('Brak zalogowanego pracownika.')
+    _check_employee_access(employee_id, actor_id)
+    if dzial not in dict(DEPARTMENTS):
+        raise ValueError('Nieznany dział.')
+    sekundy = int(sekundy)
+    if sekundy <= 0 or sekundy > 999 * 3600:
+        raise ValueError('Czas musi wynosić od 1 sekundy do 999 godzin.')
+    opis = (opis or '').strip()
+    if dzial == 'dodatkowe' and not usluga_id:
+        raise ValueError('Dla czynności dodatkowej wybierz usługę.')
+    if dzial != 'dodatkowe':
+        usluga_id = None
+    try:
+        start = datetime.fromisoformat(started_at) if started_at else datetime.now().replace(microsecond=0)
+    except (TypeError, ValueError):
+        raise ValueError('Nieprawidłowa data lub godzina rozpoczęcia.') from None
+    if start.tzinfo is not None:
+        raise ValueError('Podaj czas lokalny bez strefy czasowej.')
+    from datetime import timedelta
+    end = start + timedelta(seconds=sekundy)
+    month = start.strftime('%Y-%m')
+    with get_conn() as conn:
+        employee = conn.execute(
+            'SELECT id FROM pracownicy WHERE id=%s AND COALESCE(aktywny,1)=1',
+            (employee_id,),
+        ).fetchone()
+        if not employee:
+            raise ValueError('Wybrany pracownik nie istnieje lub jest nieaktywny.')
+        if firma_id is not None and not conn.execute(
+                'SELECT 1 FROM firmy WHERE id=%s', (firma_id,)).fetchone():
+            raise ValueError('Wybrana firma nie istnieje.')
+        row = conn.execute(
+            "INSERT INTO czasomierze (firma_id,pracownik_id,miesiac,typ,usluga_id,fakturowac,"
+            "rozpoczecie,zakonczenie,sekundy,opis) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            (firma_id, employee_id, month, dzial, usluga_id, int(dzial == 'dodatkowe'),
+             start.isoformat(), end.isoformat(), sekundy, opis),
+        ).fetchone()
+        record_id = row['id']
+        _adjust_totals(conn, firma_id, month, dzial, sekundy)
+        new = dict(conn.execute('SELECT * FROM czasomierze WHERE id=%s', (record_id,)).fetchone())
+        _audit(conn, 'czasomierze', record_id, actor_id, 'insert_manual', {}, new)
+        conn.commit()
+        return record_id
+
+
 @office_endpoint('app.db.dao_timers.list_extra_service_catalogue')
 def list_extra_service_catalogue() -> List[Dict[str, Any]]:
     conn = get_conn()

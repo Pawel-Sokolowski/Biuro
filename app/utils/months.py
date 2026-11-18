@@ -11,6 +11,19 @@ def previous_month(month: str) -> str:
     return f"{year:04d}-{month_number - 1:02d}"
 
 
+def current_month(today: date | None = None) -> str:
+    today = today or date.today()
+    return f"{today.year:04d}-{today.month:02d}"
+
+
+def default_month_for_department(department: str, today: date | None = None) -> str:
+    if department == "accounting":
+        return previous_month(current_month(today))
+    if department == "payroll":
+        return current_month(today)
+    raise ValueError("Nieprawidłowy dział.")
+
+
 def default_month_for_monthly_view(today: date | None = None) -> str:
     """Use the previous month until the last calendar day of the current month."""
     today = today or date.today()

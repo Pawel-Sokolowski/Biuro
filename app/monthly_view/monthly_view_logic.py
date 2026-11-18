@@ -55,6 +55,13 @@ class MonthlyViewLogic:
 
         self._auto_check_suspension()
 
+    def _work_month(self) -> str:
+        """Kadry zapisują czas do bieżącego miesiąca, pozostali do poprzedniego."""
+        from app.preferences.department import default_department
+        from app.utils.months import default_month_for_department
+        department = default_department(self.pracownik_id)
+        return default_month_for_department(department)
+
     def is_general_timer_running(self) -> bool:
         return self.czas_start_general is not None
 
@@ -107,9 +114,10 @@ class MonthlyViewLogic:
             finally:
                 conn.close()
         started = datetime.datetime.now()
+        month = self._work_month()
         with get_conn() as conn:
             session = dao_active_timers.start(conn, self.pracownik_id, None,
-                started.strftime('%Y-%m'), 'ogolne', activity, started)
+                month, 'ogolne', activity, started)
         self.general_activity = activity
         self.czas_start_general = started
         self._durable_timers['ogolne'] = session
@@ -121,14 +129,16 @@ class MonthlyViewLogic:
         start = self.czas_start_general
         delta = self._timer_elapsed('ogolne', start, now)
         activity = self.general_activity or {}
+        session = self._durable_timers.get('ogolne')
+        month = getattr(session, 'month', '') or self._work_month()
         conn = get_conn()
         try:
-            dao_active_timers.finish(conn, self._durable_timers.get('ogolne'))
+            dao_active_timers.finish(conn, session)
             conn.execute(
                 "INSERT INTO czasomierze (firma_id, pracownik_id, miesiac, typ, usluga_id, fakturowac, "
                 "task_id, rozpoczecie, zakonczenie, sekundy, opis) "
                 "VALUES (NULL, %s, %s, 'ogolne', NULL, 0, %s, %s, %s, %s, %s)",
-                (self.pracownik_id, start.strftime("%Y-%m"), activity.get("task_id"),
+                (self.pracownik_id, month, activity.get("task_id"),
                  start.isoformat(timespec="seconds"), now.isoformat(timespec="seconds"), delta,
                  activity.get("task_title") or None),
             )
@@ -253,8 +263,8 @@ class MonthlyViewLogic:
                    sm.data_dostarczenia AS data_dostarczenia,
                    CASE WHEN di.firma_id IS NOT NULL THEN COALESCE(sm.ilosc_dok, 0)
                         ELSE COALESCE(NULLIF(sm.ilosc_dok, 0), doc.ilosc_dok, 0) END AS ilosc_dok,
-                   COALESCE(sm.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
-                   COALESCE(sm.sekundy_kadry, 0) AS sekundy_kadry,
+                   COALESCE(timer_sum.sekundy_ksiegowosc, 0) AS sekundy_ksiegowosc,
+                   COALESCE(timer_sum.sekundy_kadry, 0) AS sekundy_kadry,
                    COALESCE(k.uop_ilosc, f.uop_ilosc, 0) AS uop,
                    COALESCE(k.uz_ilosc, f.uz_ilosc, 0) AS uz,
                    COALESCE(k.uod_ilosc, f.uod_ilosc, 0) AS uod
@@ -262,6 +272,18 @@ class MonthlyViewLogic:
             LEFT JOIN statusy_miesieczne sm
                 ON sm.firma_id = f.id AND sm.miesiac = %s
             LEFT JOIN monthly_document_imports di ON di.firma_id=f.id AND di.miesiac=sm.miesiac
+            LEFT JOIN (
+                SELECT firma_id,
+                       COALESCE(SUM(sekundy) FILTER (WHERE typ = 'ksiegowosc'), 0)
+                           AS sekundy_ksiegowosc,
+                       COALESCE(SUM(sekundy) FILTER (WHERE typ = 'kadry'), 0)
+                           AS sekundy_kadry
+                FROM czasomierze
+                WHERE miesiac = %s
+                  AND firma_id IS NOT NULL
+                GROUP BY firma_id
+            ) timer_sum
+                ON timer_sum.firma_id = f.id
             LEFT JOIN LATERAL (
                 SELECT uop_ilosc, uz_ilosc, uod_ilosc
                 FROM kadry_umowy_miesieczne
@@ -275,7 +297,7 @@ class MonthlyViewLogic:
                 GROUP BY firma_id
             ) doc ON doc.firma_id = f.id
         """
-        params: List[Any] = [selected_month, selected_month, month_start, month_end]
+        params: List[Any] = [selected_month, selected_month, selected_month, month_start, month_end]
         cur.execute(sql, params)
 
         rows = [dict(r) for r in cur.fetchall()]
@@ -598,8 +620,10 @@ class MonthlyViewLogic:
             setattr(self, fields[0], firma_id)
             setattr(self, fields[1], now)
             setattr(self, fields[2], activity_payload)
+            work_month = self._work_month()
+            self.aktualny_miesiac = work_month
             self._durable_timers[typ] = dao_active_timers.start(cur, self.pracownik_id, firma_id,
-                self.aktualny_miesiac, typ, activity_payload, now)
+                work_month, typ, activity_payload, now)
 
             conn.commit()
 

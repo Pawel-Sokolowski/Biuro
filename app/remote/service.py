@@ -72,10 +72,15 @@ class OfficeService:
         owner = auth.digest(token)
         with self.lock:
             self._expire()
-            if len(self.jobs)>=1000:
-                raise ValueError('Zbyt wiele oczekujących wyników. Poczekaj na zakończenie odczytów.')
-            if sum(j['state']=='running' for j in self.jobs.values())>=32 or sum(j['owner']==owner and j['state']=='running' for j in self.jobs.values())>=4:
-                raise ValueError('Trwają już inne operacje. Poczekaj na ich zakończenie.')
+            running_jobs = sum(j['state']=='running' for j in self.jobs.values())
+            if running_jobs>=32:
+                raise ValueError('Serwer wykonuje maksymalną liczbę operacji. Poczekaj na ich zakończenie.')
+            owner_running_jobs = sum(
+                j['owner']==owner and j['state']=='running'
+                for j in self.jobs.values()
+            )
+            if owner_running_jobs>=4:
+                raise ValueError('Trwają już inne operacje tej sesji. Poczekaj na ich zakończenie.')
             key = secrets.token_urlsafe(24)
             job = {'owner':owner,'state':'running','events':[],'stop':threading.Event(),'created':time.monotonic()}
             self.jobs[key] = job
@@ -99,8 +104,11 @@ class OfficeService:
     def _expire(self):
         now = time.monotonic()
         for key,job in list(self.jobs.items()):
-            if job['state']!='running' and now-job['created']>3600:
+            age = now-job['created']
+            if job['state']!='running' and age>300:
                 del self.jobs[key]
+            elif job['state']=='running' and age>3600:
+                job['stop'].set()
         for key,item in list(self.preparations.items()):
             if now-item['created']>3600:
                 item['value'].close()
@@ -274,7 +282,8 @@ class OfficeService:
         self.identity(token)
         owner = auth.digest(token)
         with self.lock:
-            job = self.jobs.get(payload.get('job'))
+            job_key = payload.get('job')
+            job = self.jobs.get(job_key)
             if not job or job['owner']!=owner:
                 raise PermissionError('Brak dostępu do operacji.')
             seen = payload.get('seen',0)
@@ -284,4 +293,6 @@ class OfficeService:
                 job['stop'].set()
             result = {key:value for key,value in job.items() if key in ('state','result','message','permission')}
             result.update(events=job['events'][seen:],seen=len(job['events']))
+            if job['state'] in ('done','failed'):
+                self.jobs.pop(job_key,None)
             return result

@@ -1,5 +1,9 @@
 """Explicit service API catalogue. Unlisted operations are rejected before import/invocation."""
 OPERATIONS = {
+ 'app.db.dao_timers.add_manual_time': {'actors': ['actor_id'],
+                                       'arguments': ['employee_id', 'firma_id', 'dzial', 'opis', 'sekundy', 'actor_id', 'usluga_id', 'started_at'],
+                                       'capability': 'authenticated', 'function': 'add_manual_time',
+                                       'module': 'app.db.dao_timers'},
  'app.services.checking_refresh.run_now': {'actors':['actor_id'],'arguments':['actor_id','kind','company_ids','period','sources'],'capability':'tab:Sprawdzanie','function':'run_now','module':'app.services.checking_refresh'},
 
  'app.remote.screen_data.mail_sidebar_snapshot': {'actors':['actor_id'],'arguments':['actor_id'],'capability':'tab:E-mail','function':'mail_sidebar_snapshot','module':'app.remote.screen_data'},

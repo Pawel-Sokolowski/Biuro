@@ -1,7 +1,7 @@
 """Explicit service API catalogue. Unlisted operations are rejected before import/invocation."""
 OPERATIONS = {
  'app.db.dao_timers.add_manual_time': {'actors': ['actor_id'],
-                                       'arguments': ['employee_id', 'firma_id', 'dzial', 'opis', 'sekundy', 'actor_id', 'usluga_id', 'started_at'],
+                                       'arguments': ['employee_id', 'firma_id', 'dzial', 'opis', 'sekundy', 'actor_id', 'usluga_id', 'started_at', 'miesiac'],
                                        'capability': 'authenticated', 'function': 'add_manual_time',
                                        'module': 'app.db.dao_timers'},
  'app.services.checking_refresh.run_now': {'actors':['actor_id'],'arguments':['actor_id','kind','company_ids','period','sources'],'capability':'tab:Sprawdzanie','function':'run_now','module':'app.services.checking_refresh'},
@@ -1839,7 +1839,8 @@ OPERATIONS = {
                                                           'actor_id',
                                                           'usluga_id',
                                                           'started_at',
-                                                          'ended_at'],
+                                                          'ended_at',
+                                                          'miesiac'],
                                             'capability': 'authenticated',
                                             'function': 'update_company_timer',
                                             'module': 'app.db.dao_timers'},
@@ -2873,7 +2874,7 @@ OPERATIONS = {
                                                                                  'class': 'MonthlyViewLogic',
                                                                                  'method': '_assert_company_access',
                                                                                  'module': 'app.monthly_view.monthly_view_logic'},
- 'app.monthly_view.monthly_view_logic.MonthlyViewLogic._ensure_month_status': {'arguments': ['firma_id'],
+ 'app.monthly_view.monthly_view_logic.MonthlyViewLogic._ensure_month_status': {'arguments': ['firma_id', 'month'],
                                                                                'capability': 'tab:Widok '
                                                                                              'miesięczny|Klienci|Raporty',
                                                                                'class': 'MonthlyViewLogic',

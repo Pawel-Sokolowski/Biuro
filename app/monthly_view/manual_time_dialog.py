@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from PyQt6.QtCore import QDateTime
 from PyQt6.QtWidgets import (
     QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QFormLayout,
@@ -8,6 +6,8 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_employees import list_employees
 from app.db.dao_timers import DEPARTMENTS, add_manual_time, list_extra_service_catalogue
+from app.monthly_view.month_picker import MonthPicker
+from app.utils.months import default_month_for_employee
 from app.remote.screen_data import company_identities
 
 
@@ -45,6 +45,7 @@ class ManualTimeDialog(QDialog):
         for key, label in DEPARTMENTS:
             self.department.addItem(label, key)
 
+        self.month = MonthPicker(default_month_for_employee(employee_id or actor_id))
         self.service = QComboBox()
         self.service.addItem('Wybierz usługę dodatkową', None)
         for row in list_extra_service_catalogue():
@@ -59,6 +60,7 @@ class ManualTimeDialog(QDialog):
         self.minutes.setRange(0, 59)
         self.description = QLineEdit()
 
+        form.addRow('Miesiąc rozliczeniowy', self.month)
         form.addRow('Pracownik', self.employee)
         form.addRow('Firma', self.company)
         form.addRow('Dział', self.department)
@@ -68,6 +70,7 @@ class ManualTimeDialog(QDialog):
         form.addRow('Minuty', self.minutes)
         form.addRow('Opis', self.description)
         layout.addLayout(form)
+        self.employee.currentIndexChanged.connect(self._employee_changed)
 
         self.department.currentIndexChanged.connect(self._update_service)
         self._update_service()
@@ -85,6 +88,9 @@ class ManualTimeDialog(QDialog):
 
     def save(self):
         seconds = self.hours.value() * 3600 + self.minutes.value() * 60
+    def _employee_changed(self):
+        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
+
         try:
             add_manual_time(
                 self.employee.currentData(),
@@ -100,3 +106,4 @@ class ManualTimeDialog(QDialog):
             QMessageBox.warning(self, 'Dodaj czas', str(error))
             return
         self.accept()
+                miesiac=self.month.monthText(),

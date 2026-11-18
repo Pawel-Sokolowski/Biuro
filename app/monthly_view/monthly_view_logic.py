@@ -57,10 +57,8 @@ class MonthlyViewLogic:
 
     def _work_month(self) -> str:
         """Kadry zapisują czas do bieżącego miesiąca, pozostali do poprzedniego."""
-        from app.preferences.department import default_department
-        from app.utils.months import default_month_for_department
-        department = default_department(self.pracownik_id)
-        return default_month_for_department(department)
+        from app.utils.months import default_month_for_employee
+        return default_month_for_employee(self.pracownik_id)
 
     def is_general_timer_running(self) -> bool:
         return self.czas_start_general is not None
@@ -81,7 +79,8 @@ class MonthlyViewLogic:
             saved_state = {field: getattr(self, field) for field in fields[:3]}
             saved_session = self._durable_timers.get(typ)
             try:
-                self._ensure_month_status(firma_id)
+                month = getattr(saved_session, 'month', '') or self._work_month()
+                self._ensure_month_status(firma_id, month)
                 cur = conn.cursor()
                 self._finish_timer(typ, now, cur)
                 conn.commit()
@@ -490,12 +489,13 @@ class MonthlyViewLogic:
                 int(uod if uod is not None else current["uod_ilosc"]),
             )
 
-    def _ensure_month_status(self, firma_id: int):
-        row = get_month_status(firma_id, self.aktualny_miesiac)
+    def _ensure_month_status(self, firma_id: int, month: Optional[str] = None):
+        month = month or self.aktualny_miesiac
+        row = get_month_status(firma_id, month)
         if row is None:
             save_month_status(
                 firma_id,
-                self.aktualny_miesiac,
+                month,
                 {
                     "etap": "Brak",
                     "ilosc_dok": 0,
@@ -575,7 +575,8 @@ class MonthlyViewLogic:
             raise ValueError(f"Nieznany typ stopera: {typ}")
 
         now = datetime.datetime.now()
-        self._ensure_month_status(firma_id)
+        work_month = self._work_month()
+        self._ensure_month_status(firma_id, work_month)
         self.stop_general_timer()
         saved_state = {field: getattr(self, field) for fields in self._TIMER_FIELDS.values() for field in fields[:3]}
         saved_sessions = dict(self._durable_timers)
@@ -620,8 +621,6 @@ class MonthlyViewLogic:
             setattr(self, fields[0], firma_id)
             setattr(self, fields[1], now)
             setattr(self, fields[2], activity_payload)
-            work_month = self._work_month()
-            self.aktualny_miesiac = work_month
             self._durable_timers[typ] = dao_active_timers.start(cur, self.pracownik_id, firma_id,
                 work_month, typ, activity_payload, now)
 

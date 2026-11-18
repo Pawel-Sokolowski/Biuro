@@ -11,6 +11,8 @@ from app.db.dao_timers import (
     list_company_timers, list_extra_service_catalogue, list_employee_timers, update_company_timer,
 )
 
+from app.monthly_view.month_picker import MonthPicker
+from app.utils.months import default_month_for_employee
 _DEPARTMENT_NAMES = dict(DEPARTMENTS)
 
 
@@ -28,6 +30,7 @@ class EditTimerRecordDialog(QDialog):
         self.pause_seconds = int(entry.get("pauza_sekundy") or 0)
         self.setWindowTitle("Edytuj rekord czasu")
         form = QFormLayout(self)
+        self.month = MonthPicker(entry["miesiac"])
         self.department = QComboBox()
         for key, label in DEPARTMENTS:
             self.department.addItem(label, key)
@@ -66,6 +69,7 @@ class EditTimerRecordDialog(QDialog):
         self.activity_label = QLabel("Czynność dodatkowa:")
         form.addRow(self.activity_label, self._activity_row)
         form.addRow("Opis:", self.description)
+        form.addRow("Miesiąc rozliczeniowy:", self.month)
         self.time_mode = QComboBox()
         self.time_mode.addItem("Od–do", "range")
         self.time_mode.addItem("Czas trwania", "duration")
@@ -183,7 +187,7 @@ class AddManualTimeDialog(QDialog):
         index = self.employee.findData(selected_employee or actor_id)
         self.employee.setCurrentIndex(max(index, 0))
 
-        self.month = MonthPicker(selected_month or datetime.now().strftime("%Y-%m"))
+        self.month = MonthPicker(selected_month or default_month_for_employee(selected_employee or actor_id))
         self.company = QComboBox()
         self.company.addItem("— bez firmy —", None)
         from app.remote.screen_data import company_identities
@@ -245,6 +249,7 @@ class AddManualTimeDialog(QDialog):
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
 
+        self.employee.currentIndexChanged.connect(self._employee_changed)
     def _department_changed(self):
         visible = self.department.currentData() == "dodatkowe"
         self.activity_label.setVisible(visible)
@@ -258,6 +263,9 @@ class AddManualTimeDialog(QDialog):
             QMessageBox.warning(self, "Dodaj czas", "Podaj czas większy od zera.")
             return
         if self.department.currentData() != "ogolne" and self.company.currentData() is None:
+    def _employee_changed(self):
+        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
+
             QMessageBox.warning(self, "Dodaj czas", "Dla księgowości, kadr lub czynności dodatkowej wybierz firmę.")
             return
         if self.department.currentData() == "dodatkowe" and self.activity.currentData() is None:
@@ -287,6 +295,7 @@ class AddManualTimeDialog(QDialog):
         self.accept()
 
 
+                miesiac=self.month.monthText(),
 class TimerRecordsDialog(QDialog):
     """Rekordy firmy lub wybranego pracownika; serwer sprawdza prawo do edycji."""
 
@@ -307,16 +316,14 @@ class TimerRecordsDialog(QDialog):
             for employee_id, label in self._employees:
                 self.employee.addItem(label, employee_id)
             self.employee.setCurrentIndex(max(0, self.employee.findData(actor_id)))
-            self.month = QDateTimeEdit(QDateTime.currentDateTime())
-            self.month.setDisplayFormat('MM.yyyy')
-            self.month.setCalendarPopup(True)
+            self.month = MonthPicker(default_month_for_employee(self.employee.currentData()))
             filters.addWidget(QLabel('Pracownik:'))
             filters.addWidget(self.employee, 1)
             filters.addWidget(QLabel('Miesiąc:'))
             filters.addWidget(self.month)
             layout.addLayout(filters)
-            self.employee.currentIndexChanged.connect(self.reload)
-            self.month.dateTimeChanged.connect(self.reload)
+            self.employee.currentIndexChanged.connect(self._employee_changed)
+            self.month.monthChanged.connect(self.reload)
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(["Miesiąc", "Początek", "Koniec", "Firma", "Pracownik", "Dział / czynność", "Opis", "Czas"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -347,7 +354,7 @@ class TimerRecordsDialog(QDialog):
 
     def reload(self):
         self._rows = (list_employee_timers(self.employee.currentData(), self.actor_id,
-                                         self.month.dateTime().toString('yyyy-MM')) if self.employee_view
+                                         self.month.monthText()) if self.employee_view
                       else list_company_timers(self.firma_id))
         self.table.setRowCount(0)
         for entry in self._rows:
@@ -373,7 +380,7 @@ class TimerRecordsDialog(QDialog):
             self._employees,
             self,
             selected_employee=self.employee.currentData(),
-            selected_month=self.month.dateTime().toString("yyyy-MM"),
+            selected_month=self.month.monthText(),
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -388,6 +395,10 @@ class TimerRecordsDialog(QDialog):
             return
         entry = self._rows[selected[0]]
         dialog = EditTimerRecordDialog(entry, self, self.actor_id)
+    def _employee_changed(self):
+        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
+        self.reload()
+
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         dzial, opis, seconds = dialog.values()
@@ -396,7 +407,8 @@ class TimerRecordsDialog(QDialog):
             opis = " — ".join(filter(None, [dialog.activity_name(), opis]))
         try:
             update_company_timer(entry.get('firma_id', self.firma_id), entry["zrodlo"], entry["id"], dzial, opis, seconds,
-                                 self.actor_id, usluga_id, **dialog.timestamps())
+                                 self.actor_id, usluga_id, miesiac=dialog.month.monthText(),
+                                 **dialog.timestamps())
         except Exception as exc:
             QMessageBox.critical(self, "Czasomierz", f"Nie udało się zapisać zmian: {exc}")
             return

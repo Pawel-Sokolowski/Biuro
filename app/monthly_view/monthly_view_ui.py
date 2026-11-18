@@ -471,6 +471,7 @@ class InlineExtraServiceWindow(QDialog):
 
         self.chk_fakturowac = QCheckBox("Fakturować?")
 
+        self.logic.set_month(self._months_by_tab[0])
         form.addRow("Usługa:", self.cb_usluga)
         form.addRow("Jednostka:", self.cb_jednostka)
         form.addRow("Ilość:", self.input_ilosc)
@@ -565,10 +566,10 @@ class MonthlyViewPage(QWidget):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.logic = MonthlyViewLogic(pracownik_id)
-        # Księgowość: dotychczasowy miesiąc domyślny; Kadry: miesiąc bieżący.
+        from app.utils.months import default_month_for_department
         self._months_by_tab = {
-            0: self.logic.aktualny_miesiac,
-            1: datetime.date.today().strftime("%Y-%m"),
+            0: default_month_for_department('accounting'),
+            1: default_month_for_department('payroll'),
         }
 
         self._rows: List[Dict[str, Any]] = []
@@ -604,7 +605,7 @@ class MonthlyViewPage(QWidget):
 
         filters_layout = QHBoxLayout()
 
-        self.month_combo = MonthPicker(self.logic.aktualny_miesiac, allow_year=True)
+        self.month_combo = MonthPicker(self._months_by_tab[0], allow_year=True)
         filters_layout.addWidget(QLabel("Miesiąc:"))
         filters_layout.addWidget(self.month_combo)
 

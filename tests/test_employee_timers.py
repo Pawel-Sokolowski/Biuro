@@ -5,7 +5,7 @@ from unittest import mock
 
 from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
-from app.db.dao_timers import SOURCE_IMPORT, SOURCE_TIMER, list_employee_timers, update_company_timer, delete_company_timers
+from app.db.dao_timers import SOURCE_IMPORT, SOURCE_TIMER, add_manual_time, list_employee_timers, update_company_timer, delete_company_timers
 
 
 class EmployeeTimersTests(DbTestCase):
@@ -45,6 +45,22 @@ class EmployeeTimersTests(DbTestCase):
         record = self.timer(self.company)
         with get_conn() as conn:
             conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,sekundy_ksiegowosc) VALUES (%s,'2026-10',3600)",(self.company,))
+
+    def test_explicit_accounting_month_is_independent_from_calendar_date(self):
+        record = add_manual_time(self.employee, self.company, 'ksiegowosc', 'Październik', 900,
+                                 self.employee, started_at='2026-11-18T10:00:00', miesiac='2026-10')
+        october = list_employee_timers(self.employee, self.employee, '2026-10')
+        self.assertEqual(october[0]['id'], record)
+        self.assertEqual(october[0]['start'], '2026-11-18T10:00:00')
+
+    def test_duration_only_edit_can_move_record_between_accounting_months(self):
+        record = self.timer(self.company)
+        with get_conn() as conn:
+            conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,sekundy_ksiegowosc) VALUES (%s,'2026-10',3600)",(self.company,))
+        update_company_timer(self.company, SOURCE_TIMER, record, 'ksiegowosc', '', 1800,
+                             self.employee, miesiac='2026-11')
+        self.assertEqual(list_employee_timers(self.employee, self.employee, '2026-10'), [])
+        self.assertEqual(list_employee_timers(self.employee, self.employee, '2026-11')[0]['sekundy'], 1800)
         update_company_timer(self.company,SOURCE_TIMER,record,'kadry','Korekta',123,self.employee,
                              started_at='2026-11-01T08:15:00',ended_at='2026-11-01T10:45:00')
         rows = list_employee_timers(self.employee,self.employee,'2026-11')
@@ -105,7 +121,7 @@ class EmployeeTimersTests(DbTestCase):
         self.assertEqual(dialog.timestamps(),{})
         view = TimerRecordsDialog(None,self.employee,employee_view=True)
         self.addCleanup(view.close)
-        view.month.setDateTime(QDateTime(datetime(2026,10,1)))
+        view.month.setCurrentText('2026-10')
         self.assertEqual(view.employee.currentData(),self.employee)
         self.assertEqual(view.table.rowCount(),1)
 

@@ -1,11 +1,12 @@
 from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from PyQt6.QtCore import QDate, Qt, QSignalBlocker
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDateEdit,
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QComboBox, QTabWidget,  QTableWidgetItem,
     QAbstractItemView, QCheckBox, QStackedWidget)
+from app.monthly_view.month_picker import MonthPicker
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
                                                 declaration_entries, declarations)
 from app.integrations.enova.jpk import STATUSES
@@ -44,10 +45,7 @@ class AccountingPage(QWidget):
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         bar.addWidget(QLabel('Sprawdzanie'))
-        self.month = QDateEdit()
-        self.month.setDisplayFormat('yyyy-MM')
-        self.month.setCalendarPopup(True)
-        self.set_month(self.period)
+        self.month = MonthPicker(self.period)
         bar.addWidget(self.month)
         self.tax_filter = QComboBox()
         for label, value in [('Wszystkie formy', ''), ('KPiR', 'KPIR'), ('Ryczałt', 'RYCZALT'),
@@ -146,13 +144,13 @@ class AccountingPage(QWidget):
         from app.accounting.refresh_ui import CheckingRefreshControls
         self.refresh_controls = CheckingRefreshControls(actor_id,self.refresh_companies,self.selected_company_ids,
             lambda kind:self.holiday_panel.year.value() if kind=='platnik' else
-            self.annual_zus_panel.year.value() if kind=='platnik_annual' else self.month.date().toString('yyyy-MM'),self.refresh_async,self)
+            self.annual_zus_panel.year.value() if kind=='platnik_annual' else self.month.monthText(),self.refresh_async,self)
         layout.addWidget(self.refresh_controls)
         self.source_note = QLabel()
         self.source_note.setWordWrap(True)
         layout.addWidget(self.source_note)
         self.tabs.currentChanged.connect(self.update_period_controls)
-        self.month.dateChanged.connect(self.refresh_async)
+        self.month.monthChanged.connect(self.refresh_async)
         self.apply_department_default()
         if self._fixed_department:
             self.tabs.tabBar().hide()
@@ -160,15 +158,9 @@ class AccountingPage(QWidget):
         self.filter_rows()
 
     def set_month(self, month: str):
-        try:
-            year, number = (int(part) for part in month.split('-', 1))
-            value = QDate(year, number, 1)
-        except (TypeError, ValueError):
-            raise ValueError('Nieprawidłowy miesiąc.') from None
-        if not value.isValid():
-            raise ValueError('Nieprawidłowy miesiąc.')
-        with QSignalBlocker(self.month):
-            self.month.setDate(value)
+        datetime.strptime(month, '%Y-%m')
+        self.month.setCurrentText(month)
+        self.period = month
 
     def _add_report(self, department, label, key, widget):
         stack = self.report_stacks[department]
@@ -272,7 +264,7 @@ class AccountingPage(QWidget):
         if self.annual_zus_selected():
             self.annual_zus_panel.refresh()
             return
-        month = self.month.date().toString('yyyy-MM')
+        month = self.month.monthText()
         def read():
             rows = list_accounting(self.actor_id, month)
             remote = None

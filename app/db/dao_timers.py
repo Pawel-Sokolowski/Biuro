@@ -130,7 +130,7 @@ DEPARTMENTS = [
 @office_endpoint('app.db.dao_timers.add_manual_time')
 def add_manual_time(employee_id: int, firma_id: Optional[int], dzial: str, opis: str,
                     sekundy: int, actor_id: Optional[int], usluga_id: Optional[int] = None,
-                    *, started_at: Optional[str] = None) -> int:
+                    *, started_at: Optional[str] = None, miesiac: Optional[str] = None) -> int:
     if not actor_id:
         raise PermissionError('Brak zalogowanego pracownika.')
     _check_employee_access(employee_id, actor_id)
@@ -152,7 +152,12 @@ def add_manual_time(employee_id: int, firma_id: Optional[int], dzial: str, opis:
         raise ValueError('Podaj czas lokalny bez strefy czasowej.')
     from datetime import timedelta
     end = start + timedelta(seconds=sekundy)
-    month = start.strftime('%Y-%m')
+    if miesiac is None:
+        miesiac = start.strftime('%Y-%m')
+    try:
+        datetime.strptime(miesiac, '%Y-%m')
+    except (TypeError, ValueError):
+        raise ValueError('Nieprawidłowy miesiąc rozliczeniowy.') from None
     with get_conn() as conn:
         employee = conn.execute(
             'SELECT id FROM pracownicy WHERE id=%s AND COALESCE(aktywny,1)=1',
@@ -166,11 +171,11 @@ def add_manual_time(employee_id: int, firma_id: Optional[int], dzial: str, opis:
         row = conn.execute(
             "INSERT INTO czasomierze (firma_id,pracownik_id,miesiac,typ,usluga_id,fakturowac,"
             "rozpoczecie,zakonczenie,sekundy,opis) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-            (firma_id, employee_id, month, dzial, usluga_id, int(dzial == 'dodatkowe'),
+            (firma_id, employee_id, miesiac, dzial, usluga_id, int(dzial == 'dodatkowe'),
              start.isoformat(), end.isoformat(), sekundy, opis),
         ).fetchone()
         record_id = row['id']
-        _adjust_totals(conn, firma_id, month, dzial, sekundy)
+        _adjust_totals(conn, firma_id, miesiac, dzial, sekundy)
         new = dict(conn.execute('SELECT * FROM czasomierze WHERE id=%s', (record_id,)).fetchone())
         _audit(conn, 'czasomierze', record_id, actor_id, 'insert_manual', {}, new)
         conn.commit()
@@ -213,7 +218,8 @@ def add_extra_service_to_catalogue(nazwa: str, actor_id: Optional[int], cena_net
 @office_endpoint('app.db.dao_timers.update_company_timer')
 def update_company_timer(firma_id: Optional[int], source: str, record_id: int, dzial: str, opis: str,
                          sekundy: int, actor_id: Optional[int], usluga_id: Optional[int] = None,
-                         *, started_at: Optional[str] = None, ended_at: Optional[str] = None) -> bool:
+                         *, started_at: Optional[str] = None, ended_at: Optional[str] = None,
+                         miesiac: Optional[str] = None) -> bool:
     """Atomowa edycja własnego czasu, dat i sum miesięcznych, z historią zmian."""
     if not actor_id:
         raise PermissionError('Brak zalogowanego pracownika.')
@@ -228,22 +234,26 @@ def update_company_timer(firma_id: Optional[int], source: str, record_id: int, d
         if not old:
             return False
         interval = _range(started_at, ended_at, source, int(old['pauza_sekundy'] or 0) if source==SOURCE_IMPORT else 0)
-        month = interval[0].strftime('%Y-%m') if interval else old['miesiac']
+        month = miesiac or (interval[0].strftime('%Y-%m') if interval else old['miesiac'])
+        try:
+            datetime.strptime(month, '%Y-%m')
+        except (TypeError, ValueError):
+            raise ValueError('Nieprawidłowy miesiąc rozliczeniowy.') from None
         if interval:
             sekundy = interval[2]
         if source == SOURCE_IMPORT:
-            conn.execute('UPDATE import_czas_pracy SET dzial=%s,czynnosc=%s,komentarz=NULL,sekundy=%s WHERE id=%s',
-                         (dzial, opis, sekundy, record_id))
+            conn.execute('UPDATE import_czas_pracy SET dzial=%s,czynnosc=%s,komentarz=NULL,sekundy=%s,miesiac=%s WHERE id=%s',
+                         (dzial, opis, sekundy, month, record_id))
             if interval:
                 start, end, _ = interval
-                conn.execute('UPDATE import_czas_pracy SET data=%s,od=%s,do_=%s,miesiac=%s WHERE id=%s',
-                             (start.date().isoformat(),start.time().isoformat(),end.time().isoformat(),month,record_id))
+                conn.execute('UPDATE import_czas_pracy SET data=%s,od=%s,do_=%s WHERE id=%s',
+                             (start.date().isoformat(),start.time().isoformat(),end.time().isoformat(),record_id))
         else:
-            conn.execute('UPDATE czasomierze SET typ=%s,opis=%s,sekundy=%s,usluga_id=%s WHERE id=%s',
-                         (dzial,opis,sekundy,usluga_id if dzial=='dodatkowe' else None,record_id))
+            conn.execute('UPDATE czasomierze SET typ=%s,opis=%s,sekundy=%s,usluga_id=%s,miesiac=%s WHERE id=%s',
+                         (dzial,opis,sekundy,usluga_id if dzial=='dodatkowe' else None,month,record_id))
             if interval:
-                conn.execute('UPDATE czasomierze SET rozpoczecie=%s,zakonczenie=%s,miesiac=%s WHERE id=%s',
-                             (interval[0].isoformat(),interval[1].isoformat(),month,record_id))
+                conn.execute('UPDATE czasomierze SET rozpoczecie=%s,zakonczenie=%s WHERE id=%s',
+                             (interval[0].isoformat(),interval[1].isoformat(),record_id))
             _adjust_totals(conn,firma_id,old['miesiac'],old['typ'],-int(old['sekundy'] or 0))
             _adjust_totals(conn,firma_id,month,dzial,sekundy)
         new = dict(conn.execute(f'SELECT * FROM {table} WHERE id=%s',(record_id,)).fetchone())

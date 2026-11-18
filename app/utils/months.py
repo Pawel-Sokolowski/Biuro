@@ -22,6 +22,11 @@ def default_month_for_department(department: str, today: date | None = None) -> 
     if department == "payroll":
         return current_month(today)
     raise ValueError("Nieprawidłowy dział.")
+def default_month_for_employee(employee_id: int, today: date | None = None) -> str:
+    from app.preferences.department import default_department
+    return default_month_for_department(default_department(employee_id), today)
+
+
 
 
 def default_month_for_monthly_view(today: date | None = None) -> str:

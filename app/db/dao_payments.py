@@ -484,6 +484,63 @@ def _contractor_name_matches(bank_name: str, invoice_name: str) -> bool:
     return len(bank_tokens) >= 2 and bank_tokens.issubset(invoice_tokens)
 
 
+def _contractor_match_index(invoices: list[dict]) -> dict:
+    """Buduje indeks raz dla całego odświeżenia, zamiast skanować faktury dla każdego przelewu."""
+    grouped = {}
+    by_number = {}
+    by_nip = {}
+    by_account = {}
+    names = {}
+
+    for invoice in invoices:
+        key = _contractor_key(invoice)
+        grouped.setdefault(key, []).append(invoice)
+
+        number = re.sub(r"[^A-Z0-9]", "", str(invoice.get("numer") or "").upper())
+        if number:
+            by_number.setdefault(number, set()).add(key)
+
+        nip = re.sub(r"\D", "", str(invoice.get("nip") or ""))
+        if len(nip) == 10:
+            by_nip.setdefault(nip, set()).add(key)
+
+        account = _normalize_account(invoice.get("buyer_account"))
+        if account:
+            by_account.setdefault(account, set()).add(key)
+
+        bucket = names.setdefault(key, set())
+        for candidate in (
+            invoice.get("buyer"),
+            invoice.get("buyer_full_name"),
+            invoice.get("buyer_short_name"),
+            invoice.get("buyer_invoice_name"),
+            invoice.get("buyer_contractor_name"),
+        ):
+            normalized = _normalize_contractor_name(candidate)
+            if normalized:
+                bucket.add(normalized)
+
+    return {
+        "grouped": grouped,
+        "by_number": by_number,
+        "by_nip": by_nip,
+        "by_account": by_account,
+        "names": names,
+    }
+
+
+def _resolved_contractor(keys, grouped, unresolved, reason):
+    if len(keys) != 1:
+        return dict(unresolved, reason="Dane wskazują kilku kontrahentów; sprawdź fakturę ręcznie.")
+    key = next(iter(keys))
+    return {
+        "company_key": key,
+        "resolved_contractor": grouped[key][0].get("buyer") or "Kontrahent",
+        "confident": True,
+        "reason": reason,
+    }
+
+
 @office_endpoint('app.db.dao_payments.match_invoice_contractor')
 def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     """Rozpoznaje jednego nabywcę; nigdy nie zatwierdza zapłaty ani faktury."""
@@ -531,6 +588,106 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
                           inv.get("buyer_invoice_name"), inv.get("buyer_contractor_name"))
     )}
     return resolved(name_keys, "Dopasowano kontrahenta po nazwie nadawcy.") if name_keys else unresolved
+
+
+@office_endpoint('app.db.dao_payments.match_invoice_contractors')
+def match_invoice_contractors(transactions: list[dict], invoices: list[dict]) -> dict[int, dict]:
+    """Rozpoznaje kontrahentów dla całej listy przy użyciu jednego wspólnego indeksu."""
+    index = _contractor_match_index(invoices)
+    grouped = index["grouped"]
+    unresolved = {
+        "company_key": None,
+        "resolved_contractor": None,
+        "confident": False,
+        "reason": "Nie rozpoznano jednoznacznie kontrahenta; wybierz fakturę ręcznie.",
+    }
+    results = {}
+
+    for transaction in transactions:
+        raw = str(
+            transaction.get("opis_surowy")
+            or transaction.get("raw_title")
+            or transaction.get("tytul")
+            or transaction.get("title")
+            or ""
+        )
+        text = raw + " " + str(transaction.get("tytul") or transaction.get("title") or "")
+        numbers = {
+            re.sub(r"[^A-Z0-9]", "", value.upper())
+            for value in re.findall(
+                r"\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*",
+                text,
+                re.IGNORECASE,
+            )
+        }
+        number_keys = set()
+        for number in numbers:
+            number_keys.update(index["by_number"].get(number, ()))
+
+        details = _description_details(raw)
+        nip = re.sub(
+            r"\D",
+            "",
+            str(
+                transaction.get("kontrahent_nip")
+                or transaction.get("contractor_nip")
+                or details["contractor_nip"]
+            ),
+        )
+        nip_keys = set(index["by_nip"].get(nip, ())) if len(nip) == 10 else set()
+
+        if number_keys:
+            if len(number_keys) == 1 and len(nip) == 10 and (
+                not nip_keys or not number_keys.issubset(nip_keys)
+            ):
+                match = dict(
+                    unresolved,
+                    reason="Numer faktury i NIP wskazują różnych kontrahentów; sprawdź ręcznie.",
+                )
+            else:
+                match = _resolved_contractor(
+                    number_keys,
+                    grouped,
+                    unresolved,
+                    "Dopasowano nabywcę po numerze faktury w tytule przelewu.",
+                )
+        elif len(nip) == 10 and nip_keys:
+            match = _resolved_contractor(
+                nip_keys, grouped, unresolved, "Dopasowano kontrahenta po NIP."
+            )
+        else:
+            account = _normalize_account(
+                transaction.get("kontrahent_rachunek")
+                or transaction.get("contractor_account")
+                or details["contractor_account"]
+            )
+            account_keys = set(index["by_account"].get(account, ())) if account else set()
+            if account_keys:
+                match = _resolved_contractor(
+                    account_keys, grouped, unresolved, "Dopasowano kontrahenta po rachunku nadawcy."
+                )
+            else:
+                name = _normalize_contractor_name(
+                    transaction.get("kontrahent")
+                    or transaction.get("contractor")
+                    or details["contractor"]
+                )
+                name_keys = {
+                    key
+                    for key, candidates in index["names"].items()
+                    if name and any(_contractor_name_matches(name, candidate) for candidate in candidates)
+                }
+                match = (
+                    _resolved_contractor(
+                        name_keys, grouped, unresolved, "Dopasowano kontrahenta po nazwie nadawcy."
+                    )
+                    if name_keys
+                    else unresolved
+                )
+
+        results[int(transaction["id"])] = match
+
+    return results
 
 
 @office_endpoint('app.db.dao_payments.invoice_choices_for_transaction')

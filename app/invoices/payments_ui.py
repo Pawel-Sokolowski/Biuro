@@ -5,7 +5,7 @@ import logging
 import traceback
 from decimal import Decimal, DecimalException
 
-from PyQt6.QtCore import QDate, QSettings, Qt
+from PyQt6.QtCore import QDate, QObject, QSettings, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtWidgets import (
@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
     list_unsettled_transfers, record_manual_payment, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
-    invoice_choices_for_transaction, match_invoice_contractor,
+    invoice_choices_for_transaction, match_invoice_contractor, match_invoice_contractors,
     invoice_contractor_key,
     bank_transfer_block_reason, apply_invoice_correction,
 )
@@ -43,6 +43,35 @@ def _payment_amount(text: str) -> Decimal:
         return amount
     except DecimalException as exc:
         raise PaymentError("Nieprawidłowa kwota płatności.") from exc
+
+
+class Mt940ImportWorker(QObject):
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str, str)
+
+    def __init__(self, path: str, actor_id: int, encoding: str | None):
+        super().__init__()
+        self.path = path
+        self.actor_id = actor_id
+        self.encoding = encoding
+
+    def run(self):
+        try:
+            report = import_mt940_file(
+                self.path,
+                self.actor_id,
+                encoding=self.encoding,
+            )
+        except (PaymentError, OSError, PermissionError) as exc:
+            self.failed.emit(str(exc), "")
+        except Exception:
+            logger.exception("Błąd importu wyciągu MT940")
+            self.failed.emit(
+                "Nie udało się zaimportować wyciągu.",
+                traceback.format_exc(),
+            )
+        else:
+            self.finished.emit(report)
 
 
 class InvoiceChoiceCombo(QComboBox):
@@ -71,7 +100,12 @@ class BankPaymentReview(QDialog):
         self.invoices = []
         self.companies = []
         self.transactions = []
+        self._matches = {}
+        self._invoices_by_contractor = {}
         self._bank_limit = 100
+        self._import_thread = None
+        self._import_worker = None
+        self._import_in_progress = False
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
         self.resize(1600, 1000)
         layout = QVBoxLayout(self)
@@ -134,7 +168,22 @@ class BankPaymentReview(QDialog):
         self.data_status = QLabel()
         self.data_status.setWordWrap(True)
         layout.addWidget(self.data_status)
+        self.import_status = QLabel()
+        self.import_status.setWordWrap(True)
+        self.import_status.setVisible(False)
+        layout.addWidget(self.import_status)
         self.refresh()
+
+    def closeEvent(self, event):
+        if self._import_in_progress:
+            QMessageBox.information(
+                self,
+                "Import MT940",
+                "Import nadal trwa. Poczekaj na jego zakończenie przed zamknięciem okna.",
+            )
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _load_more_imports(self):
         self._bank_limit += 100
@@ -145,38 +194,101 @@ class BankPaymentReview(QDialog):
         self.settings.sync()
 
     def _import_file(self):
+        if self._import_in_progress:
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Import wyciągu ING MT940", "",
             "Wyciągi MT940 (*.sta *.mt940 *.txt *.940);;Wszystkie pliki (*)",
         )
         if not path:
             return
-        try:
-            report = import_mt940_file(path, self.actor_id, encoding=self.encoding.currentData() or None)
-        except (PaymentError, OSError, PermissionError) as exc:
-            QMessageBox.warning(self, "Wyciąg MT940", str(exc))
-            return
-        except Exception:
-            logger.exception("Błąd importu wyciągu MT940")
+
+        self._set_import_busy(True)
+        self.import_status.setText(
+            "Importowanie MT940 w tle. Okno pozostaje aktywne. "
+            "Po zakończeniu użyj przycisku Odśwież, aby przebudować listę."
+        )
+        self.import_status.setVisible(True)
+
+        self._import_thread = QThread(self)
+        self._import_worker = Mt940ImportWorker(
+            path,
+            self.actor_id,
+            self.encoding.currentData() or None,
+        )
+        self._import_worker.moveToThread(self._import_thread)
+        self._import_thread.started.connect(self._import_worker.run)
+        self._import_worker.finished.connect(self._import_succeeded)
+        self._import_worker.failed.connect(self._import_failed)
+        self._import_worker.finished.connect(self._import_thread.quit)
+        self._import_worker.failed.connect(self._import_thread.quit)
+        self._import_thread.finished.connect(self._import_worker.deleteLater)
+        self._import_thread.finished.connect(self._import_thread.deleteLater)
+        self._import_thread.finished.connect(self._clear_import_worker)
+        self._import_thread.start()
+
+    def _set_import_busy(self, busy: bool):
+        self._import_in_progress = busy
+        self.btn_import.setEnabled(not busy)
+        self.encoding.setEnabled(not busy)
+        self.btn_confirm.setEnabled(not busy)
+        self.btn_confirm_all.setEnabled(not busy)
+        self.btn_correction.setEnabled(not busy)
+        self.btn_delete.setEnabled(not busy)
+        self.more_imports.setEnabled(not busy)
+        self.btn_import.setText(
+            "Importowanie MT940…" if busy else "Importuj ING MT940"
+        )
+
+    def _clear_import_worker(self):
+        self._import_worker = None
+        self._import_thread = None
+
+    def _import_failed(self, message: str, details: str):
+        self._set_import_busy(False)
+        self.import_status.setText("Import MT940 zakończony błędem.")
+        if details:
             error = QMessageBox(self)
             error.setIcon(QMessageBox.Icon.Warning)
             error.setWindowTitle("Wyciąg MT940")
-            error.setText("Nie udało się zaimportować wyciągu.")
-            error.setInformativeText("Rozwiń szczegóły i skopiuj treść błędu, aby ustalić przyczynę.")
-            error.setDetailedText(traceback.format_exc())
+            error.setText(message)
+            error.setInformativeText(
+                "Rozwiń szczegóły i skopiuj treść błędu, aby ustalić przyczynę."
+            )
+            error.setDetailedText(details)
             error.exec()
             return
+        QMessageBox.warning(self, "Wyciąg MT940", message)
+
+    def _import_succeeded(self, report: dict):
+        self._set_import_busy(False)
+        self.import_status.setText(
+            f"Import zakończony. Nowe operacje: {report['new']}; "
+            f"duplikaty: {report['duplicates']}; "
+            f"pominięte przelewy własne: {report.get('own', 0)}. "
+            "Kliknij Odśwież, aby wczytać listę."
+        )
         QMessageBox.information(
             self, "Wyciąg MT940",
             f"Transakcje w pliku: {report['all']}\n"
             f"Nowe: {report['new']}\n"
             f"Już importowane: {report['duplicates']}\n"
             f"Pominięte przelewy własne: {report.get('own', 0)}\n\n"
-            "Operacje wymagają potwierdzenia na liście przed rozliczeniem.",
+            "Import zakończył się poprawnie.\n\n"
+            "Lista nie jest przebudowywana automatycznie, ponieważ właśnie "
+            "jej pełne odświeżenie było drugim źródłem blokowania interfejsu. "
+            "Kliknij Odśwież, kiedy chcesz wczytać nowe operacje.",
         )
-        self.refresh()
 
     def refresh(self):
+        if self._import_in_progress:
+            QMessageBox.information(
+                self,
+                "Odświeżanie",
+                "Poczekaj na zakończenie importu MT940.",
+            )
+            return
         try:
             invoices = list_invoice_choices(self.actor_id)
             transactions = list_unsettled_transfers(self.actor_id, include_all=self.all_imports.isChecked(), limit=self._bank_limit)
@@ -203,6 +315,12 @@ class BankPaymentReview(QDialog):
         saved_choices = self._snapshot_choices()
         state = ItemViewState(self.table, lambda index: index.data()) if self.table.rowCount() else None
         self.invoices, self.transactions = invoices, transactions
+        self._invoices_by_contractor = {}
+        for invoice in invoices:
+            self._invoices_by_contractor.setdefault(
+                invoice_contractor_key(invoice), []
+            ).append(invoice)
+        self._matches = match_invoice_contractors(transactions, invoices)
         old_model = getattr(self, '_contractor_model', None)
         self._contractor_model = QStandardItemModel(self)
         first = QStandardItem('Wszyscy kontrahenci')
@@ -237,7 +355,10 @@ class BankPaymentReview(QDialog):
                 cell = QTableWidgetItem(str(value))
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(idx, col, cell)
-            match = match_invoice_contractor(entry, self.invoices)
+            match = self._matches.get(
+                int(entry["id"]),
+                {"company_key": None, "confident": False, "reason": ""},
+            )
             contractor = QComboBox(self.table)
             contractor.setEditable(True)
             contractor.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -360,9 +481,15 @@ class BankPaymentReview(QDialog):
         if self.table.cellWidget(row, self.COL_FILTER).isChecked():
             invoices = self.invoices
         elif contractor_key is not None:
-            invoices = [item for item in self.invoices if _contractor_data(item) == contractor_key]
+            kind, value = contractor_key.split(":", 1)
+            try:
+                value = int(value)
+            except ValueError:
+                pass
+            invoices = self._invoices_by_contractor.get((kind, value), [])
         else:
-            invoices = invoice_choices_for_transaction(entry, self.invoices)
+            match = self._matches.get(int(entry["id"]), {})
+            invoices = self._invoices_by_contractor.get(match.get("company_key"), self.invoices)
         refund = Decimal(str(entry['kwota'])) < 0
         invoices = [item for item in invoices if (item.get('rodzaj') == 'korekta'
                     and Decimal(str(item.get('kwota_brutto', 0))) < 0) == refund]

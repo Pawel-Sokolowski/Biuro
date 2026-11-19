@@ -146,9 +146,12 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
             raise ValueError('Nieznana firma w odczycie formularzy ZUS.')
         mapped = {}
         from app.companies.identities import payer_nips,is_civil
-        from app.db.dao_companies import get_partners
+        from app.db.dao_companies import get_partners_for_companies
+        civil_ids = [row['id'] for row in companies if is_civil(row)]
+        partners_by_company = get_partners_for_companies(civil_ids)
+
         def identities(row):
-            return payer_nips(row,get_partners(row['id']) if is_civil(row) else ())
+            return payer_nips(row, partners_by_company.get(row['id'], ()))
         for row in selected:
             try:
                 nips = identities(row)

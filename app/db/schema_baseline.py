@@ -1345,7 +1345,6 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cenniki_kadry_klucz ON cenniki_kadry(klucz);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_konta_email ON konta_email(email);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_dokumenty_firma_data ON dokumenty(firma_id, data_wyst);")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_statusy_miesieczne_firma_miesiac ON statusy_miesieczne(firma_id, miesiac);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_czasomierze_firma_miesiac ON czasomierze(firma_id, miesiac);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_data ON audit_log(data DESC);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_import_history_started ON import_history(started_at DESC);")

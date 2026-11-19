@@ -1212,6 +1212,23 @@ def get_partners(firma_id: int) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_partners_for_companies(company_ids):
+    """Load partners for many companies in one query, keyed by company id."""
+    ids = sorted({int(company_id) for company_id in company_ids})
+    if not ids:
+        return {}
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM udzialowcy WHERE firma_id = ANY(%s) ORDER BY firma_id, id",
+            (ids,),
+        ).fetchall()
+    result = {company_id: [] for company_id in ids}
+    for row in rows:
+        item = dict(row)
+        result[item['firma_id']].append(item)
+    return result
+
+
 @office_endpoint('app.db.dao_companies.save_partner')
 def save_partner(firma_id: int, data: Dict[str, Any]) -> None:
     conn = get_conn()

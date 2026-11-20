@@ -12,18 +12,23 @@ from app.integrations.enova.jpk import save_jpk, validate_jpk
 from app.services.worker_activity import record
 
 
-def read_enova(config, source, company_id, months):
+def fetch_enova(config, source, months):
     if not source.get('declarations_query'):
         raise ValueError('Brak adaptera deklaracji Enovy dla firmy.')
+    declarations = validate_declarations(fetch_counts(config,{**source,'count_query':source['declarations_query']},
+                                                     months,result_kind='declarations'),source,months)
+    jpk = None
+    if source.get('jpk_query'):
+        jpk = validate_jpk(fetch_counts(config,{**source,'count_query':source['jpk_query']},
+                                       months,result_kind='jpk'),source,months)
+    return declarations, jpk
+
+
+def read_enova(config, source, company_id, months):
     with get_conn() as conn:
         if not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Trwa inny odczyt Enovy.')
-        declarations = validate_declarations(fetch_counts(config,{**source,'count_query':source['declarations_query']},
-                                                         months,result_kind='declarations'),source,months)
-        jpk = None
-        if source.get('jpk_query'):
-            jpk = validate_jpk(fetch_counts(config,{**source,'count_query':source['jpk_query']},
-                                           months,result_kind='jpk'),source,months)
+        declarations, jpk = fetch_enova(config, source, months)
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for month in months:
             key = f'enova_checking_{company_id}_{month}'

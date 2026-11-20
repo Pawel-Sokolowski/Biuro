@@ -198,6 +198,26 @@ def get_company_year_declarations(firma_id: int, year: int) -> list[str]:
         return company_declarations(dict(row)) if row else []
 
 
+def write_company_year_declarations(conn, company, year, codes, actor_id):
+    company_id = company['id']
+    _seed_company_snapshot(conn, year, company)
+    row = conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s AND firma_id = %s FOR UPDATE",
+                       (year, company_id)).fetchone()
+    snapshot = json.loads(row[0])
+    codes = list(dict.fromkeys(codes))
+    # Recorded filings remain visible even after an obligation is unticked.
+    for saved in conn.execute("SELECT deklaracja FROM zakonczenie_roku WHERE rok = %s AND firma_id = %s AND owner_key = 0",
+                              (year, company_id)).fetchall():
+        if saved[0] not in codes:
+            codes.append(saved[0])
+    snapshot['declaration_codes'] = codes
+    snapshot['roczne_deklaracje'] = json.dumps(codes, ensure_ascii=False)
+    conn.execute("UPDATE year_end_snapshots SET company_json = %s WHERE rok = %s AND firma_id = %s",
+                 (json.dumps(snapshot, ensure_ascii=False, default=str), year, company_id))
+    conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('year_end_snapshots', %s, 'edycja', %s, %s)",
+                 (company_id, actor_id, json.dumps({'year': year, 'declarations': codes})))
+
+
 @office_endpoint('app.db.dao_year_end.save_company_year_declarations')
 def save_company_year_declarations(firma_id: int, selections: dict[int, list[str]], actor_id: int) -> None:
     from app.security.authorization import can
@@ -211,20 +231,7 @@ def save_company_year_declarations(firma_id: int, selections: dict[int, list[str
         for year, codes in selections.items():
             if not 2000 <= int(year) <= 2100:
                 raise ValueError("Nieprawidłowy rok.")
-            row = conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s AND firma_id = %s FOR UPDATE", (year, firma_id)).fetchone()
-            if not row:
-                _seed_company_snapshot(conn, year, dict(company))
-                row = conn.execute("SELECT company_json FROM year_end_snapshots WHERE rok = %s AND firma_id = %s FOR UPDATE", (year, firma_id)).fetchone()
-            snapshot = json.loads(row[0])
-            codes = list(dict.fromkeys(codes))
-            # Recorded filings remain visible even after an obligation is unticked.
-            for saved in conn.execute("SELECT deklaracja FROM zakonczenie_roku WHERE rok = %s AND firma_id = %s AND owner_key = 0", (year, firma_id)).fetchall():
-                if saved[0] not in codes:
-                    codes.append(saved[0])
-            snapshot["declaration_codes"] = codes
-            snapshot["roczne_deklaracje"] = json.dumps(codes, ensure_ascii=False)
-            conn.execute("INSERT INTO year_end_snapshots(rok, firma_id, company_json) VALUES (%s, %s, %s) ON CONFLICT (rok, firma_id) DO UPDATE SET company_json = EXCLUDED.company_json", (year, firma_id, json.dumps(snapshot, ensure_ascii=False, default=str)))
-            conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('year_end_snapshots', %s, 'edycja', %s, %s)", (firma_id, actor_id, json.dumps({"year": year, "declarations": codes})))
+            write_company_year_declarations(conn, company, year, codes, actor_id)
 
 
 @office_endpoint('app.db.dao_year_end.reset_annual_declarations')

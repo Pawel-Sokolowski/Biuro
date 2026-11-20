@@ -122,6 +122,44 @@ def normalize(rows, months, selected_nips, *, annual=False):
     return result
 
 
+def payer_mapping(companies, company_ids=None):
+    from app.companies.identities import payer_nips, is_civil
+    from app.db.dao_companies import get_partners_for_companies
+
+    selected_ids = None if company_ids is None else set(company_ids)
+    selected = [row for row in companies if selected_ids is None or row['id'] in selected_ids]
+    if selected_ids is not None and {row['id'] for row in selected} != selected_ids:
+        raise ValueError('Nieznana firma w odczycie formularzy ZUS.')
+    partners = get_partners_for_companies([row['id'] for row in companies if is_civil(row)])
+
+    def identities(row):
+        return payer_nips(row, partners.get(row['id'], ()))
+
+    mapped = {}
+    for row in selected:
+        try:
+            nips = identities(row)
+        except ValueError:
+            if selected_ids is not None:
+                raise
+            continue
+        for nip in nips:
+            if nip in mapped and mapped[nip] != row['id']:
+                raise ValueError('Kilka firm Biuro ma ten sam NIP płatnika. Nie przypisano formularzy ZUS.')
+            mapped[nip] = row['id']
+    mapped_ids = set(mapped.values())
+    for row in companies:
+        if row['id'] in mapped_ids:
+            continue
+        try:
+            nips = identities(row)
+        except ValueError:
+            continue
+        if any(nip in mapped for nip in nips):
+            raise ValueError('NIP wybranej firmy jest przypisany także innej firmie Biuro.')
+    return mapped
+
+
 def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
     if actor_id is not None:
         from app.security.authorization import is_administrator
@@ -143,37 +181,7 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
             return {'mode': 'busy'}
         with get_conn() as conn:
             companies = conn.execute('SELECT id,nip,forma_dzialalnosci FROM firmy').fetchall()
-        selected = [row for row in companies if company_ids is None or row['id'] in company_ids]
-        if company_ids is not None and {row['id'] for row in selected} != set(company_ids):
-            raise ValueError('Nieznana firma w odczycie formularzy ZUS.')
-        mapped = {}
-        from app.companies.identities import payer_nips,is_civil
-        from app.db.dao_companies import get_partners_for_companies
-        civil_ids = [row['id'] for row in companies if is_civil(row)]
-        partners_by_company = get_partners_for_companies(civil_ids)
-
-        def identities(row):
-            return payer_nips(row, partners_by_company.get(row['id'], ()))
-        for row in selected:
-            try:
-                nips = identities(row)
-            except ValueError:
-                if company_ids is not None:
-                    raise
-                continue
-            for nip in nips:
-                if nip in mapped and mapped[nip]!=row['id']:
-                    raise ValueError('Kilka firm Biuro ma ten sam NIP płatnika. Nie przypisano formularzy ZUS.')
-                mapped[nip] = row['id']
-        for row in companies:
-            if row['id'] in mapped.values():
-                continue
-            try:
-                nips = identities(row)
-            except ValueError:
-                continue
-            if any(nip in mapped for nip in nips):
-                raise ValueError('NIP wybranej firmy jest przypisany także innej firmie Biuro.')
+        mapped = payer_mapping(companies, company_ids)
         if not mapped:
             return {'mode': 'empty', 'companies': 0}
         from app.services.worker_activity import batch

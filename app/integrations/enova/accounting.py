@@ -5,10 +5,29 @@ import datetime
 import json
 from app.db.dao_conn import get_conn
 from app.security.authorization import allowed_tabs, assigned_company_ids
+from app.companies.cennik_keys import company_accounting_type
 from app.integrations.enova.checking import history_months
 
 
 SUBSTITUTION_KEYS = {'accounting': 'ksiegowosc', 'payroll': 'kadry'}
+SIMPLE_DOCUMENT_TYPES = ('SPU', 'ZR', 'DW')
+SALES_SYMBOLS = {'SPU', 'SPR', 'SPD', 'SPT', 'SPUUE', 'SPTUE', 'SPUEX', 'SPTEX', 'VME'}
+PURCHASE_SYMBOLS = {'ZR', 'ZP', 'ZT', 'ZUE', 'ZŚT', 'ZST'}
+
+
+def simple_accounting(row):
+    return company_accounting_type(row) in ('KPIR', 'RYCZALT')
+
+
+def accounting_breakdown(row, counts):
+    if counts is None or not simple_accounting(row) or counts.keys() <= set(SIMPLE_DOCUMENT_TYPES):
+        return counts
+    grouped = dict.fromkeys(SIMPLE_DOCUMENT_TYPES, 0)
+    for symbol, count in counts.items():
+        symbol = symbol.upper()
+        key = 'SPU' if symbol in SALES_SYMBOLS else 'ZR' if symbol in PURCHASE_SYMBOLS else 'DW'
+        grouped[key] += count
+    return grouped
 
 
 def _employee_names(ids):
@@ -112,7 +131,9 @@ def list_accounting(actor_id, month):
             (ids, prior)).fetchall()
     by_company = {}
     for record in history:
-        by_company.setdefault(record['id'], []).append({**decoded(record['wartosc']), 'month': record['klucz'][-7:]})
+        report = decoded(record['wartosc'])
+        report.pop('accounting_details', None)
+        by_company.setdefault(record['id'], []).append({**report, 'month': record['klucz'][-7:]})
     result = []
     for record in rows:
         row = dict(record)
@@ -127,10 +148,14 @@ def list_accounting(actor_id, month):
 def documents(row, department):
     report = decoded(row.get('checking'))
     if report:
-        return report.get('documents', {}).get(department)
+        counts = report.get('documents', {}).get(department)
+        if counts is not None:
+            return accounting_breakdown(row, counts) if department == 'accounting' else counts
     # Legacy totals can be shown, but missing types must not be invented as zero.
     if department == 'accounting':
-        return decoded(row.get('snapshot')).get('by_type')
+        snapshot = decoded(row.get('snapshot'))
+        counts = snapshot.get('report_types')
+        return accounting_breakdown(row, snapshot.get('by_type') if counts is None else counts)
     return None
 
 

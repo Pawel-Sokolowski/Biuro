@@ -1,4 +1,4 @@
-"""Shared Enova bank-position weighting: office default and client overrides."""
+"""Shared Enova weighting for bank and cash positions."""
 from app.remote.boundary import endpoint as office_endpoint
 import json
 from app.db.dao_app_settings import get_setting, set_setting
@@ -9,7 +9,7 @@ SETTINGS_KEY = 'enova_document_count_rules'
 
 def validate_divisor(value):
     if type(value) is not int or not 1 <= value <= 1000:
-        raise ValueError('Dzielnik pozycji bankowych musi być liczbą całkowitą od 1 do 1000.')
+        raise ValueError('Dzielnik pozycji bankowych i kasowych musi być liczbą całkowitą od 1 do 1000.')
     return value
 
 

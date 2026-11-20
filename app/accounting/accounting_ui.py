@@ -8,15 +8,29 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QAbstractItemView, QCheckBox, QStackedWidget)
 from app.monthly_view.month_picker import MonthPicker
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
-                                                declaration_entries, declarations)
+                                                declaration_entries, declarations, simple_accounting,
+                                                SIMPLE_DOCUMENT_TYPES)
 from app.integrations.enova.jpk import STATUSES
 from app.companies.cennik_keys import company_accounting_type
 from app.utils.background import TaskRunner
 from app.accounting.insights import comparison, declaration_issue, hr_status, needs_attention, previous_active_types, HR_LABELS
 from app.preferences.state_colors import paint as paint_state
 
-BASE_TYPES = ('SPU', 'ZR', 'DW', 'AMO')
+BASE_TYPES = (*SIMPLE_DOCUMENT_TYPES, 'AMO')
 TYPE_LABELS = {'SPU': 'Sprzedaż', 'ZR': 'Zakup'}
+DOCUMENT_NAMES = {
+    'DR': 'Dokument rozliczeniowy', 'DW': 'Dokumenty wewnętrzne i pozostałe zapisy',
+    'DWNNC': 'Dokument wewnętrzny – nabycie należny/naliczony',
+    'DWNNZ': 'Dokument wewnętrzny – nabycie należny (zakup)',
+    'LPEW': 'Lista płac – ewidencja', 'PKE': 'Polecenie księgowania – ewidencja',
+    'RDEW': 'Raport dzienny ewidencji wewnętrznej', 'RKVE': 'Ważone pozycje kasowe',
+    'WBEW': 'Ważone pozycje wyciągów bankowych', 'SPD': 'Sprzedaż detaliczna',
+    'SPR': 'Sprzedaż', 'SPT': 'Sprzedaż towarów', 'SPUUE': 'Sprzedaż usług UE',
+    'STE': 'Ewidencja dokumentów środków trwałych', 'AMO': 'Amortyzacja',
+    'UE': 'Wypłata umów cywilnoprawnych', 'VME': 'VAT marża / VAT międzynarodowy / e-commerce',
+    'ZP': 'Zakup paliw', 'ZR': 'Zakup pozostały', 'ZT': 'Zakup towarów',
+    'ZUE': 'Zakup unijny', 'ZŚT': 'Zakup środków trwałych',
+}
 from app.accounting.report_types import (DEFAULT_FORMS, NOT_SENT_FORMS, declaration_title, form_matches,
                                       form_key, form_label, pit_form)
 
@@ -458,7 +472,9 @@ class AccountingPage(QWidget):
 
     def _render_table(self, rows, department):
         table = self.tables[department]
-        kinds = set(BASE_TYPES if department == 'accounting' else ())
+        simple_ids = {row['id'] for row in rows if department == 'accounting' and simple_accounting(row)}
+        simple_only = bool(rows and len(simple_ids) == len(rows))
+        kinds = set((SIMPLE_DOCUMENT_TYPES if simple_only else BASE_TYPES) if department == 'accounting' else ())
         forms = set(DEFAULT_FORMS[department])
         by_company = {row['id']: declarations(row, department) for row in rows}
         for row in rows:
@@ -473,7 +489,8 @@ class AccountingPage(QWidget):
         labels = [TYPE_LABELS.get(kind, kind) for kind in kinds]
         # Keep distinct definitions distinct even when their friendly names coincide.
         labels = [label + (' (' + kind + ')' if labels.count(label) > 1 else '') for label, kind in zip(labels, kinds)]
-        headers = ['Firma', 'NIP', 'Forma opodatkowania', 'Opiekun (obecny, z zastępstwami)', *labels, 'Dokumenty razem']
+        headers = ['Firma', 'NIP', 'Forma opodatkowania', 'Opiekun (obecny, z zastępstwami)', *labels,
+                   'Razem' if simple_only else 'Dokumenty razem']
         if department == 'accounting':
             headers.append('Ilość dokumentów — Widok miesięczny')
         headers.append('Ostatni odczyt')
@@ -484,18 +501,28 @@ class AccountingPage(QWidget):
         table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             report, counts = decoded(row.get('checking')), documents(row, department)
+            simple = row['id'] in simple_ids
             historical = previous_active_types(row, self.period) if department == 'accounting' else set()
             cells = [_item(row.get(key)) for key in ('nazwa', 'nip', 'forma_opodatkowania')]
             cells.append(self._owner_item(row, department))
             for kind in kinds:
                 known = counts is not None and (kind in counts or bool(report))
+                if simple and kind not in SIMPLE_DOCUMENT_TYPES:
+                    known = False
                 value = counts.get(kind, 0) if known else None
-                item = _item(value, 'Rodzaj dokumentu: ' + kind)
+                item = _item(value, DOCUMENT_NAMES.get(kind, 'Rodzaj dokumentu: ' + kind))
                 if value == 0 and kind in historical:
                     paint_state(item, 'error')
                     item.setToolTip('Brak dokumentów tego rodzaju w wybranym miesiącu; występowały w tej firmie w poprzednim miesiącu.\nRodzaj: ' + kind)
                 cells.append(item)
-            cells.append(_item(sum(counts.values()) if counts is not None else None))
+            detail = ''
+            if simple:
+                snapshot = decoded(row.get('snapshot'))
+                breakdown = report.get('accounting_details', {}).get('by_type') if report else snapshot.get('by_type')
+                if breakdown:
+                    detail = '\n'.join(f'{symbol} — {DOCUMENT_NAMES.get(symbol, symbol)}: {amount}'
+                                       for symbol, amount in sorted(breakdown.items()))
+            cells.append(_item(sum(counts.values()) if counts is not None else None, detail))
             if department == 'accounting':
                 cells.append(_item(row.get('ilosc_dok'), 'Licznik miesięczny, z zachowaniem ręcznych korekt.'))
             stamp = report.get('imported_at') if counts is not None or report.get('declarations') is not None else None

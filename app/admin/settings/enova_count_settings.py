@@ -17,28 +17,25 @@ class EnovaCountSettings(QWidget):
         layout = QVBoxLayout(self)
         text = QLabel('Enova — miesięczna liczba dokumentów księgowości')
         layout.addWidget(text)
-        note = QLabel('KH: pozostałe dokumenty + pozycje WBEW ÷ dzielnik; '
-                      'zaokrąglenie następuje raz, po zsumowaniu miesiąca. '
-                      'Dzielnik 1 oznacza liczenie każdej pozycji bankowej w całości. '
-                      'Reguła nie zmienia liczników KPIR ani ryczałtu.')
+        note = QLabel('KH: dzielnik obejmuje pozycje bankowe i kasowe. KPiR: obejmuje pozycje kasowe. '
+                      'Suma jest zaokrąglana raz za cały miesiąc. Dzielnik 1 liczy każdą pozycję w całości.')
         note.setWordWrap(True)
         layout.addWidget(note)
         form = QFormLayout()
         self.default_divisor = QSpinBox()
         self.default_divisor.setRange(1, 1000)
         self.default_divisor.setValue(rules['bank_divisor'])
-        form.addRow('Globalny dzielnik pozycji WBEW', self.default_divisor)
+        form.addRow('Globalny dzielnik pozycji bankowych i kasowych', self.default_divisor)
         layout.addLayout(form)
-        note = QLabel('Wyjątki dla firm: „Globalny” korzysta z powyższej wartości. '
-                      'Możesz wybrać np. 10 dla konkretnej firmy. '
-                      'Reguła jest stosowana, gdy jej źródło Enova ma typ KH.')
+        note = QLabel('Wyjątki dla firm: „Globalny” używa ustawienia biura. '
+                      'Możesz wybrać osobny dzielnik dla każdej firmy z KH lub KPiR.')
         note.setWordWrap(True)
         layout.addWidget(note)
         self.search = QLineEdit()
         self.search.setPlaceholderText('Szukaj firmy lub NIP…')
         layout.addWidget(self.search)
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(['Firma', 'NIP', 'Dzielnik WBEW'])
+        self.table.setHorizontalHeaderLabels(['Firma', 'NIP', 'Dzielnik pozycji'])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)

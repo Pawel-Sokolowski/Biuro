@@ -1,7 +1,8 @@
 """Resolve shipped adapters separately from user-owned SQL overrides."""
 from pathlib import Path
 
-ADAPTER_REVISION = 5
+ADAPTER_REVISION = 6
+DOCUMENTS_QUERY = 'monthly-documents.sql'
 
 
 def bundled_directory():

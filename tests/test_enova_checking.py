@@ -130,7 +130,10 @@ class CheckingIntegrationTests(DbTestCase):
                 {**common, 'id': 999, 'nazwa': 'B', 'nip': '9999999999', 'forma_opodatkowania': 'KPiR', 'history': []}]
         page = AccountingPage(self.admin)
         page.render(rows, '2026-11')
-        column = next(i for i in range(page.table.columnCount()) if page.table.horizontalHeaderItem(i).text() == 'AMO')
+        headers = [page.table.horizontalHeaderItem(i).text() for i in range(page.table.columnCount())]
+        self.assertEqual(headers[4:8], ['Sprzedaż', 'Zakup', 'DW', 'Razem'])
+        self.assertNotIn('AMO', headers)
+        column = headers.index('DW')
         self.assertEqual(page.table.item(0, column).text(), '0')
         self.assertEqual(page.table.item(0, column).background().color().name(), '#fee2e2')
         self.assertNotEqual(page.table.item(1, column).background().color().name(), '#fee2e2')

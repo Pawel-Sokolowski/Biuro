@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from app.db.dao_conn import get_conn
 from app.integrations.enova.counting_rules import load_rules, effective_divisor, validate_divisor
+from app.integrations.enova.query_defaults import ADAPTER_REVISION, DOCUMENTS_QUERY, bundled_directory
 from app.utils.months import month_bounds, previous_month
 
 
@@ -24,6 +25,12 @@ class MonthlyCount:
     bank_transactions: int
     total: int
     by_type: dict | None = None
+    cash_transactions: int = 0
+    report_types: dict | None = None
+
+    @property
+    def report_breakdown(self):
+        return self.by_type if self.report_types is None else self.report_types
 
 
 # Rodzaje dokumentów, które użytkownik może włączyć/wyłączyć do liczby dokumentów.
@@ -79,16 +86,18 @@ def whole_count(value):
     return int(number)
 
 
-def calculate_total(kind, documents, bank_transactions, bank_divisor=3):
+def calculate_total(kind, documents, bank_transactions, bank_divisor=3, *, cash_transactions=0):
     documents, bank_transactions = whole_count(documents), whole_count(bank_transactions)
+    cash_transactions = whole_count(cash_transactions)
     if kind not in {'KPIR', 'RYCZALT', 'KH'}:
         raise ValueError('Typ księgowości: KPIR, RYCZALT lub KH.')
     if kind != 'KH' and bank_transactions:
         raise ValueError('Pozycje bankowe są uwzględniane wyłącznie dla KH.')
+    if kind == 'RYCZALT' and cash_transactions:
+        raise ValueError('Ryczałt nie dolicza pozycji raportów kasowych.')
     validate_divisor(bank_divisor)
     total = Decimal(documents)
-    if kind == 'KH':
-        total += Decimal(bank_transactions) / bank_divisor
+    total += Decimal(bank_transactions + cash_transactions) / bank_divisor
     return whole_count(total.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
 
 
@@ -104,6 +113,7 @@ def requested_months(today, months_back):
 def validate_rows(rows, source, months, bank_divisor=3):
     found = {}
     expected_nip = normalize_nip(source['nip'])
+    kind = source['accounting_type']
     for row in rows:
         if normalize_nip(row['nip']) != expected_nip:
             raise ValueError('NIP zwrócony przez Enova nie odpowiada mapowaniu firmy.')
@@ -112,6 +122,7 @@ def validate_rows(rows, source, months, bank_divisor=3):
             raise ValueError('Powtórzony miesiąc lub miesiąc spoza zakresu importu.')
         documents = whole_count(row['dokumenty'])
         bank = whole_count(row['pozycje_bankowe'])
+        cash = whole_count(row.get('pozycje_kasowe', 0))
         breakdown = row.get('rodzaje')
         if isinstance(breakdown, str):
             breakdown = json.loads(breakdown)
@@ -121,8 +132,21 @@ def validate_rows(rows, source, months, bank_divisor=3):
             breakdown = {str(k): whole_count(v) for k, v in breakdown.items()}
             if sum(breakdown.values()) != documents:
                 raise ValueError('Podział dokumentów nie odpowiada sumie.')
-        found[month] = MonthlyCount(month, documents, bank,
-                                   calculate_total(source['accounting_type'], documents, bank, bank_divisor), breakdown)
+        total = calculate_total(kind, documents, bank, bank_divisor, cash_transactions=cash)
+        report_types = None
+        if 'sprzedaz' in row or 'zakup' in row:
+            sales = whole_count(row.get('sprzedaz'))
+            purchases = whole_count(row.get('zakup'))
+            if sales + purchases > documents:
+                raise ValueError('Sprzedaż i zakupy przekraczają sumę dokumentów.')
+            if kind in ('KPIR', 'RYCZALT'):
+                report_types = {'SPU': sales, 'ZR': purchases, 'DW': total - sales - purchases}
+            elif breakdown is not None:
+                report_types = dict(breakdown)
+                # Allocate the rounded contribution without rounding the month twice.
+                bank_count = calculate_total(kind, 0, bank, bank_divisor)
+                report_types.update(WBEW=bank_count, RKVE=total - documents - bank_count)
+        found[month] = MonthlyCount(month, documents, bank, total, breakdown, cash, report_types)
     if set(found) != set(months):
         missing = ', '.join(month for month in months if month not in found)
         raise ValueError(f"Baza {source.get('database','Enova')}: odczytano {len(found)}/{len(months)} miesięcy. "
@@ -232,11 +256,13 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         cursor = connection.cursor()
         from app.integrations.enova.discovery import query_timeout
         connection.timeout = query_timeout(config)
-        from app.integrations.enova.query_defaults import bundled_directory
         bundled = query_path.resolve().parent == bundled_directory().resolve() and query_path.name in (
-            'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql')
+            DOCUMENTS_QUERY, 'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql')
         if bundled:
             _bind_company_identity(cursor,source)
+        if bundled and query_path.name == DOCUMENTS_QUERY:
+            cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_accounting_type', @value=?", source['accounting_type'])
+            cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_vat_czynny', @value=?", source.get('vat_czynny'))
         # Exactly two positional date parameters: inclusive start, exclusive end.
         cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
                        date.fromisoformat(month_bounds(months[-1])[1]))
@@ -249,7 +275,7 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
             'hr_events': {'nip', 'event_id', 'employee_id', 'employee_name', 'event_type', 'due_date', 'status'},
         }
         required = contracts[result_kind]
-        optional = ({'rodzaje'} if result_kind == 'counts' else
+        optional = ({'rodzaje', 'pozycje_kasowe', 'sprzedaz', 'zakup'} if result_kind == 'counts' else
                     {'employee_id', 'employee_name', 'source_system', 'raw_status', 'form_variant', 'created_at'} if result_kind == 'declarations' else
                     {'document_number'} if result_kind == 'hr_events' else
                     {'raw_status', 'form_variant', 'sent_at', 'upo_at'} if result_kind == 'jpk' else set())
@@ -268,7 +294,7 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
 
 
 def find_company(conn, nip):
-    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania, forma_dzialalnosci, status_vat FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
+    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania, forma_dzialalnosci, status_vat, vat_czynny FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
                         "IN (%s, %s)", (nip, 'PL' + nip)).fetchall()
     if len(rows) != 1:
         raise ValueError('NIP musi wskazywać dokładnie jedną firmę w Biuro.')
@@ -277,7 +303,7 @@ def find_company(conn, nip):
 
 def resolve_source(source, company):
     """Use Biuro's accounting classification; legacy explicit types remain a fallback."""
-    from app.companies.cennik_keys import company_accounting_type
+    from app.companies.cennik_keys import company_accounting_type, vat_flag_from_status
     resolved = dict(source)
     kind = company_accounting_type(company)
     if company.get('forma_opodatkowania') and not kind:
@@ -297,7 +323,18 @@ def resolve_source(source, company):
     if not source.get('count_query'):
         if kind not in ('KPIR', 'KH', 'RYCZALT'):
             raise ValueError('Brak gotowego zapytania dla rodzaju księgowości.')
-        resolved['count_query'] = str(Path(__file__).resolve().parents[3] / 'docs' / 'enova' / 'queries' / (kind.lower() + '.sql'))
+        if kind == 'RYCZALT':
+            status = str(company.get('status_vat') or '').strip()
+            vat_flag = vat_flag_from_status(status)
+            if status.casefold() == 'niezarejestrowany':
+                vat_flag = 'N'
+            if vat_flag is not None:
+                resolved['vat_czynny'] = vat_flag == 'T'
+            elif not status and company.get('vat_czynny') in (0, 1):
+                resolved['vat_czynny'] = bool(company['vat_czynny'])
+            elif type(source.get('vat_czynny')) is not bool:
+                raise ValueError(f"Uzupełnij status VAT firmy {company.get('nazwa') or company.get('id')} w Biuro.")
+        resolved['count_query'] = str(bundled_directory() / DOCUMENTS_QUERY)
     elif source.get('accounting_type') and source['accounting_type'] != kind:
         raise ValueError('Typ starego count_query jest niezgodny z formą opodatkowania w Biuro. Usuń stare accounting_type/count_query lub popraw mapowanie.')
     return resolved
@@ -333,7 +370,8 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
                          'imported_by=NULL, imported_at=now()',
                          (company['id'], count.month, 'Enova: ' + source['database']))
         snapshot = {'documents': count.documents, 'bank_transactions': count.bank_transactions,
-                    'by_type': count.by_type, 'total': count.total, 'bank_divisor': bank_divisor,
+                    'cash_transactions': count.cash_transactions, 'by_type': count.by_type,
+                    'report_types': count.report_types, 'total': count.total, 'bank_divisor': bank_divisor,
                     'database': source['database'], 'accounting_type': source['accounting_type'],
                     'imported_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
         conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
@@ -414,9 +452,10 @@ def run_import(config, *, apply=False, today=None, fetch=None, months=None):
                         from app.services.worker_activity import record
                         record('enova', 'reading', company_id=company['id'])
                     source = resolve_source(source, company)
-                    divisor = effective_divisor(rules, company['id']) if source['accounting_type'] == 'KH' else 1
+                    divisor = effective_divisor(rules, company['id']) if source['accounting_type'] in ('KH', 'KPIR') else 1
                     signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor,
-                                 'accounting_type': source['accounting_type'], 'server': config.get('server')}
+                                 'accounting_type': source['accounting_type'], 'vat_czynny': source.get('vat_czynny'),
+                                 'adapter_revision': ADAPTER_REVISION, 'query': str(source['count_query']), 'server': config.get('server')}
                     jpk_result = jpk_error = None
                     if source.get('jpk_query'):
                         from app.integrations.enova.jpk import import_jpk
@@ -456,7 +495,8 @@ def run_import(config, *, apply=False, today=None, fetch=None, months=None):
                                     'manual_preserved': [change['month'] for change in changes if change['manual_preserved']],
                                     'counts': {count.month: count.total for count in counts},
                                     'components': {count.month: {'documents': count.documents,
-                                                               'bank_transactions': count.bank_transactions}
+                                                               'bank_transactions': count.bank_transactions,
+                                                               'cash_transactions': count.cash_transactions}
                                                    for count in counts}, 'ok': jpk_error is None})
                     if jpk_error is not None:
                         results[-1]['error'] = 'JPK: ' + jpk_error

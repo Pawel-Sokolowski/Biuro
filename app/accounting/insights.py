@@ -1,13 +1,15 @@
 """Comparison and follow-up rules; missing source reads are never zero-filled."""
 from datetime import date, timedelta
-from app.integrations.enova.accounting import decoded, documents, declaration_entries
+from app.integrations.enova.accounting import accounting_breakdown, decoded, documents, declaration_entries
 from app.integrations.enova.checking import history_months
 
 HR_LABELS = {'contract_end': 'Koniec umowy', 'medical_exam': 'Badania lekarskie', 'ohs_training': 'Szkolenie BHP'}
 
 
-def _count(report, department, kind=None):
+def _count(row, report, department, kind=None):
     counts = report.get('documents', {}).get(department)
+    if department == 'accounting':
+        counts = accounting_breakdown(row, counts)
     if counts is None:
         return None
     return sum(counts.values()) if kind is None else counts.get(kind, 0)
@@ -20,7 +22,7 @@ def comparison(row, month, department, kind=None):
         sum(counts.values()) if kind is None else counts.get(kind, 0))
     history = {report['month']: report for report in row.get('history', []) if report.get('month')}
     previous = history_months(month, 1)[0]
-    prior = _count(history.get(previous, {}), department, kind)
+    prior = _count(row, history.get(previous, {}), department, kind)
     delta = current - prior if current is not None and prior is not None else None
     return {'current': current, 'previous': prior, 'delta': delta,
             'percent': delta / prior * 100 if delta is not None and prior else None,
@@ -30,7 +32,8 @@ def comparison(row, month, department, kind=None):
 def previous_active_types(row, month):
     previous = history_months(month, 1)[0]
     return {kind for report in row.get('history', []) if report.get('month') == previous
-            for kind, count in (report.get('documents', {}).get('accounting') or {}).items() if count > 0}
+            for kind, count in (accounting_breakdown(row, report.get('documents', {}).get('accounting')) or {}).items()
+            if count > 0}
 
 
 def declaration_issue(entry):

@@ -30,9 +30,11 @@ class RemoteRenderingTests(unittest.TestCase):
         connection.call.assert_not_called()
 
     def test_bank_review_fetches_batched_data_for_1000_companies(self):
+        from PyQt6.QtCore import QTimer
         from PyQt6.QtWidgets import QMessageBox
         from app.invoices.payments_ui import BankPaymentReview
         from tests.base import QT_APP
+        from tests.test_review_optimizations import wait_until
 
         self.assertIsNotNone(QT_APP)
         invoices = [
@@ -52,11 +54,27 @@ class RemoteRenderingTests(unittest.TestCase):
             'list_company_choices': [{'id': idx, 'buyer': f'Firma {idx}'} for idx in range(1, 1001)],
         }
         connection = mock.Mock(server='https://biuro.example.test')
-        connection.call.side_effect = lambda operation, *_: responses[operation.rsplit('.', 1)[-1]]
+        gui_thread = threading.get_ident()
+        started, release, gui_tick = threading.Event(), threading.Event(), threading.Event()
+
+        def read(operation, *_):
+            self.assertNotEqual(threading.get_ident(), gui_thread)
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError('Czekanie na odczyt powinno odbywać się poza interfejsem.')
+            return responses[operation.rsplit('.', 1)[-1]]
+
+        connection.call.side_effect = read
         with mock.patch('app.remote.state._client', connection), mock.patch.object(QMessageBox, 'warning') as warning:
             page = BankPaymentReview(7)
             self.addCleanup(page.close)
-            self.assertEqual(page.table.rowCount(), 100)
+            try:
+                QTimer.singleShot(0, gui_tick.set)
+                self.assertTrue(wait_until(lambda: started.is_set() and gui_tick.is_set()))
+                self.assertEqual(page.table.rowCount(), 0)
+            finally:
+                release.set()
+            self.assertTrue(wait_until(lambda: page.table.rowCount() == 100))
             self.assertEqual(page.table.cellWidget(99, page.COL_INVOICE).currentData(), 100)
             warning.assert_not_called()
         self.assertEqual([call.args[0] for call in connection.call.call_args_list],

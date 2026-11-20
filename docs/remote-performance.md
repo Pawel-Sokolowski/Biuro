@@ -85,3 +85,14 @@ Błędy odczytu są widoczne w statusie i logach jako `mail_sidebar_failed` lub
 `calendar_snapshot_failed` z typem i bezpiecznym komunikatem błędu. Nie wymagają
 odczytywania tokenów, kluczy ani danych logowania. W razie problemu potrzebne
 są wpisy z tej samej próby otwarcia widoku po stronie klienta i serwera.
+
+## Import i lista rozliczeń MT940
+
+W trybie HTTPS klient odczytuje wskazany plik i wysyła go na serwer workera.
+Worker rozpoznaje transakcje, a PostgreSQL zapisuje je zbiorczo. Otwieranie
+i odświeżanie listy rozliczeń pobiera dane w tle i buduje podpowiedzi na stanowisku.
+
+W logu klienta `mt940_import_client` podaje łączny czas od rozpoczęcia importu
+pliku do odpowiedzi. W logu workera `mt940_import_postgres` podaje liczbę operacji,
+czas odczytu i parsowania pliku (`read_parse_s`) oraz czas połączenia i zapisu
+w PostgreSQL (`postgres_s`). Zestaw wpisy z tej samej próby według czasu zapisu.

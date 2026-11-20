@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import traceback
 from decimal import Decimal, DecimalException
+from time import perf_counter
 
 from PyQt6.QtCore import QDate, QObject, QSettings, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
@@ -20,6 +21,8 @@ from app.db.dao_payments import (
     match_invoice_contractors, contractor_key, suggest_invoice_ids, transfer_block_reason,
     apply_invoice_correction,
 )
+from app.remote.state import client
+from app.utils.background import TaskRunner
 from app.utils.view_state import ItemViewState
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,18 @@ def _payment_amount(text: str) -> Decimal:
         raise PaymentError("Nieprawidłowa kwota płatności.") from exc
 
 
+def _read_bank_review(actor_id, include_all, limit):
+    invoices = list_invoice_choices(actor_id)
+    transfers = list_unsettled_transfers(actor_id, include_all=include_all, limit=limit)
+    summary = bank_import_summary(actor_id)
+    try:
+        companies = list_company_choices(actor_id)
+    except Exception:
+        logger.exception("Nie udało się wczytać listy firm do rozliczeń")
+        companies = []
+    return invoices, transfers, summary, companies, match_invoice_contractors(transfers, invoices)
+
+
 class Mt940ImportWorker(QObject):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str, str)
@@ -50,6 +65,8 @@ class Mt940ImportWorker(QObject):
         self.encoding = encoding
 
     def run(self):
+        started = perf_counter()
+        remote = client() is not None
         try:
             report = import_mt940_file(
                 self.path,
@@ -66,6 +83,8 @@ class Mt940ImportWorker(QObject):
             )
         else:
             self.finished.emit(report)
+        finally:
+            logger.info('mt940_import_client duration_s=%.3f remote=%s', perf_counter() - started, remote)
 
 
 class InvoiceChoiceCombo(QComboBox):
@@ -101,6 +120,8 @@ class BankPaymentReview(QDialog):
         self._import_thread = None
         self._import_worker = None
         self._import_in_progress = False
+        self._bank_reads = TaskRunner(self)
+        self.finished.connect(self._bank_reads.invalidate)
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
         self.resize(1600, 1000)
         layout = QVBoxLayout(self)
@@ -284,22 +305,32 @@ class BankPaymentReview(QDialog):
                 "Poczekaj na zakończenie importu MT940.",
             )
             return
+        actor_id, include_all, limit = self.actor_id, self.all_imports.isChecked(), self._bank_limit
+        if client() is not None:
+            self.data_status.setText("Odczytuję operacje bankowe i faktury…")
+            self._bank_reads.submit(
+                lambda: _read_bank_review(actor_id, include_all, limit), self._render_bank_review,
+                self._bank_read_failed, key=(actor_id, include_all, limit),
+            )
+            return
         try:
-            invoices = list_invoice_choices(self.actor_id)
-            transactions = list_unsettled_transfers(self.actor_id, include_all=self.all_imports.isChecked(), limit=self._bank_limit)
-            summary = bank_import_summary(self.actor_id)
-            try:
-                self.companies = list_company_choices(self.actor_id)
-            except Exception:
-                logger.exception("Nie udało się wczytać listy firm do rozliczeń")
-                self.companies = []
-        except (PaymentError, PermissionError) as exc:
-            QMessageBox.warning(self, "Rozliczenie", str(exc))
+            snapshot = _read_bank_review(actor_id, include_all, limit)
+        except Exception as error:
+            self._bank_read_failed(error)
             return
-        except Exception:
-            logger.exception("Błąd odświeżania rozliczeń bankowych")
+        self._render_bank_review(snapshot)
+
+    def _bank_read_failed(self, error):
+        self.data_status.setText("Nie udało się odczytać rozliczeń bankowych.")
+        if isinstance(error, (PaymentError, PermissionError)):
+            QMessageBox.warning(self, "Rozliczenie", str(error))
+        else:
+            logger.error("Błąd odświeżania rozliczeń bankowych", exc_info=error)
             QMessageBox.warning(self, "Rozliczenie", "Nie udało się odczytać rozliczeń. Szczegóły w logach.")
-            return
+
+    def _render_bank_review(self, snapshot):
+        invoices, transactions, summary, companies, self._matches = snapshot
+        self.companies = companies
         from app.config import get_database
         self.data_status.setText(
             f"Wspólna baza: {get_database()} · schemat: {summary['schema']}. "
@@ -316,7 +347,6 @@ class BankPaymentReview(QDialog):
             self._invoices_by_contractor.setdefault(
                 contractor_key(invoice), []
             ).append(invoice)
-        self._matches = match_invoice_contractors(transactions, invoices)
         old_model = getattr(self, '_contractor_model', None)
         self._contractor_model = QStandardItemModel(self)
         first = QStandardItem('Wszyscy kontrahenci')

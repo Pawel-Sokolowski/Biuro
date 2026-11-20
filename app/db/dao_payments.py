@@ -4,11 +4,13 @@ from app.remote.boundary import endpoint as office_endpoint
 
 import hashlib
 import json
+import logging
 import re
 import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import mt940
@@ -16,6 +18,8 @@ import mt940
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice, create_draft_after_payment
 from app.security.authorization import can, is_administrator
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentError(ValueError):
@@ -213,8 +217,10 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
     if source.stat().st_size > 20 * 1024 * 1024:
         raise PaymentError("Wyciąg przekracza 20 MB.")
 
+    started = perf_counter()
     parsed = parse_ing_mt940(source.read_bytes(), encoding=encoding)
     records_all = len(parsed)
+    database_started = perf_counter()
     conn = get_conn()
     try:
         # Przelewy własne: kontrahent to jeden z rachunków biura (z pliku lub
@@ -307,6 +313,8 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
         raise
     finally:
         conn.close()
+        logger.info('mt940_import_postgres operations=%d read_parse_s=%.3f postgres_s=%.3f',
+                    records_all, database_started - started, perf_counter() - database_started)
 
     inserted = int(inserted or 0)
     return {

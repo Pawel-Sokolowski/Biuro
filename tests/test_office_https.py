@@ -81,6 +81,21 @@ class OfficeHttpsTests(DbTestCase):
         with self.assertRaises(PermissionError):
             self.client.resume(token)
 
+    def test_mt940_upload_imports_12_transactions_into_the_shared_database(self):
+        from app.db.dao_conn import get_conn
+        from tests.test_payment_safety import statement
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        source = Path(self.temporary.name) / 'statement.sta'
+        source.write_bytes(b''.join(statement(str(idx)) for idx in range(1, 13)))
+        operation = 'app.db.dao_payments.import_mt940_file'
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 12, 'new': 12, 'duplicates': 0, 'own': 0})
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 12, 'new': 0, 'duplicates': 12, 'own': 0})
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM bank_transakcje').fetchone()[0], 12)
+
     def test_enova_ezla_endpoint_authenticates_before_releasing_company_xml(self):
         import base64
         import hashlib

@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.email.email_helpers import (SPECIAL_FOLDER_ORDER, decode_mailbox_utf7,
                                      folder_role)
 
+_SUBJECT_PREFIX = re.compile(r"^\s*(re|odp|fw|fwd|pd|wg|aw|przekaż)\s*:\s*", re.IGNORECASE)
+
 def group_threads(entries: List[Tuple[Any, str, str]]) -> List[List[Any]]:
     """Grupuje (element, message_id, refs) w wątki po In-Reply-To/References; kolejność jak na wejściu."""
     parent = list(range(len(entries)))

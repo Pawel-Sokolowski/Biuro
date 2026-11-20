@@ -275,7 +275,8 @@ wyłącznie. Zwraca dokładnie jeden wiersz na miesiąc z kolumnami `nip`, `mies
 (`YYYY-MM`), `status` oraz `upo` (referencja potwierdzenia, NULL dopuszczalny poza
 `accepted`). Dozwolone statusy: `not_sent`, `sent`, `accepted`, `rejected`,
 `not_applicable`, `prepared`, `processing`, `unknown`, `failed`, `cancelled`. Opcjonalne `raw_status`
-zachowuje kod źródła. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
+zachowuje kod źródła. Opcjonalne `sent_at` i `upo_at` przyjmują wartości ISO lub
+NULL. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
 nie są zamieniane na „niewysłany”. Bez prawdziwego źródła nie można potwierdzić
 połączenia z JPK ani przetestować go w tej sesji.
 
@@ -411,8 +412,11 @@ transmisji nie potwierdza złożenia. `Stamp` to wersja wiersza, nie data.
 
 `queries/jpk.sql` odczytuje JPK VAT/V7M/V7K z `JednolitePK` (nazwy i typy kolumn
 potwierdzone we wszystkich czterech lokalnych eksportach). Wybiera najwyższy numer
-korekty, następnie ID. Pobiera tylko referencję z kolumny UPO, bez treści dokumentów
-ani kwot. Przyjęcie wymaga statusu Finished=100, oficjalnej bramki=3 i referencji UPO.
+korekty, następnie ID. Z kolumny UPO pobiera referencję i daty bez eksportowania XML
+ani kwot. W kolumnie „Data wysyłki” pokazuje `DataWplyniecia`, czyli udokumentowany
+czas wpłynięcia pliku do MF. „Data UPO” pochodzi z czasu wytworzenia potwierdzenia
+albo z `SigningTime` podpisu XAdES na UPO. Gdy brakuje odpowiedniego pola w źródle,
+data pozostaje pusta. Przyjęcie wymaga statusu Finished=100, oficjalnej bramki=3 i referencji UPO.
 Testowe UPO nie potwierdza złożenia produkcyjnego. Statusy przygotowania,
 wysyłania, przetwarzania i błędu mapujemy według potwierdzonych enumów;
 nieznane kody, brak pliku i zakończenie bez UPO pozostają nieustalone.

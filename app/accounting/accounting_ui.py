@@ -78,6 +78,12 @@ def _search_haystack(row):
     return ' '.join(str(part or '') for part in parts).casefold()
 
 
+def _company_has_report(row, department, form):
+    from app.companies.checking_obligations import report_applies
+    return report_applies(row, form) or any(form_matches(entry['form'], form)
+                                           for entry in declaration_entries(row, department))
+
+
 class AccountingPage(QWidget):
     """Sprawdzanie: dynamic, read-only accounting/payroll pivots."""
     def __init__(self, actor_id, parent=None, *, department=None):
@@ -87,6 +93,8 @@ class AccountingPage(QWidget):
         self._fixed_department = department
         self.actor_id = actor_id
         self.reader = TaskRunner(self)
+        self.ezla_reader = TaskRunner(self)
+        self._remote_ezla_month = None
         self.rows = []
         from app.utils.months import default_month_for_department
         self.period = default_month_for_department(department or 'accounting')
@@ -190,7 +198,7 @@ class AccountingPage(QWidget):
                 self._add_report(department, 'ZUS IWA — Płatnik (rocznie)', 'annual:IWA', self.annual_zus_panel)
                 self._add_report(department, 'ZUS ZSWA — Płatnik (rocznie)', 'annual:ZSWA', self.annual_zus_panel)
             self.tabs.addTab(sections, label)
-            report_selector.currentIndexChanged.connect(self.filter_rows)
+            report_selector.currentIndexChanged.connect(self._report_changed)
         self.table = self.tables['accounting']
         layout.addWidget(self.tabs)
         from app.accounting.refresh_ui import CheckingRefreshControls
@@ -201,7 +209,7 @@ class AccountingPage(QWidget):
         self.source_note = QLabel()
         self.source_note.setWordWrap(True)
         layout.addWidget(self.source_note)
-        self.tabs.currentChanged.connect(self.update_period_controls)
+        self.tabs.currentChanged.connect(self._report_changed)
         self.month.monthChanged.connect(self.refresh_async)
         self.apply_department_default()
         if self._fixed_department:
@@ -245,7 +253,6 @@ class AccountingPage(QWidget):
                         selector.addItem(declaration_title(entry['form']), key)
         finally:
             selector.blockSignals(blocked)
-        self.report_stacks[department].setCurrentIndex(self.report_indices[department][selector.currentData()])
 
     @staticmethod
     def _new_table():
@@ -285,10 +292,9 @@ class AccountingPage(QWidget):
             return self.holiday_panel.payload.get('companies',[])
         if self.annual_zus_selected():
             return self.annual_zus_panel.companies()
-        from app.companies.checking_obligations import report_applies
         department = 'payroll' if self.tabs.currentIndex() == 1 else 'accounting'
         form = self._selected_form(department)
-        return [row for row in self.rows if not form or report_applies(row, form)]
+        return [row for row in self.rows if not form or _company_has_report(row, department, form)]
 
     def selected_company_ids(self):
         department = 'payroll' if self.tabs.currentIndex()==1 else 'accounting'
@@ -322,26 +328,46 @@ class AccountingPage(QWidget):
             self.annual_zus_panel.refresh()
             return
         month = self.month.monthText()
-        def read():
-            rows = list_accounting(self.actor_id, month)
-            remote = None
-            if self._fixed_department != 'accounting':
-                from app.integrations.ezla.sync import load_reports
-                remote = load_reports(self.actor_id, month)
-            return rows, remote
-        def loaded(result):
-            rows, remote = result
-            if remote is not None:
-                self.ezla_panel.set_remote(remote)
-            self.render(rows, month)
-        self.reader.submit(read, loaded, self.failed)
+        self.reader.submit(lambda: list_accounting(self.actor_id, month),
+                           lambda rows: self.render(rows, month), self.failed, key=month)
+        if self._ezla_selected():
+            self._refresh_ezla(month)
+
+    def _ezla_selected(self):
+        return self.tabs.currentIndex() == 1 and self.report_selectors['payroll'].currentData() == 'ezla'
+
+    def _report_changed(self, *_):
+        self.filter_rows()
+        if self.isVisible() and self._ezla_selected():
+            self._refresh_ezla(self.month.monthText())
+
+    def _refresh_ezla(self, month):
+        from app.integrations.ezla.sync import load_reports
+
+        def loaded(batch):
+            if month == self.month.monthText():
+                self._remote_ezla_month = month
+                self.ezla_panel.set_remote(batch)
+                if self._ezla_selected() and month == self.period:
+                    self.filter_rows()
+
+        def failed(exc):
+            if month == self.month.monthText() and self._ezla_selected():
+                self.ezla_panel.failed(exc)
+
+        self.ezla_reader.submit(lambda: load_reports(self.actor_id, month), loaded, failed, key=month)
 
     def failed(self, exc):
         self.source_note.setText('Nie udało się odczytać danych: ' + str(exc))
 
     def render(self, rows, month):
         rows = [{**row, 'checking_period': month} for row in rows]
+        for row in rows:
+            for field in ('checking', 'snapshot', 'jpk', 'hr', 'checking_obligations'):
+                row[field] = decoded(row.get(field))
         self.rows, self.period = rows, month
+        for department in self.tables:
+            self._update_report_choices(department)
         self.filter_rows()
 
     def _report_attention(self, row, department, today, horizon):
@@ -352,7 +378,7 @@ class AccountingPage(QWidget):
             if form_key(selected) in EVENT_FORMS and not entries and decoded(row.get('platnik_declarations')).get('imported_at'):
                 return False  # No registration event is not a missed monthly filing.
             return not entries or any(declaration_issue(entry) for entry in entries)
-        report_key = self.report_selectors[department].currentData()
+        report_key = self.report_selectors[department].currentData() or 'documents'
         if report_key.startswith('hr'):
             events = decoded(row.get('hr')).get('events')
             if events is None:
@@ -364,34 +390,45 @@ class AccountingPage(QWidget):
 
     def filter_rows(self, *_):
         self.update_period_controls()
+        department = 'payroll' if self.tabs.currentIndex() == 1 else 'accounting'
+        report = self.report_selectors[department].currentData() or 'documents'
+        self.report_stacks[department].setCurrentIndex(self.report_indices[department][report])
         if self.yearly_selected():
-            self._update_report_choices('payroll')
             self.holiday_panel.set_company_filter(self.search.text().strip())
             return
         if self.annual_zus_selected():
             form = self.report_selectors['payroll'].currentData().split(':', 1)[1]
             self.annual_zus_panel.set_filter(form, self.search.text())
             return
-        query, selected = self.search.text().strip().casefold(), self.tax_filter.currentData()
-        rows = [row for row in self.rows
-                if (not selected or (company_accounting_type(row) or 'OTHER') == selected)
-                and all(word in _search_haystack(row) for word in query.split())]
+        words = self.search.text().casefold().split()
+        selected = self.tax_filter.currentData()
+        rows = []
+        for row in self.rows:
+            if selected and (company_accounting_type(row) or 'OTHER') != selected:
+                continue
+            if words:
+                haystack = _search_haystack(row)
+                if not all(word in haystack for word in words):
+                    continue
+            rows.append(row)
         today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
         horizon = self.hr_range.currentData()
-        for department in self.tables:
-            self._update_report_choices(department)
-            from app.companies.checking_obligations import report_applies
-            form = self._selected_form(department)
-            applicable = [row for row in rows if not form or report_applies(row, form)]
-            visible = [row for row in applicable if not self.attention.isChecked() or self._report_attention(row, department, today, horizon)]
+        form = self._selected_form(department)
+        applicable = [row for row in rows if not form or _company_has_report(row, department, form)]
+        only_attention = self.attention.isChecked()
+        visible = [row for row in applicable if not only_attention or self._report_attention(row, department, today, horizon)]
+        if report == 'documents':
             self._render_table(visible, department)
-            if department == 'accounting':
-                self._render_comparisons(visible, department)
+        elif report == 'comparison':
+            self._render_comparisons(visible, department)
+        elif report == 'declarations' or form:
             self._render_declarations(visible, department)
-            if department == 'payroll':
-                self._render_hr(visible, today, horizon)
-                # e-ZLA rządzi się własnymi terminami; filtr uwagi zawęża też tę listę.
-                self.ezla_panel.set_companies(visible, self.period, self.attention.isChecked())
+        elif report.startswith('hr'):
+            self._render_hr(visible, today, horizon)
+        elif report == 'ezla':
+            if self._remote_ezla_month != self.period:
+                self.ezla_panel.set_remote({'reports': []})
+            self.ezla_panel.set_companies(visible, self.period, only_attention)
         missing_reports = sum(not decoded(row.get('checking')) for row in rows)
         missing_payroll = sum(documents(row, 'payroll') is None for row in rows)
         missing_declarations = sum(decoded(row.get('checking')).get('declarations') is None for row in rows)
@@ -423,11 +460,12 @@ class AccountingPage(QWidget):
         table = self.tables[department]
         kinds = set(BASE_TYPES if department == 'accounting' else ())
         forms = set(DEFAULT_FORMS[department])
+        by_company = {row['id']: declarations(row, department) for row in rows}
         for row in rows:
             kinds.update(documents(row, department) or {})
             if department == 'accounting':
                 kinds.update(previous_active_types(row, self.period))
-            forms.update(declarations(row, department))
+            forms.update(by_company[row['id']])
             for old in row.get('history', []):
                 forms.update(entry['form'] for entry in old.get('declarations') or [] if entry['department'] == department)
         kinds = sorted(kinds, key=lambda value: (BASE_TYPES.index(value) if value in BASE_TYPES else len(BASE_TYPES), value))
@@ -466,7 +504,7 @@ class AccountingPage(QWidget):
             if department == 'accounting' and not report:
                 stamp = decoded(row.get('snapshot')).get('imported_at')
             cells.append(_item(_date(stamp)))
-            entries = declarations(row, department)
+            entries = by_company[row['id']]
             for form in forms:
                 entry = entries.get(form, {})
                 status = entry.get('status_text') or STATUSES.get(entry.get('status'), 'Brak danych' if report.get('declarations') is not None else 'Nie sprawdzono')
@@ -538,23 +576,23 @@ class AccountingPage(QWidget):
 
     def _render_declarations(self, rows, department):
         table = self.declaration_tables[department]
+        form = self._selected_form(department)
+        selected = self.declaration_filters[department].currentData()
         records, receipts = [], []
         for row in rows:
             entries = declaration_entries(row, department)
-            form = self._selected_form(department)
             apply_not_sent = _not_sent_entry(row, department, form)
             if form:
                 entries = [entry for entry in entries if form_matches(entry['form'], form)]
                 if apply_not_sent:
                     entries = entries + [apply_not_sent]
             owner = row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or '—'
-            selected = self.declaration_filters[department].currentData()
             if not entries and not selected:
                 # Nazwa formularza wg firmy (PIT-5/PIT-5L), nie wg podpisu zakładki.
                 empty_name = self._declaration_name(apply_not_sent or {'form': form}, row) if form else '—'
-                records.append([row.get('nazwa'), owner, empty_name,
+                records.append([row.get('nazwa'), owner, '—', empty_name,
                                 'Brak danych' if decoded(row.get('checking')).get('declarations') is not None else 'Nie sprawdzono',
-                                '—', '—', '—', '—', 'Brak danych źródłowych', ''])
+                                '—', '—', '—', '—', 'Brak danych źródłowych', '—', '', False])
                 receipts.append('')
             for entry in sorted(entries, key=lambda item: (item['form'], item.get('employee_name', ''))):
                 status = entry.get('status')
@@ -566,15 +604,16 @@ class AccountingPage(QWidget):
                 if selected and not matches[selected]:
                     continue
                 name = self._declaration_name(entry, row)
+                employee = f"{entry['employee_name']} ({entry['employee_id']})" if entry.get('employee_name') else '—'
                 # PIT-y nie są wysyłane przez program, więc brak wysyłki nie jest zarzutem.
                 issue = 'Nie wysyłane przez program' if form_key(entry['form']) in NOT_SENT_FORMS else declaration_issue(entry)
                 # Uwaga: kolejność kolumn = nagłówki w _fill; ostatnia kolumna to stan
                 # „bez żółtego” (PIT-y, których dziś nie wysyłamy).
-                records.append([row.get('nazwa'), owner, name,
+                records.append([row.get('nazwa'), owner, employee, name,
                                 entry.get('status_text') or STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
                                 _date(entry.get('sent_at')),
                                 'Tak' if (entry.get('upo') or entry.get('upo_confirmed_at')) else '—',
-                                _date(entry.get('upo_at') or entry.get('upo_confirmed_at')),
+                                _date(entry.get('upo_at')),
                                 str(entry.get('upo') or '—'), issue or 'OK',
                                 _date(entry.get('created_at')),
                                 (f"Status źródłowy: {entry['raw_status']}" if entry.get('raw_status') else '') +
@@ -582,7 +621,7 @@ class AccountingPage(QWidget):
                                  if entry.get('source_system') == 'platnik' and entry.get('source_id') else ''),
                                 form_key(entry['form']) in NOT_SENT_FORMS])
                 receipts.append(_upo_tooltip(entry))
-        self._fill(table, ['Firma', 'Opiekun (obecny, z zastępstwami)', 'Deklaracja', 'Status',
+        self._fill(table, ['Firma', 'Opiekun (obecny, z zastępstwami)', 'Pracownik', 'Deklaracja', 'Status',
                            'Data wysyłki', 'UPO', 'Data UPO', 'Nr UPO', 'Do sprawdzenia',
                            'Utworzono'], records)
         table.setToolTip('Kolumna „Deklaracja” to nr formularza. PIT-y nie są wysyłane przez program, '
@@ -591,8 +630,8 @@ class AccountingPage(QWidget):
         for row in rows:
             by_name.setdefault(row.get('nazwa'), row)
         for index, record in enumerate(records):
-            table.item(index, 5).setToolTip(receipts[index])
-            table.item(index, 7).setToolTip(receipts[index])
+            table.item(index, 6).setToolTip(receipts[index])
+            table.item(index, 8).setToolTip(receipts[index])
             source = by_name.get(record[0]) or {}
             if source.get(f'{department}_substitute'):
                 owner_item = self._owner_item(source, department)
@@ -600,10 +639,11 @@ class AccountingPage(QWidget):
                 table.item(index, 1).setToolTip(owner_item.toolTip())
                 table.item(index, 1).setForeground(QColor('#1a5fb4'))
             # Źródło odczytu trafia do tooltipu, nie do osobnej kolumny.
-            table.item(index, 8).setToolTip(record[9] or 'Status odczytu bez danych o źródle.')
-            if record[8] not in ('OK', 'Brak danych źródłowych') and not record[10]:
-                table.item(index, 8).setBackground(QColor('#fef3c7'))
-                table.item(index, 8).setForeground(QColor('#92400e'))
+            issue = table.item(index, 9)
+            issue.setToolTip(record[11] or 'Status odczytu bez danych o źródle.')
+            if record[9] not in ('OK', 'Brak danych źródłowych') and not record[12]:
+                issue.setBackground(QColor('#fef3c7'))
+                issue.setForeground(QColor('#92400e'))
 
     def _render_hr(self, rows, today, days):
         records, missing = [], 0
@@ -623,15 +663,15 @@ class AccountingPage(QWidget):
                 if days is not None and status in ('Bezterminowa', 'Późniejszy termin'):
                     continue
                 employee = event['employee_name'] + ' (' + event['employee_id'] + ')'
-                records.append([row.get('nazwa'), row.get('nip'), employee,
+                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', employee,
                                 event.get('document_number') or '—', HR_LABELS[event['event_type']],
                                 event.get('due_date') or '—', status, _date(report.get('imported_at'))])
             if len(records) == before:
                 state = 'Brak odczytu' if report.get('events') is None else 'Brak terminów w wybranym zakresie'
-                records.append([row.get('nazwa'), row.get('nip'), '—', '—', HR_LABELS.get(kind, '—'), '—',
+                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', '—', '—', HR_LABELS.get(kind, '—'), '—',
                                 state, _date(report.get('imported_at'))])
-        records.sort(key=lambda record: (0 if record[6] in ('Po terminie', 'Brak terminu') else 1, record[5], record[0]))
-        self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa (obecna, z zastępstwami)', 'Numer dokumentu',
+        records.sort(key=lambda record: (0 if record[7] in ('Po terminie', 'Brak terminu') else 1, record[6], record[0]))
+        self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa (obecna, z zastępstwami)', 'Pracownik', 'Numer dokumentu',
                                   'Rodzaj', 'Data', 'Stan', 'Ostatni odczyt'], records)
         by_name = {}
         for row in rows:
@@ -643,8 +683,8 @@ class AccountingPage(QWidget):
                 self.hr_table.item(index, 2).setText(owner_item.text())
                 self.hr_table.item(index, 2).setToolTip(owner_item.toolTip())
                 self.hr_table.item(index, 2).setForeground(QColor('#1a5fb4'))
-            if record[6] in ('Po terminie', 'Brak terminu'):
-                paint_state(self.hr_table.item(index, 6), 'error')
+            if record[7] in ('Po terminie', 'Brak terminu'):
+                paint_state(self.hr_table.item(index, 7), 'error')
         self.hr_note.setText(f'Stan terminów na {today.isoformat()}. Brak odczytu dla {missing} firm. '
                              'Umowy bezterminowe są widoczne w „Wszystkie pobrane”. Dane wymagają źródła terminów kadrowych z Enova.')
 

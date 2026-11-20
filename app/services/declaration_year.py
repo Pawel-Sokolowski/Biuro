@@ -4,10 +4,11 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.db.dao_conn import get_conn
+from app.db.import_audit import log_import
 from app.companies.checking_obligations import add_imported
 from app.integrations.enova.checking import validate_declarations,CheckingBusy
 from app.integrations.enova.document_counts import fetch_counts,normalize_nip
-from app.integrations.enova.jpk import validate_jpk
+from app.integrations.enova.jpk import save_jpk, validate_jpk
 from app.services.worker_activity import record
 
 
@@ -34,16 +35,11 @@ def read_enova(config, source, company_id, months):
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',(key,json.dumps(snapshot)))
             add_imported(conn,company_id,month,declarations[month],'enova')
             if jpk is not None:
-                conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                             'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                             (f'enova_jpk_{company_id}_{month}',json.dumps({**jpk[month],'imported_at':stamp,'database':source['database']})))
-                if jpk[month].get('form_variant') or jpk[month]['status'] not in ('unknown','not_applicable'):
-                    add_imported(conn,company_id,month,[{'form':'JPK_VAT',**jpk[month]}],'enova-jpk')
-    from app.db.import_audit import log_import
-    documents = sum(len(entries) for entries in declarations.values())
-    log_import(conn, 'enova_declarations', source=source['database'], updated=documents,
-               details={'company_id': company_id, 'months': months, 'documents': documents,
-                        'jpk': jpk is not None})
+                save_jpk(conn, company_id, month, {**jpk[month], 'imported_at': stamp, 'database': source['database']})
+        documents = sum(len(entries) for entries in declarations.values())
+        log_import(conn, 'enova_declarations', source=source['database'], updated=documents,
+                   details={'company_id': company_id, 'months': months, 'documents': documents,
+                            'jpk': jpk is not None})
     return {'company_id':company_id,'source':'enova','ok':True,'months':months,
             'documents':documents}
 

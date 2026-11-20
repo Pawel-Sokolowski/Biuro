@@ -1,7 +1,7 @@
 """Resolve shipped adapters separately from user-owned SQL overrides."""
 from pathlib import Path
 
-ADAPTER_REVISION = 4
+ADAPTER_REVISION = 5
 
 
 def bundled_directory():

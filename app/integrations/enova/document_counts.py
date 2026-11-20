@@ -250,9 +250,9 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         }
         required = contracts[result_kind]
         optional = ({'rodzaje'} if result_kind == 'counts' else
-                    {'employee_id', 'employee_name', 'source_system', 'raw_status', 'form_variant'} if result_kind == 'declarations' else
+                    {'employee_id', 'employee_name', 'source_system', 'raw_status', 'form_variant', 'created_at'} if result_kind == 'declarations' else
                     {'document_number'} if result_kind == 'hr_events' else
-                    {'raw_status','form_variant'} if result_kind == 'jpk' else set())
+                    {'raw_status', 'form_variant', 'sent_at', 'upo_at'} if result_kind == 'jpk' else set())
         if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
             raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))
         limit = len(months) if result_kind in ('counts', 'jpk') else 20000
@@ -349,7 +349,7 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
     return changes
 
 
-def _daily_key(company_id, month):
+def count_check_key(company_id, month):
     return f'enova_document_count_checked_{company_id}_{month}'
 
 
@@ -383,11 +383,13 @@ def month_batches(months):
 
 
 @office_endpoint('app.integrations.enova.document_counts.run_import')
-def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=None):
+def run_import(config, *, apply=False, today=None, fetch=None, months=None):
     if apply and not config.get('enabled', False):
         raise ValueError('Import wyłączony. Najpierw sprawdź podgląd, następnie ustaw enabled=true.')
     if not config.get('sources'):
         raise ValueError('Połączenie Enovy można zapisać bez baz firm. Przed importem znajdź bazy po NIP lub przypisz je ręcznie i zapisz ustawienia.')
+    if fetch is None:
+        fetch = fetch_counts
     run_day = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
     months = requested_months(run_day, config.get('months_back', 3)) if months is None else list(months)
     for month in months:
@@ -415,10 +417,14 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=No
                     divisor = effective_divisor(rules, company['id']) if source['accounting_type'] == 'KH' else 1
                     signature = {'day': run_day.isoformat(), 'database': source['database'], 'bank_divisor': divisor,
                                  'accounting_type': source['accounting_type'], 'server': config.get('server')}
-                    jpk_result = None
+                    jpk_result = jpk_error = None
                     if source.get('jpk_query'):
                         from app.integrations.enova.jpk import import_jpk
-                        jpk_result = import_jpk(conn, config, source, company['id'], months, run_day, apply=apply)
+                        try:
+                            with conn.transaction():
+                                jpk_result = import_jpk(conn, config, source, company['id'], months, run_day, apply=apply)
+                        except Exception as exc:
+                            jpk_error = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else type(exc).__name__
                     eligible = _eligible_months(conn, company['id'], monthly_months, signature, apply=apply)
                     counts = []
                     # Batch adjacent months, preserving the adapter's two date bounds.
@@ -442,7 +448,7 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=No
                             for count in counts:
                                 conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                                              'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                                             (_daily_key(company['id'], count.month), json.dumps(signature)))
+                                             (count_check_key(company['id'], count.month), json.dumps(signature)))
                     results.append({'database': source['database'], 'company_id': company['id'],
                                     'mode': ('applied' if apply else 'preview') if counts else 'skipped',
                                     'skipped_months': [month for month in months if month not in {c.month for c in counts}],
@@ -451,7 +457,9 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=No
                                     'counts': {count.month: count.total for count in counts},
                                     'components': {count.month: {'documents': count.documents,
                                                                'bank_transactions': count.bank_transactions}
-                                                   for count in counts}, 'ok': True})
+                                                   for count in counts}, 'ok': jpk_error is None})
+                    if jpk_error is not None:
+                        results[-1]['error'] = 'JPK: ' + jpk_error
                     if apply:
                         from app.db.import_audit import log_import
                         log_import(conn, 'enova_document_counts', source=source['database'],
@@ -461,7 +469,7 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=No
                                             'skipped_months': [month for month in months
                                                                if month not in {c.month for c in counts}]})
                 if apply:
-                    record('enova', 'read', company_id=company['id'])
+                    record('enova', 'read' if jpk_error is None else 'failed', company_id=company['id'])
             except Exception as exc:
                 if apply:
                     from app.services.worker_activity import record

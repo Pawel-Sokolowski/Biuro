@@ -139,7 +139,7 @@ class MailRefreshTests(MailboxFixture):
 
     def test_failed_folder_read_keeps_the_existing_tree(self):
         original = self.page.folder_tree.topLevelItem(0)
-        with mock.patch.object(email_ui, 'get_folders_for_account', side_effect=RuntimeError('read failed')):
+        with mock.patch('app.email.mail_shell.get_folders_for_account', side_effect=RuntimeError('read failed')):
             self.page.load_folders_from_db()
         self.assertIs(self.page.folder_tree.topLevelItem(0), original)
 
@@ -158,7 +158,7 @@ class MailRefreshTests(MailboxFixture):
         self.page._current_message_row_id = current.data(0, email_ui.ROLE_ROW_ID)
         self.page._last_account_check = time.monotonic()
         storage.save_message_headers(1, self.folder, [{'uid': '999', 'subject': 'New mail', 'date': '2026-12-01 10:00'}])
-        with mock.patch.object(email_ui, 'sync_automatic_accounts', return_value=[]), \
+        with mock.patch('app.email.mail_sync_controller.sync_automatic_accounts', return_value=[]), \
                 mock.patch.object(self.page._sync_jobs, 'submit', side_effect=lambda work: work()), \
                 mock.patch.object(self.page, '_clear_view') as clear:
             self.real_sync(self.page)

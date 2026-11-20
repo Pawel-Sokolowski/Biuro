@@ -138,9 +138,28 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         self.jpk(gateway=2, confirmation=receipt('TEST-REF'), correction=3)
         row, = self.query('jpk.sql')
         self.assertEqual((row['status'], row['upo']), ('unknown', ''))
+        self.assertEqual((row['sent_at'], row['upo_at']), (None, None))
         self.assertIn('testowa', row['raw_status'])
         self.jpk(identity=2, gateway=3, confirmation=receipt('PRODUCTION-REF'))
         self.assertEqual(self.query('jpk.sql')[0]['upo'], 'PRODUCTION-REF')
+
+    def test_jpk_reads_receipt_dates_from_the_signed_upo(self):
+        confirmation = ('<?xml version="1.0" encoding="UTF-8"?>'
+                        '<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" '
+                        'xmlns:xades="http://uri.etsi.org/01903/v1.3.2#">'
+                        '<ds:Object><xades:QualifyingProperties><xades:SignedProperties>'
+                        '<xades:SignedSignatureProperties><xades:SigningTime>2026-11-05T00:15:00+01:00'
+                        '</xades:SigningTime></xades:SignedSignatureProperties></xades:SignedProperties>'
+                        '</xades:QualifyingProperties></ds:Object>'
+                        '<ds:Object><Potwierdzenie><NumerReferencyjny>REF-CI</NumerReferencyjny>'
+                        '<DataWplyniecia>2026-11-04T23:55:00.1234567+01:00</DataWplyniecia>'
+                        '</Potwierdzenie></ds:Object></ds:Signature>')
+        self.jpk(confirmation=confirmation)
+        row, = self.query('jpk.sql')
+        self.assertEqual((row['status'], row['upo']), ('accepted', 'REF-CI'))
+        self.assertEqual(datetime.fromisoformat(row['sent_at']), datetime.fromisoformat('2026-11-04T23:55:00.123456+01:00'))
+        self.assertEqual(datetime.fromisoformat(row['upo_at']), datetime.fromisoformat('2026-11-05T00:15:00+01:00'))
+        self.assertNotIn('<ds:', str(row))
 
     def test_jpk_latest_correction_and_complete_empty_months(self):
         self.jpk(confirmation=receipt('OLD-REF'))
@@ -154,6 +173,7 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         self.jpk(confirmation='<broken')
         row, = self.query('jpk.sql')
         self.assertEqual((row['status'], row['upo']), ('unknown', ''))
+        self.assertEqual((row['sent_at'], row['upo_at']), (None, None))
 
     def test_payroll_documents_buffers_and_zero_months(self):
         self.writer.execute("INSERT INTO dbo.DefListPlac VALUES (1, 'LP')")

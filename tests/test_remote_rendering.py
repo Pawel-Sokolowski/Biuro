@@ -25,7 +25,7 @@ class RemoteRenderingTests(unittest.TestCase):
                 self.assertEqual(active_types(row,'accounting'),{'SPU'})
                 self.assertEqual(len(declaration_entries(row,'accounting')),1)
                 self.assertIn('JPK_VAT',declarations(row,'accounting'))
-                self.assertTrue(report_applies(row,'JPK_VAT'))
+                self.assertTrue(report_applies(row,'JPK_VAT',reported=True))
                 self.assertEqual(profile({},'2026-11')['vat_period'],'auto')
         connection.call.assert_not_called()
 

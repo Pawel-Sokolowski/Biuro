@@ -12,6 +12,9 @@ def record_change(conn, company_id, month, before, payload):
     new = (payload.get('etap','Brak'),payload.get('etap_kadry') if payload.get('etap_kadry') is not None else old[1])
     if old == new:
         return
+    if old[0] != new[0] and new[0] == 'Wysłane wyniki':
+        from app.integrations.enova.document_counts import count_check_key
+        conn.execute('DELETE FROM app_settings WHERE klucz=%s', (count_check_key(company_id, month),))
     value = {'company_id':company_id,'month':month,'revision':uuid.uuid4().hex}
     conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                  'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',

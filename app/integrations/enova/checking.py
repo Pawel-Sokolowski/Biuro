@@ -1,12 +1,11 @@
 """Independent checking snapshots; never update workflow stages or invoice counters."""
 from app.remote.boundary import endpoint as office_endpoint
-import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import json
 from zoneinfo import ZoneInfo
 from app.integrations.enova.document_counts import fetch_counts, normalize_nip, validate_rows, whole_count, requested_months
-from app.integrations.enova.jpk import STATUSES
+from app.integrations.enova.jpk import STATUSES, filing_timestamp
 from app.utils.months import previous_month, month_bounds
 from app.services.worker_activity import record
 from app.db.import_audit import log_import
@@ -109,26 +108,6 @@ def _identity(row, source, months):
     return month
 
 
-def _timestamp(value):
-    if value in (None, ''):
-        return None
-    if isinstance(value, date):
-        return value.isoformat()
-    if len(str(value)) == 10:
-        try:
-            return date.fromisoformat(str(value)).isoformat()
-        except ValueError:
-            raise ValueError('Nieprawidłowa data wysyłki lub UPO.') from None
-    text = str(value).strip().replace('Z', '+00:00') if str(value).strip().endswith('Z') else str(value).strip()
-    # ODBC oddaje niekiedy '2026-11-20 11:21:00.0000000 +02:00' — ucinamy nadmiar
-    # miejsc po przecinku, inaczej fromisoformat odrzuca całą datę.
-    text = re.sub(r'(\.\d{6})\d+', r'\1', text)
-    try:
-        return datetime.fromisoformat(text).isoformat()
-    except ValueError:
-        raise ValueError('Nieprawidłowa data wysyłki lub UPO.') from None
-
-
 def validate_declarations(rows, source, months):
     result = {month: [] for month in months}
     seen = set()
@@ -154,11 +133,11 @@ def validate_declarations(rows, source, months):
             raise ValueError('Nieprawidłowy status deklaracji lub brak UPO dla przyjętej deklaracji.')
         entry = {'department': department, 'form': form, 'status': status,
                  'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
-                 'sent_at': _timestamp(row.get('sent_at')), 'upo': upo,
-                 'upo_at': _timestamp(row.get('upo_at'))}
+                 'sent_at': filing_timestamp(row.get('sent_at')), 'upo': upo,
+                 'upo_at': filing_timestamp(row.get('upo_at'))}
         # Data utworzenia deklaracji w Enovie (opcjonalna kolumna odczytu).
         if row.get('created_at'):
-            entry['created_at'] = _timestamp(row.get('created_at'))
+            entry['created_at'] = filing_timestamp(row.get('created_at'))
         result[month].append(entry)
         if row.get('raw_status'):
             result[month][-1]['raw_status'] = str(row['raw_status'])[:256]
@@ -229,8 +208,8 @@ def _remember(source, result_kind, months, rows):
                                        ensure_ascii=False)))
 
 
-def _counts(config, source, months, result_kind):
-    if not config.get('fetch_cache', True):
+def _counts(config, source, months, result_kind, *, force=False):
+    if force or not config.get('fetch_cache', True):
         return fetch_counts(config, source, months, result_kind=result_kind)
     cached = _cached(source, result_kind, months)
     if cached is not None:
@@ -259,17 +238,17 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
     from app.integrations.enova.document_counts import find_company
     company = find_company(conn,normalize_nip(source['nip']))
     report_source = checking_source(source,company)
-    counts = validate_rows(_counts(config, report_source, months, 'counts'), report_source, months)
+    counts = validate_rows(_counts(config, report_source, months, 'counts', force=force), report_source, months)
     if any(count.by_type is None for count in counts):
         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
     payroll = None
     if source.get('payroll_query'):
         query = {**source, 'count_query': source['payroll_query']}
-        payroll = validate_payroll(_counts(config, query, months, 'payroll'), source, months)
+        payroll = validate_payroll(_counts(config, query, months, 'payroll', force=force), source, months)
     declarations = None
     if source.get('declarations_query'):
         query = {**source, 'count_query': source['declarations_query']}
-        declarations = validate_declarations(_counts(config, query, months, 'declarations'), source, months)
+        declarations = validate_declarations(_counts(config, query, months, 'declarations', force=force), source, months)
     events = None
     if source.get('hr_events_query'):
         from app.integrations.enova.hr_events import fetch_events

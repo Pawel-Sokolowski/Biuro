@@ -209,13 +209,13 @@ def reset_obligations(actor_id=None):
     return cleared
 
 
-def report_applies(company, form, month=None):
+def report_applies(company, form, month=None, *, reported=False):
     month = month or company.get('checking_period') or datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
     selected = profile(company.get('checking_obligations'), month)
 
     # Brak ręcznej konfiguracji i brak danych zaimportowanych oznacza brak
     # obowiązków. Import ENOVA/Płatnika uzupełni wyłącznie wykryte formularze.
-    if not selected.get('_configured') and not (selected.get('_imported') or {}):
+    if not (selected.get('_configured') or selected.get('_imported') or reported):
         return False
 
     key = form_key(form)
@@ -235,5 +235,5 @@ def report_applies(company, form, month=None):
             return cadence != 'quarterly' or int(month[-2:]) % 3 == 0
         key = 'JPKVAT'  # V7K ewidencja is still monthly.
     # Formularz jest obowiązkiem tylko po imporcie albo ręcznym ustawieniu.
-    cadence = selected.get('forms', {}).get(key, 'none')
+    cadence = selected.get('forms', {}).get(key, 'monthly' if reported else 'none')
     return cadence != 'none' and (cadence != 'quarterly' or int(month[-2:]) % 3 == 0)

@@ -8,7 +8,7 @@ from unittest.mock import patch,Mock
 from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting,set_setting
-from app.companies.checking_obligations import add_imported,profile,save
+from app.companies.checking_obligations import add_imported,profile,report_applies,save
 from app.email.company_folders import link_account
 from app.email.email_storage import save_folder
 from app.services.declaration_year import read_enova
@@ -92,15 +92,23 @@ class ImportAndMailTests(DbTestCase):
         self.assertEqual(tuple(row),(77,'Brak'))
 
     def test_missing_documents_preserve_positive_scope_and_quarterly_source_cadence(self):
+        month = '2026-01'
+        settings_key = f'checking_obligations_{self.company}'
         with get_conn() as conn:
-            add_imported(conn,self.company,'2026-01',[{'form':'JPK_VAT','form_variant':'JPK_V7K'}],'enova')
-            add_imported(conn,self.company,'2026-01',[],'enova')
-        value = profile(json.loads(get_setting(f'checking_obligations_{self.company}')),'2026-01')
-        self.assertEqual(value['forms'],{'JPKVAT':'monthly'})
-        self.assertEqual(value['vat_period'],'quarterly')
-        self.assertFalse(value.get('_configured',False))
-        from app.companies.checking_obligations import report_applies
-        self.assertTrue(report_applies({'checking_obligations':json.loads(get_setting(f'checking_obligations_{self.company}'))},'RCA','2026-01'))
+            add_imported(conn, self.company, month, [{'form': 'JPK_VAT', 'form_variant': 'JPK_V7K'}], 'enova')
+        company = {'checking_obligations': json.loads(get_setting(settings_key))}
+        self.assertFalse(report_applies(company, 'RCA', month))
+
+        with get_conn() as conn:
+            add_imported(conn, self.company, month, [{'form': 'ZUS RCA'}], 'platnik')
+            add_imported(conn, self.company, month, [], 'enova')
+            add_imported(conn, self.company, month, [], 'platnik')
+        company = {'checking_obligations': json.loads(get_setting(settings_key))}
+        value = profile(company['checking_obligations'], month)
+        self.assertEqual(value['forms'], {'JPKVAT': 'monthly', 'RCA': 'monthly'})
+        self.assertEqual(value['vat_period'], 'quarterly')
+        self.assertFalse(value.get('_configured', False))
+        self.assertTrue(report_applies(company, 'RCA', month))
 
     def test_monthly_insurance_titles_are_imported_not_carried_into_other_months(self):
         from app.integrations.platnik.declarations import import_months

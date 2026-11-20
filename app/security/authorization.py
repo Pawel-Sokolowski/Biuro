@@ -13,14 +13,6 @@ from app.utils.request_cache import cached
 def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
     if not pracownik_id:
         return {}
-    from app.utils.request_cache import session_value
-    return session_value(
-        ('get_permissions', pracownik_id),
-        lambda: _read_permissions(pracownik_id),
-    )
-
-
-def _read_permissions(pracownik_id: int) -> Dict[str, bool]:
     conn = get_conn()
     try:
         row = conn.execute(
@@ -51,14 +43,6 @@ def _read_permissions(pracownik_id: int) -> Dict[str, bool]:
 def is_administrator(pracownik_id: Optional[int]) -> bool:
     if not pracownik_id:
         return False
-    from app.utils.request_cache import session_value
-    return session_value(
-        ('is_administrator', pracownik_id),
-        lambda: _read_administrator(pracownik_id),
-    )
-
-
-def _read_administrator(pracownik_id: int) -> bool:
     conn = get_conn()
     try:
         # Rola należy do pracownika i nie zależy od przypisań do firm.
@@ -102,18 +86,11 @@ def parse_tabs(raw: Optional[str], can_admin_settings: bool = False) -> list:
 
 
 @office_endpoint('app.security.authorization.allowed_tabs')
+@cached
 def allowed_tabs(pracownik_id: Optional[int]) -> list:
     """Zakładki dostępne dla pracownika (administrator widzi wszystkie)."""
     if not pracownik_id:
         return []
-    from app.utils.request_cache import session_value
-    return session_value(
-        ('allowed_tabs', pracownik_id),
-        lambda: _read_allowed_tabs(pracownik_id),
-    )
-
-
-def _read_allowed_tabs(pracownik_id: int) -> list:
     if is_administrator(pracownik_id):
         return list(TABS)
     conn = get_conn()

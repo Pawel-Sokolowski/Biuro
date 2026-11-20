@@ -57,7 +57,7 @@ def import_document_year(config, year, *, actor_id, progress=None):
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
                     report_source = checking_source(source,company)
-                    counts = validate_rows(_counts(config, report_source, months, 'counts'), report_source, months)
+                    counts = validate_rows(_counts(config, report_source, months, 'counts', force=True), report_source, months)
                     if any(count.by_type is None for count in counts):
                         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
                     stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()

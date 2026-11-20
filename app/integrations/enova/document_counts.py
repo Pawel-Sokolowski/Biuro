@@ -460,14 +460,12 @@ def run_import(config, *, apply=False, today=None, fetch=None, months=None):
                                                    for count in counts}, 'ok': jpk_error is None})
                     if jpk_error is not None:
                         results[-1]['error'] = 'JPK: ' + jpk_error
-                    if apply:
+                    if apply and not changes:
                         from app.db.import_audit import log_import
                         log_import(conn, 'enova_document_counts', source=source['database'],
-                                   updated=len(counts),
+                                   status='failed' if jpk_error else 'completed',
                                    details={'company_id': company['id'], 'accounting_type': source['accounting_type'],
-                                            'months': [count.month for count in counts],
-                                            'skipped_months': [month for month in months
-                                                               if month not in {c.month for c in counts}]})
+                                            'months': [], 'skipped_months': months, 'jpk_error': jpk_error})
                 if apply:
                     record('enova', 'read' if jpk_error is None else 'failed', company_id=company['id'])
             except Exception as exc:

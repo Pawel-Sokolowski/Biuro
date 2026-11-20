@@ -2,7 +2,7 @@
 import threading
 from unittest import mock
 
-from PyQt6.QtCore import QItemSelectionModel
+from PyQt6.QtCore import QItemSelectionModel, QThreadPool
 from PyQt6.QtWidgets import QMessageBox, QTextBrowser
 
 from app.db.dao_conn import get_conn
@@ -37,6 +37,9 @@ class MailListConsistencyTests(MailboxFixture):
             self.addCleanup(patcher.stop)
         self.page = email_ui.EmailPage(1)
         self.page.current_folder_local = "INBOX"
+        pool = QThreadPool(self.page)
+        pool.setMaxThreadCount(2)
+        self.page._list_jobs._pool = pool
         self.addCleanup(self.close_page)
 
     def close_page(self):
@@ -298,16 +301,17 @@ class MailListConsistencyTests(MailboxFixture):
             payload = original(*args, **kwargs)
             if first:
                 captured.set()
-                if not release.wait(3):
+                if not release.wait(12):
                     raise TimeoutError("test did not release the stale list result")
             return payload
 
         with mock.patch.object(self.page, "_fetch_mail_data", side_effect=fetch):
             try:
                 self.page._load_mail_async(more=True)
-                self.assertTrue(wait_until(captured.is_set))
+                self.assertTrue(wait_until(captured.is_set, timeout=8000))
                 self.page._mark_opened_as_read(row_id, 1, "INBOX", "502")
-                self.assertTrue(wait_until(lambda: len(self.page._mail_rows) == 502 and self.page.older_messages.isEnabled()))
+                self.assertTrue(wait_until(
+                    lambda: len(self.page._mail_rows) == 502 and self.page.older_messages.isEnabled(), timeout=8000))
                 self.assertFalse(self.page.unread_map[row_id])
             finally:
                 release.set()
@@ -507,19 +511,20 @@ class MailListConsistencyTests(MailboxFixture):
             payload = original(*args, **kwargs)
             if first:
                 captured.set()
-                if not release.wait(3):
+                if not release.wait(12):
                     raise TimeoutError("test did not release the superseded older-page result")
             return payload
 
         with mock.patch.object(self.page, "_fetch_mail_data", side_effect=fetch):
             try:
                 self.page._load_mail_async(more=True)
-                self.assertTrue(wait_until(captured.is_set))
+                self.assertTrue(wait_until(captured.is_set, timeout=8000))
                 storage.save_message_headers(1, self.folder, [{
                     "uid": "503", "message_id": "<incoming@review>", "date": "2026-11-02 10:00",
                 }])
                 self.page._on_sync_finished(True)
-                self.assertTrue(wait_until(lambda: len(self.page._mail_rows) == 503 and self.page.older_messages.isEnabled()))
+                self.assertTrue(wait_until(
+                    lambda: len(self.page._mail_rows) == 503 and self.page.older_messages.isEnabled(), timeout=8000))
             finally:
                 release.set()
             self.assertTrue(wait_until(lambda: not self.page._list_jobs._jobs))

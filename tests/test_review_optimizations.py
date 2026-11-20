@@ -5,9 +5,10 @@ import hashlib
 import io
 import threading
 import unittest
+from time import monotonic
 from unittest import mock
 
-from PyQt6.QtCore import QEventLoop, QTimer
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
@@ -23,15 +24,9 @@ from tests.base import DbTestCase
 
 
 def wait_until(predicate, timeout=3000):
-    if predicate():
-        return True
-    loop = QEventLoop()
-    poll = QTimer()
-    poll.timeout.connect(lambda: loop.quit() if predicate() else None)
-    poll.start(10)
-    QTimer.singleShot(timeout, loop.quit)
-    loop.exec()
-    poll.stop()
+    deadline = monotonic() + timeout / 1000
+    while not predicate() and monotonic() < deadline:
+        QTest.qWait(10)
     return bool(predicate())
 
 

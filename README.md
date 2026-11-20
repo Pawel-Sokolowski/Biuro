@@ -15,7 +15,7 @@ Biuro to aplikacja Windows dla biura rachunkowego. Łączy kartotekę firm, wido
 
 1. Pobierz pakiet `Biuro-Windows-installer` z zakończonego zadania **windows-release** i uruchom `Biuro-Setup-<wersja>.exe`. Na stanowiskach wybierz **Program Biuro**. Na serwerze wybierz składnik workera. [Pakiety z GitHub Actions](https://github.com/Pawel-Sokolowski/Biuro/actions/workflows/tests.yml)
 2. Na serwerze ustaw adres PostgreSQL oraz wspólny klucz Biuro w panelu `Biuro.exe --worker-setup`. Worker przechowuje konfigurację pod kontem Windows, na którym działa. Przy aktualizacji użyj dotychczasowego klucza. [Konfiguracja workera](docs/worker-configuration.md)
-3. W panelu workera włącz usługę HTTPS i ustaw certyfikat odpowiadający adresowi używanemu na stanowiskach. Przy połączeniu na adres IP certyfikat musi zawierać ten IP jako SAN. Domyślny port usługi to `8443`. [Połączenie stanowisk z serwerem](docs/office-server.md)
+3. W panelu workera włącz usługę HTTPS i ustaw certyfikat odpowiadający adresowi używanemu na stanowiskach. Przy połączeniu na adres IP certyfikat musi zawierać ten adres IP w polu SAN. Domyślny port usługi to `8443`. [Połączenie stanowisk z serwerem](docs/office-server.md)
 4. Uruchom Biuro na stanowisku, podaj adres HTTPS workera i zaloguj się kontem pracownika. Przy kompilacji instalatora parametr `DefaultServerUrl` może uzupełnić adres na nowych stanowiskach. Adres zapisany wcześniej przez użytkownika ma pierwszeństwo. [Budowanie instalatora](packaging/README.md)
 
 ### Migracja PostgreSQL

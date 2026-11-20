@@ -52,3 +52,12 @@ def calendar_view_snapshot(actor_id,start,end):
         host = urlparse(caldav_sync.get_config()['url']).hostname or 'CalDAV'
         sources.append(('CalDAV: '+host,'caldav'))
     return {'events':list_events(actor_id,start,end),'sources':sources}
+
+
+def invoice_selection(invoice_ids, actor_id, *, details=False):
+    from app.db.dao_invoices import get_invoice_selection, get_invoice_by_id, can_access_invoice
+    if _batched('invoice_selection'):
+        return get_invoice_selection(invoice_ids, actor_id, details=details)
+    return [invoice for invoice_id in invoice_ids
+            if (invoice := get_invoice_by_id(invoice_id)) is not None
+            and can_access_invoice(actor_id, invoice.get('firma_id'))]

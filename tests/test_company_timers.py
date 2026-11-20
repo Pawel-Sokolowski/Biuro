@@ -146,27 +146,52 @@ class CompanyTimerRecordsTests(DbTestCase):
 
     def test_company_form_tab_is_available_for_employees_and_deletes_selected_rows(self):
         from app.companies.company_form import CompanyForm
+        from PyQt6.QtCore import QTimer
+        from threading import Event
+        from tests.test_review_optimizations import wait_until
+
         anonymous = CompanyForm(self.firma)
         self.addCleanup(anonymous.close)
         self.assertFalse(hasattr(anonymous, "timers_table"))
 
-        form = CompanyForm(self.firma, actor_id=self.emp)
-        self.addCleanup(form.close)
-        tabs = [form.section_tabs.tabText(i) for i in range(form.section_tabs.count())]
-        self.assertIn("Czasomierz", tabs)
+        started, release, tick = Event(), Event(), Event()
+
+        def read(firma_id):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("Odczyt Czasomierza blokuje interfejs.")
+            return list_company_timers(firma_id)
+
+        with mock.patch("app.db.dao_timers.list_company_timers", side_effect=read) as loader:
+            form = CompanyForm(self.firma, actor_id=self.emp)
+            self.addCleanup(form.close)
+            loader.assert_not_called()
+            form.section_tabs.setCurrentWidget(form.section_pages["Czasomierz"])
+            try:
+                QTimer.singleShot(0, tick.set)
+                self.assertTrue(wait_until(lambda: started.is_set() and tick.is_set()))
+                self.assertEqual(form.timers_table.rowCount(), 0)
+            finally:
+                release.set()
+            self.assertTrue(wait_until(lambda: form.timers_table.rowCount() == 3))
+            loader.assert_called_once_with(self.firma)
         self.assertEqual(form.timers_table.rowCount(), 3)
         self.assertEqual(form.timers_table.item(1, 6).text(), "1:00:00")
         self.assertIn("Rekordów: 3", form.timers_total.text())
         form.timers_table.selectRow(1)
         with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
             form._delete_timers()
-        self.assertEqual(form.timers_table.rowCount(), 2)
+        self.assertTrue(wait_until(lambda: form.timers_table.rowCount() == 2))
         self.assertEqual(self._status_seconds(), (1400, 900))
 
     def test_company_form_declined_confirmation_keeps_records(self):
         from app.companies.company_form import CompanyForm
+        from tests.test_review_optimizations import wait_until
+
         form = CompanyForm(self.firma, actor_id=1)
         self.addCleanup(form.close)
+        form.section_tabs.setCurrentWidget(form.section_pages["Czasomierz"])
+        self.assertTrue(wait_until(lambda: form.timers_table.rowCount() == 3))
         form.timers_table.selectRow(0)
         with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
             form._delete_timers()

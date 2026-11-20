@@ -40,6 +40,7 @@ from app.companies.constants import (
 )
 from app.companies.company_lookup import lookup_company_by_nip
 from app.companies.annual_declarations import ANNUAL_DECLARATIONS, DECLARATION_DETAILS
+from app.utils.background import TaskRunner
 from app.companies.cennik_keys import (
     filter_cennik_keys, parse_cennik_key, typ_from_forma, vat_flag_from_status,
 )
@@ -894,6 +895,9 @@ class CompanyForm(QDialog):
         if self.firma_id and self.actor_id:
             timers_box = QWidget()
             timers_layout = QVBoxLayout(timers_box)
+            self._timer_reads = TaskRunner(self)
+            self._timer_rows = None
+            self._timer_loading = False
             self.timers_table = QTableWidget(0, 7)
             self.timers_table.setHorizontalHeaderLabels(
                 ["Źródło", "Miesiąc", "Początek", "Koniec", "Pracownik", "Dział / opis", "Czas"])
@@ -907,13 +911,14 @@ class CompanyForm(QDialog):
             self.timers_total = QLabel("")
             timers_layout.addWidget(self.timers_total)
             timers_buttons = QHBoxLayout()
-            btn_timers_delete = QPushButton("Usuń zaznaczone rekordy")
+            self._btn_timers_delete = QPushButton("Usuń zaznaczone rekordy")
+            self._btn_timers_delete.setEnabled(False)
             btn_timers_refresh = QPushButton("Odśwież")
-            timers_buttons.addWidget(btn_timers_delete)
+            timers_buttons.addWidget(self._btn_timers_delete)
             timers_buttons.addWidget(btn_timers_refresh)
             timers_buttons.addStretch()
             timers_layout.addLayout(timers_buttons)
-            btn_timers_delete.clicked.connect(self._delete_timers)
+            self._btn_timers_delete.clicked.connect(self._delete_timers)
             btn_timers_refresh.clicked.connect(self._load_timers)
             main_layout.addWidget(timers_box)
 
@@ -976,6 +981,8 @@ class CompanyForm(QDialog):
             area.setWidget(page)
             self.section_tabs.addTab(area, label)
             self.section_pages[label] = area
+        if timers_box is not None:
+            self.section_tabs.currentChanged.connect(self._load_timer_tab)
         if "forma_dzialalnosci" in self.inputs:
             self.inputs["forma_dzialalnosci"].currentIndexChanged.connect(
                 lambda *_: self._update_partners_visibility())
@@ -1019,8 +1026,6 @@ class CompanyForm(QDialog):
             self._load_email_filters()
             self._load_partners()
             self._load_notes()
-            if hasattr(self, "timers_table"):
-                self._load_timers()
             self._refresh_cennik_options()
 
         for name in ("forma_opodatkowania", "status_vat"):
@@ -1846,14 +1851,32 @@ class CompanyForm(QDialog):
         hours, rest = divmod(max(0, int(seconds)), 3600)
         return f"{hours}:{rest // 60:02d}:{rest % 60:02d}"
 
+    def _load_timer_tab(self, index):
+        if (self.section_tabs.widget(index) is self.section_pages["Czasomierz"]
+                and self._timer_rows is None and not self._timer_loading):
+            self._load_timers()
+
     def _load_timers(self):
-        from app.db.dao_timers import SOURCE_IMPORT, list_company_timers
-        rows = list_company_timers(self.firma_id)
+        from app.db.dao_timers import list_company_timers
+        company_id = self.firma_id
+        self._timer_loading = True
+        self._btn_timers_delete.setEnabled(False)
+        self.timers_total.setText("Wczytywanie zapisów czasu…")
+        self.timers_total.setToolTip("")
+        self._timer_reads.submit(lambda: list_company_timers(company_id), self._render_timers, self._timer_read_failed)
+
+    def _timer_read_failed(self, exc):
+        self._timer_loading = False
+        self.timers_total.setText("Nie udało się wczytać zapisów czasu.")
+        self.timers_total.setToolTip(str(exc))
+
+    def _render_timers(self, rows):
+        from app.db.dao_timers import SOURCE_IMPORT
+        self._timer_loading = False
         self._timer_rows = rows
         self.timers_table.setRowCount(0)
-        for entry in rows:
-            row = self.timers_table.rowCount()
-            self.timers_table.insertRow(row)
+        self.timers_table.setRowCount(len(rows))
+        for row, entry in enumerate(rows):
             source = "Import" if entry["zrodlo"] == SOURCE_IMPORT else "Stoper"
             description = " — ".join(filter(None, [entry["dzial"], entry["opis"]]))
             for col, text in enumerate([source, entry["miesiac"], entry["start"], entry["koniec"],
@@ -1861,9 +1884,12 @@ class CompanyForm(QDialog):
                 self.timers_table.setItem(row, col, QTableWidgetItem(str(text)))
         total = sum(entry["sekundy"] for entry in rows)
         self.timers_total.setText(f"Rekordów: {len(rows)}, łączny czas: {self._format_duration(total)}")
+        self._btn_timers_delete.setEnabled(bool(rows))
 
     def _delete_timers(self):
         from app.db.dao_timers import delete_company_timers
+        if not self._btn_timers_delete.isEnabled():
+            return
         selected = sorted({index.row() for index in self.timers_table.selectedIndexes()})
         if not selected:
             QMessageBox.information(self, "Czasomierz", "Zaznacz rekordy do usunięcia.")

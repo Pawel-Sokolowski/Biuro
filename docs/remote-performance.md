@@ -86,6 +86,17 @@ Błędy odczytu są widoczne w statusie i logach jako `mail_sidebar_failed` lub
 odczytywania tokenów, kluczy ani danych logowania. W razie problemu potrzebne
 są wpisy z tej samej próby otwarcia widoku po stronie klienta i serwera.
 
+## Firmy i masowa obsługa faktur
+
+Lista firm wyświetla rekordy przez model Qt. Zmiana filtra aktualizuje wiersze
+według identyfikatorów firm i zachowuje zaznaczenie, jeśli firma nadal pasuje.
+Karta firmy pobiera historię zapisów czasu w tle po otwarciu zakładki Czasomierz.
+
+Worker z funkcją `invoice_selection` udostępnia zbiorczy odczyt wybranych
+faktur przed wystawieniem, wysyłką do KSeF, wysyłką PDF i eksportem. Starszy
+worker obsługuje te akcje przez dotychczasowe odczyty pojedynczych faktur.
+Eksport Saldeo pobiera dane firm jednym zapytaniem PostgreSQL.
+
 ## Import i lista rozliczeń MT940
 
 W trybie HTTPS klient odczytuje wskazany plik i wysyła go na serwer workera.

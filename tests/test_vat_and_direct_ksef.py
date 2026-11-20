@@ -189,12 +189,13 @@ class DirectSendUiTests(unittest.TestCase):
         for row in range(2):
             page.issued_table.setItem(row,0,QTableWidgetItem(str(row+1)))
             page.issued_table.selectionModel().select(page.issued_table.model().index(row,0),QItemSelectionModel.SelectionFlag.Select)
-        with patch('app.invoices.faktury_ui.get_invoice_by_id',side_effect=lambda i:{**INVOICE,'id':i}), \
-             patch('app.invoices.faktury_ui.can_access_invoice',return_value=True), \
+        with patch('app.invoices.faktury_ui.invoice_selection',
+                   side_effect=lambda ids, actor_id: [{**INVOICE, 'id': i} for i in ids]) as read, \
              patch('app.invoices.faktury_ui.ksef_configured',return_value=True), \
              patch('app.db.dao_app_settings.get_setting',return_value='test'), \
              patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.Yes), \
              patch.object(QFileDialog,'getOpenFileName') as file_dialog:
             page._send_selected_to_ksef()
+        read.assert_called_once_with([1, 2], 7)
         page._start_ksef_batch.assert_called_once_with([1,2],send=True)
         file_dialog.assert_not_called()

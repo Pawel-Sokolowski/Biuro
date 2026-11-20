@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Iterable, List, Tuple
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from app.utils.money import decimal_amount
 
 CENT = Decimal("0.01")
+
+
+def decode_positions(value: str | None) -> List[Dict[str, Any]]:
+    try:
+        positions = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return positions if isinstance(positions, list) else []
+
 
 def decimal_value(value, default=0):
     try:

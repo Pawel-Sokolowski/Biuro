@@ -1,6 +1,7 @@
 """Actual TLS desktop-to-service round trips; only executed on CI."""
 from datetime import datetime,timedelta,timezone
 from ipaddress import ip_address
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -95,6 +96,27 @@ class OfficeHttpsTests(DbTestCase):
                          {'all': 12, 'new': 0, 'duplicates': 12, 'own': 0})
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM bank_transakcje').fetchone()[0], 12)
+
+    def test_selected_invoice_details_for_1000_records_use_one_https_request(self):
+        from app.db.dao_conn import get_conn
+        from app.remote.view_reads import invoice_selection
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        self.assertIn('invoice_selection', self.client.server_features)
+        with get_conn() as conn:
+            conn.execute("""
+                INSERT INTO faktury (miesiac, kwota_netto, kwota_brutto, numer, pozycje_json)
+                SELECT '2026-11', 100, 123, 'FV/' || n, '[{"nazwa":"Usługa"}]'
+                FROM generate_series(1, 1000) AS n
+            """)
+            ids = [row[0] for row in conn.execute("SELECT id FROM faktury ORDER BY id DESC")]
+        with mock.patch('app.remote.state._client', self.client), \
+                mock.patch.object(self.client, '_request', wraps=self.client._request) as request:
+            selected = invoice_selection([*ids, -1], 1, details=True)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual([row['id'] for row in selected], ids)
+        self.assertEqual(selected[0]['numer'], 'FV/1000')
+        self.assertEqual(json.loads(selected[0]['pozycje_json']), [{'nazwa': 'Usługa'}])
 
     def test_enova_ezla_endpoint_authenticates_before_releasing_company_xml(self):
         import base64

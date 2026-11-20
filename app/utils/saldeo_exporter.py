@@ -12,9 +12,6 @@ import xlsxwriter
 from app.utils.xlsx_safe import safe_cell
 from app.db.dao_conn import get_conn, Row
 from app.db.dao_app_settings import get_setting_bool, get_setting_first
-import logging
-
-logger = logging.getLogger(__name__)
 
 # Nagłówki zgodne z Twoim wzorem
 SALDEO_HEADERS = [
@@ -137,6 +134,27 @@ def _get_field(obj: Any, key: str, default: Any = "") -> Any:
             return default
 
 
+def _export_companies(company_ids):
+    if not company_ids:
+        return {}
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, nazwa, nazwa_skrocona, nazwa_saldeo, nip, regon,
+                   miasto, kod_pocztowy, ulica, adres_budynek, adres_lokal, adres_email,
+                   kategoria_domyslna, wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa,
+                   adres_koresp_ulica, adres_koresp_budynek, adres_koresp_lokal,
+                   adres_koresp_kod_pocztowy, adres_koresp_miasto,
+                   adres_zam_ulica, adres_zam_budynek, adres_zam_lokal,
+                   adres_zam_kod_pocztowy, adres_zam_miasto
+            FROM firmy WHERE id = ANY(%s)
+        """, (sorted(company_ids),))
+        return {row["id"]: dict(row) for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def _to_bool(v: Any) -> Optional[bool]:
     if v is None:
         return None
@@ -222,6 +240,10 @@ def export_saldeo_xlsx(
     default_konto = get_setting_first(("konto_bankowe_biura", "faktury_konto_bankowe"), "")
     default_termin_dni = get_setting_first(("termin_platnosci_dni", "faktury_termin_dni"), "14")
 
+    company_ids = [_get_field(fv, "firma_id", _get_field(fv, "id", None)) for fv in invoices]
+    company_ids = [int(company_id) if company_id is not None else None for company_id in company_ids]
+    companies = _export_companies({company_id for company_id in company_ids if company_id is not None})
+
     p = Path(output_path)
     workbook = xlsxwriter.Workbook(str(p))
     worksheet = workbook.add_worksheet("Eksport")
@@ -232,15 +254,10 @@ def export_saldeo_xlsx(
     for col, header in enumerate(SALDEO_HEADERS):
         worksheet.write(0, col, header, fmt_bold)
 
-    conn = _get_conn()
-    cur = conn.cursor()
-
     row_idx = 1
     lp_counter = 1
 
-    for fv in invoices:
-        firma_id = _get_field(fv, "firma_id", _get_field(fv, "id", None))
-
+    for fv, firma_id in zip(invoices, company_ids):
         miesiac = _get_field(fv, "miesiac", _get_field(fv, "data", ""))
         data_wyst = _get_field(fv, "data_wystawienia", "") or (
             f"{miesiac}-01"
@@ -249,30 +266,7 @@ def export_saldeo_xlsx(
         )
         termin = _get_field(fv, "termin_platnosci", "") or _default_due_date(data_wyst, default_termin_dni)
 
-        fr = {}
-        if firma_id is not None:
-            try:
-                cur.execute("""
-                    SELECT
-                        nazwa, nazwa_skrocona, nazwa_saldeo, nip, regon,
-                        miasto, kod_pocztowy, ulica,
-                        adres_budynek, adres_lokal, adres_email,
-                        konto_bankowe, uwagi, kategoria_domyslna,
-                        forma_opodatkowania, vat_czynny, glowny_cennik, limit_dokumentow,
-                        wysylac_do_ksef, wysylac_do_kontrahenta, metoda_kasowa,
-                        adres_koresp_ulica, adres_koresp_budynek, adres_koresp_lokal,
-                        adres_koresp_kod_pocztowy, adres_koresp_miasto,
-                        adres_zam_ulica, adres_zam_budynek, adres_zam_lokal,
-                        adres_zam_kod_pocztowy, adres_zam_miasto
-                    FROM firmy WHERE id = %s
-                """, (firma_id,))
-                row = cur.fetchone()
-                if row:
-                    fr = dict(row)
-            except Exception:
-                logger.exception("Błąd odczytu danych firmy %s podczas eksportu Saldeo", firma_id)
-                raise
-
+        fr = companies.get(firma_id, {})
         firm_name = fr.get("nazwa") or _get_field(fv, "firma_nazwa", _get_field(fv, "nazwa_firmy", ""))
         nazwa_pelna = _get_field(fv, "nabywca_pelna", "") or firm_name
         # Kontrahent w Saldeo ma własną nazwę skróconą; nazwa rejestrowa pozostaje niezależna.
@@ -463,11 +457,6 @@ def export_saldeo_xlsx(
             first = False
 
         lp_counter += 1
-
-    try:
-        conn.close()
-    except Exception:
-        logger.warning("Zignorowany błąd", exc_info=True)
 
     workbook.close()
 

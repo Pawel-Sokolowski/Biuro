@@ -163,12 +163,19 @@ jobs:
           $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $compiler)) { choco install innosetup --version=6.4.3 -y --no-progress }
           & .\scripts\prepare_odbc_prerequisite.ps1
+          $configuredDir = "$env:RUNNER_TEMP\Configured Biuro Setup"
+          $testServer = 'https://192.0.2.10:8443'
+          & $compiler "/O$configuredDir" "/DDefaultServerUrl=$testServer" installer\biuro.iss
+          if ($LASTEXITCODE) { throw 'Configured installer compilation failed' }
+          $configuredSetup = Get-ChildItem "$configuredDir\Biuro-Setup-*.exe" | Select-Object -First 1
           & $compiler installer\biuro.iss
           if ($LASTEXITCODE) { throw 'Installer compilation failed' }
           $setup = Get-ChildItem installer\output\*.exe | Select-Object -First 1
           $target = "$env:RUNNER_TEMP\Installed Biuro"
-          $process = Start-Process $setup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$target`"" -Wait -PassThru
+          $process = Start-Process $configuredSetup.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$target`"" -Wait -PassThru
           if ($process.ExitCode) { throw 'Installer failed' }
+          $installedServer = Join-Path $target 'office-server.ini'
+          if ((Get-Content $installedServer) -notcontains "ServerUrl=$testServer") { throw 'Installer HTTPS address missing' }
           if (Test-Path (Join-Path $target 'scripts\install_background_worker.cmd')) { throw 'Worker must not be selected by default' }
           $process = Start-Process "$target\unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
           if ($process.ExitCode) { throw 'Desktop-only uninstall failed' }

@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QCompleter
 
 from app.db.dao_companies import (
-    get_company, save_company, get_contacts, save_contact,
+    get_company, save_company, get_contacts, save_contact, list_company_people,
     delete_contact, get_pricing_kadry, get_ksiegowosc_options,
     get_partners, save_partner, delete_partner,
     get_company_field_options, get_tax_offices,
@@ -155,10 +155,6 @@ class CompanyForm(QDialog):
         dane_box = QWidget()
         dane_layout = QVBoxLayout(dane_box)
 
-        title = QLabel("Dane firmy")
-        title.setStyleSheet("font-weight: bold; font-size: 16px;")
-        dane_layout.addWidget(title)
-
         def add_row(labels, widgets):
             _grid_row(dane_layout, labels, widgets)
 
@@ -216,6 +212,7 @@ class CompanyForm(QDialog):
         forma_dzialalnosci = QComboBox()
         forma_dzialalnosci.addItems(_merged_options("forma_dzialalnosci", FORMA_DZIALALNOSCI))
         make_searchable(forma_dzialalnosci)
+        forma_dzialalnosci.setToolTip('Decyduje m.in. o tym, czy firma ma wspólników (sekcja Wspólnicy).')
 
         add_row(
             ["KRS:", "PESEL:", "Forma działalności:"],
@@ -234,6 +231,11 @@ class CompanyForm(QDialog):
         forma_opodatkowania = QComboBox()
         forma_opodatkowania.addItems(_merged_options("forma_opodatkowania", FORMA_OPODATKOWANIA))
         make_searchable(forma_opodatkowania)
+        # Bez tej pozycji import Enovy nie ma jak wyliczyć rodzaju księgowości
+        # (Ryczałt/KPiR/Księgi rachunkowe/Karta podatkowa) i pomija firmę.
+        from app.companies.cennik_keys import supported_forma_labels
+        forma_opodatkowania.setToolTip(
+            'Wymagane do importu Enovy. Obsługiwane: ' + ', '.join(supported_forma_labels()) + '.')
 
         add_row(
             ["Status VAT:", "Urząd skarbowy:", "Forma opodatkowania:"],
@@ -242,10 +244,14 @@ class CompanyForm(QDialog):
 
         monthly_group = QGroupBox('Rozliczenia miesięczne i kwartalne')
         from app.companies.monthly_setup import MonthlySetup
-        self.monthly_setup = MonthlySetup(self.firma_id, monthly_group)
+        # Zakres domyślny liczy się z pól formularza, także dla nowej firmy bez id.
+        self.monthly_setup = MonthlySetup(self.firma_id, monthly_group, {
+            'status_vat': status_vat.currentText(),
+            'forma_opodatkowania': forma_opodatkowania.currentText(),
+            'forma_dzialalnosci': forma_dzialalnosci.currentText(),
+        })
         monthly_box = QVBoxLayout(monthly_group)
         monthly_box.addWidget(self.monthly_setup)
-        dane_layout.addWidget(monthly_group)
 
         annual_group = QGroupBox("Roczne rozliczenie")
         annual_box = QVBoxLayout(annual_group)
@@ -279,7 +285,6 @@ class CompanyForm(QDialog):
             self._annual_next_row += (len(rows) + 2) // 3
         self.annual_year.valueChanged.connect(self._annual_year_changed)
         self.annual_owner.currentIndexChanged.connect(lambda *_: self._annual_year_changed(self.annual_year.value()))
-        dane_layout.addWidget(annual_group)
 
         analityka_fk = QLineEdit()
         kody_pkd = QLineEdit()
@@ -351,7 +356,8 @@ class CompanyForm(QDialog):
         dane_layout.addWidget(uwagi_label)
         dane_layout.addWidget(uwagi)
 
-        # Rejestracja pól
+        # Rejestracja pól formularza (jedno miejsce dla całej sekcji).
+        # (MonthlySetup czyta status VAT i formę opodatkowania).
         self.inputs.update({
             "nazwa": nazwa,
             "nazwa_skrocona": nazwa_skrocona,
@@ -381,14 +387,12 @@ class CompanyForm(QDialog):
             "uwagi": uwagi,
         })
 
+
         main_layout.addWidget(dane_box)
 
         adresy_box = QWidget()
         adresy_layout = QVBoxLayout(adresy_box)
 
-        title_addr = QLabel("Adresy")
-        title_addr.setStyleSheet("font-weight: bold; font-size: 16px;")
-        adresy_layout.addWidget(title_addr)
 
         tabs = QTabWidget()
         adresy_layout.addWidget(tabs)
@@ -515,9 +519,6 @@ class CompanyForm(QDialog):
         cenniki_box = QWidget()
         cenniki_layout = QVBoxLayout(cenniki_box)
 
-        title_cenniki = QLabel("Cenniki")
-        title_cenniki.setStyleSheet("font-weight: bold; font-size: 16px;")
-        cenniki_layout.addWidget(title_cenniki)
 
         def add_cennik_row(labels, widgets):
             _grid_row(cenniki_layout, labels, widgets)
@@ -604,9 +605,6 @@ class CompanyForm(QDialog):
         kadry_box = QWidget()
         kadry_layout = QVBoxLayout(kadry_box)
 
-        title_kadry = QLabel("Kadry")
-        title_kadry.setStyleSheet("font-weight: bold; font-size: 16px;")
-        kadry_layout.addWidget(title_kadry)
 
         def add_kadry_row(labels, widgets):
             _grid_row(kadry_layout, labels, widgets)
@@ -680,9 +678,6 @@ class CompanyForm(QDialog):
         kontakty_box = QWidget()
         kontakty_layout = QVBoxLayout(kontakty_box)
 
-        title_kontakty = QLabel("Kontakty")
-        title_kontakty.setStyleSheet("font-weight: bold; font-size: 16px;")
-        kontakty_layout.addWidget(title_kontakty)
 
         self.contacts_table = QTableWidget(0, 5)
         self.contacts_table.setHorizontalHeaderLabels(["Imię", "Nazwisko", "E-mail", "Telefon", "Rola"])
@@ -740,9 +735,6 @@ class CompanyForm(QDialog):
         # ============================================================
         pel_box = QWidget()
         pel_layout = QVBoxLayout(pel_box)
-        title_pel = QLabel("Pełnomocnictwa pracowników")
-        title_pel.setStyleSheet("font-weight: bold; font-size: 16px;")
-        pel_layout.addWidget(title_pel)
 
         self.pel_table = QTableWidget(0, 3)
         self.pel_table.setHorizontalHeaderLabels(["Pracownik", "PEL", "UPL"])
@@ -811,9 +803,6 @@ class CompanyForm(QDialog):
         wsp_box = QWidget()
         wsp_layout = QVBoxLayout(wsp_box)
 
-        title_wsp = QLabel("Wspólnicy")
-        title_wsp.setStyleSheet("font-weight: bold; font-size: 16px;")
-        wsp_layout.addWidget(title_wsp)
 
         self.partners_table = QTableWidget(0, 4)
         self.partners_table.setHorizontalHeaderLabels(["Imię pierwsze", "Imię drugie", "Nazwisko", "Procent"])
@@ -883,9 +872,6 @@ class CompanyForm(QDialog):
         not_box = QWidget()
         not_layout = QVBoxLayout(not_box)
 
-        title_not = QLabel("Notatki")
-        title_not.setStyleSheet("font-weight: bold; font-size: 16px;")
-        not_layout.addWidget(title_not)
 
         self.notes_table = QTableWidget(0, 3)
         self.notes_table.setHorizontalHeaderLabels(["Treść", "Autor", "Data"])
@@ -908,9 +894,6 @@ class CompanyForm(QDialog):
         if self.firma_id and self.actor_id:
             timers_box = QWidget()
             timers_layout = QVBoxLayout(timers_box)
-            title_timers = QLabel("Czasomierz — rekordy czasu pracy")
-            title_timers.setStyleSheet("font-weight: bold; font-size: 16px;")
-            timers_layout.addWidget(title_timers)
             self.timers_table = QTableWidget(0, 7)
             self.timers_table.setHorizontalHeaderLabels(
                 ["Źródło", "Miesiąc", "Początek", "Koniec", "Pracownik", "Dział / opis", "Czas"])
@@ -950,6 +933,18 @@ class CompanyForm(QDialog):
         self.section_tabs.setUsesScrollButtons(True)
         root_layout.removeWidget(scroll)
         root_layout.addWidget(self.section_tabs)
+        settlements_box = QWidget()
+        settlements_layout = QVBoxLayout(settlements_box)
+        settlements_layout.addWidget(monthly_group)
+        settlements_layout.addWidget(annual_group)
+        reset_row = QHBoxLayout()
+        self.reset_declarations = QPushButton('Wyzeruj deklaracje (jednorazowo)')
+        self.reset_declarations.setToolTip('Usuwa ustawiony zakres rozliczeń miesięcznych i rocznych wszystkich firm. '
+                                           'Wymaga potwierdzenia; po wykonaniu pokazuje, ile wpisów usunięto.')
+        self.reset_declarations.clicked.connect(self._reset_declarations)
+        reset_row.addWidget(self.reset_declarations)
+        reset_row.addStretch()
+        settlements_layout.addLayout(reset_row)
         billing_box = QWidget()
         billing_layout = QVBoxLayout(billing_box)
         billing_layout.addWidget(QLabel("Adres e-mail do wysyłki faktur"))
@@ -958,13 +953,16 @@ class CompanyForm(QDialog):
         self.inputs["email_faktury"].setToolTip("Adresy wyłącznie do faktur; kilka adresów oddziel przecinkiem. Gdy puste, używany jest e-mail kontaktowy. Dla spółki cywilnej odbiorcy pochodzą z adresów wszystkich wspólników.")
         billing_layout.addWidget(self.inputs["email_faktury"])
         sections_list = [
-            ("Firma", [dane_box]), ("Adresy", [adresy_box]),
-            ("Faktury i ceny", [billing_box, cenniki_box]), ("Kadry", [kadry_box]),
-            ("Kontakty", [kontakty_box]), ("Pełnomocnictwa", [pel_box]),
-            ("Filtry poczty", [email_box]), ("Wspólnicy", [wsp_box]), ("Notatki", [not_box]),
+            # Dane podstawowe: firma, adresy, a na końcu pełnomocnictwa.
+            ("Dane podstawowe", [dane_box, adresy_box, pel_box]),
+            ("Rozliczenia i deklaracje", [settlements_box]),
+            ("Faktury i ceny", [billing_box, cenniki_box, kadry_box]),
+            ("Kontakty", [kontakty_box, email_box]),
+            ("Wspólnicy", [wsp_box]), ("Notatki", [not_box]),
         ]
         if timers_box is not None:
             sections_list.append(("Czasomierz", [timers_box]))
+        self.section_pages = {}
         for label, sections in sections_list:
             page = QWidget()
             page_layout = QVBoxLayout(page)
@@ -977,6 +975,11 @@ class CompanyForm(QDialog):
             area.setFrameShape(QScrollArea.Shape.NoFrame)
             area.setWidget(page)
             self.section_tabs.addTab(area, label)
+            self.section_pages[label] = area
+        if "forma_dzialalnosci" in self.inputs:
+            self.inputs["forma_dzialalnosci"].currentIndexChanged.connect(
+                lambda *_: self._update_partners_visibility())
+        self._update_partners_visibility()
         scroll.takeWidget()
         content.deleteLater()
         scroll.deleteLater()
@@ -1484,14 +1487,21 @@ class CompanyForm(QDialog):
     def _load_contacts(self):
         if not self.firma_id:
             return
-        rows = get_contacts(self.firma_id)
+        # Kontakty i wspólnicy to jedna lista osób; wiersz wspólnika jest tylko do odczytu tutaj.
+        from app.db.dao_companies import get_partners, partner_contacts
+        rows = get_contacts(self.firma_id) + partner_contacts(
+            self.firma_id, None, get_partners(self.firma_id))
         self.contacts_table.setRowCount(0)
         for r in rows:
             row = self.contacts_table.rowCount()
             self.contacts_table.insertRow(row)
             for col, key in enumerate(["imie", "nazwisko", "email", "telefon", "rola"]):
                 self.contacts_table.setItem(row, col, QTableWidgetItem(str(r.get(key) or "")))
-            self.contacts_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, r.get("id"))
+            item = self.contacts_table.item(row, 0)
+            item.setData(Qt.ItemDataRole.UserRole, r.get("id"))
+            item.setData(Qt.ItemDataRole.UserRole + 1, r.get("partner_id"))
+            if r.get("from_partner"):
+                item.setToolTip("Wspólnik — dane osobowe edytuj w zakładce Wspólnicy.")
 
     def _add_contact(self):
         if not self._ensure_company_saved():
@@ -1519,9 +1529,20 @@ class CompanyForm(QDialog):
         row = self.contacts_table.currentRow()
         if row < 0:
             return
-        email = self.contacts_table.item(row, 2).text()
-        contact_id = self.contacts_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-        if contact_id:
+        cell = self.contacts_table.item(row, 0)
+        contact_id = cell.data(Qt.ItemDataRole.UserRole)
+        partner_id = cell.data(Qt.ItemDataRole.UserRole + 1)
+        if partner_id:
+            if QMessageBox.question(
+                    self, "Kontakty",
+                    "Ten wiersz to wspólnik. Usunąć tylko jego e-mail i telefon? "
+                    "Wspólnik pozostanie w zakładce Wspólnicy.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+            from app.db.dao_companies import delete_people_contact
+            delete_people_contact(self.firma_id, partner_id=int(partner_id))
+        elif contact_id:
             delete_contact(int(contact_id))
         self._load_contacts()
 
@@ -1529,6 +1550,7 @@ class CompanyForm(QDialog):
         row = self.contacts_table.currentRow()
         if row < 0:
             return
+        cell = self.contacts_table.item(row, 0)
         payload = {
             "firma_id": self.firma_id,
             "imie": self.contacts_table.item(row, 0).text(),
@@ -1537,10 +1559,25 @@ class CompanyForm(QDialog):
             "telefon": self.contacts_table.item(row, 3).text(),
             "rola": self.contacts_table.item(row, 4).text(),
         }
-        contact_id = self.contacts_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-        if contact_id:
+        contact_id = cell.data(Qt.ItemDataRole.UserRole)
+        partner_id = cell.data(Qt.ItemDataRole.UserRole + 1)
+        if partner_id:
+            # Wspólnik: imię i nazwisko są edytowane w swoim formularzu, tu tylko dane kontaktowe.
+            payload["partner_id"] = int(partner_id)
+            payload.pop("imie", None)
+            payload.pop("nazwisko", None)
+            from app.db.dao_companies import save_people_contact
+            try:
+                save_people_contact(self.firma_id, payload)
+            except ValueError as error:
+                QMessageBox.warning(self, "Kontakty", str(error))
+                return
+            self._load_partners()
+        elif contact_id:
             payload["id"] = int(contact_id)
-        save_contact(self.firma_id, payload)
+            save_contact(self.firma_id, payload)
+        else:
+            save_contact(self.firma_id, payload)
         self._sync_contact_email_filters()
         self._load_contacts()
 
@@ -1558,7 +1595,52 @@ class CompanyForm(QDialog):
     # ============================================================
     # WSPÓLNICY
     # ============================================================
+    def _reset_declarations(self):
+        """Jednorazowe wyzerowanie zakresu rozliczeń: miesięcznego i rocznego."""
+        if not QMessageBox.question(
+                self, 'Wyzerowanie deklaracji',
+                'Usunąć ustawiony zakres rozliczeń miesięcznych i deklaracji rocznych '
+                'WSZYSTKICH firm?\n\nDokumenty, faktury, kontakty i dane firm zostają bez zmian. '
+                'Tej operacji nie można cofnąć.') == QMessageBox.StandardButton.Yes:
+            return
+        from app.companies.checking_obligations import reset_obligations
+        from app.db.dao_year_end import reset_annual_declarations
+        try:
+            monthly = reset_obligations(self.actor_id)
+            annual = reset_annual_declarations(self.actor_id)
+        except Exception as error:  # pokazujemy powód zamiast cichego braku zmiany
+            QMessageBox.critical(self, 'Wyzerowanie deklaracji', f'Nie udało się wyzerować: {error}')
+            return
+        QMessageBox.information(
+            self, 'Wyzerowane',
+            'Wyzerowanie zakończone.\n\n'
+            f'Zakres miesięczny: {monthly} firm (usunięte ręczne ustawienia).\n'
+            f'Deklaracje roczne: {annual["zlozenia"]} złożeń, {annual["upo"]} numerów UPO, '
+            f'{annual["wybor_firm"]} wyborów firmy, {annual["wybor_wspolnikow"]} wyborów wspólników.\n\n'
+            'Zakres domyślny policzy się ponownie z danych rejestrowych firmy.')
+        try:
+            self.monthly_setup.saved = {}
+            self.monthly_setup.edits = {}
+            self.monthly_setup.show_month()
+            self._annual_year_changed(self.annual_year.value())
+        except Exception:
+            pass
+
+    def _update_partners_visibility(self):
+        """Wspólnicy tylko tam, gdzie prawo ich przewiduje: spółki, nie JDG."""
+        from app.companies.identities import has_partners
+        page = getattr(self, 'section_pages', {}).get('Wspólnicy')
+        if page is None:
+            return
+        forma = (self.inputs["forma_dzialalnosci"].currentText() if "forma_dzialalnosci" in self.inputs
+                 else '')
+        visible = has_partners({'forma_dzialalnosci': forma})
+        index = self.section_tabs.indexOf(page)
+        if index >= 0:
+            self.section_tabs.setTabVisible(index, visible)
+
     def _load_partners(self):
+        self._update_partners_visibility()
         if not self.firma_id:
             return
 

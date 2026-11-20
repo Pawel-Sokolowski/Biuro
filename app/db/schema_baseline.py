@@ -1176,6 +1176,9 @@ def init_db():
 
     _safe_alter_add_column(cur, "pracownicy", "telefon TEXT")
     _safe_alter_add_column(cur, "faktury", "podstawa_zwolnienia TEXT")
+    # Dodatkowy opis na fakturze: dowolny tekst drukowany pod pozycjami i
+    # wysyłany do KSeF (DodatkowyOpis), niezależny od podstawy zwolnienia.
+    _safe_alter_add_column(cur, "faktury", "opis_dodatkowy TEXT")
     _safe_alter_add_column(cur, "firmy", "email_faktury TEXT")
     for definition in (
         "invoice_email_status TEXT", "invoice_email_recipients TEXT",

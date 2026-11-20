@@ -2,6 +2,24 @@
 from app.integrations.enova.document_counts import normalize_nip
 
 
+# Formy działalności, w których występują wspólnicy. JDG i „osoba fizyczna”
+# mają właściciela, nie wspólników, więc sekcja Wspólnicy jest dla nich zbędna.
+PARTNER_FORMS = ('spółka cywilna', 'spolka cywilna', 'spółka jawna', 'spolka jawna',
+                 'spółka komandytowa', 'spolka komandytowa', 'spółka komandytowo-akcyjna',
+                 'spolka komandytowo-akcyjna', 'spółka partnerska', 'spolka partnerska',
+                 'spółka z o.o.', 'spółka z ograniczoną odpowiedzialnością', 'spółka akcyjna',
+                 's.c.', 's.c', 'sc', 's.j.', 'sp.k.', 's.k.a.', 'sp. z o.o.', 's.a.')
+
+
+def has_partners(company):
+    """Czy firma może mieć wspólników (spółki), czy tylko właściciela (JDG)."""
+    value = ' '.join(str(company.get('forma_dzialalnosci') or '').strip().casefold().split())
+    if not value:
+        # Brak formy nie może ukryć już wpisanych wspólników.
+        return True
+    return any(form in value for form in PARTNER_FORMS)
+
+
 def is_civil(company):
     value = ' '.join(str(company.get('forma_dzialalnosci') or '').strip().casefold().split())
     return value in ('spółka cywilna', 'spolka cywilna', 's.c.', 's.c', 'sc')

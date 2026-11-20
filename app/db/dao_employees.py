@@ -86,6 +86,9 @@ def update_employee(pracownik_id: int, email: str, imie: str, nazwisko: str, akt
             WHERE id = %s
         """, (email, imie, nazwisko, aktywny, pracownik_id))
         conn.commit()
+        # Dezaktywacja pracownika musi od razu odebrać mu dostęp.
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 
@@ -115,6 +118,8 @@ def set_employee_active(pracownik_id: int, active: bool) -> None:
             WHERE id = %s
         """, (1 if active else 0, pracownik_id))
         conn.commit()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 
@@ -126,6 +131,8 @@ def delete_employee(pracownik_id: int) -> None:
         cur.execute("DELETE FROM pracownik_firma WHERE pracownik_id = %s", (pracownik_id,))
         cur.execute("DELETE FROM pracownicy WHERE id = %s", (pracownik_id,))
         conn.commit()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 

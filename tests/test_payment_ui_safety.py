@@ -394,10 +394,14 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
             "Pobierz fakturę z KSeF", "Wyślij zaznaczone do KSeF", "Status wysyłki KSeF", "Rozlicz MT940", "Zapłacono",
             "Wyślij pdf e-mailem", "Przypomnij o płatności…", "Przenieś do kosza", "Kosz…"])
         drafts = texts(page.tab_robocze)
-        self.assertEqual(drafts[:2], ["Generuj faktury", "Wystaw faktury"])
-        general = [page.btn_manual.text(), page.btn_contractors.text()]
-        self.assertNotIn("Generuj faktury", general)
-        self.assertIs(page.btn_generate_all.parent(), page.tab_robocze)
+        self.assertEqual(drafts[:2], ["Edytuj pozycje poniżej", "Dane faktury..."])
+        self.assertNotIn("Generuj faktury", drafts)
+        # Tworzenie i wystawianie jest na jednym pasku akcji nad zakładkami.
+        actions = [page.btn_new_draft.text(), page.btn_issue.text(), page.btn_issue_ksef.text(),
+                   page.btn_generate_all.text(), page.btn_contractors.text(), page.btn_refresh.text()]
+        self.assertEqual(actions, ["Nowa robocza", "Wystaw zaznaczone", "Wystaw i wyślij do KSeF",
+                                   "Generuj faktury", "Kontrahenci", "Odśwież"])
+        self.assertIs(page.btn_issue, page.btn_export)
 
     def test_cash_dialog_defaults_to_remaining_balance(self):
         record_cash_payment(self.invoice_id, "2026-09-06", "23.00", 1)

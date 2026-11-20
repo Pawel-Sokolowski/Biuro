@@ -41,7 +41,7 @@ def declaration_issue(entry):
         return None
     return {'sent': 'Oczekuje na UPO', 'accepted': 'Brak potwierdzenia UPO',
             'rejected': 'Odrzucona', 'failed': 'Błąd przetwarzania', 'cancelled': 'Anulowana', 'not_sent': 'Niewysłana', 'prepared': 'Przygotowana, niewysłana',
-            'processing': 'Przetwarzana', 'unknown': 'Odczytano dokument; status wysyłki/UPO nieustalony'}.get(status, 'Nie sprawdzono')
+            'processing': 'Przetwarzana', 'unknown': 'status wysyłki/UPO nieustalony'}.get(status, 'Nie sprawdzono')
 
 
 def hr_status(event, today=None, days=30):
@@ -61,11 +61,19 @@ def hr_status(event, today=None, days=30):
 
 
 def needs_attention(row, department, today, days=30, month=None):
+    """Czy firma naprawdę wymaga uwagi: zaległość w dokumentach albo w deklaracji.
+
+    Filtr nie może ukrywać zaległości dokumentów: brak dokumentów, które firma
+    zwykle dostarcza w poprzednim miesiącu, jest właśnie powodem do uwagi.
+    """
     counts = documents(row, department)
     full = bool(decoded(row.get('checking')))
-    if department == 'accounting' and month and counts is not None and any(
-            (kind in counts or full) and counts.get(kind, 0) == 0 for kind in previous_active_types(row, month)):
-        return True
+    if department == 'accounting':
+        if counts is None:
+            return True  # Brak odczytu dokumentów to też brak potwierdzenia.
+        expected = previous_active_types(row, month) if month else set()
+        if any(counts.get(kind, 0) == 0 for kind in expected):
+            return True
     if any(declaration_issue(entry) for entry in declaration_entries(row, department)):
         return True
     return department == 'payroll' and any(hr_status(event, today, days) in

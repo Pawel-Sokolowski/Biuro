@@ -62,6 +62,8 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
             (pracownik_id, current_month),
         )
 
+        # Kafelek „Komplet dokumentów” to firmy z zaznaczonym kompletem
+        # dokumentów w księgowości (ta sama kolumna, którą widać w Widoku miesięcznym).
         delivered = _scalar(
             conn,
             "SELECT COUNT(*) FROM statusy_miesieczne s JOIN firmy f ON f.id = s.firma_id "
@@ -70,16 +72,33 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
         )
         data["dokumenty_dostarczone"] = delivered
         data["dokumenty_brak"] = max(data["firmy_aktywne"] - delivered, 0)
+        # Komplet dokumentów to firmy, które dostarczyły dokumenty; „Brak
+        # dokumentów" to reszta aktywnych. Wysyłane wyniki to firmy na etapie
+        # wysyłki, a nie liczba wiadomości — kafelek ma pokazywać stan pracy.
+        data["dokumenty_komplet"] = delivered
 
+        # Etapy księgowości i kadr to dwie niezależne kolumny, więc firma może być
+        # „Wysłane wyniki” w jednej i „Brak” w drugiej. Liczymy firmy (nie wiersze),
+        # z etapem z dowolnej kolumny — wcześniej kafelek pokazywał 0, gdy etap
+        # wysyłki był ustawiony tylko w kadrach.
         stages = {"Brak": 0, "Zatwierdzone": 0, "Zaksięgowane": 0, "Wysłane wyniki": 0}
+        sent_companies = set()
         for row in conn.execute(
-            "SELECT s.etap, COUNT(*) FROM statusy_miesieczne s JOIN firmy f ON f.id = s.firma_id "
-            f"WHERE s.miesiac = %s AND {ACTIVE_COMPANY_SQL.replace('status', 'f.status')} GROUP BY s.etap",
+            "SELECT s.firma_id, s.etap, s.etap_kadry FROM statusy_miesieczne s "
+            "JOIN firmy f ON f.id = s.firma_id "
+            f"WHERE s.miesiac = %s AND {ACTIVE_COMPANY_SQL.replace('status', 'f.status')}",
             (month,),
         ):
-            stages[row[0]] = int(row[1])
+            values = {row[1] or 'Brak', row[2] or 'Brak'}
+            for value in values:
+                if value in stages:
+                    stages[value] += 1
+            if 'Wysłane wyniki' in values:
+                sent_companies.add(row[0])
         stages["Brak"] = max(data["firmy_aktywne"] - sum(v for k, v in stages.items() if k != "Brak"), 0)
         data["etapy"] = stages
+        data["wyslane_wyniki"] = len(sent_companies)
+        data["do_zaksiegowania"] = int(stages.get("Zatwierdzone", 0))
 
         data["zadania"] = [
             dict(r)

@@ -109,7 +109,9 @@ def normalize(rows, months, selected_nips, *, annual=False):
                  'employee_id': employee_id, 'employee_name': employee_name,
                  'source_id': source_id, 'report_id': str(row['report_id'] or '').strip(),
                  'raw_status': code, 'status': 'unknown',
-                 'status_text': 'Status źródłowy: ' + code if code else 'Odczytano dokument; status wysyłki nieustalony',
+                 # Sam odczyt dokumentu nic nie mówi o wysyłce — nie piszemy,
+                 # że dokument został „odczytany”, tylko wprost, czego nie wiadomo.
+                 'status_text': 'Status źródłowy: ' + code if code else 'status wysyłki/UPO nieustalony',
                  'sent_at': None, 'upo': '', 'upo_at': None}
         if row.get('insurance_code'):
             from app.companies.holiday_eligibility import insurance_code
@@ -190,8 +192,17 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
                         if not annual:
                             from app.companies.checking_obligations import add_imported
                             add_imported(conn,fid,month,entries,'platnik')
+        documents = sum(len(entries) for by_month in records.values() for entries in by_month.values())
+        # Jeden wpis w historii importów na cały odczyt Płatnika (miesiące albo rok).
+        from app.db.import_audit import log_import_safely
+        log_import_safely('platnik_declarations_annual' if annual else 'platnik_declarations',
+                          source=config.get('database') or 'Płatnik',
+                          updated=documents,
+                          details={'companies': len(set(mapped.values())), 'months': months,
+                                   'documents': documents, 'annual': annual},
+                          user_id=actor_id)
         return {'mode': 'applied', 'companies': len(set(mapped.values())), 'months': months,
-                'documents': sum(len(entries) for by_month in records.values() for entries in by_month.values())}
+                'documents': documents}
 
 
 def decoded_snapshot(value):

@@ -35,6 +35,8 @@ def init_db():
         apply_saldeo_web(conn)
         from app.db.billing_label_schema import apply as remove_billing_label
         remove_billing_label(conn)
+        from app.db.service_tables_schema import apply as apply_service_tables
+        apply_service_tables(conn)
 
 
 @office_endpoint('app.db.schema.schema_is_current')

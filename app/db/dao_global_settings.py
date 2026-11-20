@@ -59,8 +59,8 @@ def set_role_tabs(rid: int, tabs: List[str]) -> None:
         cur.execute("UPDATE role SET zakladki = %s,can_view_invoices=%s WHERE id = %s",
                     ("|".join(tabs), int('Faktury' in tabs), rid))
         conn.commit()
-        from app.utils.request_cache import clear_request_cache
-        clear_request_cache()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 
@@ -132,8 +132,8 @@ def add_role(
         _new_id = cur.fetchone()[0]
         rid = _new_id
         conn.commit()
-        from app.utils.request_cache import clear_request_cache
-        clear_request_cache()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
         return rid
     finally:
         conn.close()
@@ -173,8 +173,8 @@ def update_role(rid: int, nazwa: str, **perms) -> None:
                 tabs = _invoice_tabs(row['zakladki'], row['can_access_admin_settings'], bool(perms['can_view_invoices']))
                 cur.execute('UPDATE role SET zakladki=%s WHERE id=%s', (tabs, rid))
         conn.commit()
-        from app.utils.request_cache import clear_request_cache
-        clear_request_cache()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 
@@ -186,8 +186,8 @@ def delete_role(rola_id: int) -> None:
         cur = conn.cursor()
         cur.execute("DELETE FROM role WHERE id = %s", (rola_id,))
         conn.commit()
-        from app.utils.request_cache import clear_request_cache
-        clear_request_cache()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 
@@ -224,8 +224,8 @@ def assign_role(uid: int, rid: int, firma_id: int = 1) -> None:
             (rid, 1 if rid == 4 else 0, uid),
         )
         conn.commit()
-        from app.utils.request_cache import clear_request_cache
-        clear_request_cache()
+        from app.utils.request_cache import invalidate_permissions
+        invalidate_permissions()
     finally:
         conn.close()
 

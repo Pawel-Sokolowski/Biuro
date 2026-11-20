@@ -169,6 +169,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       .num {{ text-align: right; white-space: nowrap; }}
       .grand {{ font-size: 14pt; font-weight: bold; }}
       .ksef-number {{ font-family: monospace; font-size: 12pt; color: #333; }}
+      .extra-desc {{ font-size: {INVOICE_FONT_PT:g}pt; color: #111; }}
     </style></head><body>
     {('<h1>ANULOWANA</h1><p>' + _escape(invoice.get('cancelled_reason')) + '</p>') if invoice.get('cancelled_at') else ''}
       <table width="100%" border="0" cellspacing="0" cellpadding="8"><tr>
@@ -197,6 +198,7 @@ def invoice_html(invoice: dict, positions: list[dict]) -> str:
       <th width="14%">Cena netto</th><th width="8%">VAT&nbsp;%</th><th width="16%">Netto</th><th width="16%">Brutto</th></tr></thead>
       <tbody>{''.join(rows)}</tbody></table>
       <br>{summary_html(positions, paper=True, accepted_amounts=bool(invoice.get("_official")))}<br>
+      {f'<div class="extra-desc"><b>Dodatkowy opis:</b> {_escape(invoice.get("opis_dodatkowy"))}</div><br>' if invoice.get("opis_dodatkowy") else ''}
       <table width="100%" border="0" cellspacing="0" cellpadding="5"><tr>
         <td width="43%"></td><td width="32%" align="right"><b>Razem netto</b></td>
         <td width="25%" align="right">{_money(invoice.get('kwota_netto'))} PLN</td></tr>

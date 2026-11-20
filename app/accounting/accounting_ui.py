@@ -13,10 +13,12 @@ from app.integrations.enova.jpk import STATUSES
 from app.companies.cennik_keys import company_accounting_type
 from app.utils.background import TaskRunner
 from app.accounting.insights import comparison, declaration_issue, hr_status, needs_attention, previous_active_types, HR_LABELS
+from app.preferences.state_colors import paint as paint_state
 
 BASE_TYPES = ('SPU', 'ZR', 'DW', 'AMO')
 TYPE_LABELS = {'SPU': 'Sprzedaż', 'ZR': 'Zakup'}
-from app.accounting.report_types import DEFAULT_FORMS, form_matches, form_key
+from app.accounting.report_types import (DEFAULT_FORMS, NOT_SENT_FORMS, declaration_title, form_matches,
+                                      form_key, form_label, pit_form)
 
 
 def _item(value, tooltip=''):
@@ -28,6 +30,52 @@ def _item(value, tooltip=''):
 
 def _date(value):
     return str(value).replace('T', ' ')[:19] if value else '—'
+
+
+def _date_range(entry, first_key='upo_at', last_key='upo_to'):
+    """Data albo zakres dat: zbiorczy wiersz deklaracji ma różne daty per pracownik."""
+    first, last = _date(entry.get(first_key)), _date(entry.get(last_key))
+    if first == '—':
+        return '—'
+    return first if last in ('—', first) else f'{first} – {last}'
+
+
+def _upo_tooltip(entry):
+    """Numer UPO albo — gdy źródło go nie podaje — informacja, skąd wiadomo o przyjęciu."""
+    if entry.get('upo_numbers'):
+        return 'Numery UPO poszczególnych pracowników:\n' + '\n'.join(entry['upo_numbers'][:20])
+    if entry.get('upo'):
+        return 'Nr UPO: ' + str(entry['upo'])
+    if entry.get('upo_confirmed_at'):
+        return ('Potwierdzenie przyjęcia ze statusu Enovy (' + _date(entry['upo_confirmed_at']) +
+                '). Numer UPO nie jest dostępny w tym źródle.')
+    return 'Brak potwierdzenia UPO.'
+
+
+def _not_sent_entry(row, department, form=None):
+    """PIT-y nie są wysyłane przez program — pokazujemy je, ale bez zarzutu o brak wysyłki.
+
+    Zwraca wpis tylko dla raportu PIT (cały raport albo filtr formularza), bo lista
+    deklaracji „wszystkie” ma już własne wiersze z importu.
+    """
+    if department != 'accounting' or not form or form_key(form) != 'PIT':
+        return None
+    return {'form': 'PIT', 'department': 'accounting', 'status': 'not_sent',
+            'status_text': 'PIT-y nie są wysyłane przez program', 'upo': '', 'upo_at': None,
+            'sent_at': None, 'source_system': ''}
+
+
+def _search_haystack(row):
+    """Pole wyszukiwania: nazwa, NIP i opiekunowie (księgowość i kadry).
+
+    Obejmuje też opiekuna zastępowanego, żeby „moje firmy” działało zarówno dla
+    osoby na zastępstwie, jak i dla osoby, którą zastępuje.
+    """
+    parts = [row.get('nazwa'), row.get('nip'), row.get('ksiegowa'), row.get('kadrowa')]
+    for department in ('accounting', 'payroll'):
+        parts.append((row.get('owner_original') or {}).get(department))
+        parts.append((row.get(f'{department}_substitute') or {}).get('zastepowany'))
+    return ' '.join(str(part or '') for part in parts).casefold()
 
 
 class AccountingPage(QWidget):
@@ -54,7 +102,7 @@ class AccountingPage(QWidget):
         self.tax_filter.currentIndexChanged.connect(self.filter_rows)
         bar.addWidget(self.tax_filter)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Szukaj firmy lub NIP')
+        self.search.setPlaceholderText('Szukaj firmy, NIP lub opiekuna (księgowość / kadry)')
         self.search.textChanged.connect(self.filter_rows)
         bar.addWidget(self.search)
         self.attention = QCheckBox('Tylko wymagające uwagi')
@@ -65,7 +113,8 @@ class AccountingPage(QWidget):
         bar.addWidget(refresh)
         layout.addLayout(bar)
         self.message = QLabel('Księgowość: porównanie wyłącznie z poprzednim miesiącem; czerwone 0, gdy wtedy były dokumenty tego rodzaju. Kadry bez porównań. '
-                              '„—” oznacza brak odczytu, nie zero. Status przyjęcia wymaga UPO; daty wysyłki i UPO są odrębne.')
+                              '„—” oznacza brak odczytu, nie zero. Status przyjęcia wymaga UPO; daty wysyłki i UPO są odrębne. '
+                              'Opiekun to pracownik faktycznie prowadzący firmę w tym miesiącu — z uwzględnieniem zastępstw.')
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         self.tabs = QTabWidget()
@@ -106,7 +155,10 @@ class AccountingPage(QWidget):
             selector.currentIndexChanged.connect(self.filter_rows)
             self._add_report(department, 'Deklaracje i UPO — wszystkie', 'declarations', declaration_panel)
             for form in DEFAULT_FORMS[department]:
-                self._add_report(department, form, 'form:' + form_key(form), declaration_panel)
+                # 'VAT' i 'VAT-7' to ten sam obowiązek — bez duplikatu na liście.
+                if department == 'accounting' and form_key(form) == 'VAT':
+                    continue
+                self._add_report(department, declaration_title(form), 'form:' + form_key(form), declaration_panel)
             if department == 'payroll':
                 panel = QWidget()
                 panel_layout = QVBoxLayout(panel)
@@ -168,7 +220,12 @@ class AccountingPage(QWidget):
         if index < 0:
             index = stack.addWidget(widget)
         self.report_indices[department][key] = index
-        self.report_selectors[department].addItem(label, key)
+        selector = self.report_selectors[department]
+        # Ten sam raport bywa dodawany drugi raz (przycisk + lista formularzy z firmy)
+        # i wtedy na liście pojawiała się druga pozycja „Deklaracja VAT-7”.
+        if selector.findData(key) >= 0:
+            return
+        selector.addItem(label, key)
 
     def _selected_form(self, department):
         key = self.report_selectors[department].currentData() or ''
@@ -185,7 +242,7 @@ class AccountingPage(QWidget):
                     if selector.findData(key) < 0:
                         index = self.report_indices[department]['declarations']
                         self.report_indices[department][key] = index
-                        selector.addItem(entry['form'], key)
+                        selector.addItem(declaration_title(entry['form']), key)
         finally:
             selector.blockSignals(blocked)
         self.report_stacks[department].setCurrentIndex(self.report_indices[department][selector.currentData()])
@@ -318,7 +375,7 @@ class AccountingPage(QWidget):
         query, selected = self.search.text().strip().casefold(), self.tax_filter.currentData()
         rows = [row for row in self.rows
                 if (not selected or (company_accounting_type(row) or 'OTHER') == selected)
-                and query in (str(row.get('nazwa') or '') + ' ' + str(row.get('nip') or '')).casefold()]
+                and all(word in _search_haystack(row) for word in query.split())]
         today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
         horizon = self.hr_range.currentData()
         for department in self.tables:
@@ -333,7 +390,8 @@ class AccountingPage(QWidget):
             self._render_declarations(visible, department)
             if department == 'payroll':
                 self._render_hr(visible, today, horizon)
-                self.ezla_panel.set_companies(rows, self.period, self.attention.isChecked())
+                # e-ZLA rządzi się własnymi terminami; filtr uwagi zawęża też tę listę.
+                self.ezla_panel.set_companies(visible, self.period, self.attention.isChecked())
         missing_reports = sum(not decoded(row.get('checking')) for row in rows)
         missing_payroll = sum(documents(row, 'payroll') is None for row in rows)
         missing_declarations = sum(decoded(row.get('checking')).get('declarations') is None for row in rows)
@@ -341,6 +399,25 @@ class AccountingPage(QWidget):
                                  f'brak odczytu kadr: {missing_payroll}; brak odczytu deklaracji: {missing_declarations}. '
                                  'Listy płac odczytuje Enova, formularze ZUS — Płatnik. Brak potwierdzenia nie oznacza przyjęcia. '
                                  'Liczba do faktury pochodzi z Widoku miesięcznego.')
+
+    @staticmethod
+    def _owner_item(row, department):
+        """Opiekun: zastępca, gdy zastępuje (z informacją, kogo), inaczej opiekun stały."""
+        field = 'kadrowa' if department == 'payroll' else 'ksiegowa'
+        name = row.get(field) or '—'
+        item = _item(name)
+        substitute = row.get(f'{department}_substitute')
+        if substitute:
+            original = (row.get('owner_original') or {}).get(department) or substitute.get('zastepowany') or ''
+            details = [f'Zastępstwo za: {original or "—"}']
+            if substitute.get('do_dnia'):
+                details.append(f'Do: {_date(substitute["do_dnia"])}')
+            item.setToolTip('\n'.join(details))
+            item.setForeground(QColor('#1a5fb4'))
+            font = item.font()
+            font.setItalic(True)
+            item.setFont(font)
+        return item
 
     def _render_table(self, rows, department):
         table = self.tables[department]
@@ -358,7 +435,7 @@ class AccountingPage(QWidget):
         labels = [TYPE_LABELS.get(kind, kind) for kind in kinds]
         # Keep distinct definitions distinct even when their friendly names coincide.
         labels = [label + (' (' + kind + ')' if labels.count(label) > 1 else '') for label, kind in zip(labels, kinds)]
-        headers = ['Firma', 'NIP', 'Forma opodatkowania', 'Opiekun w biurze', *labels, 'Dokumenty razem']
+        headers = ['Firma', 'NIP', 'Forma opodatkowania', 'Opiekun (obecny, z zastępstwami)', *labels, 'Dokumenty razem']
         if department == 'accounting':
             headers.append('Ilość dokumentów — Widok miesięczny')
         headers.append('Ostatni odczyt')
@@ -371,14 +448,13 @@ class AccountingPage(QWidget):
             report, counts = decoded(row.get('checking')), documents(row, department)
             historical = previous_active_types(row, self.period) if department == 'accounting' else set()
             cells = [_item(row.get(key)) for key in ('nazwa', 'nip', 'forma_opodatkowania')]
-            cells.append(_item(row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or '—'))
+            cells.append(self._owner_item(row, department))
             for kind in kinds:
                 known = counts is not None and (kind in counts or bool(report))
                 value = counts.get(kind, 0) if known else None
                 item = _item(value, 'Rodzaj dokumentu: ' + kind)
                 if value == 0 and kind in historical:
-                    item.setBackground(QColor('#fee2e2'))
-                    item.setForeground(QColor('#991b1b'))
+                    paint_state(item, 'error')
                     item.setToolTip('Brak dokumentów tego rodzaju w wybranym miesiącu; występowały w tej firmie w poprzednim miesiącu.\nRodzaj: ' + kind)
                 cells.append(item)
             cells.append(_item(sum(counts.values()) if counts is not None else None))
@@ -394,9 +470,19 @@ class AccountingPage(QWidget):
             for form in forms:
                 entry = entries.get(form, {})
                 status = entry.get('status_text') or STATUSES.get(entry.get('status'), 'Brak danych' if report.get('declarations') is not None else 'Nie sprawdzono')
-                cells.extend((_item(status, 'Odczyt statusu: ' + _date(entry.get('imported_at') or report.get('imported_at'))), _item(_date(entry.get('sent_at'))),
-                              _item(f"{entry['upo_count']}/{entry['count']}" if 'count' in entry else ('Tak' if entry.get('upo') else '—'), str(entry.get('upo') or 'Szczegóły pracowników w zakładce Deklaracje i UPO.')),
-                              _item(_date(entry.get('upo_at')))))
+                if form_key(entry.get('form') or form) in NOT_SENT_FORMS and not entry.get('status_text'):
+                    status = 'Nie wysyłane przez program'
+                    entry = {**entry, 'status': 'not_sent'}
+                # Trzy osobne daty i numer: wysyłka, potwierdzenie UPO, numer UPO.
+                sent_tooltip = 'Odczyt statusu: ' + _date(entry.get('imported_at') or report.get('imported_at'))
+                if entry.get('upo_confirmed_at'):
+                    sent_tooltip += '\nPrzyjęte wg statusu: ' + _date(entry['upo_confirmed_at'])
+                cells.append(_item(status, 'Odczyt statusu: ' + _date(entry.get('imported_at') or report.get('imported_at'))))
+                cells.append(_item(_date_range(entry, 'sent_at', 'sent_to'), sent_tooltip))
+                upo_item = _item(f"{entry['upo_count']}/{entry['count']}" if 'count' in entry else ('Tak' if entry.get('upo') or entry.get('upo_confirmed_at') else '—'),
+                                 _upo_tooltip(entry))
+                cells.append(upo_item)
+                cells.append(_item(_date_range(entry)))
             for column, item in enumerate(cells):
                 if column==0:
                     item.setData(Qt.ItemDataRole.UserRole,row['id'])
@@ -406,27 +492,49 @@ class AccountingPage(QWidget):
             table.setColumnWidth(0, min(330, max(190, table.columnWidth(0))))
 
     def _render_comparisons(self, rows, department):
+        from app.utils.months import previous_month
         table = self.comparison_tables[department]
-        headers = ['Firma', 'Opiekun w biurze', 'Rodzaj', self.period, 'Poprzedni miesiąc', 'Zmiana', 'Zmiana %']
+        previous = previous_month(self.period)
+        # Kolumna wybranego miesiąca i kolumna miesiąca wcześniejszego — z nazwami,
+        # żeby nie trzeba było liczyć, który to miesiąc.
+        headers = ['Firma', 'Opiekun (obecny, z zastępstwami)', 'Rodzaj', f'{self.period} (wybrany)',
+                   f'{previous} (poprzedni)', 'Zmiana', 'Zmiana %']
         records = []
         for row in rows:
             kinds = set(documents(row, department) or {}) | previous_active_types(row, self.period)
             for kind in [None, *sorted(kinds)]:
                 values = comparison(row, self.period, department, kind)
                 percent = 'Nowe' if values['new'] else (f"{values['percent']:+.1f}%" if values['percent'] is not None else '—')
-                records.append([row.get('nazwa'), row.get('ksiegowa') or '—',
+                records.append([row.get('nazwa'), row.get('ksiegowa') or row.get('kadrowa') or '—',
                                 'Razem' if kind is None else TYPE_LABELS.get(kind, kind),
                                 values['current'], values['previous'], values['delta'], percent])
         self._fill(table, headers, records)
+        # Firma może wystąpić kilka razy (raz na rodzaj dokumentu) — ale opiekun jest ten sam.
+        by_name = {}
+        for row in rows:
+            by_name.setdefault(row.get('nazwa'), row)
+        for index, record in enumerate(records):
+            source = by_name.get(record[0]) or {}
+            if source.get(f'{department}_substitute'):
+                owner_item = self._owner_item(source, department)
+                cell = table.item(index, 1)
+                cell.setText(owner_item.text())
+                cell.setToolTip(owner_item.toolTip())
+                cell.setForeground(QColor('#1a5fb4'))
         for index, record in enumerate(records):
             delta = record[5]
             if delta is not None and delta != 0:
                 item = table.item(index, 5)
                 item.setForeground(QColor('#b45309' if delta < 0 else '#166534'))
                 if record[3] == 0 and record[4] > 0:
-                    table.item(index, 3).setBackground(QColor('#fee2e2'))
-                    table.item(index, 3).setForeground(QColor('#991b1b'))
+                    paint_state(table.item(index, 3), 'error')
         table.setToolTip('Porównanie wyłącznie z poprzednim miesiącem. Brak odczytu: —. Przy zerowej podstawie nie obliczamy procentu.')
+
+    def _declaration_name(self, entry, row):
+        """Nazwa pozycji: „PIT-5”/„PIT-5L” zależnie od formy firmy, reszta wg skrótu."""
+        if form_key(entry['form']) == 'PIT':
+            return pit_form(row)
+        return form_label(entry['form'])
 
     def _render_declarations(self, rows, department):
         table = self.declaration_tables[department]
@@ -434,14 +542,19 @@ class AccountingPage(QWidget):
         for row in rows:
             entries = declaration_entries(row, department)
             form = self._selected_form(department)
+            apply_not_sent = _not_sent_entry(row, department, form)
             if form:
                 entries = [entry for entry in entries if form_matches(entry['form'], form)]
+                if apply_not_sent:
+                    entries = entries + [apply_not_sent]
             owner = row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or '—'
             selected = self.declaration_filters[department].currentData()
             if not entries and not selected:
-                records.append([row.get('nazwa'), owner, '—', self.report_selectors[department].currentText() if form else '—',
+                # Nazwa formularza wg firmy (PIT-5/PIT-5L), nie wg podpisu zakładki.
+                empty_name = self._declaration_name(apply_not_sent or {'form': form}, row) if form else '—'
+                records.append([row.get('nazwa'), owner, empty_name,
                                 'Brak danych' if decoded(row.get('checking')).get('declarations') is not None else 'Nie sprawdzono',
-                                '—', '—', '—', '—', 'Brak danych źródłowych'])
+                                '—', '—', '—', '—', 'Brak danych źródłowych', ''])
                 receipts.append('')
             for entry in sorted(entries, key=lambda item: (item['form'], item.get('employee_name', ''))):
                 status = entry.get('status')
@@ -452,25 +565,45 @@ class AccountingPage(QWidget):
                            'rejected': status in ('rejected', 'failed')}
                 if selected and not matches[selected]:
                     continue
-                employee = entry.get('employee_name') or 'Cała firma / zestaw'
-                if entry.get('employee_id'):
-                    employee += ' (' + entry['employee_id'] + ')'
-                records.append([row.get('nazwa'), owner, employee, entry['form'],
+                name = self._declaration_name(entry, row)
+                # PIT-y nie są wysyłane przez program, więc brak wysyłki nie jest zarzutem.
+                issue = 'Nie wysyłane przez program' if form_key(entry['form']) in NOT_SENT_FORMS else declaration_issue(entry)
+                # Uwaga: kolejność kolumn = nagłówki w _fill; ostatnia kolumna to stan
+                # „bez żółtego” (PIT-y, których dziś nie wysyłamy).
+                records.append([row.get('nazwa'), owner, name,
                                 entry.get('status_text') or STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
-                                _date(entry.get('sent_at')), 'Tak' if entry.get('upo') else '—',
-                                _date(entry.get('upo_at')), entry.get('source_system', 'enova'),
-                                (declaration_issue(entry) or 'OK') +
-                                (f"; {entry['raw_status']}" if entry.get('raw_status') else '') +
-                                (f"; dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
-                                 if entry.get('source_system') == 'platnik' and entry.get('source_id') else '')])
-                receipts.append(str(entry.get('upo') or 'Brak potwierdzenia UPO.'))
-        self._fill(table, ['Firma', 'Opiekun w biurze', 'Pracownik firmy', 'Deklaracja', 'Status',
-                           'Data wysyłki', 'UPO', 'Data UPO', 'Źródło', 'Do sprawdzenia'], records)
+                                _date(entry.get('sent_at')),
+                                'Tak' if (entry.get('upo') or entry.get('upo_confirmed_at')) else '—',
+                                _date(entry.get('upo_at') or entry.get('upo_confirmed_at')),
+                                str(entry.get('upo') or '—'), issue or 'OK',
+                                _date(entry.get('created_at')),
+                                (f"Status źródłowy: {entry['raw_status']}" if entry.get('raw_status') else '') +
+                                (f"{'; ' if entry.get('raw_status') else ''}dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
+                                 if entry.get('source_system') == 'platnik' and entry.get('source_id') else ''),
+                                form_key(entry['form']) in NOT_SENT_FORMS])
+                receipts.append(_upo_tooltip(entry))
+        self._fill(table, ['Firma', 'Opiekun (obecny, z zastępstwami)', 'Deklaracja', 'Status',
+                           'Data wysyłki', 'UPO', 'Data UPO', 'Nr UPO', 'Do sprawdzenia',
+                           'Utworzono'], records)
+        table.setToolTip('Kolumna „Deklaracja” to nr formularza. PIT-y nie są wysyłane przez program, '
+                         'więc nie są oznaczane jako niewysłane. Źródło odczytu jest w tooltipie kolumny „Do sprawdzenia”.')
+        by_name = {}
+        for row in rows:
+            by_name.setdefault(row.get('nazwa'), row)
         for index, record in enumerate(records):
-            table.item(index, 6).setToolTip(receipts[index])
-            if record[-1] not in ('OK', 'Brak danych źródłowych'):
-                table.item(index, 9).setBackground(QColor('#fef3c7'))
-                table.item(index, 9).setForeground(QColor('#92400e'))
+            table.item(index, 5).setToolTip(receipts[index])
+            table.item(index, 7).setToolTip(receipts[index])
+            source = by_name.get(record[0]) or {}
+            if source.get(f'{department}_substitute'):
+                owner_item = self._owner_item(source, department)
+                table.item(index, 1).setText(owner_item.text())
+                table.item(index, 1).setToolTip(owner_item.toolTip())
+                table.item(index, 1).setForeground(QColor('#1a5fb4'))
+            # Źródło odczytu trafia do tooltipu, nie do osobnej kolumny.
+            table.item(index, 8).setToolTip(record[9] or 'Status odczytu bez danych o źródle.')
+            if record[8] not in ('OK', 'Brak danych źródłowych') and not record[10]:
+                table.item(index, 8).setBackground(QColor('#fef3c7'))
+                table.item(index, 8).setForeground(QColor('#92400e'))
 
     def _render_hr(self, rows, today, days):
         records, missing = [], 0
@@ -490,21 +623,28 @@ class AccountingPage(QWidget):
                 if days is not None and status in ('Bezterminowa', 'Późniejszy termin'):
                     continue
                 employee = event['employee_name'] + ' (' + event['employee_id'] + ')'
-                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', employee,
+                records.append([row.get('nazwa'), row.get('nip'), employee,
                                 event.get('document_number') or '—', HR_LABELS[event['event_type']],
                                 event.get('due_date') or '—', status, _date(report.get('imported_at'))])
             if len(records) == before:
                 state = 'Brak odczytu' if report.get('events') is None else 'Brak terminów w wybranym zakresie'
-                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—',
-                                '—', '—', HR_LABELS.get(kind, '—'), '—', state, _date(report.get('imported_at'))])
-        records.sort(key=lambda record: (0 if record[7] in ('Po terminie', 'Brak terminu') else 1, record[6], record[0]))
-        self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa w biurze', 'Pracownik firmy', 'Numer dokumentu',
+                records.append([row.get('nazwa'), row.get('nip'), '—', '—', HR_LABELS.get(kind, '—'), '—',
+                                state, _date(report.get('imported_at'))])
+        records.sort(key=lambda record: (0 if record[6] in ('Po terminie', 'Brak terminu') else 1, record[5], record[0]))
+        self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa (obecna, z zastępstwami)', 'Numer dokumentu',
                                   'Rodzaj', 'Data', 'Stan', 'Ostatni odczyt'], records)
+        by_name = {}
+        for row in rows:
+            by_name.setdefault(row.get('nazwa'), row)
         for index, record in enumerate(records):
-            if record[7] in ('Po terminie', 'Brak terminu'):
-                item = self.hr_table.item(index, 7)
-                item.setBackground(QColor('#fee2e2'))
-                item.setForeground(QColor('#991b1b'))
+            source = by_name.get(record[0]) or {}
+            if source.get('payroll_substitute'):
+                owner_item = self._owner_item(source, 'payroll')
+                self.hr_table.item(index, 2).setText(owner_item.text())
+                self.hr_table.item(index, 2).setToolTip(owner_item.toolTip())
+                self.hr_table.item(index, 2).setForeground(QColor('#1a5fb4'))
+            if record[6] in ('Po terminie', 'Brak terminu'):
+                paint_state(self.hr_table.item(index, 6), 'error')
         self.hr_note.setText(f'Stan terminów na {today.isoformat()}. Brak odczytu dla {missing} firm. '
                              'Umowy bezterminowe są widoczne w „Wszystkie pobrane”. Dane wymagają źródła terminów kadrowych z Enova.')
 

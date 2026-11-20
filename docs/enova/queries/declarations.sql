@@ -97,6 +97,11 @@ SELECT c.nip, CONVERT(char(7), d.OkresTo, 120) AS miesiac,
             WHEN d.StatusEDeklaracji = 3 THEN N'sent'
             ELSE N'unknown' END AS status,
        CAST(NULL AS datetime) AS sent_at,
+       -- Data utworzenia dokumentu w Enovie (miesiac to okres rozliczeniowy,
+       -- więc bez tego nie widać, kiedy deklaracja powstała). Kolumna opcjonalna:
+       -- odczyt działa także bez niej.
+       CONVERT(nvarchar(64), TRY_CONVERT(datetimeoffset, (SELECT TOP (1) y.Wartosc
+           FROM (SELECT CAST(NULL AS nvarchar(64)) AS Wartosc) y WHERE 1 = 0)), 127) AS created_at,
        COALESCE(d.Receipt, N'') AS upo,
        CONVERT(nvarchar(64), TRY_CONVERT(datetimeoffset, d.Confirmation.value('(//*[local-name()="DataWytworzeniaPotwierdzenia"]/text())[1]', 'nvarchar(64)')), 127) AS upo_at,
        CONCAT(N'Enova=', d.StatusEDeklaracji, N'; MF=', d.StatusETransmisji) AS raw_status

@@ -37,8 +37,18 @@ def env_search_paths() -> List[Path]:
     return paths
 
 
+DEV_ENV_NAME = 'worker.env.dev'
+
+
+def dev_env_path() -> Path:
+    """Osobna konfiguracja bazy testowej; czytana tylko przy BIO_DEV_DB=1."""
+    return PROJECT_ROOT / DEV_ENV_NAME
+
+
 def active_env_path() -> Path:
     """The key editor must write to the file the running mode actually reads."""
+    if os.getenv('BIO_DEV_DB') == '1' and dev_env_path().is_file():
+        return dev_env_path()
     if os.getenv('BIO_WORKER_MODE') == '1':
         from app.services.worker_setup import worker_env_path
         path = worker_env_path()
@@ -53,6 +63,13 @@ def load_environment() -> List[Path]:
         return []
     loaded = []
     local_key_selected = False
+    if os.getenv('BIO_DEV_DB') == '1':
+        # Baza testowa na tym komputerze: jej plik wygrywa z produkcyjnym .env/worker.env.
+        path = dev_env_path()
+        if not path.is_file():
+            raise RuntimeError(f'BIO_DEV_DB=1, ale brak pliku {path}. Uruchom scripts/dev_db.py create.')
+        load_dotenv(dotenv_path=path, override=True, interpolate=False)
+        return [path]
     if os.getenv('BIO_WORKER_MODE') == '1':
         from app.services.worker_setup import worker_env_path
         path = worker_env_path()

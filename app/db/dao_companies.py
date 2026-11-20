@@ -158,10 +158,13 @@ def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
             (ids,),
         ).fetchall()]
         from app.companies.identities import is_civil, company_recipients
+        # Wspólnicy wszystkich firm jednym zapytaniem — wysyłka masowa nie może robić N+1.
+        partners = get_partners_for_companies([row['id'] for row in rows if is_civil(row)])
         for row in rows:
             if is_civil(row):
                 try:
-                    row['adres_email'] = ', '.join(company_recipients(row, get_partners(row['id'])))
+                    row['adres_email'] = ', '.join(
+                        company_recipients(row, partners.get(row['id'], ())))
                 except ValueError:
                     row['adres_email'] = ''
         return rows
@@ -1321,4 +1324,90 @@ def delete_contact(contact_id: int) -> None:
     cur.execute("DELETE FROM company_contacts WHERE id = %s", (contact_id,))
     conn.commit()
     conn.close()
+
+
+def _partner_contact(partner: Dict[str, Any]) -> Dict[str, Any]:
+    """Wspólnik widziany jako osoba kontaktowa: jedno źródło danych, dwa widoki."""
+    return {
+        'id': None,
+        'partner_id': partner.get('id'),
+        'imie': str(partner.get('imie_pierwsze') or '').strip(),
+        'nazwisko': str(partner.get('nazwisko') or '').strip(),
+        'email': str(partner.get('email') or '').strip(),
+        'telefon': str(partner.get('telefon') or '').strip(),
+        'rola': 'Wspólnik',
+        'from_partner': True,
+    }
+
+
+def partner_contacts(firma_id: int, contacts=None, partners=None) -> List[Dict[str, Any]]:
+    """Kontakty wyprowadzone ze wspólników: imię, nazwisko, e-mail, telefon.
+
+    Kontakty zapisane ręcznie mają pierwszeństwo (ten sam adres e-mail nie jest dublowany),
+    więc oba widoki zawsze pokazują ten sam zestaw osób.
+    """
+    known = contacts if contacts is not None else get_contacts(firma_id)
+    people = partners if partners is not None else get_partners(firma_id)
+    emails = {str(row.get('email') or '').strip().casefold() for row in known if row.get('email')}
+    names = {(str(row.get('imie') or '').strip().casefold(), str(row.get('nazwisko') or '').strip().casefold())
+             for row in known}
+    result = []
+    for partner in people:
+        candidate = _partner_contact(partner)
+        email = candidate['email'].casefold()
+        if email and email in emails:
+            continue
+        if not email and not candidate['imie'] and not candidate['nazwisko']:
+            continue
+        if not email and (candidate['imie'].casefold(), candidate['nazwisko'].casefold()) in names:
+            continue
+        result.append(candidate)
+    return result
+
+
+def _partner_from_contact(contact: Dict[str, Any]) -> Dict[str, Any]:
+    """Zapisany kontakt wspólnika jest zapisywany w kartotece wspólnika."""
+    return {
+        'id': contact.get('partner_id'),
+        'imie_pierwsze': str(contact.get('imie') or '').strip(),
+        'nazwisko': str(contact.get('nazwisko') or '').strip(),
+        'email': str(contact.get('email') or '').strip(),
+        'telefon': str(contact.get('telefon') or '').strip(),
+    }
+
+
+@office_endpoint('app.db.dao_companies.list_company_people')
+def list_company_people(firma_id: int) -> List[Dict[str, Any]]:
+    """Wspólnicy i kontakty razem, bez dublowania osób (ui: sekcja Kontakty)."""
+    contacts = get_contacts(firma_id)
+    partners = get_partners(firma_id)
+    return contacts + partner_contacts(firma_id, contacts, partners)
+
+
+@office_endpoint('app.db.dao_companies.save_people_contact')
+def save_people_contact(firma_id: int, data: Dict[str, Any]) -> None:
+    """Zapis z sekcji Kontakty: istniejący wspólnik trafia do udzialowcy, inaczej company_contacts."""
+    if data.get('partner_id'):
+        partner = next((row for row in get_partners(firma_id) if row['id'] == data['partner_id']), None)
+        if not partner:
+            raise ValueError('Wspólnik nie należy do tej firmy.')
+        payload = {**partner, **_partner_from_contact(data)}
+        save_partner(firma_id, payload)
+        return
+    save_contact(firma_id, data)
+
+
+@office_endpoint('app.db.dao_companies.delete_people_contact')
+def delete_people_contact(firma_id: int, *, contact_id: Optional[int] = None,
+                          partner_id: Optional[int] = None) -> None:
+    """Usunięcie kontaktu wspólnika czyści tylko dane kontaktowe, nie samego wspólnika."""
+    if partner_id:
+        partner = next((row for row in get_partners(firma_id) if row['id'] == partner_id), None)
+        if not partner:
+            raise ValueError('Wspólnik nie należy do tej firmy.')
+        payload = {**partner, 'email': '', 'telefon': ''}
+        save_partner(firma_id, payload)
+        return
+    if contact_id:
+        delete_contact(int(contact_id))
 

@@ -39,8 +39,13 @@ def read_enova(config, source, company_id, months):
                              (f'enova_jpk_{company_id}_{month}',json.dumps({**jpk[month],'imported_at':stamp,'database':source['database']})))
                 if jpk[month].get('form_variant') or jpk[month]['status'] not in ('unknown','not_applicable'):
                     add_imported(conn,company_id,month,[{'form':'JPK_VAT',**jpk[month]}],'enova-jpk')
+    from app.db.import_audit import log_import
+    documents = sum(len(entries) for entries in declarations.values())
+    log_import(conn, 'enova_declarations', source=source['database'], updated=documents,
+               details={'company_id': company_id, 'months': months, 'documents': documents,
+                        'jpk': jpk is not None})
     return {'company_id':company_id,'source':'enova','ok':True,'months':months,
-            'documents':sum(len(entries) for entries in declarations.values())}
+            'documents':documents}
 
 
 def run(value, stop):

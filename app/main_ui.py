@@ -526,7 +526,9 @@ class OfficeManagerApp(QMainWindow):
         self._header_timer.start()
 
         self._email_badge_timer = QTimer(self)
-        self._email_badge_timer.setInterval(10000)
+        # Odpytywanie poczty w tle nie może zajmować serwera co kilka sekund:
+        # 30 s wystarcza, a przy braku zmian odstęp rośnie do 120 s.
+        self._email_badge_timer.setInterval(30000)
         self._email_badge_timer.timeout.connect(self.refresh_email_badge_async)
         self._email_badge_timer.start()
         from app.mail_toasts import MailToaster
@@ -770,6 +772,11 @@ class OfficeManagerApp(QMainWindow):
                 return
             self._set_badge('E-mail', result[0])
             self._mail_toaster.apply_check(*result[1])
+            # Bez nowych wiadomości zwalniamy serwer: 30 s -> 120 s.
+            has_new = bool(result[1][1])
+            interval = 30000 if has_new else min(120000, self._email_badge_timer.interval() * 2)
+            if self._email_badge_timer.interval() != interval:
+                self._email_badge_timer.setInterval(interval)
 
         def failed(exc):
             self._badge_busy = False

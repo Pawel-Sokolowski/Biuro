@@ -36,13 +36,20 @@ class BackupMailWorker(QThread):
 CARDS = (
     ("firmy_aktywne", "Aktywne firmy"),
     ("maile_nieprzeczytane", "Nieprzeczytane e-maile"),
-    ("zadania_otwarte", "Moje otwarte zadania"),
-    ("zadania_zalegle", "Zadania po terminie"),
-    ("sesje_dzisiaj", "Moje sesje pracy dziś"),
-    ("dokumenty_miesiac", "Dokumenty w poprzednim miesiącu"),
-    ("dokumenty_dostarczone", "Dokumenty dostarczone"),
+    ("zadania_otwarte", "Moje zadania"),
     ("dokumenty_brak", "Brak dokumentów"),
+    ("wyslane_wyniki", "Wysłane wyniki"),
+    ("dokumenty_dostarczone", "Komplet dokumentów"),
 )
+
+CARD_HINTS = {
+    "firmy_aktywne": "Firmy o statusie Aktywne.",
+    "maile_nieprzeczytane": "Nieprzeczytane wiadomości w skrzynkach.",
+    "zadania_otwarte": "Twoje zadania w statusie Nowe lub W toku.",
+    "dokumenty_brak": "Aktywne firmy bez dokumentów za rozliczany miesiąc.",
+    "wyslane_wyniki": "Firmy, którym wysłano już wyniki za rozliczany miesiąc.",
+    "dokumenty_dostarczone": "Aktywne firmy z zaznaczonym kompletem dokumentów w księgowości.",
+}
 
 
 class DashboardPage(QWidget):
@@ -75,8 +82,14 @@ class DashboardPage(QWidget):
             value.setStyleSheet("font-size: 26px; font-weight: bold;")
             value.setAlignment(Qt.AlignmentFlag.AlignCenter)
             box_layout.addWidget(value)
+            hint = QLabel(CARD_HINTS.get(key, ""))
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color: gray; font-size: 11px;")
+            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            box_layout.addWidget(hint)
+            box.setToolTip(CARD_HINTS.get(key, ""))
             self.cards[key] = value
-            grid.addWidget(box, index // 4, index % 4)
+            grid.addWidget(box, index // 3, index % 3)
 
         self.is_admin = is_administrator(pracownik_id)
         self.backup_box = QGroupBox("Kopie zapasowe baz")
@@ -185,9 +198,9 @@ class DashboardPage(QWidget):
         self.title.setText(f"Pulpit — rozliczany miesiąc {data['miesiac']}")
         for key, label in self.cards.items():
             label.setText(str(data.get(key, 0)))
-        self.cards["zadania_zalegle"].setStyleSheet(
+        self.cards["dokumenty_brak"].setStyleSheet(
             "font-size: 26px; font-weight: bold;"
-            + (" color: #c0392b;" if data["zadania_zalegle"] else "")
+            + (" color: #c0392b;" if data.get("dokumenty_brak") else "")
         )
         self.time_label.setText(f"Mój czas pracy w tym miesiącu: {format_duration(data['sekundy_miesiac'])}")
         self.stages_label.setText(

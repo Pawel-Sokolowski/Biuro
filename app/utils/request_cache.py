@@ -2,9 +2,35 @@
 from contextvars import ContextVar
 from contextlib import contextmanager
 from functools import wraps
+import threading
+import time
 
 _cache = ContextVar('request_cache', default=None)
 _resources = ContextVar('request_resources', default=None)
+
+# Uprawnienia pracownika zmieniają się rzadko, a każde żądanie ekranu pyta o nie
+# ponownie (check + allowed_tabs + is_administrator). Krótka pamięć procesu
+# oszczędza kilka zapytań na operację, a administrator unieważnia ją po zmianie ról.
+_session_cache = {}
+_session_lock = threading.RLock()
+SESSION_TTL = 120.0
+
+
+def session_value(key, load, ttl=SESSION_TTL):
+    now = time.monotonic()
+    with _session_lock:
+        item = _session_cache.get(key)
+        if item is not None and now - item[0] < ttl:
+            return item[1]
+    value = load()
+    with _session_lock:
+        _session_cache[key] = (now, value)
+    return value
+
+
+def clear_session_cache():
+    with _session_lock:
+        _session_cache.clear()
 
 
 @contextmanager
@@ -43,6 +69,12 @@ def clear_request_cache():
     cache = _cache.get()
     if cache is not None:
         cache.clear()
+
+
+def invalidate_permissions():
+    """Po zmianie ról/pracowników pamięć uprawnień musi się od razu wyczyścić."""
+    clear_session_cache()
+    clear_request_cache()
 
 
 def cached(function):

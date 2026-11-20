@@ -111,6 +111,19 @@ def official_pdf(invoice, xml_path):
     return str(destination)
 
 
+def _log_delivery(invoice_id, recipients, pdf_path):
+    """Ślad wysyłki: kto dostał, ile ważył załącznik. Bez treści i bez adresów w logu."""
+    import logging
+    from pathlib import Path as _Path
+    try:
+        size = _Path(pdf_path).stat().st_size
+    except OSError:
+        size = 0
+    logging.getLogger(__name__).info(
+        'invoice_email_sent invoice=%s recipients=%d attachment_bytes=%d',
+        invoice_id, len(recipients or []), size)
+
+
 def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
     conn = get_conn()
     try:
@@ -150,6 +163,9 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
         raise KsefError('PDF można wysłać dopiero po przyjęciu faktury w KSeF.')
     try:
         recipients = json.loads(invoice.get('invoice_email_recipients') or '[]')
+        # Każde odbiorca dostaje tę samą treść, ale wiadomość jest wysyłana do
+        # wszystkich naraz (jeden załącznik), więc adresy muszą być jawne w „Do".
+
         parse_recipients(','.join(recipients))
         account_id = invoice.get('invoice_email_account_id')
         if account_id not in {account['id'] for account in get_email_accounts_for_employee(actor_id)}:
@@ -180,6 +196,11 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
         ok, info = send_email_smtp(account_id,recipients,'Faktura '+str(invoice['numer']),
                                   f"Dzień dobry,\n\nw załączeniu faktura {invoice['numer']}.\nNumer KSeF: {invoice['ksef_numer']}\n\nPozdrawiamy",
                                   attachments=[pdf],save_copy=True,require_attachments=True)
+        # Jedna wiadomość na fakturę: lista odbiorców trafia do „Do", nigdy do
+        # UDW, więc klient widzi własny adres i załącznik. Zapisujemy rozmiar,
+        # żeby dało się sprawdzić, czy PDF naprawdę poszedł.
+        if ok:
+            _log_delivery(invoice_id, recipients, pdf)
     except Exception as exc:
         ok, info = False, str(exc)
     if not ok:

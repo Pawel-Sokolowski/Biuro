@@ -140,7 +140,11 @@ def platnik_job():
 
 
 def checking_refresh_job(stop=None):
-    from app.services.checking_refresh import process_next
+    from app.services.checking_refresh import process_next, purge_finished
+    try:
+        purge_finished()
+    except Exception:
+        pass  # Sprzątanie historii nie może blokować odczytów.
     result = process_next(stop)
     if result.get('state') in ('failed','partial'):
         raise RuntimeError('Odczyt zleconych danych nieukończony. Sprawdź wynik pobierania w Sprawdzaniu.')

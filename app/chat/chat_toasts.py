@@ -17,7 +17,8 @@ class ChatToaster(MailToaster):
         self._closed = False
         self._runner = TaskRunner(window)
         self.timer = QTimer(window)
-        self.timer.setInterval(3000)
+        # 8 s zamiast 3 s: powiadomienia czatu nie mogą zajmować kolejki serwera.
+        self.timer.setInterval(8000)
         self.timer.timeout.connect(self.check)
         self.timer.start()
         self.check()
@@ -34,7 +35,7 @@ class ChatToaster(MailToaster):
         if self._closed:
             return
         self._last_id, messages = result
-        self.timer.setInterval(3000 if messages else min(30000,self.timer.interval()*2))
+        self.timer.setInterval(8000 if messages else min(60000,self.timer.interval()*2))
         grouped = {}
         for message in messages:
             grouped.setdefault(message['konwersacja_id'], []).append(message)

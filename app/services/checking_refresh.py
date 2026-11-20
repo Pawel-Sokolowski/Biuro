@@ -173,11 +173,71 @@ def _result_state(results):
     ):
         return 'failed'
 
+    # Każda firma bez zapisanych danych to niepowodzenie w całości: użytkownik
+    # nie może zobaczyć „wykonane”, gdy część firm nie została odczytana.
+    if failed:
+        return 'partial'
+
     return (
         'partial'
         if failed
         else 'completed'
     )
+
+
+def _needs_retry(state):
+    """Ponawiamy tylko stan, w którym nic nie zostało zapisane."""
+    return state in ('failed', 'queued')
+
+
+def retry_request(request_id, actor_id=None):
+    """Ponowienie nieudanego odczytu z zachowaniem tego, kto go zlecił."""
+    require_access(actor_id)
+    with get_conn() as conn:
+        row = conn.execute(
+            'SELECT wartosc FROM app_settings WHERE klucz = %s FOR UPDATE',
+            (PREFIX + request_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError('Nie znaleziono żądania odczytu.')
+        value = json.loads(row[0])
+        if actor_id is not None and value['actor_id'] != actor_id:
+            raise PermissionError('Możesz ponowić tylko własne żądanie.')
+        if not _needs_retry(value.get('state')):
+            raise ValueError('To żądanie zostało już wykonane.')
+        value.update(
+            state='queued',
+            attempts=int(value.get('attempts') or 0) + 1,
+            retried_at=stamp(),
+        )
+        value.pop('error', None)
+        conn.execute(
+            'UPDATE app_settings SET wartosc = %s WHERE klucz = %s',
+            (json.dumps(value, ensure_ascii=False), PREFIX + request_id),
+        )
+    return value
+
+
+def purge_finished(older_than_days=7):
+    """Sprząta zakończone żądania, żeby app_settings nie rosło w nieskończoność."""
+    from datetime import timedelta
+    limit = (
+        datetime.now(ZoneInfo('Europe/Warsaw'))
+        - timedelta(days=max(1, int(older_than_days)))
+    ).isoformat()
+    removed = 0
+    with get_conn() as conn:
+        rows = conn.execute(
+            'SELECT klucz, wartosc FROM app_settings WHERE starts_with(klucz, %s)',
+            (PREFIX,),
+        ).fetchall()
+        for row in rows:
+            value = json.loads(row[1])
+            finished = value.get('finished_at') or ''
+            if value.get('state') in ('completed', 'partial', 'failed') and finished and finished < limit:
+                conn.execute('DELETE FROM app_settings WHERE klucz = %s', (row[0],))
+                removed += 1
+    return removed
 
 
 @office_endpoint(
@@ -710,6 +770,7 @@ def process_next(stop=None):
         value.update(
             state='running',
             started_at=stamp(),
+            attempts=int(value.get('attempts') or 0),
         )
 
         _save(value)

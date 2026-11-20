@@ -145,6 +145,17 @@ def send_bulk_batch(plan, recipients):
     }
 
 
+def resend_uncertain(plan, entry):
+    """Ponowienie jednej niepewnej partii po decyzji użytkownika (zapis w historii)."""
+    result = send_bulk_batch(plan, entry['recipients'])
+    status = 'sent' if result['ok'] else 'blocked' if result['blocked'] else 'uncertain'
+    from app.services.bulk_mail_log import record_batch
+    record_batch(getattr(plan, 'run_id', None),
+                 {'recipients': entry['recipients'], 'status': status,
+                  'info': result['info'], 'retry': True})
+    return result
+
+
 class BulkMailSender(QObject):
     progress = pyqtSignal(object)
     finished = pyqtSignal(object)
@@ -168,6 +179,9 @@ class BulkMailSender(QObject):
         self._stopped = False
         self.report = []
         self.running = True
+        # Raport wysyłki jest zapisywany od razu, więc zamknięcie okna nie gubi historii.
+        from app.services.bulk_mail_log import start_run
+        self._run_id = start_run(plan)
         self._next()
 
     def cancel(self):
@@ -190,7 +204,15 @@ class BulkMailSender(QObject):
         def done(result):
             self._busy = False
             status = 'sent' if result['ok'] else 'blocked' if result['blocked'] else 'uncertain'
-            self.report.append({'recipients': batch, 'status': status, 'info': result['info']})
+            entry = {'recipients': batch, 'status': status, 'info': result['info']}
+            if status == 'uncertain':
+                # SMTP nie potwierdził wysyłki: nie wiemy, czy wiadomość poszła.
+                # Partia zostaje w raporcie jako niepewna, ale bez automatycznego
+                # ponowienia — użytkownik decyduje, czy wysłać ponownie.
+                entry['retry_allowed'] = True
+            self.report.append(entry)
+            from app.services.bulk_mail_log import record_batch
+            record_batch(self._run_id, entry)
             if status != 'blocked':
                 self._index += len(batch)
             if not result['ok'] or self._stopped or self._index >= len(self.plan.recipients):
@@ -210,5 +232,7 @@ class BulkMailSender(QObject):
             return
         self._timer.stop()
         self.running = False
+        from app.services.bulk_mail_log import finish_run
+        finish_run(self._run_id, remaining=len(self.plan.recipients) - self._index, stopped=self._stopped)
         self.finished.emit({'entries': list(self.report), 'remaining': len(self.plan.recipients) - self._index,
                             'stopped': self._stopped, 'total': len(self.plan.recipients)})

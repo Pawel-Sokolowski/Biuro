@@ -50,6 +50,7 @@ inspect_export.log
 
 # Local server worker credentials
 worker.env
+worker.env.dev
 
 # Authenticated browser profiles contain private session cookies.
 /saldeo-browser/
@@ -68,3 +69,8 @@ platnik-schema*.json
 /scripts/measure_imap.py.before_email_speed_fix
 /.ollamassist/
 /patches/
+/docs/refactor-notes.md
+/scripts/dev_db.py
+/docs/dev-database.md
+/app/db/migrations/versions/20261116_03_service_tables.py
+/app/db/migrations/versions/20261116_02_index_cleanup.py

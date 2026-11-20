@@ -86,10 +86,11 @@ class ManualTimeDialog(QDialog):
         if not enabled:
             self.service.setCurrentIndex(0)
 
-    def save(self):
-        seconds = self.hours.value() * 3600 + self.minutes.value() * 60
     def _employee_changed(self):
         self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
+
+    def save(self):
+        seconds = self.hours.value() * 3600 + self.minutes.value() * 60
 
         try:
             add_manual_time(
@@ -101,9 +102,9 @@ class ManualTimeDialog(QDialog):
                 self.actor_id,
                 self.service.currentData(),
                 started_at=self.started.dateTime().toString('yyyy-MM-ddTHH:mm:ss'),
+                miesiac=self.month.monthText(),
             )
         except (ValueError, PermissionError) as error:
             QMessageBox.warning(self, 'Dodaj czas', str(error))
             return
         self.accept()
-                miesiac=self.month.monthText(),

@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from importlib import import_module
 from pathlib import Path
 import logging
+import os
 import secrets
 import threading
 import time
@@ -19,12 +20,24 @@ _operation_owner = ContextVar("office_operation_owner")
 logger = logging.getLogger(__name__)
 
 
+def _limit(name,default,minimum,maximum):
+    try:
+        value = int(os.getenv(name,str(default)) or default)
+    except (TypeError,ValueError):
+        value = default
+    return max(minimum,min(maximum,value))
+
+
 class OfficeService:
     def __init__(self,directory):
         self.files = FileStore(Path(directory)/'api-files')
         self.jobs,self.objects,self.preparations = {},{},{}
         self.lock = threading.RLock()
-        self.executor = ThreadPoolExecutor(max_workers=4,thread_name_prefix='office-api')
+        # Więcej robotników: ekran ładuje kilka list naraz, a powiadomienia w tle
+        # nie mogą blokować kliknięcia użytkownika.
+        self._worker_limit = _limit('BIO_API_WORKERS',16,4,32)
+        self._owner_job_limit = _limit('BIO_API_OWNER_JOBS',12,4,32)
+        self.executor = ThreadPoolExecutor(max_workers=self._worker_limit,thread_name_prefix='office-api')
         with service_scope():
             auth.initialize()
 
@@ -79,7 +92,7 @@ class OfficeService:
                 j['owner']==owner and j['state']=='running'
                 for j in self.jobs.values()
             )
-            if owner_running_jobs>=4:
+            if owner_running_jobs>=self._owner_job_limit:
                 raise ValueError('Trwają już inne operacje tej sesji. Poczekaj na ich zakończenie.')
             key = secrets.token_urlsafe(24)
             job = {'owner':owner,'state':'running','events':[],'stop':threading.Event(),'created':time.monotonic()}

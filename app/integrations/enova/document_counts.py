@@ -26,6 +26,38 @@ class MonthlyCount:
     by_type: dict | None = None
 
 
+# Rodzaje dokumentów, które użytkownik może włączyć/wyłączyć do liczby dokumentów.
+# Klucze są zgodne z podziałem `rodzaje` z Enovy (SPU = sprzedaż, ZR = zakup).
+DOCUMENT_TYPE_LABELS = (
+    ('SPU', 'Sprzedaż'),
+    ('ZR', 'Zakup'),
+    ('BANK', 'Bank'),
+    ('POZ', 'Pozostałe'),
+)
+
+
+def counted_documents(by_type, included=None):
+    """Suma dokumentów z podziału na rodzaje, z pominięciem wyłączonych rodzajów.
+
+    ``included`` to zbiór rodzajów do wliczenia; ``None`` oznacza wszystkie
+    (dotychczasowe zachowanie). Nieznane rodzaje są zawsze wliczane, żeby zmiana
+    słownika w Enovie nie zaniżała liczby bez wiedzy użytkownika.
+    """
+    if by_type is None or included is None:
+        return None
+    included = {str(key).upper() for key in included}
+    if not included:
+        return None
+    total = 0
+    for kind, count in by_type.items():
+        key = str(kind).upper()
+        # Nieznany rodzaj liczymy zawsze — inaczej zmiana słownika w Enovie
+        # po cichu zaniżałaby liczbę dokumentów.
+        if key in included or key not in {known for known, _ in DOCUMENT_TYPE_LABELS}:
+            total += count
+    return total
+
+
 def normalize_nip(value):
     text = re.sub(r'[\s-]', '', str(value or '').upper()).removeprefix('PL')
     if not re.fullmatch(r'[0-9]{10}', text):
@@ -249,10 +281,18 @@ def resolve_source(source, company):
     resolved = dict(source)
     kind = company_accounting_type(company)
     if company.get('forma_opodatkowania') and not kind:
-        raise ValueError('Nieobsługiwana forma opodatkowania firmy w Biuro.')
+        # Nieznana etykieta nie może blokować importu: zostaje zapisane powiązanie
+        # z ustawień Enovy, a gdy i tego nie ma — domyślnie KPiR.
+        import logging
+        logging.getLogger(__name__).warning(
+            'enova_accounting_type_unknown company_id=%s forma=%s',
+            company.get('id'), company.get('forma_opodatkowania'))
     kind = kind or source.get('accounting_type')
     if not kind:
-        raise ValueError('Uzupełnij formę opodatkowania firmy w Biuro.')
+        from app.companies.cennik_keys import supported_forma_labels
+        raise ValueError(
+            f"Uzupełnij formę opodatkowania firmy {company.get('nazwa') or company.get('id')} w Biuro "
+            f"(obsługiwane: {', '.join(supported_forma_labels())}; puste pole nie wystarcza).")
     resolved['accounting_type'] = kind
     if not source.get('count_query'):
         if kind not in ('KPIR', 'KH', 'RYCZALT'):
@@ -412,6 +452,14 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=No
                                     'components': {count.month: {'documents': count.documents,
                                                                'bank_transactions': count.bank_transactions}
                                                    for count in counts}, 'ok': True})
+                    if apply:
+                        from app.db.import_audit import log_import
+                        log_import(conn, 'enova_document_counts', source=source['database'],
+                                   updated=len(counts),
+                                   details={'company_id': company['id'], 'accounting_type': source['accounting_type'],
+                                            'months': [count.month for count in counts],
+                                            'skipped_months': [month for month in months
+                                                               if month not in {c.month for c in counts}]})
                 if apply:
                     record('enova', 'read', company_id=company['id'])
             except Exception as exc:
@@ -421,9 +469,9 @@ def run_import(config, *, apply=False, today=None, fetch=fetch_counts, months=No
                 error = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else type(exc).__name__
                 results.append({'database': source['database'], 'ok': False, 'error': error})
                 if apply:
-                    conn.execute("INSERT INTO import_history(import_type,source_path,status,details) "
-                                 "VALUES ('enova_document_counts',%s,'failed',%s)",
-                                 (source['database'], json.dumps({'error': error}, ensure_ascii=False)))
+                    from app.db.import_audit import log_import
+                    log_import(conn, 'enova_document_counts', source=source['database'], status='failed',
+                               details={'company_id': company['id'] if company else None, 'error': error})
     return results
 
 

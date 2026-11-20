@@ -227,6 +227,48 @@ def save_company_year_declarations(firma_id: int, selections: dict[int, list[str
             conn.execute("INSERT INTO audit_log(tabela, rekord_id, akcja, uzytkownik_id, szczegoly) VALUES ('year_end_snapshots', %s, 'edycja', %s, %s)", (firma_id, actor_id, json.dumps({"year": year, "declarations": codes})))
 
 
+@office_endpoint('app.db.dao_year_end.reset_annual_declarations')
+def reset_annual_declarations(actor_id: int) -> dict:
+    """Zeruje deklaracje roczne: złożenia, UPO i ustawiony wybór formularzy.
+
+    Snapshot roku trzyma też dane rejestrowe firmy, więc nie usuwamy go — tylko
+    czyścimy wybór deklaracji, żeby po zerowaniu znów liczyły się domyślne.
+    Zwraca liczby, żeby interfejs mógł potwierdzić, co się faktycznie stało.
+    """
+    from app.security.authorization import can
+    if actor_id is not None and not can(actor_id, "can_edit_companies"):
+        raise PermissionError("Brak uprawnień do wyzerowania deklaracji rocznych.")
+    counts = {"zlozenia": 0, "upo": 0, "wybor_firm": 0, "wybor_wspolnikow": 0}
+    with get_conn() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(748204)")
+        counts["zlozenia"] = conn.execute(
+            "SELECT COUNT(*) FROM zakonczenie_roku WHERE COALESCE(zlozona,0)<>0").fetchone()[0]
+        counts["upo"] = conn.execute(
+            "SELECT COUNT(*) FROM zakonczenie_roku WHERE COALESCE(upo,'')<>''").fetchone()[0]
+        conn.execute("DELETE FROM zakonczenie_roku")
+        counts["wybor_wspolnikow"] = conn.execute("SELECT COUNT(*) FROM owner_year_declarations").fetchone()[0]
+        conn.execute("DELETE FROM owner_year_declarations")
+        rows = conn.execute("SELECT rok, firma_id, company_json FROM year_end_snapshots").fetchall()
+        for year, firma_id, raw in rows:
+            try:
+                snapshot = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not (snapshot.get("roczne_deklaracje") or snapshot.get("declaration_codes")):
+                continue
+            snapshot["roczne_deklaracje"] = None
+            snapshot["declaration_codes"] = company_declarations(snapshot)
+            conn.execute("UPDATE year_end_snapshots SET company_json=%s WHERE rok=%s AND firma_id=%s",
+                         (json.dumps(snapshot, ensure_ascii=False, default=str), year, firma_id))
+            counts["wybor_firm"] += 1
+        conn.execute("INSERT INTO audit_log(tabela, akcja, uzytkownik_id, szczegoly) "
+                     "VALUES ('zakonczenie_roku','zerowanie_deklaracji_rocznych',%s,%s)",
+                     (actor_id, json.dumps(counts, ensure_ascii=False)))
+    from app.utils.request_cache import clear_request_cache
+    clear_request_cache()
+    return counts
+
+
 @office_endpoint('app.db.dao_year_end.get_owner_year_declarations')
 def get_owner_year_declarations(firma_id, year, owner_id):
     with get_conn() as conn:

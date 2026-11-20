@@ -363,19 +363,35 @@ class FakturyPage(QWidget):
         controls.addWidget(QLabel("Miesiąc:"))
         controls.addWidget(self.month_button)
 
-        self.btn_manual = QPushButton("Wystaw faktur\u0119")
-        self.btn_manual.clicked.connect(self._new_manual_invoice)
-        controls.addWidget(self.btn_manual)
+        controls.addStretch()
+        self._build_action_bar(controls)
+        return controls
+
+    def _build_action_bar(self, controls):
+        """Jeden pasek akcji nad zakładkami: tworzenie, wystawianie, kontrahenci.
+
+        Nazwy mówią wprost, co przycisk robi: „Nowa robocza” tylko zapisuje
+        szkic, „Wystaw” nadaje numer i zamyka fakturę.
+        """
+        self.btn_new_draft = QPushButton("Nowa robocza")
+        self.btn_new_draft.setToolTip("Dodaje fakturę roboczą do edycji; numer zostanie nadany przy wystawieniu.")
+        self.btn_new_draft.clicked.connect(self._new_manual_invoice)
+        self.btn_issue = QPushButton("Wystaw zaznaczone")
+        self.btn_issue.setToolTip("Nadaje numer i zamyka zaznaczone faktury robocze.")
+        self.btn_issue.clicked.connect(self._export_selected_drafts)
+        self.btn_issue_ksef = QPushButton("Wystaw i wyślij do KSeF")
+        self.btn_issue_ksef.setToolTip("Wystawia zaznaczone faktury robocze i wysyła je do KSeF.")
+        self.btn_issue_ksef.clicked.connect(lambda: self._send_selected_to_ksef(drafts=True))
+        self.btn_generate_all = QPushButton("Generuj faktury")
+        self.btn_generate_all.setToolTip("Generuje faktury robocze dla wszystkich firm za wybrany miesiąc.")
+        self.btn_generate_all.clicked.connect(self._on_generate_clicked)
         self.btn_contractors = QPushButton("Kontrahenci")
         self.btn_contractors.clicked.connect(self._manage_contractors)
-        controls.addWidget(self.btn_contractors)
-        self.btn_generate_all = QPushButton("Generuj faktury")
-        self.btn_generate_all.clicked.connect(self._on_generate_clicked)
-        btn_refresh = QPushButton("Odśwież")
-        btn_refresh.clicked.connect(self.refresh_async)
-        controls.addWidget(btn_refresh)
-        controls.addStretch()
-        return controls
+        self.btn_refresh = QPushButton("Odśwież")
+        self.btn_refresh.clicked.connect(self.refresh_async)
+        for button in (self.btn_new_draft, self.btn_issue, self.btn_issue_ksef,
+                       self.btn_generate_all, self.btn_contractors, self.btn_refresh):
+            controls.addWidget(button)
 
     def _build_tab_robocze(self):
         layout = QVBoxLayout(self.tab_robocze)
@@ -384,16 +400,12 @@ class FakturyPage(QWidget):
         self.btn_edit.clicked.connect(self._edit_selected_draft)
         self.btn_header = QPushButton("Dane faktury...")
         self.btn_header.clicked.connect(self._edit_draft_header)
-        self.btn_issue_ksef = QPushButton("Wystaw i wyślij do KSeF")
-        self.btn_issue_ksef.clicked.connect(lambda: self._send_selected_to_ksef(drafts=True))
-        self.btn_export = QPushButton("Wystaw faktury")
-        self.btn_export.clicked.connect(self._export_selected_drafts)
+        self.btn_export = self.btn_issue
         self.btn_delete = QPushButton("Usuń roboczą")
         self.btn_delete.clicked.connect(self._delete_selected_draft)
         self.btn_saldeo_correction = QPushButton("Korekta w Saldeo...")
         self.btn_saldeo_correction.clicked.connect(self._prepare_saldeo_correction)
-        for button in (self.btn_generate_all, self.btn_export, self.btn_edit, self.btn_header, self.btn_issue_ksef,
-                       self.btn_saldeo_correction, self.btn_delete):
+        for button in (self.btn_edit, self.btn_header, self.btn_saldeo_correction, self.btn_delete):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -403,6 +415,7 @@ class FakturyPage(QWidget):
         self.draft_table = _make_table(self.DRAFT_HEADERS, multi=True)
         self.draft_table.setColumnHidden(0, True)
         self.draft_table.itemSelectionChanged.connect(self._show_draft_positions)
+        self.draft_table.itemSelectionChanged.connect(self._update_action_state)
         self.draft_table.cellDoubleClicked.connect(lambda *_: self._edit_selected_draft())
         layout.addWidget(self.draft_table)
 
@@ -542,6 +555,8 @@ class FakturyPage(QWidget):
         self.issued_table.setItemDelegateForColumn(self.ISSUED_PREVIEW_COLUMN, PreviewDelegate(self.issued_table))
         self.issued_table.setColumnHidden(0, True)
         self._configure_issued_columns()
+        self.issued_table.selectionModel().selectionChanged.connect(
+            lambda *_: self._update_action_state())
         self.issued_table.cellClicked.connect(self._on_issued_cell_clicked)
         self.issued_table.cellDoubleClicked.connect(self._on_issued_double_click)
         layout.addWidget(self.issued_table)
@@ -898,14 +913,16 @@ class FakturyPage(QWidget):
             QMessageBox.information(self, "Gotówka", "Zapisano zapłatę gotówką.")
             self.refresh_async()
 
-    def _send_selected_to_ksef(self, *, drafts=False):
+    def _send_selected_to_ksef(self, *, drafts=False, ids=None):
         if not self._can_issue():
             return
         if self._ksef_send_worker is not None or self._sync_running():
             QMessageBox.information(self, "KSeF", "Obsługa wysyłki KSeF już trwa.")
             return
-        table = self.draft_table if drafts else self.issued_table
-        ids = self._selected_ids(table)
+        if ids is None:
+            table = self.draft_table if drafts else self.issued_table
+            ids = self._selected_ids(table)
+        ids = list(ids)
         if not ids:
             QMessageBox.information(self, "KSeF", "Zaznacz faktury do wysłania.")
             return
@@ -959,10 +976,11 @@ class FakturyPage(QWidget):
             return
         self._payment_reminders.open('payments',ids[0])
 
-    def _email_selected_pdfs(self):
+    def _email_selected_pdfs(self, *, ids=None):
         if not self._can_issue() or self._ksef_send_worker is not None or self._sync_running():
             return
-        ids = self._selected_ids(self.issued_table)
+        if ids is None:
+            ids = self._selected_ids(self.issued_table)
         if not ids:
             QMessageBox.information(self, "Wysyłka PDF", "Zaznacz faktury przyjęte w KSeF.")
             return
@@ -1011,6 +1029,7 @@ class FakturyPage(QWidget):
         self.btn_ksef_download.setEnabled(True)
         self.btn_send_ksef.setEnabled(True)
         self.btn_issue_ksef.setEnabled(True)
+        self.btn_issue.setEnabled(True)
         self.btn_status_ksef.setEnabled(True)
         pending = set(result["pending"])
         completed = {entry["id"] for entry in result["accepted"] + result["rejected"]}
@@ -1057,6 +1076,8 @@ class FakturyPage(QWidget):
     def _invoice_number_filter_changed(self):
         if self._issued_rows is not None:
             self._fill_issued(self._issued_rows, payments=self._issued_payments)
+        if self._draft_rows is not None:
+            self._fill_drafts(self._visible_drafts(self._draft_rows))
 
     def _payment_filter_changed(self):
         self._view_settings.setValue(self._payment_filter_key, self.payment_filter.currentData())
@@ -1087,6 +1108,7 @@ class FakturyPage(QWidget):
             self._generation_busy = False
             return
         self.btn_generate_all.setEnabled(False)
+        self.btn_issue.setEnabled(False)
         progress = QProgressDialog('Generowanie faktur…', None, 0, 0, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setAutoClose(False)
@@ -1121,6 +1143,7 @@ class FakturyPage(QWidget):
     def _finish_generation(self):
         self._generation_busy = False
         self.btn_generate_all.setEnabled(True)
+        self.btn_issue.setEnabled(True)
         if self._generation_progress is not None:
             self._generation_progress.close()
             self._generation_progress.deleteLater()
@@ -1215,7 +1238,25 @@ class FakturyPage(QWidget):
 
         self._invoice_reads.submit(read, loaded, lambda exc: self.payment_filter_status.setText('Nie udało się odświeżyć faktur. ' + str(exc)), key=(actor, request))
 
+    def _visible_drafts(self, invoices):
+        """Faktury robocze po filtrach wspólnych z zakładką wystawionych."""
+        number_filter = self.invoice_number_filter.text().strip().casefold()
+        kind_filter = self.invoice_kind_filter.currentData()
+        if not number_filter and kind_filter in (None, "all", "sale"):
+            return invoices
+        shown = []
+        for inv in invoices:
+            if number_filter not in str(inv.get("numer") or "").casefold():
+                continue
+            if kind_filter == "korekta" and inv.get("rodzaj") != "korekta":
+                continue
+            if kind_filter == "sale" and inv.get("rodzaj") == "korekta":
+                continue
+            shown.append(inv)
+        return shown
+
     def _fill_drafts(self, invoices):
+        invoices = self._visible_drafts(invoices)
         if self._draft_rows == invoices:
             return
         shown = getattr(self, "_shown_draft_id", None)
@@ -1312,6 +1353,28 @@ class FakturyPage(QWidget):
 
         # Rendering a list never schedules KSeF traffic. Only an explicit send
         # or status request can start the workflow and its one-minute retries.
+        self._update_action_state()
+
+    def _update_action_state(self):
+        """Włącz przyciski akcji tylko dla zaznaczenia, które do nich pasuje.
+
+        Wystawianie dotyczy faktur roboczych, a wysyłka PDF, KSeF i rozliczenia —
+        wystawionych. Bez tego kliknięcie na niewłaściwej zakładce kończyło się
+        komunikatem „zaznacz faktury", mimo że coś było zaznaczone.
+        """
+        drafts = self._selected_ids(self.draft_table) if self.draft_table.rowCount() else []
+        issued = self._selected_ids(self.issued_table) if self.issued_table.rowCount() else []
+        self.btn_issue.setEnabled(bool(drafts))
+        self.btn_issue_ksef.setEnabled(bool(drafts))
+        self.btn_edit.setEnabled(bool(drafts))
+        self.btn_header.setEnabled(bool(drafts))
+        self.btn_delete.setEnabled(bool(drafts))
+        for button in (self.btn_view, self.btn_correction, self.btn_delete_issued, self.btn_email_pdf,
+                       self.btn_send_ksef, self.btn_status_ksef, self.btn_cash, self.btn_remind_payment):
+            button.setEnabled(bool(issued))
+        self.btn_ksef_download.setEnabled(bool(issued) or self._selected_company_id() is not None)
+        self.btn_jpk.setEnabled(bool(issued))
+        self.btn_trash.setEnabled(bool(issued))
 
     @staticmethod
     def _selected_ids(table):
@@ -1407,6 +1470,7 @@ class FakturyPage(QWidget):
                              termin_platnosci=header.get("termin_platnosci", invoice.get("termin_platnosci")),
                              przyczyna_korekty=header.get("przyczyna_korekty", invoice.get("przyczyna_korekty")),
                              podstawa_zwolnienia=header.get("podstawa_zwolnienia", invoice.get("podstawa_zwolnienia")),
+                             opis_dodatkowy=header.get("opis_dodatkowy", invoice.get("opis_dodatkowy")),
                              expected_revision=self._shown_draft_revision, actor_id=self.pracownik_id)
         if self._shown_draft_revision is not None:
             self._shown_draft_revision += 1
@@ -1620,12 +1684,45 @@ class FakturyPage(QWidget):
                 invoice = get_invoice_by_id(invoice_id)
                 if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
                     raise PermissionError("Brak dostępu do faktury.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Wystawianie faktur", str(exc))
+            return
+        numbers = "\n".join(str((get_invoice_by_id(invoice_id) or {}).get("numer") or "(numer nadany automatycznie)")
+                            for invoice_id in ids[:20])
+        if len(ids) > 20:
+            numbers += f"\n… i {len(ids)-20} kolejnych"
+        ksef = ksef_configured()
+        question = f"Wystawić {len(ids)} faktur?\n{numbers}\n\nNumery zostaną nadane teraz."
+        if ksef:
+            question += ("\n\nTak — wystaw i wyślij do KSeF.\nNie — tylko wystaw, bez wysyłki."
+                         "\nAnuluj przerywa bez zmian.")
+            box = QMessageBox(QMessageBox.Icon.Question, "Wystaw faktury", question,
+                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                              | QMessageBox.StandardButton.Cancel, self)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            answer = box.exec()
+            if answer == QMessageBox.StandardButton.Cancel:
+                return
+            if answer == QMessageBox.StandardButton.Yes:
+                self._send_selected_to_ksef(ids=ids, drafts=True)
+                return
+        elif QMessageBox.question(self, "Wystaw faktury", question,
+                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                  QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
             mark_exported(ids, self.pracownik_id)
         except Exception as exc:
             QMessageBox.warning(self, "Wystawianie faktur", str(exc))
             return
         self.refresh_async()
         self.tabs.setCurrentWidget(self.tab_wystawione)
+        if ksef and QMessageBox.question(
+            self, "Wyślij PDF",
+            "Wysłać teraz PDF wystawionych faktur do klientów e-mailem?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            self._email_selected_pdfs(ids=ids)
 
     def _reexport_selected(self):
         self._export_ids(self._selected_ids(self.issued_table), mark=False)

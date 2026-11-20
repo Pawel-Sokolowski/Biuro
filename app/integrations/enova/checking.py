@@ -1,6 +1,7 @@
 """Independent checking snapshots; never update workflow stages or invoice counters."""
 from app.remote.boundary import endpoint as office_endpoint
-from datetime import date, datetime
+import re
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import json
 from zoneinfo import ZoneInfo
@@ -8,6 +9,8 @@ from app.integrations.enova.document_counts import fetch_counts, normalize_nip, 
 from app.integrations.enova.jpk import STATUSES
 from app.utils.months import previous_month, month_bounds
 from app.services.worker_activity import record
+from app.db.import_audit import log_import
+from app.integrations.enova.query_defaults import ADAPTER_REVISION
 
 DEPARTMENTS = ('accounting', 'payroll')
 
@@ -55,7 +58,7 @@ def import_document_year(config, year, *, actor_id, progress=None):
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
                     report_source = checking_source(source,company)
-                    counts = validate_rows(fetch_counts(config, report_source, months), report_source, months)
+                    counts = validate_rows(_counts(config, report_source, months, 'counts'), report_source, months)
                     if any(count.by_type is None for count in counts):
                         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
                     stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
@@ -71,9 +74,8 @@ def import_document_year(config, year, *, actor_id, progress=None):
                                      (key, json.dumps(snapshot, ensure_ascii=False)))
                     details = {'year': year, 'company_id': company['id'], 'months': months,
                                'counts': {count.month: count.documents for count in counts}}
-                    conn.execute("INSERT INTO import_history(import_type,source_path,status,updated_count,completed_at,details) "
-                                 "VALUES ('enova_document_year',%s,'completed',12,to_char(now(),'YYYY-MM-DD HH24:MI:SS'),%s)",
-                                 (database, json.dumps(details)))
+                    log_import(conn, 'enova_document_year', source=database, updated=len(months),
+                               details=details)
                     results.append({'database': database, 'company': company['nazwa'], 'ok': True, **details})
             except Exception as exc:
                 from app.integrations.enova.odbc_support import describe_sql_error
@@ -81,9 +83,8 @@ def import_document_year(config, year, *, actor_id, progress=None):
                 diagnostic = describe_sql_error(exc, secrets=(config.get('password_enc'),))
                 error = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else diagnostic['hint']
                 results.append({'database': database, 'ok': False, 'error': error})
-                conn.execute("INSERT INTO import_history(import_type,source_path,status,details) "
-                             "VALUES ('enova_document_year',%s,'failed',%s)",
-                             (database, json.dumps({'year': year, 'error': error})))
+                log_import(conn, 'enova_document_year', source=database, status='failed',
+                           details={'year': year, 'error': error})
             finally:
                 if progress:
                     progress(index + 1, len(sources), database)
@@ -118,8 +119,12 @@ def _timestamp(value):
             return date.fromisoformat(str(value)).isoformat()
         except ValueError:
             raise ValueError('Nieprawidłowa data wysyłki lub UPO.') from None
+    text = str(value).strip().replace('Z', '+00:00') if str(value).strip().endswith('Z') else str(value).strip()
+    # ODBC oddaje niekiedy '2026-11-20 11:21:00.0000000 +02:00' — ucinamy nadmiar
+    # miejsc po przecinku, inaczej fromisoformat odrzuca całą datę.
+    text = re.sub(r'(\.\d{6})\d+', r'\1', text)
     try:
-        return datetime.fromisoformat(str(value)).isoformat()
+        return datetime.fromisoformat(text).isoformat()
     except ValueError:
         raise ValueError('Nieprawidłowa data wysyłki lub UPO.') from None
 
@@ -147,10 +152,14 @@ def validate_declarations(rows, source, months):
         status, upo = row['status'], str(row['upo'] or '').strip()
         if status not in STATUSES or (status == 'accepted' and not upo):
             raise ValueError('Nieprawidłowy status deklaracji lub brak UPO dla przyjętej deklaracji.')
-        result[month].append({'department': department, 'form': form, 'status': status,
-                              'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
-                              'sent_at': _timestamp(row['sent_at']), 'upo': upo,
-                              'upo_at': _timestamp(row['upo_at'])})
+        entry = {'department': department, 'form': form, 'status': status,
+                 'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
+                 'sent_at': _timestamp(row.get('sent_at')), 'upo': upo,
+                 'upo_at': _timestamp(row.get('upo_at'))}
+        # Data utworzenia deklaracji w Enovie (opcjonalna kolumna odczytu).
+        if row.get('created_at'):
+            entry['created_at'] = _timestamp(row.get('created_at'))
+        result[month].append(entry)
         if row.get('raw_status'):
             result[month][-1]['raw_status'] = str(row['raw_status'])[:256]
         if row.get('form_variant'):
@@ -179,6 +188,58 @@ def validate_payroll(rows, source, months):
     return result
 
 
+def _now():
+    return datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+
+
+CACHE_TTL_MINUTES = 10
+
+
+def _cache_key(source, result_kind, months):
+    return f'enova_fetch_cache_{source["database"]}_{result_kind}_{months[0]}_{months[-1]}'
+
+
+def _cached(source, result_kind, months):
+    """Ten sam odczyt w krótkim odstępie czasu nie uderza drugi raz w Enovę."""
+    from app.db.dao_conn import get_conn as _conn
+    with _conn() as cache_conn:
+        row = cache_conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
+                                 (_cache_key(source, result_kind, months),)).fetchone()
+    if not row:
+        return None
+    try:
+        value = json.loads(row[0])
+    except ValueError:
+        return None
+    if value.get('adapter') != ADAPTER_REVISION:
+        return None
+    created = datetime.fromisoformat(value['at'])
+    if datetime.now(ZoneInfo('Europe/Warsaw')) - created > timedelta(minutes=CACHE_TTL_MINUTES):
+        return None
+    return value.get('rows')
+
+
+def _remember(source, result_kind, months, rows):
+    from app.db.dao_conn import get_conn as _conn
+    with _conn() as cache_conn:
+        cache_conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
+                           'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
+                           (_cache_key(source, result_kind, months),
+                            json.dumps({'adapter': ADAPTER_REVISION, 'at': _now(), 'rows': rows},
+                                       ensure_ascii=False)))
+
+
+def _counts(config, source, months, result_kind):
+    if not config.get('fetch_cache', True):
+        return fetch_counts(config, source, months, result_kind=result_kind)
+    cached = _cached(source, result_kind, months)
+    if cached is not None:
+        return cached
+    rows = fetch_counts(config, source, months, result_kind=result_kind)
+    _remember(source, result_kind, months, rows)
+    return rows
+
+
 def sync_checking(conn, config, source, company_id, day, *, apply, months=None, force=False):
     requested_months(day, config.get('months_back', 3))
     month = day.strftime('%Y-%m')
@@ -189,7 +250,6 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
     for period in months:
         month_bounds(period)
     key = f'enova_checking_checked_{company_id}'
-    from app.integrations.enova.query_defaults import ADAPTER_REVISION
     signature = {'version': 3, 'adapter_revision': ADAPTER_REVISION, 'day': day.isoformat(), 'server': config.get('server'),
                  'database': source['database'], 'months': months,
                  'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
@@ -199,17 +259,17 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
     from app.integrations.enova.document_counts import find_company
     company = find_company(conn,normalize_nip(source['nip']))
     report_source = checking_source(source,company)
-    counts = validate_rows(fetch_counts(config, report_source, months), report_source, months)
+    counts = validate_rows(_counts(config, report_source, months, 'counts'), report_source, months)
     if any(count.by_type is None for count in counts):
         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
     payroll = None
     if source.get('payroll_query'):
         query = {**source, 'count_query': source['payroll_query']}
-        payroll = validate_payroll(fetch_counts(config, query, months, result_kind='payroll'), source, months)
+        payroll = validate_payroll(_counts(config, query, months, 'payroll'), source, months)
     declarations = None
     if source.get('declarations_query'):
         query = {**source, 'count_query': source['declarations_query']}
-        declarations = validate_declarations(fetch_counts(config, query, months, result_kind='declarations'), source, months)
+        declarations = validate_declarations(_counts(config, query, months, 'declarations'), source, months)
     events = None
     if source.get('hr_events_query'):
         from app.integrations.enova.hr_events import fetch_events
@@ -266,7 +326,6 @@ def run_checking_import(config, *, apply=False, today=None, months=None, force=F
                 error = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
                 results.append({'database': source['database'], 'kind': 'checking', 'ok': False, 'error': error})
                 if apply:
-                    conn.execute("INSERT INTO import_history(import_type,source_path,status,details) "
-                                 "VALUES ('enova_checking',%s,'failed',%s)",
-                                 (source['database'], json.dumps({'error': error})))
+                    log_import(conn, 'enova_checking', source=source['database'], status='failed',
+                               details={'company_id': company['id'] if company else None, 'error': error})
     return results

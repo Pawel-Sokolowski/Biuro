@@ -230,6 +230,11 @@ class ManualInvoiceDialog(QDialog):
         self.podstawa_zwolnienia = QLineEdit()
         self.podstawa_zwolnienia.setPlaceholderText("Np. art. 113 ust. 1 ustawy o VAT — wymagane dla zw")
         form.addRow("Podstawa zwolnienia z VAT:", self.podstawa_zwolnienia)
+        self.opis_dodatkowy = QLineEdit()
+        self.opis_dodatkowy.setMaxLength(256)
+        self.opis_dodatkowy.setPlaceholderText("Np. numer zamówienia, projekt, miesiąc rozliczeniowy")
+        self.opis_dodatkowy.setToolTip("Tekst drukowany pod pozycjami i przekazywany do KSeF (DodatkowyOpis).")
+        form.addRow("Dodatkowy opis:", self.opis_dodatkowy)
         self.kind = QComboBox()
         self.kind.addItem("Faktura VAT", "faktura")
         self.kind.addItem("Faktura zaliczkowa", "zaliczkowa")
@@ -372,6 +377,7 @@ class ManualInvoiceDialog(QDialog):
                                   self.date_sale.date().toString("yyyy-MM-dd"),
                                   self.date_due.date().toString("yyyy-MM-dd"),
                                   podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
+                                  opis_dodatkowy=self.opis_dodatkowy.text().strip(),
                                   rodzaj=self.kind.currentData(), actor_id=getattr(self.parent(), 'pracownik_id', None))
         except (ValueError, TypeError, PermissionError) as exc:
             QMessageBox.warning(self, "Faktura", str(exc))

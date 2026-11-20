@@ -536,10 +536,8 @@ class CalendarPage(QWidget):
         if key == self._pending_snapshot_key:
             return
         self._pending_snapshot_key = key
-        self.tree.clear()
-        self._events = []
-        self._tree_rows = None
-        self.grid_scroll.hide()
+        # Powłoka (pasek, panel boczny, widok) zostaje; podmienia się tylko treść:
+        # lista dnia, siatka i status. Inaczej przełączanie widoku migało pustką.
         self.status.setText('Wczytywanie kalendarza…')
         from app.remote.view_reads import calendar_view_snapshot
         actor = self.pracownik_id
@@ -560,6 +558,8 @@ class CalendarPage(QWidget):
             message = safe_error(error)
             self.status.setText('Nie udało się wczytać kalendarza: '+message)
             logging.getLogger(__name__).warning('calendar_snapshot_failed error_type=%s message=%s',type(error).__name__,message)
+        # Terminy stałe w powłoce (pasek, panel kalendarzy, przełącznik widoków) są
+        # gotowe od razu — tu wczytuje się wyłącznie treść (wydarzenia) i status.
         self._snapshot_reads.submit(lambda:calendar_view_snapshot(actor,*key),loaded,failed,key=key)
 
     def _render_calendar(self):

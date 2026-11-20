@@ -97,7 +97,7 @@ class InvoiceHistoryTests(DbTestCase):
         page.refresh()
         with patch.object(page, '_selected_ids', return_value=[invoice]), patch('app.invoices.faktury_ui.QFileDialog.getSaveFileName', side_effect=AssertionError('XLSX dialog')):
             page._export_selected_drafts()
-        self.assertEqual(page.btn_export.text(), 'Wystaw faktury')
+        self.assertEqual(page.btn_export.text(), 'Wystaw zaznaczone')
         self.assertIs(page.tabs.currentWidget(), page.tab_wystawione)
         self.assertTrue(get_invoice_by_id(invoice)['eksportowana'])
         page.close()

@@ -82,8 +82,12 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, value))
 
 
-_POOL_MIN = _env_int("BIO_DB_POOL_MIN", 1, 0, 8)
-_POOL_MAX = _env_int("BIO_DB_POOL_MAX", 8, 1, 32)
+# Pula trzyma gotowe połączenia: po włączeniu TLS każde nowe połączenie kosztuje
+# uzgodnienie szyfrowania, więc lista nie może czekać, aż pula je otworzy.
+# Serwer biura wykonuje do 16 operacji naraz (BIO_API_WORKERS), więc pula musi
+# mieć co najmniej tyle gotowych połączeń.
+_POOL_MIN = _env_int("BIO_DB_POOL_MIN", 8, 0, 16)
+_POOL_MAX = _env_int("BIO_DB_POOL_MAX", 16, 1, 32)
 _POOL_IDLE = _env_int("BIO_DB_POOL_IDLE", 300, 30, 3600)
 _POOL_TIMEOUT = _env_int("BIO_DB_POOL_TIMEOUT", 10, 1, 60)
 

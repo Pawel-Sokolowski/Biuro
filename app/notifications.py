@@ -9,7 +9,7 @@ from app.email.email_storage import _SAME_MESSAGE
 from app.security.authorization import allowed_tabs
 
 logger = logging.getLogger(__name__)
-POLL_INTERVAL_MS = 15000
+POLL_INTERVAL_MS = 30000
 
 
 @office_endpoint('app.notifications.list_user_notifications')
@@ -116,10 +116,10 @@ class NotificationCenter(QPushButton):
     def _loaded(self, entries, error):
         self._worker = None
         if error:
-            self.setToolTip('Nie można odświeżyć powiadomień. Ponowna próba co 15 sekund.')
+            self.setToolTip('Nie można odświeżyć powiadomień. Ponowna próba co 30 sekund.')
             return
         self.entries = entries
-        self.setToolTip('Przypisane e-maile i otwarte zadania · odświeżanie co 15 sekund')
+        self.setToolTip('Przypisane e-maile i otwarte zadania · odświeżanie co 30 sekund')
         self._rebuild_menu()
 
     def _menu_opening(self):

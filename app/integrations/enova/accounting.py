@@ -1,9 +1,77 @@
 """Read-only checking data with a rolling per-company document history."""
 from app.remote.boundary import endpoint as office_endpoint
+import calendar
+import datetime
 import json
 from app.db.dao_conn import get_conn
 from app.security.authorization import allowed_tabs, assigned_company_ids
 from app.integrations.enova.checking import history_months
+
+
+SUBSTITUTION_KEYS = {'accounting': 'ksiegowosc', 'payroll': 'kadry'}
+
+
+def _employee_names(ids):
+    """Identyfikator pracownika -> „Imię Nazwisko” (jeden odczyt, bez N+1)."""
+    ids = sorted({int(value) for value in ids if value})
+    if not ids:
+        return {}
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, TRIM(COALESCE(imie,'') || ' ' || COALESCE(nazwisko,'')) AS nazwa "
+            'FROM pracownicy WHERE id = ANY(%s)', (ids,)).fetchall()
+    return {row['id']: (row['nazwa'] or '').strip() for row in rows}
+
+
+def _month_last_day(month):
+    """Ostatni dzień miesiąca „RRRR-MM” jako ISO; None, gdy miesiąc jest nieznany."""
+    try:
+        year, number = (int(part) for part in str(month).split('-')[:2])
+        return datetime.date(year, number, calendar.monthrange(year, number)[1]).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def attach_substitutions(rows, month=None):
+    """Kto faktycznie prowadzi firmę w danym miesiącu: opiekun stały albo zastępca.
+
+    Zastępstwo ma pierwszeństwo, bo opisuje rzeczywistą osobę pracującą nad firmą.
+    Zapisujemy też, kogo zastępuje, żeby dało się to pokazać w tooltipie. ``month``
+    (RRRR-MM) decyduje, czy zastępstwo już obowiązywało — liczymy od ostatniego dnia
+    miesiąca, żeby marcowe zastępstwo nie zmieniało widoku stycznia.
+    """
+    from app.db.dao_monthly import list_active_substitutions
+    substitutions = list_active_substitutions(_month_last_day(month))
+    if not substitutions:
+        # Klucze muszą istnieć także bez zastępstw: interfejs i JSON czytają je
+        # zawsze, a brak klucza kończył się pokazaniem opiekuna stałego.
+        for row in rows:
+            row.setdefault('owner_original', {})
+            for department in SUBSTITUTION_KEYS:
+                row.setdefault(f'{department}_substitute', None)
+        return rows
+    names = _employee_names(
+        [sub.get('zastepca_id') for sub in substitutions.values()] +
+        [sub.get('zastepowany_id') for sub in substitutions.values()])
+    for row in rows:
+        original = {}
+        for department, role in SUBSTITUTION_KEYS.items():
+            field = 'kadrowa' if department == 'payroll' else 'ksiegowa'
+            original[department] = row.get(field) or ''
+            sub = substitutions.get((row['id'], role)) or {}
+            substitute_name = (names.get(sub.get('zastepca_id')) or '').strip()
+            if substitute_name:
+                row[field] = substitute_name
+            # Rola obecna zawsze (z pustym zastepca_id), żeby klucz nie znikał z JSON-a
+            # i zachowanie między wersjami było przewidywalne.
+            row[f'{department}_substitute'] = {
+                'zastepca_id': sub.get('zastepca_id'),
+                'zastepowany_id': sub.get('zastepowany_id'),
+                'zastepowany': original[department] or (names.get(sub.get('zastepowany_id')) or '').strip(),
+                'do_dnia': sub.get('do_dnia') or '',
+            } if sub.get('zastepca_id') else None
+        row['owner_original'] = original
+    return rows
 
 
 def require_access(actor_id):
@@ -52,7 +120,7 @@ def list_accounting(actor_id, month):
         row['platnik_declarations'] = decoded_snapshot(row.get('platnik_declarations'))
         row['history'] = by_company.get(row['id'], [])
         result.append(row)
-    return result
+    return attach_substitutions(result, month)
 
 
 def documents(row, department):
@@ -84,7 +152,24 @@ def declaration_entries(row, department):
         if legacy:
             result.append({**legacy, 'form': 'JPK_VAT', 'employee_id': '', 'employee_name': '',
                            'source_system': 'enova', 'sent_at': None, 'upo_at': None})
-    return [entry for entry in result if report_applies(row, entry['form'])]
+    owner = row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or ''
+    original = (row.get('owner_original') or {}).get(department) or owner
+    substitute = row.get(f'{department}_substitute')
+    for entry in result:
+        entry['owner'] = owner
+        entry['owner_original'] = original if substitute else ''
+        entry['owner_is_substitute'] = bool(substitute)
+    result = [entry for entry in result if report_applies(row, entry['form'])]
+    # Data wysyłki i UPO muszą być widoczne nawet tam, gdzie źródło ich nie podaje
+    # (status JPK z Enovy). Wtedy data wysyłki = data odczytu statusu, a UPO jest
+    # oznaczone jako potwierdzone, bez wymyślania numeru.
+    for entry in result:
+        if entry.get('upo_at') and not entry.get('sent_at'):
+            entry['sent_at'] = entry['upo_at']
+        if entry.get('status') == 'accepted' and not entry.get('upo'):
+            entry['upo_confirmed_at'] = entry.get('imported_at') or entry.get('upo_at')
+            entry['upo_source'] = 'status Enova'
+    return result
 
 
 def declarations(row, department):
@@ -95,12 +180,24 @@ def declarations(row, department):
     for form, entries in groups.items():
         if len(entries) == 1:
             result[form] = entries[0]
+            result[form].setdefault('sent_at', result[form].get('sent_at'))
+            result[form].setdefault('upo_at', result[form].get('upo_at'))
         else:
             accepted = sum(entry.get('status') == 'accepted' and bool(entry.get('upo')) for entry in entries)
             receipts = sum(bool(entry.get('upo')) for entry in entries)
+            # Zbiorczo pokazujemy zakres dat: wysyłki i UPO mogą się różnić per pracownik.
+            sent = sorted(str(entry['sent_at']) for entry in entries if entry.get('sent_at'))
+            receipts_at = sorted(str(entry['upo_at']) for entry in entries if entry.get('upo_at'))
             result[form] = {'form': form, 'count': len(entries), 'entries': entries,
                             'status_text': f'Przyjęte: {accepted}/{len(entries)}', 'upo_count': receipts,
-                            'sent_at': None, 'upo_at': None}
+                            'sent_at': sent[0] if sent else None,
+                            'sent_to': sent[-1] if sent else None,
+                            'upo_at': receipts_at[0] if receipts_at else None,
+                            'upo_to': receipts_at[-1] if receipts_at else None,
+                            'upo_numbers': [entry['upo'] for entry in entries if entry.get('upo')]}
             if any(entry.get('status') == 'unknown' for entry in entries):
-                result[form]['status_text'] = f'Dokumenty: {len(entries)}; nieustalony status wysyłki'
+                # Dokumenty są odczytane, ale nic nie wiemy o wysyłce. Numer UPO
+                # bywa podany bez statusu — wtedy mówimy tylko o statusie.
+                result[form]['status_text'] = ('status wysyłki nieustalony' if receipts
+                                               else 'status wysyłki/UPO nieustalony')
     return result

@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QAbstractItemView, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
     QVBoxLayout,
 )
@@ -17,6 +17,18 @@ from app.invoices.service_picker import choose_service
 from app.invoices.vat_summary import VatSummary
 from app.utils.parsing import to_float
 
+# Stawki dostępne w kolumnie VAT. Wartość 'zw' niesie kod zwolnienia do KSeF
+# (wymaga wypełnionej podstawy prawnej).
+VAT_RATES = ("23", "22", "8", "7", "5", "0", "0 kr", "zw", "np")
+# Najczęstsze podstawy prawne zwolnienia (można też wpisać własną).
+VAT_EXEMPTION_BASES = (
+    "art. 43 ust. 1 pkt 1 ustawy o VAT",
+    "art. 43 ust. 1 pkt 37 ustawy o VAT",
+    "art. 43 ust. 1 pkt 22 ustawy o VAT",
+    "art. 113 ust. 1 ustawy o VAT",
+    "art. 113 ust. 9 ustawy o VAT",
+    "§ 3 ust. 1 pkt 7 rozporządzenia w sprawie zwolnień z VAT",
+)
 COL_NAZWA, COL_ILOSC, COL_JEDN, COL_CENA, COL_VAT, COL_NETTO, COL_BRUTTO = range(7)
 EDITABLE_COLUMNS = (COL_NAZWA, COL_ILOSC, COL_JEDN, COL_CENA, COL_VAT)
 NUMERIC_COLUMNS = (COL_ILOSC, COL_CENA, COL_VAT, COL_NETTO, COL_BRUTTO)
@@ -57,8 +69,18 @@ class InvoiceEditorDialog(QDialog):
         self.przyczyna = QLineEdit(invoice.get("przyczyna_korekty") or "")
         if self.is_correction:
             form.addRow("Przyczyna korekty:", self.przyczyna)
-        self.podstawa_zwolnienia = QLineEdit(invoice.get("podstawa_zwolnienia") or "")
+        self.podstawa_zwolnienia = QComboBox()
+        self.podstawa_zwolnienia.setEditable(True)
+        self.podstawa_zwolnienia.addItems(VAT_EXEMPTION_BASES)
+        self.podstawa_zwolnienia.setCurrentText(invoice.get("podstawa_zwolnienia") or "")
+        self.podstawa_zwolnienia.setToolTip(
+            "Wymagane, gdy pozycja ma stawkę 'zw'. Można wybrać z listy albo wpisać własną podstawę.")
         form.addRow("Podstawa zwolnienia z VAT:", self.podstawa_zwolnienia)
+        self.opis_dodatkowy = QLineEdit(invoice.get("opis_dodatkowy") or "")
+        self.opis_dodatkowy.setMaxLength(256)
+        self.opis_dodatkowy.setPlaceholderText("Np. numer zamówienia, projekt, miesiąc rozliczeniowy")
+        self.opis_dodatkowy.setToolTip("Tekst drukowany pod pozycjami i przekazywany do KSeF (DodatkowyOpis).")
+        form.addRow("Dodatkowy opis:", self.opis_dodatkowy)
         layout.addLayout(form)
 
         if self.is_correction:
@@ -111,7 +133,8 @@ class InvoiceEditorDialog(QDialog):
         self.table.itemChanged.connect(self._on_item_changed)
 
         if self.read_only:
-            for widget in (self.numer, self.data_wyst, self.data_sprz, self.termin, self.przyczyna, self.podstawa_zwolnienia):
+            for widget in (self.numer, self.data_wyst, self.data_sprz, self.termin, self.przyczyna,
+                           self.podstawa_zwolnienia, self.opis_dodatkowy):
                 widget.setEnabled(False)
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.btn_add.setEnabled(False)
@@ -137,6 +160,18 @@ class InvoiceEditorDialog(QDialog):
             COL_NETTO: f"{item['netto']:.2f}", COL_BRUTTO: f"{item['brutto']:.2f}",
         }
         for column, text in values.items():
+            if column == COL_VAT:
+                combo = QComboBox()
+                combo.setEditable(True)
+                combo.addItems(VAT_RATES)
+                combo.setCurrentText(str(text))
+                combo.currentTextChanged.connect(
+                    lambda _value, combo=combo: self._on_vat_combo_changed(combo))
+                self.table.setCellWidget(row, COL_VAT, combo)
+                cell = QTableWidgetItem(str(text))
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table.setItem(row, column, cell)
+                continue
             cell = QTableWidgetItem(str(text))
             if column in NUMERIC_COLUMNS:
                 cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -162,15 +197,40 @@ class InvoiceEditorDialog(QDialog):
         base.pop("netto", None)
         base.pop("brutto", None)
         base.pop("vat_code", None)
+        vat_widget = self.table.cellWidget(row, COL_VAT)
+        vat_value = (vat_widget.currentText().strip() if isinstance(vat_widget, QComboBox) else text(COL_VAT)) or 23
         base.update({
             "nazwa": text(COL_NAZWA), "ilosc": to_float(text(COL_ILOSC), 1.0),
             "jednostka": text(COL_JEDN), "cena_netto": to_float(text(COL_CENA)),
-            "vat": text(COL_VAT) or 23,
+            "vat": vat_value,
         })
         return normalize_position(base)
 
     def positions(self) -> List[Dict[str, Any]]:
         return [self._row_position(row) for row in range(self.table.rowCount())]
+
+    def _on_vat_combo_changed(self, combo: QComboBox):
+        """Zmiana stawki w wierszu: przelicz kwoty i przypomnij o podstawie zwolnienia."""
+        index = self.table.indexAt(combo.pos())
+        row = index.row() if index.isValid() else -1
+        if row < 0:
+            for candidate in range(self.table.rowCount()):
+                if self.table.cellWidget(candidate, COL_VAT) is combo:
+                    row = candidate
+                    break
+        if row < 0:
+            return
+        position = self._row_position(row)
+        self.table.blockSignals(True)
+        cell = self.table.item(row, COL_VAT)
+        if cell is not None:
+            cell.setText(combo.currentText().strip())
+        self.table.item(row, COL_NETTO).setText(f"{position['netto']:.2f}")
+        self.table.item(row, COL_BRUTTO).setText(f"{position['brutto']:.2f}")
+        self.table.blockSignals(False)
+        self._recalculate_total()
+        if str(combo.currentText()).strip().lower() == "zw" and not self.podstawa_zwolnienia.currentText().strip():
+            self.podstawa_zwolnienia.setFocus()
 
     def _on_item_changed(self, cell: QTableWidgetItem):
         if cell.column() not in EDITABLE_COLUMNS:
@@ -205,7 +265,8 @@ class InvoiceEditorDialog(QDialog):
                 data_sprzedazy=self.data_sprz.date().toString("yyyy-MM-dd"),
                 termin_platnosci=self.termin.date().toString("yyyy-MM-dd"),
                 przyczyna_korekty=self.przyczyna.text().strip(),
-                podstawa_zwolnienia=self.podstawa_zwolnienia.text().strip(),
+                podstawa_zwolnienia=self.podstawa_zwolnienia.currentText().strip(),
+                opis_dodatkowy=self.opis_dodatkowy.text().strip(),
                 expected_revision=self.invoice.get('revision'),
                 actor_id=getattr(self.parent(), 'pracownik_id', None),
             )

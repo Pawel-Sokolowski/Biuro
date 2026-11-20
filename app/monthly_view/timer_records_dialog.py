@@ -263,9 +263,6 @@ class AddManualTimeDialog(QDialog):
             QMessageBox.warning(self, "Dodaj czas", "Podaj czas większy od zera.")
             return
         if self.department.currentData() != "ogolne" and self.company.currentData() is None:
-    def _employee_changed(self):
-        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
-
             QMessageBox.warning(self, "Dodaj czas", "Dla księgowości, kadr lub czynności dodatkowej wybierz firmę.")
             return
         if self.department.currentData() == "dodatkowe" and self.activity.currentData() is None:
@@ -294,8 +291,10 @@ class AddManualTimeDialog(QDialog):
             return
         self.accept()
 
+    def _employee_changed(self):
+        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
 
-                miesiac=self.month.monthText(),
+
 class TimerRecordsDialog(QDialog):
     """Rekordy firmy lub wybranego pracownika; serwer sprawdza prawo do edycji."""
 

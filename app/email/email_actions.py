@@ -108,6 +108,7 @@ def prepare_message(
         for cid, subtype, data in related.values():
             html_part.add_related(data, maintype='image', subtype=subtype, cid=cid, disposition='inline')
 
+    added = 0
     for path_str in attachments or []:
         path = Path(path_str)
 
@@ -126,9 +127,18 @@ def prepare_message(
                 subtype=subtype,
                 filename=path.name,
             )
+            added += 1
 
         except Exception:
             continue
+
+    # Każde żądane załączniki muszą wejść do wiadomości: brak pliku lub błąd
+    # odczytu nie może po cichu zamienić faktury w e-mail bez załącznika.
+    if attachments and added != len(list(attachments)):
+        raise ValueError(
+            "Nie dołączono wszystkich załączników: "
+            + ", ".join(Path(p).name for p in attachments if not Path(p).exists())
+        )
 
     return msg
 
@@ -217,6 +227,10 @@ def send_email_smtp(
     )
 
     try:
+        # Wiadomość bez odbiorców nie może zostać uznana za wysłaną: SMTP przyjmie
+        # kopię, a do nikogo ona nie dotrze. Ten błąd jest wyłapywany przed wysyłką.
+        if not [address for address in recipients if str(address or '').strip()]:
+            raise ValueError('Brak odbiorcy wiadomości. Nie wysłano.')
         with open_smtp(
             cfg["host"], cfg["port"], cfg["ssl"], cfg["user"], cfg["password"], timeout
         ) as smtp:
@@ -264,6 +278,50 @@ def send_email_smtp(
             False,
             f"{describe_error(exc)}\n{traceback.format_exc()}",
         )
+
+
+class _MailTransaction:
+    """Jedna sesja SMTP dla kilku wiadomości: mniej logowań, mniej zerwanych połączeń.
+
+    Każda wiadomość jest wysyłana osobno (jeden odbiorca = jedna wiadomość),
+    a błąd transportu zamyka sesję i jest zgłaszany wołającemu, żeby ten mógł
+    ponowić dopiero kolejną wiadomość — bez ryzyka podwójnej wysyłki.
+    """
+
+    def __init__(self, konto_id: int, timeout: int = 30):
+        self.cfg = get_smtp_config_for_account(konto_id)
+        self.timeout = timeout
+        self.connection = None
+
+    def __enter__(self):
+        self._open()
+        return self
+
+    def _open(self):
+        self.close()
+        self.connection = open_smtp(self.cfg["host"], self.cfg["port"], self.cfg["ssl"],
+                                    self.cfg["user"], self.cfg["password"], self.timeout)
+
+    def send(self, msg, recipients):
+        if not [address for address in recipients if str(address or '').strip()]:
+            raise ValueError('Brak odbiorcy wiadomości. Nie wysłano.')
+        try:
+            return self.connection.send_message(msg, from_addr=self.cfg["user"], to_addrs=recipients)
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        if self.connection is not None:
+            try:
+                self.connection.quit()
+            except Exception:
+                pass
+            self.connection = None
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
 
 
 @office_endpoint('app.email.email_actions.send_batch_emails')

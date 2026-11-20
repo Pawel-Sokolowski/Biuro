@@ -174,6 +174,7 @@ def build_fa3_xml(invoice, positions, seller, *, corrected=None):
         _element(row, 'P_11Vat', f"{_amount(item['brutto'])-_amount(item['netto']):.2f}")
         code = vat_code(item)
         _element(row, 'P_12', '0 KR' if code in ('0', '0 kr') else code)
+
     payment = _element(fa, 'Platnosc')
     if invoice.get('termin_platnosci'):
         _element(_element(payment, 'TerminPlatnosci'), 'Termin', _date(invoice['termin_platnosci'], 'termin płatności'))

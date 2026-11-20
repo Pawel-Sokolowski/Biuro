@@ -548,6 +548,7 @@ def create_manual_invoice(
     termin_platnosci: str,
     podstawa_zwolnienia: str = "",
     rodzaj: str = "faktura",
+    opis_dodatkowy: str = "",
     *, actor_id: Optional[int] = None,
 ) -> int:
     """Tworzy roboczą fakturę ręczną (zwykłą, zaliczkową lub proforma) dla firmy lub kontrahenta."""
@@ -596,10 +597,12 @@ def create_manual_invoice(
         columns = ["firma_id", "kontrahent_id", "reczna", "miesiac", "kwota_netto", "kwota_brutto",
                    "data_wystawienia", "data_sprzedazy", "termin_platnosci", "pozycje_json", "status", "rodzaj"]
         columns.append("podstawa_zwolnienia")
+        columns.append("opis_dodatkowy")
         columns.extend(buyer_data)
         values = [firma_id, kontrahent_id, 1, miesiac, netto, brutto, data_wystawienia,
                   data_sprzedazy, termin_platnosci, json.dumps(normalized, ensure_ascii=False), "robocza", rodzaj]
         values.append(podstawa_zwolnienia.strip())
+        values.append((opis_dodatkowy or "").strip() or None)
         values.extend(buyer_data.values())
         marks = ", ".join("%s" for _ in columns)
         cur = conn.execute(f"INSERT INTO faktury ({', '.join(columns)}) VALUES ({marks}) RETURNING id", values)
@@ -615,6 +618,7 @@ def create_manual_invoice(
 PAYMENT_TRIGGER_KINDS = ("zaliczkowa", "proforma")
 _COPIED_COLUMNS = (
     "firma_id", "kontrahent_id", "kwota_netto", "kwota_brutto", "pozycje_json", "podstawa_zwolnienia",
+    "opis_dodatkowy",
     "nabywca_skrocona", "nabywca_pelna", "nabywca_adres", "nabywca_kod", "nabywca_miasto", "nabywca_nip",
     "nabywca_regon", "nabywca_kraj", "nabywca_email", "odbiorca_skrocona", "odbiorca_pelna", "odbiorca_rola",
     "odbiorca_adres", "odbiorca_kod", "odbiorca_miasto", "odbiorca_nip", "odbiorca_regon", "odbiorca_kraj",
@@ -1154,6 +1158,7 @@ def update_invoice_draft(
     termin_platnosci: Optional[str] = None,
     przyczyna_korekty: Optional[str] = None,
     podstawa_zwolnienia: Optional[str] = None,
+    opis_dodatkowy: Optional[str] = None,
     expected_revision: Optional[int] = None,
     actor_id: Optional[int] = None,
 ) -> Tuple[float, float]:
@@ -1187,7 +1192,8 @@ def update_invoice_draft(
             UPDATE faktury
             SET pozycje_json = %s, kwota_netto = %s, kwota_brutto = %s, numer = %s,
                 data_wystawienia = %s, data_sprzedazy = %s, termin_platnosci = %s,
-                przyczyna_korekty = %s, podstawa_zwolnienia = %s, updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                przyczyna_korekty = %s, podstawa_zwolnienia = %s, opis_dodatkowy = %s,
+                updated_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = %s AND COALESCE(eksportowana, 0) = 0 RETURNING id
             """,
             (
@@ -1195,6 +1201,7 @@ def update_invoice_draft(
                 data_wystawienia, data_sprzedazy, termin_platnosci,
                 przyczyna_korekty if invoice.get("rodzaj") == "korekta" else invoice.get("przyczyna_korekty"),
                 podstawa_zwolnienia if podstawa_zwolnienia is not None else invoice.get("podstawa_zwolnienia"),
+                (opis_dodatkowy if opis_dodatkowy is not None else invoice.get("opis_dodatkowy") or "").strip() or None,
                 invoice_id,
             ),
         )

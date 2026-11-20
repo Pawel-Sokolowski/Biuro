@@ -49,13 +49,25 @@ def cennik_sort_key(klucz: str):
 
 def typ_from_forma(forma_opodatkowania: Any) -> Optional[str]:
     forma = _fold(forma_opodatkowania)
+    if not forma:
+        return None
     if "ryczalt" in forma:
         return "RYCZALT"
     if "kpir" in forma or "przychod" in forma:
         return "KPIR"
-    if "ksieg" in forma:
+    if "ksieg" in forma or "rachunkow" in forma or "kh" == forma:
         return "KH"
+    # Ewidencje uproszczone (karta podatkowa) liczą się jak KPiR: dokumenty księgowe,
+    # nie pełne księgi. Dawniej kończyło się to błędem „nieobsługiwana forma”.
+    if "karta" in forma:
+        return "KPIR"
     return None
+
+
+def supported_forma_labels() -> tuple:
+    """Etykiety formy opodatkowania, które potrafimy zamienić na rodzaj księgowości."""
+    from app.companies.constants import FORMA_OPODATKOWANIA
+    return tuple(label for label in FORMA_OPODATKOWANIA if typ_from_forma(label))
 
 
 def company_accounting_type(company: Dict[str, Any]) -> Optional[str]:

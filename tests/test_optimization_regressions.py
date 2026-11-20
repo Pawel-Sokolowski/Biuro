@@ -339,6 +339,7 @@ class BackgroundViewTests(TestCase):
         page._generation_progress = None
         page._current_month = lambda: "2026-10"
         page.btn_generate_all = QPushButton("Generate", page)
+        page.btn_issue = QPushButton("Issue", page)
         page._invoice_commands = CommandRunner(page)
         page.refresh_async = mock.Mock()
         page.generation_progress.connect(page._update_generation_progress)

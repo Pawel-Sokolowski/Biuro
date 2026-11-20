@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QWidget, QTableWidgetItem, QLineEdit, QFileDialog, QMessageBox, QPushButton
+from PyQt6.QtWidgets import QApplication, QTableWidgetItem, QLineEdit, QFileDialog, QMessageBox
 from app.invoices import faktury_ui as ui
 from app.invoices.manual_invoice_dialog import KontrahentDialog
 from app.invoices.invoice_preview import InvoicePreviewDialog
@@ -26,13 +26,11 @@ class InlineInvoiceTests(unittest.TestCase):
         self.positions = [normalize_position({"nazwa": "Księgowość", "ilosc": 2, "cena_netto": 100,
                                               "vat": 23, "usluga_id": 12, "generated": True})]
         self.updates = []
-        self.page = ui.FakturyPage.__new__(ui.FakturyPage)
-        QWidget.__init__(self.page)
+        with patch.object(ui.FakturyPage, 'refresh_async'), \
+                patch('app.remote.screen_data.invoice_filter_entities', return_value=([], [])), \
+                patch.object(ui, 'can', return_value=True):
+            self.page = ui.FakturyPage(1)
         self.addCleanup(self.page.close)
-        self.page.pracownik_id = 1
-        self.page.tab_robocze = QWidget(self.page)
-        self.page.btn_generate_all = QPushButton("Generuj faktury", self.page)
-        self.page._build_tab_robocze()
         self.page.refresh_async = self.page._show_draft_positions
         mocks = [patch.object(ui, "get_invoice_by_id", side_effect=lambda _: dict(self.invoice)),
                  patch.object(ui, "get_invoice_positions", side_effect=lambda _: deepcopy(self.positions)),

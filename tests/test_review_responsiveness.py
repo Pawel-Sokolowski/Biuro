@@ -32,6 +32,7 @@ class ReadResponsivenessTests(unittest.TestCase):
         logic.format_seconds.side_effect = str
         logic.get_timer_total_seconds.side_effect = lambda company, department, seconds: seconds
         with mock.patch.object(monthly_view_ui, 'MonthlyViewLogic', return_value=logic), \
+                mock.patch('app.utils.months.default_month_for_department', return_value='2026-11'), \
                 mock.patch.object(monthly_view_ui.MonthlyViewPage, '_setup_timer'):
             page = monthly_view_ui.MonthlyViewPage(7)
         self.addCleanup(page.close)

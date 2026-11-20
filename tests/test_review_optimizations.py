@@ -108,7 +108,7 @@ class MailGenerationTests(DbTestCase):
         old_id = self.add_message(42, "Old")
         with mock.patch.object(email_ui, "get_email_accounts_for_employee", return_value=[{"id": 1, "email": "test@example.com"}]), \
                 mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
-                mock.patch.object(email_ui, "MailBrowser", QTextBrowser):
+                mock.patch("app.email.mail_area.MailBrowser", QTextBrowser):
             page = email_ui.EmailPage(1)
             page.current_folder_local = "INBOX"
             page.load_mail_list_from_db("INBOX")

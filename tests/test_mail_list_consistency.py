@@ -30,7 +30,7 @@ class MailListConsistencyTests(MailboxFixture):
         for patcher in (
             mock.patch.object(email_ui, "get_email_accounts_for_employee", return_value=[{"id": 1, "email": "review@example.com"}]),
             mock.patch.object(email_ui.EmailPage, "start_background_sync"),
-            mock.patch.object(email_ui, "MailBrowser", QTextBrowser),
+            mock.patch("app.email.mail_area.MailBrowser", QTextBrowser),
             mock.patch.object(email_ui.EmailPage, "_run_async"),
         ):
             patcher.start()
@@ -78,8 +78,9 @@ class MailListConsistencyTests(MailboxFixture):
         return {item.data(0, email_ui.ROLE_ROW_ID) for item in self.page.mail_list.selectedItems()}
 
     def older(self):
-        self.page._load_mail_async(more=True)
-        self.assertTrue(wait_until(lambda: self.page.older_messages.isEnabled()))
+        with mock.patch.object(self.page._list_jobs, 'submit', side_effect=lambda work, done, error: done(work())):
+            self.page._load_mail_async(more=True)
+        self.assertTrue(self.page.older_messages.isEnabled())
         self.assertEqual(len(self.page._mail_rows), 504)
 
     def check_selection(self, employee=False):
@@ -105,7 +106,7 @@ class MailListConsistencyTests(MailboxFixture):
     def test_paged_move_does_not_include_other_folders_with_the_same_uids(self):
         selected = self.check_selection()
         with mock.patch.object(self.page, "_run_async", side_effect=lambda work, done: work()), \
-                mock.patch.object(email_ui, "move_emails") as move:
+                mock.patch("app.email.mail_area.move_emails") as move:
             self.page._move_refs(self.page._targets(), "Target", "Move")
         move.assert_called_once_with(1, "INBOX", ["502", "501"], "Target",
                                      expected_rows={"502": selected[0], "501": selected[1]})
@@ -115,7 +116,7 @@ class MailListConsistencyTests(MailboxFixture):
         with mock.patch.object(self.page, "_role_of", return_value="trash"), \
                 mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
                 mock.patch.object(self.page, "_run_async", side_effect=lambda work, done: work()), \
-                mock.patch.object(email_ui, "delete_email_remote", return_value=True) as delete:
+                mock.patch("app.email.mail_actions.delete_email_remote", return_value=True) as delete:
             self.page.on_delete()
         self.assertEqual(delete.call_args_list, [mock.call(1, "INBOX", uid, expected_row_id=row_id)
                                                 for uid, row_id in zip(("502", "501"), selected)])
@@ -179,7 +180,7 @@ class MailListConsistencyTests(MailboxFixture):
                 mutate()
             return result
 
-        with mock.patch.object(email_ui, "get_mail_page", side_effect=query):
+        with mock.patch("app.email.mail_area.get_mail_page", side_effect=query):
             result = self.page._fetch_mail_data(self.page._mail_request(), existing=tuple(self.page._mail_rows),
                                                 through=self.page._mail_cursor)
         self.assertEqual(len(calls), 2)
@@ -340,7 +341,7 @@ class MailListConsistencyTests(MailboxFixture):
         self.load(account_wide=False)
         row_id = self.ids[self.folder, "502"]
         self.select([row_id])
-        with mock.patch.object(email_ui, "update_message_read_flag", return_value=False):
+        with mock.patch("app.email.mail_area.update_message_read_flag", return_value=False):
             self.page._set_read_selected(True)
         self.assertTrue(self.page.unread_map[row_id])
         self.assertFalse(next(row for row in self.page._mail_rows if row["id"] == row_id)["przeczytana"])

@@ -109,12 +109,14 @@ class BankReviewSafetyTests(unittest.TestCase):
 
         with patch("app.invoices.payments_ui.QFileDialog.getOpenFileName", return_value=("statement.sta", "")), \
              patch("app.invoices.payments_ui.import_mt940_file", side_effect=import_after_gui_event) as importer, \
-             patch.object(QMessageBox, "exec") as error:
+             patch.object(QMessageBox, "exec") as error, \
+             patch.object(QMessageBox, "information") as success:
             self.dialog._import_file()
             self.assertFalse(self.dialog.btn_import.isEnabled())
             QTimer.singleShot(0, gui_processed_events.set)
             self.wait_for_import()
             error.assert_not_called()
+            success.assert_called_once()
         self.assertTrue(self.dialog.btn_import.isEnabled())
         importer.assert_called_once_with("statement.sta", 1, encoding="iso8859_2")
         self.dialog.settings.setValue.assert_called_with("mt940/encoding", "iso8859_2")

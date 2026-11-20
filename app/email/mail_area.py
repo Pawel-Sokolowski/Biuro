@@ -786,12 +786,16 @@ class MailArea:
         self.att_bar.hide()
         self.att_list.hide()
         self.att_list.clear()
-        QTimer.singleShot(
-            400,
-            lambda: self._loading_message_key == load_key
-            and is_current()
-            and self.mail_view.setPlainText("Pobieranie wiadomości…"),
-        )
+        loading_timer = QTimer(self)
+        loading_timer.setSingleShot(True)
+
+        def show_loading():
+            loading_timer.deleteLater()
+            if self._loading_message_key == load_key and is_current():
+                self.mail_view.setPlainText("Pobieranie wiadomości…")
+
+        loading_timer.timeout.connect(show_loading)
+        loading_timer.start(400)
 
         def show(msg) -> None:
             if not is_current():

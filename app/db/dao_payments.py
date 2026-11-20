@@ -328,8 +328,7 @@ def bank_import_summary(actor_id: int) -> dict:
         return {"total": row["total"], "database": scope["database"], "schema": scope["schema"]}
 
 
-@office_endpoint('app.db.dao_payments.bank_transfer_block_reason')
-def bank_transfer_block_reason(transfer: dict) -> str:
+def transfer_block_reason(transfer: dict) -> str:
     if transfer.get('waluta', 'PLN') != 'PLN':
         return 'Operacja w innej walucie — rozliczanie dotyczy PLN.'
     if transfer.get('kierunek') not in (None, '', 'C', 'D'):
@@ -340,6 +339,11 @@ def bank_transfer_block_reason(transfer: dict) -> str:
     if Decimal(str(transfer['remaining'])) <= Decimal('0.009'):
         return 'Cała kwota przelewu jest już przypisana do rozliczeń.'
     return ''
+
+
+@office_endpoint('app.db.dao_payments.bank_transfer_block_reason')
+def bank_transfer_block_reason(transfer: dict) -> str:
+    return transfer_block_reason(transfer)
 
 
 @office_endpoint('app.db.dao_payments.list_unsettled_transfers')
@@ -436,7 +440,7 @@ def list_invoice_choices(
     finally:
         conn.close()
 
-def _contractor_key(invoice: dict) -> tuple:
+def contractor_key(invoice: dict) -> tuple:
     if invoice.get("firma_id") is not None:
         return ("firma", invoice["firma_id"])
     if invoice.get("kontrahent_id") is not None:
@@ -451,7 +455,7 @@ def _contractor_key(invoice: dict) -> tuple:
 @office_endpoint('app.db.dao_payments.invoice_contractor_key')
 def invoice_contractor_key(invoice: dict) -> tuple:
     """Publiczny identyfikator nabywcy używany przez ręczny filtr płatności."""
-    return _contractor_key(invoice)
+    return contractor_key(invoice)
 
 
 def _normalize_contractor_name(value) -> str:
@@ -493,7 +497,7 @@ def _contractor_match_index(invoices: list[dict]) -> dict:
     names = {}
 
     for invoice in invoices:
-        key = _contractor_key(invoice)
+        key = contractor_key(invoice)
         grouped.setdefault(key, []).append(invoice)
 
         number = re.sub(r"[^A-Z0-9]", "", str(invoice.get("numer") or "").upper())
@@ -550,17 +554,17 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
         return unresolved
     grouped = {}
     for invoice in invoices:
-        grouped.setdefault(_contractor_key(invoice), []).append(invoice)
+        grouped.setdefault(contractor_key(invoice), []).append(invoice)
     raw = str(transaction.get("opis_surowy") or transaction.get("raw_title") or transaction.get("tytul") or transaction.get("title") or "")
     text = raw + " " + str(transaction.get("tytul") or transaction.get("title") or "")
     numbers = {re.sub(r"[^A-Z0-9]", "", value.upper()) for value in re.findall(
         r"\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*", text, re.IGNORECASE
     )}
-    invoice_keys = {_contractor_key(inv) for inv in invoices if numbers and re.sub(
+    invoice_keys = {contractor_key(inv) for inv in invoices if numbers and re.sub(
         r"[^A-Z0-9]", "", str(inv.get("numer") or "").upper()) in numbers}
     details = _description_details(raw)
     nip = re.sub(r"\D", "", str(transaction.get("kontrahent_nip") or transaction.get("contractor_nip") or details["contractor_nip"]))
-    nip_keys = {_contractor_key(inv) for inv in invoices if len(nip) == 10 and re.sub(r"\D", "", str(inv.get("nip") or "")) == nip}
+    nip_keys = {contractor_key(inv) for inv in invoices if len(nip) == 10 and re.sub(r"\D", "", str(inv.get("nip") or "")) == nip}
 
     def resolved(keys, reason):
         if len(keys) != 1:
@@ -578,11 +582,11 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     if len(nip) == 10:
         return resolved(nip_keys, "Dopasowano kontrahenta po NIP.") if nip_keys else unresolved
     account = _normalize_account(transaction.get("kontrahent_rachunek") or transaction.get("contractor_account") or details["contractor_account"])
-    account_keys = {_contractor_key(inv) for inv in invoices if account and _normalize_account(inv.get("buyer_account")) == account}
+    account_keys = {contractor_key(inv) for inv in invoices if account and _normalize_account(inv.get("buyer_account")) == account}
     if account_keys:
         return resolved(account_keys, "Dopasowano kontrahenta po rachunku nadawcy.")
     name = _normalize_contractor_name(transaction.get("kontrahent") or transaction.get("contractor") or details["contractor"])
-    name_keys = {_contractor_key(inv) for inv in invoices if name and any(
+    name_keys = {contractor_key(inv) for inv in invoices if name and any(
         _contractor_name_matches(name, candidate)
         for candidate in (inv.get("buyer"), inv.get("buyer_full_name"), inv.get("buyer_short_name"),
                           inv.get("buyer_invoice_name"), inv.get("buyer_contractor_name"))
@@ -590,7 +594,6 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
     return resolved(name_keys, "Dopasowano kontrahenta po nazwie nadawcy.") if name_keys else unresolved
 
 
-@office_endpoint('app.db.dao_payments.match_invoice_contractors')
 def match_invoice_contractors(transactions: list[dict], invoices: list[dict]) -> dict[int, dict]:
     """Rozpoznaje kontrahentów dla całej listy przy użyciu jednego wspólnego indeksu."""
     index = _contractor_match_index(invoices)
@@ -693,11 +696,10 @@ def match_invoice_contractors(transactions: list[dict], invoices: list[dict]) ->
 @office_endpoint('app.db.dao_payments.invoice_choices_for_transaction')
 def invoice_choices_for_transaction(transaction: dict, invoices: list[dict]) -> list[dict]:
     match = match_invoice_contractor(transaction, invoices)
-    return [inv for inv in invoices if _contractor_key(inv) == match["company_key"]] if match["confident"] else list(invoices)
+    return [inv for inv in invoices if contractor_key(inv) == match["company_key"]] if match["confident"] else list(invoices)
 
 
-@office_endpoint('app.db.dao_payments.suggested_invoice_ids')
-def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
+def suggest_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
     """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.
 
     Kwota, numer czy NIP same w sobie nie stanowią dowodu zapłaty.
@@ -732,6 +734,11 @@ def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, 
     return [invoice_id for _, invoice_id in results]
 
 
+@office_endpoint('app.db.dao_payments.suggested_invoice_ids')
+def suggested_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
+    return suggest_invoice_ids(transaction, invoices)
+
+
 @office_endpoint('app.db.dao_payments.apply_invoice_correction')
 def apply_invoice_correction(correction_id, invoice_id, amount, paid_on, actor_id):
     """Apply an issued negative correction as credit, without inventing cash."""
@@ -763,7 +770,7 @@ def apply_invoice_correction(correction_id, invoice_id, amount, paid_on, actor_i
                     raise PaymentError('Brak faktury źródłowej korekty.')
             return row['id']
         def contractor(row):
-            return _contractor_key({**dict(row), 'nip': row['nabywca_nip'], 'buyer': row['nabywca_pelna']})
+            return contractor_key({**dict(row), 'nip': row['nabywca_nip'], 'buyer': row['nabywca_pelna']})
         if contractor(credit) != contractor(debit) or root(credit) != root(debit):
             raise PaymentError('Korekta musi dotyczyć tej samej faktury źródłowej i kontrahenta.')
         if amount > invoice_payment_total(credit) - _paid_amount(conn, correction_id):

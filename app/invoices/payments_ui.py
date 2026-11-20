@@ -16,19 +16,13 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
-    list_unsettled_transfers, record_manual_payment, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
-    invoice_choices_for_transaction, match_invoice_contractor, match_invoice_contractors,
-    invoice_contractor_key,
-    bank_transfer_block_reason, apply_invoice_correction,
+    list_unsettled_transfers, record_manual_payment, record_cash_payment, delete_bank_transaction,
+    match_invoice_contractors, contractor_key, suggest_invoice_ids, transfer_block_reason,
+    apply_invoice_correction,
 )
 from app.utils.view_state import ItemViewState
 
 logger = logging.getLogger(__name__)
-
-
-def _contractor_data(invoice: dict) -> str:
-    kind, value = invoice_contractor_key(invoice)
-    return f"{kind}:{value}"
 
 
 def money_text(value) -> str:
@@ -102,6 +96,7 @@ class BankPaymentReview(QDialog):
         self.transactions = []
         self._matches = {}
         self._invoices_by_contractor = {}
+        self._invoices_by_id = {}
         self._bank_limit = 100
         self._import_thread = None
         self._import_worker = None
@@ -315,10 +310,11 @@ class BankPaymentReview(QDialog):
         saved_choices = self._snapshot_choices()
         state = ItemViewState(self.table, lambda index: index.data()) if self.table.rowCount() else None
         self.invoices, self.transactions = invoices, transactions
+        self._invoices_by_id = {invoice["id"]: invoice for invoice in invoices}
         self._invoices_by_contractor = {}
         for invoice in invoices:
             self._invoices_by_contractor.setdefault(
-                invoice_contractor_key(invoice), []
+                contractor_key(invoice), []
             ).append(invoice)
         self._matches = match_invoice_contractors(transactions, invoices)
         old_model = getattr(self, '_contractor_model', None)
@@ -327,11 +323,12 @@ class BankPaymentReview(QDialog):
         self._contractor_model.appendRow(first)
         seen = set()
         for invoice in sorted(invoices, key=lambda item: str(item.get('buyer') or '').casefold()):
-            key = invoice_contractor_key(invoice)
+            key = contractor_key(invoice)
             if key not in seen:
                 seen.add(key)
                 item = QStandardItem(invoice.get('buyer') or '(bez nazwy)')
-                item.setData(_contractor_data(invoice), Qt.ItemDataRole.UserRole)
+                kind, value = key
+                item.setData(f"{kind}:{value}", Qt.ItemDataRole.UserRole)
                 self._contractor_model.appendRow(item)
         for company in self.companies:
             key = (company.get('kind', 'firma'), company['id'])
@@ -402,7 +399,7 @@ class BankPaymentReview(QDialog):
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             mode.currentIndexChanged.connect(lambda _index, row=idx: self._mode_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, self.COL_SETTLEMENT))
-            reason = bank_transfer_block_reason(entry)
+            reason = transfer_block_reason(entry)
             if reason:
                 choices.blockSignals(True)
                 choices.clear()
@@ -493,7 +490,7 @@ class BankPaymentReview(QDialog):
         refund = Decimal(str(entry['kwota'])) < 0
         invoices = [item for item in invoices if (item.get('rodzaj') == 'korekta'
                     and Decimal(str(item.get('kwota_brutto', 0))) < 0) == refund]
-        suggestions = suggested_invoice_ids(entry, invoices)
+        suggestions = suggest_invoice_ids(entry, invoices)
         by_id = {invoice["id"]: invoice for invoice in invoices}
         ordering = suggestions + [invoice["id"] for invoice in invoices if invoice["id"] not in suggestions]
         deferred = not full and len(ordering) > 50
@@ -519,7 +516,7 @@ class BankPaymentReview(QDialog):
         mode = self.table.cellWidget(row, self.COL_MODE)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
         old = mode.currentData() if mode.property('invoice_id') == invoice_id else None
-        invoice = next((item for item in self.invoices if item['id'] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         mode.blockSignals(True)
         mode.clear()
         if invoice is None or Decimal(str(invoice['balance'])) > 0:
@@ -547,7 +544,7 @@ class BankPaymentReview(QDialog):
     def _mode_changed(self, row):
         self.table.setCurrentCell(row, self.COL_MODE)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
-        invoice = next((item for item in self.invoices if item['id'] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         if invoice is not None:
             self.table.cellWidget(row, self.COL_SETTLEMENT).setText(money_text(
                 min(Decimal(str(self.transactions[row]['remaining'])), self._mode_limit(row, invoice))))
@@ -578,7 +575,7 @@ class BankPaymentReview(QDialog):
         self.table.setCurrentCell(row, self.COL_INVOICE)
         self.table.cellWidget(row, self.COL_INVOICE).setProperty("auto_selected", None)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
-        invoice = next((item for item in self.invoices if item["id"] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         if invoice is not None:
             self._populate_modes(row)
             amount = min(Decimal(str(self.transactions[row]["remaining"])), self._mode_limit(row, invoice))
@@ -589,7 +586,7 @@ class BankPaymentReview(QDialog):
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         if combo.currentData() is not None or combo.count() < 2 or not combo.itemText(1).startswith("★"):
             return
-        invoice = next((item for item in self.invoices if item["id"] == combo.itemData(1)), None)
+        invoice = self._invoices_by_id.get(combo.itemData(1))
         if invoice is None:
             return
         combo.setCurrentIndex(1)
@@ -610,13 +607,13 @@ class BankPaymentReview(QDialog):
         if invoice_id is None:
             QMessageBox.warning(self, "Rozliczenie", "Wybierz konkretną fakturę.")
             return
-        invoice = next((i for i in self.invoices if i["id"] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         if invoice is None:
             QMessageBox.warning(self, "Rozliczenie", "Faktura nie jest już dostępna. Odśwież listę.")
             return
         try:
             amount = _payment_amount(self.table.cellWidget(selected, self.COL_SETTLEMENT).text().strip())
-            reason = bank_transfer_block_reason(transfer)
+            reason = transfer_block_reason(transfer)
             if reason:
                 raise PaymentError(reason)
             if amount > min(Decimal(str(transfer["remaining"])), self._mode_limit(selected, invoice)):
@@ -677,8 +674,8 @@ class BankPaymentReview(QDialog):
                 if invoice is None:
                     raise PaymentError("Faktura nie jest już dostępna. Odśwież listę.")
                 amount = _payment_amount(self.table.cellWidget(row, self.COL_SETTLEMENT).text().strip())
-                if bank_transfer_block_reason(transfer):
-                    raise PaymentError(bank_transfer_block_reason(transfer))
+                if reason := transfer_block_reason(transfer):
+                    raise PaymentError(reason)
                 if amount > Decimal(str(transfer["remaining"])):
                     raise PaymentError(f"Kwota przekracza saldo przelewu #{transfer['id']}.")
                 manual_id = self.table.cellWidget(row, self.COL_MODE).currentData()
@@ -742,7 +739,7 @@ class BankPaymentReview(QDialog):
             return item.get('root_id') or item.get('korygowana_faktura_id') or item['id']
         def limit_amount():
             credit = next(item for item in credits if item['id'] == credit_choice.currentData())
-            debit = next((item for item in self.invoices if item['id'] == debit_choice.currentData()), None)
+            debit = self._invoices_by_id.get(debit_choice.currentData())
             amount.setText(money_text(min(Decimal(str(credit['balance'])), Decimal(str(debit['balance']))) if debit else '0.00'))
         def populate():
             credit = next(item for item in credits if item['id'] == credit_choice.currentData())
@@ -750,7 +747,7 @@ class BankPaymentReview(QDialog):
             debit_choice.clear()
             for item in self.invoices:
                 if (Decimal(str(item.get('kwota_brutto', item['balance']))) > 0 and Decimal(str(item['balance'])) > 0
-                        and family(item) == family(credit) and invoice_contractor_key(item) == invoice_contractor_key(credit)):
+                        and family(item) == family(credit) and contractor_key(item) == contractor_key(credit)):
                     debit_choice.addItem(f'{item["numer"]} — pozostało {money_text(item["balance"])} zł', item['id'])
             debit_choice.blockSignals(False)
             limit_amount()

@@ -14,7 +14,7 @@ NIP = '1234567890'
 SOURCE = {'nip': NIP, 'database': 'ClientA'}
 
 
-def fetched(config, source, months):
+def fetched(config, source, months, *, result_kind='counts'):
     return [{'nip': source['nip'], 'miesiac': month, 'dokumenty': index,
              'pozycje_bankowe': 0, 'rodzaje': {'AMO': index}}
             for index, month in enumerate(months)]
@@ -78,8 +78,8 @@ class EnovaYearImportTests(DbTestCase):
                          (f'enova_checking_{self.company}_2026-11', json.dumps(previous)))
         config = {**self.config, 'sources': [SOURCE, {'nip': '9999999999', 'database': 'ClientB'}]}
         for failure in ('nip', 'missing_month'):
-            def fetch(config, source, months):
-                rows = fetched(config, source, months)
+            def fetch(config, source, months, *, result_kind):
+                rows = fetched(config, source, months, result_kind=result_kind)
                 if source['database'] == 'ClientA':
                     if failure == 'nip':
                         rows[0]['nip'] = '9999999999'

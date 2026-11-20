@@ -38,9 +38,7 @@ Company AS (
       AND NOT EXISTS (SELECT 1 FROM ValidNips)
 ),
 Documents AS (
-    SELECT j.ID, j.OkresTo, j.NumerKorekty, j.StatusJPK, j.BramkaJPK, j.FormCode,
-           TRY_CONVERT(xml, CASE WHEN LEFT(CAST(j.UPO AS nvarchar(max)), 5) = N'<?xml' AND CHARINDEX(N'?>', CAST(j.UPO AS nvarchar(max))) > 0
-                   THEN SUBSTRING(CAST(j.UPO AS nvarchar(max)), CHARINDEX(N'?>', CAST(j.UPO AS nvarchar(max))) + 2, 2147483647) ELSE CAST(j.UPO AS nvarchar(max)) END) AS Confirmation,
+    SELECT j.ID, j.OkresTo, j.StatusJPK, j.BramkaJPK, j.FormCode,
            ROW_NUMBER() OVER (PARTITION BY YEAR(j.OkresTo), MONTH(j.OkresTo)
                               ORDER BY CASE WHEN j.BramkaJPK = 3 THEN 0 ELSE 1 END, j.NumerKorekty DESC, j.ID DESC) AS Position
     FROM dbo.JednolitePK j CROSS JOIN Parameters p
@@ -49,19 +47,35 @@ Documents AS (
           IN (N'JPKVAT', N'JPKV7M', N'JPKV7K')
 ),
 Receipts AS (
-    SELECT *, Confirmation.value('(//*[local-name()="NumerReferencyjny"]/text())[1]', 'nvarchar(256)') AS Receipt
-    FROM Documents WHERE Position = 1
+    SELECT d.*,
+           NULLIF(LTRIM(RTRIM(x.Confirmation.value('(//*[local-name()="Potwierdzenie"]/*[local-name()="NumerReferencyjny"]/text())[1]', 'nvarchar(256)'))), N'') AS Receipt,
+           x.Confirmation.value('(//*[local-name()="Potwierdzenie"]/*[local-name()="DataWplyniecia"]/text())[1]', 'nvarchar(64)') AS ReceivedAt,
+           x.Confirmation.value('(//*[local-name()="Potwierdzenie"]/*[local-name()="DataWytworzeniaPotwierdzenia"]/text())[1]', 'nvarchar(64)') AS IssuedAt,
+           x.Confirmation.value('declare namespace ds="http://www.w3.org/2000/09/xmldsig#";
+               declare namespace xades="http://uri.etsi.org/01903/v1.3.2#";
+               (/ds:Signature/ds:Object/xades:QualifyingProperties/xades:SignedProperties/xades:SignedSignatureProperties/xades:SigningTime/text())[1]', 'nvarchar(64)') AS SignedAt
+    FROM Documents d
+    LEFT JOIN dbo.JednolitePK j ON j.ID = d.ID AND d.BramkaJPK = 3 AND d.StatusJPK = 100
+    CROSS APPLY (SELECT LTRIM(CAST(j.UPO AS nvarchar(max))) AS Body) u
+    CROSS APPLY (SELECT TRY_CONVERT(xml, CASE WHEN LEFT(u.Body, 5) = N'<?xml' AND CHARINDEX(N'?>', u.Body) > 0
+        THEN SUBSTRING(u.Body, CHARINDEX(N'?>', u.Body) + 2, 2147483647) ELSE u.Body END) AS Confirmation) x
+    WHERE d.Position = 1
 )
 SELECT c.nip, CONVERT(char(7), m.MonthStart, 120) AS miesiac,
        d.FormCode AS form_variant,
        CASE WHEN d.BramkaJPK <> 3 OR d.BramkaJPK IS NULL THEN N'unknown'
-            WHEN d.StatusJPK = 100 AND NULLIF(d.Receipt, N'') IS NOT NULL THEN N'accepted'
+            WHEN d.StatusJPK = 100 AND d.Receipt IS NOT NULL THEN N'accepted'
             WHEN d.StatusJPK IN (10,15) THEN N'prepared'
             WHEN d.StatusJPK = 20 THEN N'not_sent'
             WHEN d.StatusJPK IN (30,40) THEN N'processing'
             WHEN d.StatusJPK = 200 THEN N'failed'
             ELSE N'unknown' END AS status,
-       CASE WHEN d.BramkaJPK = 3 AND d.StatusJPK = 100 THEN COALESCE(d.Receipt, N'') ELSE N'' END AS upo,
+       COALESCE(d.Receipt, N'') AS upo,
+       CASE WHEN d.Receipt IS NOT NULL THEN CONVERT(nvarchar(64),
+            TRY_CONVERT(datetimeoffset(7), NULLIF(LTRIM(RTRIM(d.ReceivedAt)), N''), 127), 127) END AS sent_at,
+       CASE WHEN d.Receipt IS NOT NULL THEN CONVERT(nvarchar(64), COALESCE(
+            TRY_CONVERT(datetimeoffset(7), NULLIF(LTRIM(RTRIM(d.IssuedAt)), N''), 127),
+            TRY_CONVERT(datetimeoffset(7), NULLIF(LTRIM(RTRIM(d.SignedAt)), N''), 127)), 127) END AS upo_at,
        CASE WHEN d.ID IS NULL THEN N'Brak pliku JPK VAT w bazie'
             ELSE CONCAT(N'Enova StatusJPK=', d.StatusJPK, N' (',
                  CASE d.StatusJPK WHEN 10 THEN N'Created' WHEN 15 THEN N'WaitingForSignature'

@@ -8,7 +8,7 @@ from unittest.mock import patch,Mock
 from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting,set_setting
-from app.companies.checking_obligations import add_imported,profile,save
+from app.companies.checking_obligations import add_imported,profile,report_applies,save
 from app.email.company_folders import link_account
 from app.email.email_storage import save_folder
 from app.services.declaration_year import read_enova
@@ -92,15 +92,79 @@ class ImportAndMailTests(DbTestCase):
         self.assertEqual(tuple(row),(77,'Brak'))
 
     def test_missing_documents_preserve_positive_scope_and_quarterly_source_cadence(self):
+        month = '2026-01'
+        settings_key = f'checking_obligations_{self.company}'
         with get_conn() as conn:
-            add_imported(conn,self.company,'2026-01',[{'form':'JPK_VAT','form_variant':'JPK_V7K'}],'enova')
-            add_imported(conn,self.company,'2026-01',[],'enova')
-        value = profile(json.loads(get_setting(f'checking_obligations_{self.company}')),'2026-01')
-        self.assertEqual(value['forms'],{'JPKVAT':'monthly'})
-        self.assertEqual(value['vat_period'],'quarterly')
-        self.assertFalse(value.get('_configured',False))
-        from app.companies.checking_obligations import report_applies
-        self.assertTrue(report_applies({'checking_obligations':json.loads(get_setting(f'checking_obligations_{self.company}'))},'RCA','2026-01'))
+            add_imported(conn, self.company, month, [{'form': 'JPK_VAT', 'form_variant': 'JPK_V7K'}], 'enova')
+        company = {'checking_obligations': json.loads(get_setting(settings_key))}
+        self.assertFalse(report_applies(company, 'RCA', month))
+
+        with get_conn() as conn:
+            add_imported(conn, self.company, month, [{'form': 'ZUS RCA'}], 'platnik')
+            add_imported(conn, self.company, month, [], 'enova')
+            add_imported(conn, self.company, month, [], 'platnik')
+        company = {'checking_obligations': json.loads(get_setting(settings_key))}
+        value = profile(company['checking_obligations'], month)
+        self.assertEqual(value['forms'], {'JPKVAT': 'monthly', 'RCA': 'monthly'})
+        self.assertEqual(value['vat_period'], 'quarterly')
+        self.assertFalse(value.get('_configured', False))
+        self.assertTrue(report_applies(company, 'RCA', month))
+
+    def test_one_time_rebuild_replaces_selections_after_reads_and_preserves_filed_records(self):
+        from app.db.dao_year_end import get_company_year_declarations, save_company_year_declarations
+        from app.integrations.enova.query_defaults import bundled_directory
+        from scripts.odtworz_zaznaczenia_deklaracji import rebuild
+        from tests.test_platnik_declarations import ROW
+
+        year = 2025
+        month = '2025-01'
+        another = self.make_company('Bez odczytu Enovy', nip='2223334455')
+        prior = {'vat_period': 'monthly', 'forms': {'RCA': 'none', 'RSA': 'monthly'}, 'document_types': ['ZR']}
+        for company in (self.company, another):
+            save(company, {month: prior}, 1)
+        key = f'checking_obligations_{self.company}'
+        skipped_original = get_setting(f'checking_obligations_{another}')
+        save_company_year_declarations(self.company, {year: ['ZUS ZSWA', 'PIT-36']}, 1)
+        with get_conn() as conn:
+            conn.execute('INSERT INTO zakonczenie_roku(firma_id,rok,deklaracja,zlozona,data_zlozenia,upo) '
+                         'VALUES (%s,%s,%s,1,%s,%s)', (self.company, year, 'CIT-8', '2026-03-31', 'reference'))
+            add_imported(conn, self.company, month, [{'form': 'ZUS RZA'}], 'platnik')
+        original = get_setting(key)
+        sources = [{'nip': nip, 'declarations_query': str(bundled_directory() / 'declarations.sql'), 'jpk_query': 'jpk.sql'}
+                   for nip in ('1112223344', '2223334455')]
+
+        def platnik(config, periods, *, annual=False):
+            row = {**ROW, 'nip': '1112223344'}
+            if annual:
+                return [{**row, 'form': 'ZUS IWA', 'rok': str(year)}]
+            return [{**row, 'form': 'ZUS RCA', 'miesiac': month}] if periods == [month] else []
+
+        def enova(config, source, months):
+            if source['nip'] == '2223334455':
+                raise ValueError('Brak odczytu.')
+            jpk = {period: {'status': 'not_applicable'} for period in months}
+            jpk[month] = {'status': 'prepared', 'form_variant': 'JPK_V7K'}
+            return {period: [] for period in months}, jpk
+
+        with patch('app.integrations.platnik.declarations.fetch', side_effect=platnik), \
+                patch('app.integrations.enova.connection_settings.load_connection', return_value={'sources': sources}), \
+                patch('app.services.declaration_year.fetch_enova', side_effect=enova), patch('builtins.print'):
+            self.assertEqual(rebuild(year), 1)
+            self.assertEqual(get_setting(key), original)
+            self.assertEqual(rebuild(year, apply=True), 1)
+        value = json.loads(get_setting(key))
+        january = profile(value, month)
+        self.assertEqual(january['forms'], {'RCA': 'monthly', 'JPKVAT': 'monthly'})
+        self.assertEqual(january['vat_period'], 'quarterly')
+        self.assertEqual(january['document_types'], ['ZR'])
+        self.assertEqual(profile(value, '2025-02')['forms'], {})
+        self.assertEqual(profile(value, '2026-01')['forms'], prior['forms'])
+        self.assertEqual(get_setting(f'checking_obligations_{another}'), skipped_original)
+        self.assertEqual(get_company_year_declarations(self.company, year), ['PIT-36', 'ZUS IWA', 'CIT-8'])
+        with get_conn() as conn:
+            recorded = conn.execute('SELECT data_zlozenia,upo FROM zakonczenie_roku WHERE firma_id=%s',
+                                    (self.company,)).fetchone()
+            self.assertEqual(tuple(recorded), ('2026-03-31', 'reference'))
 
     def test_monthly_insurance_titles_are_imported_not_carried_into_other_months(self):
         from app.integrations.platnik.declarations import import_months

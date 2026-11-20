@@ -27,9 +27,9 @@ class WorkerSchedulingTests(DbTestCase):
              patch('app.integrations.enova.document_counts.run_import',return_value=[{'ok':True}]) as remote:
             self.assertEqual(enova_job()['mode'],'idle')
             remote.assert_not_called()
-            save_month_status(self.company,'2026-11',{'etap':'W toku'})
+            save_month_status(self.company,'2026-11',{'etap':'Zaksięgowane'})
             revision = json.loads(self.pending()[0]['wartosc'])['revision']
-            save_month_status(self.company,'2026-11',{'etap':'W toku','ilosc_dok':3})
+            save_month_status(self.company,'2026-11',{'etap':'Zaksięgowane','ilosc_dok':3})
             self.assertEqual(json.loads(self.pending()[0]['wartosc'])['revision'],revision)
             self.assertEqual(enova_job()['mode'],'applied')
             self.assertEqual(remote.call_args.kwargs['months'],['2026-11'])
@@ -39,7 +39,7 @@ class WorkerSchedulingTests(DbTestCase):
             self.assertEqual(remote.call_count,1)
 
     def test_new_edit_during_read_survives_and_failure_is_retried(self):
-        save_month_status(self.company,'2026-11',{'etap':'W toku'})
+        save_month_status(self.company,'2026-11',{'etap':'Zaksięgowane'})
         def read(*args,**kwargs):
             save_month_status(self.company,'2026-11',{'etap':'Wysłane wyniki'})
             return [{'ok':True}]
@@ -58,13 +58,44 @@ class WorkerSchedulingTests(DbTestCase):
 
     def test_adjacent_month_changes_are_read_together_for_one_company(self):
         for month in ('2026-09','2026-10','2026-11'):
-            save_month_status(self.company,month,{'etap':'W toku'})
+            save_month_status(self.company,month,{'etap':'Zaksięgowane'})
         with patch('app.integrations.enova.connection_settings.load_connection',return_value=self.config), \
              patch('app.integrations.enova.document_counts.run_import',return_value=[{'ok':True}]) as remote:
             enova_job()
             self.assertEqual(remote.call_count,1)
             self.assertEqual(remote.call_args.kwargs['months'],['2026-09','2026-10','2026-11'])
             self.assertFalse(self.pending())
+
+    def test_sent_accounting_stage_refreshes_count_even_if_upo_read_fails(self):
+        month = datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
+        self.config['sources'][0].update(accounting_type='KPIR', jpk_query='jpk.sql')
+        from app.db.dao_monthly import get_month_status
+        source_row = {'nip': '1234567890', 'miesiac': month, 'dokumenty': 42, 'pozycje_bankowe': 0}
+        with patch('app.integrations.enova.connection_settings.load_connection', return_value=self.config), \
+             patch('app.integrations.enova.document_counts.fetch_counts', return_value=[source_row]) as fetch, \
+             patch('app.integrations.enova.jpk.fetch_counts', side_effect=ValueError('Brak danych UPO')) as jpk:
+            save_month_status(self.company, month, {'etap': 'Zaksięgowane', 'etap_kadry': 'Wysłane wyniki'})
+            with self.assertRaises(ValueError):
+                enova_job()
+            fetch.assert_not_called()
+            save_month_status(self.company, month, {'etap': 'Wysłane wyniki'})
+            with self.assertRaises(ValueError):
+                enova_job()
+            self.assertEqual(get_month_status(self.company, month)['ilosc_dok'], 42)
+            self.assertEqual(len(self.pending()), 1)
+
+            jpk.side_effect = None
+            jpk.return_value = [{'nip': source_row['nip'], 'miesiac': month, 'status': 'unknown', 'upo': ''}]
+            self.assertEqual(enova_job()['mode'], 'applied')
+            fetch.assert_called_once()
+
+            save_month_status(self.company, month, {'etap': 'Zaksięgowane'})
+            save_month_status(self.company, month, {'etap': 'Wysłane wyniki', 'ilosc_dok': 0,
+                                                    '_manual_document_count': False})
+            self.assertEqual(get_month_status(self.company, month)['ilosc_dok'], 42)
+            fetch.return_value = [{**source_row, 'dokumenty': 57}]
+            self.assertEqual(enova_job()['mode'], 'applied')
+            self.assertEqual(get_month_status(self.company, month)['ilosc_dok'], 57)
 
     def test_ezla_downloads_only_monday_and_completion_survives_restart(self):
         zone = ZoneInfo('Europe/Warsaw')

@@ -11,7 +11,7 @@ from app.reports import reports_ui
 from tests.test_background_workflows import wait
 from tests.test_review_followups import MailboxFixture
 
-_app = QApplication.instance() or QApplication([])
+_app = QApplication.instance() or QApplication(["biuro-tests"])
 
 
 class SendAndExportWorkflowTests(MailboxFixture):
@@ -24,7 +24,7 @@ class SendAndExportWorkflowTests(MailboxFixture):
 
     def page(self):
         with mock.patch.object(email_ui.EmailPage, 'start_background_sync'), \
-                mock.patch.object(email_ui, 'MailBrowser', QTextBrowser):
+                mock.patch("app.email.mail_area.MailBrowser", QTextBrowser):
             page = email_ui.EmailPage(1)
         self.addCleanup(page.deleteLater)
         page.accounts = [{'id': 1, 'email': 'office@example.com'}]
@@ -45,9 +45,9 @@ class SendAndExportWorkflowTests(MailboxFixture):
             release.wait(3)
             sent.append((threading.get_ident(), args, kwargs))
             return True, 'OK'
-        with mock.patch.object(email_ui, 'ComposeDialog', return_value=dialog), \
+        with mock.patch("app.email.mail_actions.ComposeDialog", return_value=dialog), \
                 mock.patch('app.email.signature.choose_sender', return_value=page.current_account), \
-                mock.patch.object(email_ui, 'send_email_smtp', side_effect=send):
+                mock.patch("app.email.mail_actions.send_email_smtp", side_effect=send):
             self.assertTrue(page._open_compose('Compose', copy_folder='Sent'))
             self.assertTrue(entered.wait(1))
             page.current_account = {'id': 99}

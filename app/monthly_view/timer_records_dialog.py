@@ -394,10 +394,6 @@ class TimerRecordsDialog(QDialog):
             return
         entry = self._rows[selected[0]]
         dialog = EditTimerRecordDialog(entry, self, self.actor_id)
-    def _employee_changed(self):
-        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
-        self.reload()
-
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         dzial, opis, seconds = dialog.values()
@@ -411,6 +407,10 @@ class TimerRecordsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Czasomierz", f"Nie udało się zapisać zmian: {exc}")
             return
+        self.reload()
+
+    def _employee_changed(self):
+        self.month.setCurrentText(default_month_for_employee(self.employee.currentData()))
         self.reload()
 
     def delete_selected(self):

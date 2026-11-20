@@ -35,8 +35,9 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
     cur = conn.cursor()
     before = conn.execute('SELECT ilosc_dok,etap,etap_kadry FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
                           (firma_id, miesiac)).fetchone()
-    manual_count = payload.pop('_manual_document_count', False) or (
-        'ilosc_dok' in payload and before is not None and payload['ilosc_dok'] != before[0])
+    manual_intent = payload.pop('_manual_document_count', None)
+    update_count = 'ilosc_dok' in payload and manual_intent is not False
+    manual_count = manual_intent is True or (update_count and before is not None and payload['ilosc_dok'] != before[0])
 
     cur.execute("""
         INSERT INTO statusy_miesieczne (
@@ -49,7 +50,7 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         ON CONFLICT(firma_id, miesiac)
         DO UPDATE SET
             etap = excluded.etap,
-            ilosc_dok = excluded.ilosc_dok,
+            ilosc_dok = CASE WHEN %s THEN excluded.ilosc_dok ELSE statusy_miesieczne.ilosc_dok END,
             sekundy_ksiegowosc = excluded.sekundy_ksiegowosc,
             sekundy_kadry = excluded.sekundy_kadry,
             wartosc_uslug = excluded.wartosc_uslug,
@@ -67,6 +68,7 @@ def save_month_status(firma_id: int, miesiac: str, payload: Dict[str, Any]) -> N
         1 if payload.get("dokumenty_dostarczone") else 0,
         payload.get("data_dostarczenia") if payload.get("dokumenty_dostarczone") else None,
         payload.get("etap_kadry"),
+        update_count,
         payload.get("etap_kadry"),
     ))
 

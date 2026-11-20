@@ -45,6 +45,18 @@ class EmployeeTimersTests(DbTestCase):
         record = self.timer(self.company)
         with get_conn() as conn:
             conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,sekundy_ksiegowosc) VALUES (%s,'2026-10',3600)",(self.company,))
+        update_company_timer(self.company,SOURCE_TIMER,record,'kadry','Korekta',123,self.employee,
+                             started_at='2026-11-01T08:15:00',ended_at='2026-11-01T10:45:00')
+        rows = list_employee_timers(self.employee,self.employee,'2026-11')
+        self.assertEqual((rows[0]['sekundy'],rows[0]['start'],rows[0]['koniec']),(9000,'2026-11-01T08:15:00','2026-11-01T10:45:00'))
+        with get_conn() as conn:
+            totals = conn.execute('SELECT miesiac,sekundy_ksiegowosc,sekundy_kadry FROM statusy_miesieczne WHERE firma_id=%s ORDER BY miesiac',(self.company,)).fetchall()
+            audit = conn.execute("SELECT uzytkownik_id,szczegoly FROM audit_log WHERE tabela='czasomierze' AND rekord_id=%s",(record,)).fetchone()
+        self.assertEqual((totals[0][1],totals[1][2]),(0,9000))
+        self.assertEqual(audit[0],self.employee)
+        details = json.loads(audit[1]) if isinstance(audit[1],str) else audit[1]
+        self.assertEqual(details['before']['sekundy'],3600)
+        self.assertEqual(details['after']['sekundy'],9000)
 
     def test_explicit_accounting_month_is_independent_from_calendar_date(self):
         record = add_manual_time(self.employee, self.company, 'ksiegowosc', 'Październik', 900,
@@ -61,18 +73,6 @@ class EmployeeTimersTests(DbTestCase):
                              self.employee, miesiac='2026-11')
         self.assertEqual(list_employee_timers(self.employee, self.employee, '2026-10'), [])
         self.assertEqual(list_employee_timers(self.employee, self.employee, '2026-11')[0]['sekundy'], 1800)
-        update_company_timer(self.company,SOURCE_TIMER,record,'kadry','Korekta',123,self.employee,
-                             started_at='2026-11-01T08:15:00',ended_at='2026-11-01T10:45:00')
-        rows = list_employee_timers(self.employee,self.employee,'2026-11')
-        self.assertEqual((rows[0]['sekundy'],rows[0]['start'],rows[0]['koniec']),(9000,'2026-11-01T08:15:00','2026-11-01T10:45:00'))
-        with get_conn() as conn:
-            totals = conn.execute('SELECT miesiac,sekundy_ksiegowosc,sekundy_kadry FROM statusy_miesieczne WHERE firma_id=%s ORDER BY miesiac',(self.company,)).fetchall()
-            audit = conn.execute("SELECT uzytkownik_id,szczegoly FROM audit_log WHERE tabela='czasomierze' AND rekord_id=%s",(record,)).fetchone()
-        self.assertEqual((totals[0][1],totals[1][2]),(0,9000))
-        self.assertEqual(audit[0],self.employee)
-        details = json.loads(audit[1]) if isinstance(audit[1],str) else audit[1]
-        self.assertEqual(details['before']['sekundy'],3600)
-        self.assertEqual(details['after']['sekundy'],9000)
 
     def test_general_time_can_be_edited_without_a_company(self):
         record = self.timer(None)
@@ -127,7 +127,7 @@ class EmployeeTimersTests(DbTestCase):
 
     def test_description_edit_preserves_seconds_in_a_duration_only_record(self):
         from app.monthly_view.timer_records_dialog import EditTimerRecordDialog
-        entry = {'dzial':'ogolne','opis':'Stary opis','sekundy':95,'start':'','koniec':''}
+        entry = {'dzial':'ogolne','opis':'Stary opis','sekundy':95,'start':'','koniec':'','miesiac':'2026-11'}
         with mock.patch('app.monthly_view.timer_records_dialog.list_extra_service_catalogue',return_value=[]):
             dialog = EditTimerRecordDialog(entry,actor_id=self.employee)
         self.addCleanup(dialog.close)

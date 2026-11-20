@@ -1,5 +1,4 @@
 """Tests for invoice service labels and distinct accounting/payroll months."""
-import datetime
 import unittest
 from unittest.mock import patch
 
@@ -60,13 +59,14 @@ class MonthlyTabsTests(unittest.TestCase):
              patch.object(MonthlyViewPage, "_load_initial_data"), \
              patch.object(MonthlyViewPage, "_setup_timer"), \
              patch.object(MonthlyViewPage, "_reload_rows"), \
-             patch("app.year_end.year_end_ui.list_year_end", return_value=[]):
+             patch("app.year_end.year_end_ui.list_year_end", return_value=[]), \
+             patch('app.utils.months.default_month_for_department', side_effect=('2026-09', '2026-11')):
             factory.return_value.aktualny_miesiac = "2026-09"
             page = MonthlyViewPage(1)
             try:
                 self.assertEqual(page.month_combo.currentText(), "2026-09")
                 page.tabs.setCurrentIndex(1)
-                current = datetime.date.today().strftime("%Y-%m")
+                current = '2026-11'
                 self.assertEqual(page.month_combo.currentText(), current)
                 self.assertEqual(factory.return_value.set_month.call_args.args[0], current)
                 page.month_combo.setCurrentText("2026-08")
@@ -85,7 +85,8 @@ class MonthlyTabsTests(unittest.TestCase):
              patch.object(MonthlyViewPage, "_load_initial_data"), \
              patch.object(MonthlyViewPage, "_setup_timer"), \
              patch.object(MonthlyViewPage, "_reload_rows"), \
-             patch("app.preferences.department.default_department", return_value='accounting'):
+             patch("app.preferences.department.default_department", return_value='accounting'), \
+             patch('app.utils.months.default_month_for_department', side_effect=('2026-09', '2026-11')):
             factory.return_value.aktualny_miesiac = "2026-09"
             page = MonthlyViewPage(1)
             try:

@@ -4,25 +4,31 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.db.dao_conn import get_conn
+from app.db.import_audit import log_import
 from app.companies.checking_obligations import add_imported
 from app.integrations.enova.checking import validate_declarations,CheckingBusy
 from app.integrations.enova.document_counts import fetch_counts,normalize_nip
-from app.integrations.enova.jpk import validate_jpk
+from app.integrations.enova.jpk import save_jpk, validate_jpk
 from app.services.worker_activity import record
 
 
-def read_enova(config, source, company_id, months):
+def fetch_enova(config, source, months):
     if not source.get('declarations_query'):
         raise ValueError('Brak adaptera deklaracji Enovy dla firmy.')
+    declarations = validate_declarations(fetch_counts(config,{**source,'count_query':source['declarations_query']},
+                                                     months,result_kind='declarations'),source,months)
+    jpk = None
+    if source.get('jpk_query'):
+        jpk = validate_jpk(fetch_counts(config,{**source,'count_query':source['jpk_query']},
+                                       months,result_kind='jpk'),source,months)
+    return declarations, jpk
+
+
+def read_enova(config, source, company_id, months):
     with get_conn() as conn:
         if not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Trwa inny odczyt Enovy.')
-        declarations = validate_declarations(fetch_counts(config,{**source,'count_query':source['declarations_query']},
-                                                         months,result_kind='declarations'),source,months)
-        jpk = None
-        if source.get('jpk_query'):
-            jpk = validate_jpk(fetch_counts(config,{**source,'count_query':source['jpk_query']},
-                                           months,result_kind='jpk'),source,months)
+        declarations, jpk = fetch_enova(config, source, months)
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for month in months:
             key = f'enova_checking_{company_id}_{month}'
@@ -34,16 +40,11 @@ def read_enova(config, source, company_id, months):
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',(key,json.dumps(snapshot)))
             add_imported(conn,company_id,month,declarations[month],'enova')
             if jpk is not None:
-                conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                             'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                             (f'enova_jpk_{company_id}_{month}',json.dumps({**jpk[month],'imported_at':stamp,'database':source['database']})))
-                if jpk[month].get('form_variant') or jpk[month]['status'] not in ('unknown','not_applicable'):
-                    add_imported(conn,company_id,month,[{'form':'JPK_VAT',**jpk[month]}],'enova-jpk')
-    from app.db.import_audit import log_import
-    documents = sum(len(entries) for entries in declarations.values())
-    log_import(conn, 'enova_declarations', source=source['database'], updated=documents,
-               details={'company_id': company_id, 'months': months, 'documents': documents,
-                        'jpk': jpk is not None})
+                save_jpk(conn, company_id, month, {**jpk[month], 'imported_at': stamp, 'database': source['database']})
+        documents = sum(len(entries) for entries in declarations.values())
+        log_import(conn, 'enova_declarations', source=source['database'], updated=documents,
+                   details={'company_id': company_id, 'months': months, 'documents': documents,
+                            'jpk': jpk is not None})
     return {'company_id':company_id,'source':'enova','ok':True,'months':months,
             'documents':documents}
 

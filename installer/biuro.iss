@@ -72,6 +72,11 @@ Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 ; Szablon konfiguracji w folderze uzytkownika (nie nadpisuje istniejacego, zostaje po odinstalowaniu)
 Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.example"; Flags: onlyifdoesntexist uninsneveruninstall
 
+[INI]
+#ifdef DefaultServerUrl
+Filename: "{app}\office-server.ini"; Section: "Office"; Key: "ServerUrl"; String: "{#DefaultServerUrl}"; Components: program; Flags: uninsdeleteentry uninsdeletesectionifempty
+#endif
+
 [Icons]
 Name: "{autoprograms}\Biuro - eksport struktury Płatnika"; Filename: "{app}\scripts\export_platnik_schema.cmd"; WorkingDir: "{app}"; Components: worker
 Name: "{autoprograms}\{#MyAppName} - konfiguracja workera"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--worker-setup"; WorkingDir: "{app}"; Components: worker

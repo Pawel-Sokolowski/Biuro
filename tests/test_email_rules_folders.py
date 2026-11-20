@@ -133,7 +133,7 @@ class FolderUiTests(RulesTests):
         a, b = self.find(page, "INBOX.A"), self.find(page, "INBOX.B")
 
         calls = []
-        with mock.patch.object(email_ui, "rename_folder", side_effect=lambda k, o, n: calls.append((k, o, n)) or "INBOX.B.A"), \
+        with mock.patch("app.email.mail_shell.rename_folder", side_effect=lambda k, o, n: calls.append((k, o, n)) or "INBOX.B.A"), \
                 mock.patch.object(email_ui.QMessageBox, "question", return_value=email_ui.QMessageBox.StandardButton.Yes), \
                 mock.patch.object(page, "_run_async", side_effect=lambda w, d: d(w(), None)):
             page._on_folder_dropped(a, b)

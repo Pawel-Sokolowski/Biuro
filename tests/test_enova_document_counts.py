@@ -112,7 +112,21 @@ class EnovaImportTests(DbTestCase):
         self.assertTrue(result[0]['ok'])
         self.assertEqual(result[0]['counts'], {'2026-11': 55})
         self.assertEqual(fetched.call_args.args[1]['accounting_type'], 'KPIR')
-        self.assertTrue(fetched.call_args.args[1]['count_query'].endswith('kpir.sql'))
+        self.assertTrue(fetched.call_args.args[1]['count_query'].endswith('monthly-documents.sql'))
+
+    def test_ryczalt_import_updates_the_same_month_when_the_vat_status_changes(self):
+        def read(_config, source, months):
+            purchases = 2 if source['vat_czynny'] else 0
+            return [{**row(documents=3 + purchases, bank=0), 'sprzedaz': 3, 'zakup': purchases,
+                     'rodzaje': {'SPR': 3, **({'ZP': 2} if purchases else {})}}]
+
+        for status, expected in (('Zwolniony', 3), ('Czynny', 5)):
+            with self.subTest(status=status):
+                with get_conn() as conn:
+                    conn.execute("UPDATE firmy SET forma_opodatkowania='Ryczałt',status_vat=%s WHERE id=%s", (status, self.company))
+                result, = run_import(self.config, apply=True, today=date(2026, 11, 9), fetch=read)
+                self.assertTrue(result['ok'], result)
+                self.assertEqual(self.state()[0], expected)
 
     def run_job(self, rows=None, apply=True):
         return run_import(self.config, apply=apply, today=date(2026, 11, 9),
@@ -194,22 +208,40 @@ class AutomaticAccountingTypeTests(TestCase):
         from app.integrations.enova.checking import checking_source
         company = {'forma_dzialalnosci':'Osoba fizyczna (KPiR)','forma_opodatkowania':''}
         self.assertEqual(resolve_source(SOURCE,company)['accounting_type'],'KPIR')
-        self.assertTrue(checking_source(SOURCE,company)['count_query'].endswith('kpir.sql'))
+        self.assertEqual(checking_source(SOURCE,company)['accounting_type'], 'KPIR')
         company['forma_opodatkowania'] = 'Księgi rachunkowe'
-        self.assertTrue(checking_source(SOURCE,company)['count_query'].endswith('checking.sql'))
+        self.assertEqual(checking_source(SOURCE,company)['accounting_type'], 'KH')
 
     def test_saved_type_selects_bundled_query_without_repeating_configuration(self):
         from app.integrations.enova.document_counts import resolve_source
         for label, kind in [('KPiR', 'KPIR'), ('Księgi rachunkowe', 'KH'), ('Ryczałt', 'RYCZALT')]:
             with self.subTest(label=label):
                 result = resolve_source({'database': 'client', 'nip': '1234567890'},
-                                        {'forma_opodatkowania': label})
+                                        {'forma_opodatkowania': label, 'status_vat': 'Czynny'})
                 self.assertEqual(result['accounting_type'], kind)
                 self.assertTrue(Path(result['count_query']).is_file())
 
+    def test_ryczalt_requires_vat_status_when_company_marks_it_unknown(self):
+        from app.integrations.enova.document_counts import resolve_source
+        with self.assertRaisesRegex(ValueError, 'Uzupełnij status VAT firmy Przykład'):
+            resolve_source(SOURCE, {'nazwa': 'Przykład', 'forma_opodatkowania': 'Ryczałt',
+                                    'status_vat': 'Brak danych', 'vat_czynny': 0})
+
     def test_unsupported_type_and_mismatched_custom_query_do_not_guess(self):
         from app.integrations.enova.document_counts import resolve_source
-        for source, label in [({}, 'Karta podatkowa'),
+        for source, label in [({}, 'Nieznana forma'),
                                ({'accounting_type': 'KPIR', 'count_query': 'custom.sql'}, 'Księgi rachunkowe')]:
             with self.subTest(label=label), self.assertRaises(ValueError):
                 resolve_source(source, {'forma_opodatkowania': label})
+
+    def test_cash_and_bank_positions_share_one_rounding(self):
+        source = {'nip': SOURCE['nip'], 'accounting_type': 'KH'}
+        value = {**row(documents=2, bank=1), 'pozycje_kasowe': 1, 'sprzedaz': 1, 'zakup': 0,
+                 'rodzaje': {'SPR': 1, 'AMO': 1}}
+        count, = validate_rows([value], source, ['2026-11'], 2)
+        self.assertEqual(count.total, 3)
+        self.assertEqual(sum(count.report_breakdown.values()), count.total)
+        self.assertEqual(count.cash_transactions, 1)
+        value.update(pozycje_bankowe=0, pozycje_kasowe=3)
+        count, = validate_rows([value], {**source, 'accounting_type': 'KPIR'}, ['2026-11'], 2)
+        self.assertEqual(count.report_breakdown, {'SPU': 1, 'ZR': 0, 'DW': 3})

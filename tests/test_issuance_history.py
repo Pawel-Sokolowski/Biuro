@@ -95,7 +95,9 @@ class InvoiceHistoryTests(DbTestCase):
         invoice = self.draft()
         page = FakturyPage(1)
         page.refresh()
-        with patch.object(page, '_selected_ids', return_value=[invoice]), patch('app.invoices.faktury_ui.QFileDialog.getSaveFileName', side_effect=AssertionError('XLSX dialog')):
+        with patch.object(page, '_selected_ids', return_value=[invoice]), \
+                patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.Yes), \
+                patch('app.invoices.faktury_ui.QFileDialog.getSaveFileName', side_effect=AssertionError('XLSX dialog')):
             page._export_selected_drafts()
         self.assertEqual(page.btn_export.text(), 'Wystaw zaznaczone')
         self.assertIs(page.tabs.currentWidget(), page.tab_wystawione)

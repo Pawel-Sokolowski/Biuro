@@ -96,7 +96,8 @@ class AccessAndChatReviewTests(DbTestCase):
         page._rendered_messages = []
         cm.update_conversation(self.channel, 'Review channel', [self.other], self.owner)
         cm.add_message(self.channel, self.owner, 'Secret after removal')
-        with mock.patch.object(page._reads, 'submit', side_effect=lambda read, done, error: done(read())):
+        with mock.patch.object(page, 'isVisible', return_value=True), \
+                mock.patch.object(page._reads, 'submit', side_effect=lambda read, done, error: done(read())):
             page._poll_async()
         self.assertIsNone(page.current_konwersacja)
         self.assertIsNone(page._rendered_messages)

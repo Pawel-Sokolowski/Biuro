@@ -136,9 +136,12 @@ class CheckingReportSelectionTests(TestCase):
             {'id': 1, 'nazwa': 'A', 'nip': '1112223344', 'history': [], 'checking': {'documents': {'payroll': {}},
              'declarations': [{'department': 'payroll', 'form': 'RCA', 'status': 'accepted', 'upo': 'REF'},
                               {'department': 'payroll', 'form': 'PIT-11', 'status': 'not_sent', 'upo': ''}]}},
-            {'id': 2, 'nazwa': 'B', 'nip': '2223334455', 'history': [], 'checking': {'declarations': [
+            {'id': 2, 'nazwa': 'B', 'nip': '2223334455', 'history': [],
+             'checking_obligations': {'periods': {'2026-11': {'vat_period': 'auto', 'forms': {'RCA': 'monthly'}}}},
+             'checking': {'declarations': [
                 {'department': 'payroll', 'form': 'PIT-8C', 'status': 'prepared', 'upo': ''}]}},
-            {'id': 3, 'nazwa': 'C', 'nip': '3334445566', 'history': []}]
+            {'id': 3, 'nazwa': 'C', 'nip': '3334445566', 'history': [],
+             'checking_obligations': {'periods': {'2026-11': {'vat_period': 'auto', 'forms': {'RCA': 'monthly'}}}}}]
         self.page.render(self.rows, '2026-11')
 
     def select(self, key):
@@ -171,7 +174,7 @@ class CheckingReportSelectionTests(TestCase):
         self.page.search.clear()
         self.page.render(self.rows[:1], '2026-12')
         self.assertEqual(selector.currentData(), 'form:PIT8C')
-        self.assertEqual(self.page.declaration_tables['payroll'].item(0, 4).text(), 'Brak danych')
+        self.assertEqual(self.page.declaration_tables['payroll'].rowCount(), 0)
 
     def test_ezla_combines_companies_and_keeps_unread_firms_visible(self):
         self.select('ezla')

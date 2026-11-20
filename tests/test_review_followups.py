@@ -394,7 +394,7 @@ class MailListFollowupTests(MailboxFixture):
         for patcher in (
             mock.patch.object(email_ui, "get_email_accounts_for_employee", return_value=[{"id": 1, "email": "review@example.com"}]),
             mock.patch.object(email_ui.EmailPage, "start_background_sync"),
-            mock.patch.object(email_ui, "MailBrowser", QTextBrowser),
+            mock.patch("app.email.mail_area.MailBrowser", QTextBrowser),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -409,8 +409,9 @@ class MailListFollowupTests(MailboxFixture):
         self.assertEqual(len(self.page._mail_rows), min(count, 500))
 
     def load_older(self):
-        self.page._load_mail_async(more=True)
-        self.assertTrue(wait_until(lambda: self.page.older_messages.isEnabled()))
+        with mock.patch.object(self.page._list_jobs, 'submit', side_effect=lambda work, done, error: done(work())):
+            self.page._load_mail_async(more=True)
+        self.assertTrue(self.page.older_messages.isEnabled())
 
     def test_paging_revalidates_read_flags_and_removes_deleted_rows(self):
         self.load_first_page()
@@ -521,7 +522,7 @@ class MailListFollowupTests(MailboxFixture):
     def test_move_without_selected_item_uses_captured_row_identity(self):
         row_id = self.set_fallback_identity()
         with mock.patch.object(self.page, "_run_async", side_effect=lambda work, done: work()), \
-                mock.patch.object(self.ui, "move_emails") as move:
+                mock.patch("app.email.mail_area.move_emails") as move:
             self.page._move_refs(self.page._targets(), "Archive", "Move")
         move.assert_called_once_with(1, "INBOX", ["1"], "Archive", expected_rows={"1": row_id})
 
@@ -530,7 +531,7 @@ class MailListFollowupTests(MailboxFixture):
         with mock.patch.object(self.page, "_run_async", side_effect=lambda work, done: work()), \
                 mock.patch.object(self.page, "_role_of", return_value="trash"), \
                 mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
-                mock.patch.object(self.ui, "delete_email_remote", return_value=True) as delete:
+                mock.patch("app.email.mail_actions.delete_email_remote", return_value=True) as delete:
             self.page.on_delete()
         delete.assert_called_once_with(1, "INBOX", "1", expected_row_id=row_id)
 
@@ -646,7 +647,7 @@ class MailListFollowupTests(MailboxFixture):
         with mock.patch.object(self.page, "_role_of", return_value="trash"), \
                 mock.patch.object(self.page, "_run_async", side_effect=lambda work, done: work()), \
                 mock.patch.object(QMessageBox, "question", side_effect=confirm), \
-                mock.patch.object(self.ui, "delete_email_remote", return_value=True) as delete:
+                mock.patch("app.email.mail_actions.delete_email_remote", return_value=True) as delete:
             self.page.on_delete()
         delete.assert_called_once_with(1, "INBOX", "1", expected_row_id=row_id)
 
@@ -664,7 +665,7 @@ class OtherReviewFollowupTests(DbTestCase):
         with mock.patch.object(main_ui.OfficeManagerApp, "_start_saldeo_push_watcher"), \
                 mock.patch.object(main_ui.CalendarPage, "_auto_sync") as sync, \
                 mock.patch.object(main_ui.EmailPage, "start_background_sync"), \
-                mock.patch("app.email.email_ui.MailBrowser", QTextBrowser):
+                mock.patch("app.email.mail_area.MailBrowser", QTextBrowser):
             window = main_ui.OfficeManagerApp(1)
             try:
                 self.assertEqual(window.pages.currentIndex(), 0)

@@ -6,41 +6,38 @@ Każda firma ma osobną bazę Enova; mapowanie do Biuro odbywa się po NIP.
 
 ## Stan integracji
 
-Dostępne są gotowe zapytania odczytowe workera:
+Worker używa `queries/monthly-documents.sql` do licznika miesięcznego i do
+raportu dokumentów w Sprawdzaniu. Starsze pliki SQL pozostają dostępne dla
+konfiguracji wskazujących je jawnie.
 
-- `queries/kpir.sql`: miesięczna liczba wierszy `Dziennik` z nadanym `KPiRLp > 0`,
-  według `Dziennik.Data`. Nie odrzuca wpisów na podstawie niezweryfikowanych
-  kodów `Bufor`/`KPiRStan` — w otrzymanym wyniku licznik zawierał również `Bufor=1`.
-- `queries/kh.sql`: wszystkie dokumenty `DokEwidencja` według `DataEwidencji`,
-  z zastąpieniem nagłówków definicji `WBEW` pozycjami `Zaplaty`, których
-  `RaportType='RaportyESP'` i `Raport` wskazuje ten sam wyciąg. Pozycje importu
-  `OperacjeBankowe` nie są sumowane z płatnościami. DR, LPEW, RKVE i pozostałe
-  definicje są wliczane normalnie. Bez dodatkowego filtrowania stanów.
+- **KPiR** liczy numerowane zapisy `Dziennik.KPiRLp > 0` według `Dziennik.Data`,
+  z definicjami powiązanych dokumentów. Dolicza zatwierdzoną DRA z Enovy. PIT-5,
+  PIT-5L oraz deklaracja VAT są pomijane. Raport grupuje sprzedaż, zakupy i DW
+  (dokumenty wewnętrzne oraz pozostałe zapisy, w tym DRA).
+- **KH** liczy wpisy `DokEwidencja` według `DataEwidencji` oraz zatwierdzone
+  deklaracje CIT-2, CIT-8, CIT-8E i VAT za dany okres. Deklaracja i jej korekty
+  w tym samym okresie liczą się raz. JPK z częścią deklaracyjną wysłane na
+  bramkę produkcyjną uzupełnia VAT. Warunkiem jest rozpoczęcie przetwarzania w MF.
+- **Ryczałt** liczy sprzedaż u firm bez VAT oraz sprzedaż i zakupy u czynnych
+  podatników VAT. Do rozpoznania rodzajów służą typy definicji Enovy i znane
+  symbole, m.in. SPR oraz ZP. Przy nieustalonym statusie VAT importer zachowuje
+  poprzedni wynik. Raport pokazuje Sprzedaż, Zakup, DW i Razem.
 
-Dzielenie pozycji bankowych przez wybrany dzielnik (domyślnie 3) i jednorazowe
-zaokrąglenie sumy wykonuje worker. Przykład: 95 dokumentów, w tym 3 nagłówki WBEW i 190 pozycji płatności,
-daje `round(92 + 190/3) = 155`. Nie dobiera się wykluczeń do wcześniejszej,
-ręcznie obliczonej wartości.
+W ewidencji środków trwałych odpis AMO jest widoczny osobno, a OT i LT są
+pomijane. Podtypy bierze się z `DokumentyST` (OT=1301, LT=1302, AMO=1303).
+W KH dzielnik obejmuje pozycje WBEW i raportów kasowych, a w KPiR pozycje
+kasowe. RKEW i RKVE powiązane z `RaportyESP` liczą ich pozycje `Zaplaty`.
+Pojedynczy wpis RKVE bez powiązania z raportem wnosi jedną pozycję kasową.
+Worker używa dotychczasowego dzielnika globalnego lub właściwego firmie
+i zaokrągla raz po zsumowaniu miesiąca. Powielone powiązanie z raportem nie
+powiela jego pozycji.
 
-Zapytania zwracają pełny zakres miesięcy, także zera. Worker porównuje NIP z
-`HstDanychFirmy.NIP` z zapisanym powiązaniem bazy z firmą. Jeśli pole
-jest puste lub nie zawiera dziesięciocyfrowego NIP-u, wbudowane adaptery używają
-NIP-u ze wskazanego powiązania. Nie odczytują PESEL-u ani nie traktują go jak NIP.
-Poprawnie sformatowany inny NIP lub kilka różnych NIP-ów powodują konflikt,
-a uszkodzone powiązanie WBEW nadal powoduje błąd zamiast zapisu zera.
-Jeżeli inna baza używa innych definicji bankowych niż WBEW, trzeba je najpierw
-zidentyfikować i dostosować plik zapytania dla tego klienta.
-
-`queries/ryczalt.sql` liczy nagłówki ZR, SPU i RKVE (faktury metodą kasową)
-według `DataEwidencji`. Potwierdzony przykład: czerwiec 2026, 18 + 2 + 1 = 21.
-Nie dolicza DR, LPEW ani STE. Worker wybiera ten plik automatycznie dla firmy
-z formą opodatkowania Ryczałt. Przy innych definicjach faktur trzeba dostosować zapytanie.
-
-Zapytania oparto na przekazanych metadanych i wynikach diagnostycznych. Nadal
-wymagany jest podgląd uruchomiony na rzeczywistym serwerze, zwłaszcza sprawdzenie
-źródła NIP. Integracja pozostaje wyłączona do czasu lokalnej konfiguracji.
-Do sprawdzenia kolejnych schematów służy `inspect-schema.sql`; nie udostępniaj
-haseł ani plików `.env`.
+Zapytanie zwraca pełny zakres miesięcy, także zera. Worker weryfikuje NIP
+z `HstDanychFirmy` i przerywa zapis w razie sprzecznego NIP-u, brakującego
+okresu albo niespójnego powiązania raportu lub STE. „Razem” w Sprawdzaniu
+pokazuje wynik reguł odczytu. Licznik Widoku miesięcznego nadal chroni ręczne
+korekty i dane pochodzące z innych importów. Po aktualizacji workera odczytaj
+ponownie wybrany okres, żeby zobaczyć nowe wyniki.
 
 ## Sprawdzenie liczników po otrzymaniu schematu
 
@@ -275,7 +272,8 @@ wyłącznie. Zwraca dokładnie jeden wiersz na miesiąc z kolumnami `nip`, `mies
 (`YYYY-MM`), `status` oraz `upo` (referencja potwierdzenia, NULL dopuszczalny poza
 `accepted`). Dozwolone statusy: `not_sent`, `sent`, `accepted`, `rejected`,
 `not_applicable`, `prepared`, `processing`, `unknown`, `failed`, `cancelled`. Opcjonalne `raw_status`
-zachowuje kod źródła. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
+zachowuje kod źródła. Opcjonalne `sent_at` i `upo_at` przyjmują wartości ISO lub
+NULL. Brak wiersza/NULL status/niezgodny NIP/duplikat to błąd;
 nie są zamieniane na „niewysłany”. Bez prawdziwego źródła nie można potwierdzić
 połączenia z JPK ani przetestować go w tej sesji.
 
@@ -411,8 +409,11 @@ transmisji nie potwierdza złożenia. `Stamp` to wersja wiersza, nie data.
 
 `queries/jpk.sql` odczytuje JPK VAT/V7M/V7K z `JednolitePK` (nazwy i typy kolumn
 potwierdzone we wszystkich czterech lokalnych eksportach). Wybiera najwyższy numer
-korekty, następnie ID. Pobiera tylko referencję z kolumny UPO, bez treści dokumentów
-ani kwot. Przyjęcie wymaga statusu Finished=100, oficjalnej bramki=3 i referencji UPO.
+korekty, następnie ID. Z kolumny UPO pobiera referencję i daty bez eksportowania XML
+ani kwot. W kolumnie „Data wysyłki” pokazuje `DataWplyniecia`, czyli udokumentowany
+czas wpłynięcia pliku do MF. „Data UPO” pochodzi z czasu wytworzenia potwierdzenia
+albo z `SigningTime` podpisu XAdES na UPO. Gdy brakuje odpowiedniego pola w źródle,
+data pozostaje pusta. Przyjęcie wymaga statusu Finished=100, oficjalnej bramki=3 i referencji UPO.
 Testowe UPO nie potwierdza złożenia produkcyjnego. Statusy przygotowania,
 wysyłania, przetwarzania i błędu mapujemy według potwierdzonych enumów;
 nieznane kody, brak pliku i zakończenie bez UPO pozostają nieustalone.

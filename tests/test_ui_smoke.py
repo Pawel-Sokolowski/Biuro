@@ -1,11 +1,15 @@
 import os
+from pathlib import Path
+import sys
+from tempfile import TemporaryDirectory
 import traceback
 import unittest
 import faulthandler
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtWidgets import QApplication
 
 from app.db.dao_calendar import save_event
@@ -17,6 +21,31 @@ faulthandler.dump_traceback_later(60,repeat=True)
 unittest.addModuleCleanup(faulthandler.cancel_dump_traceback_later)
 
 ENGLISH_MARKERS = {"Dashboard", "Save", "Cancel", "Delete", "Settings", "Password", "Login"}
+
+
+class ServerLoginAddressTests(unittest.TestCase):
+    def test_installer_default_only_fills_an_unconfigured_login(self):
+        from app.remote.login_ui import ServerLoginDialog
+
+        address = 'https://192.0.2.10:8443'
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'office-server.ini').write_text(f'[Office]\nServerUrl={address}\n', encoding='utf-8')
+            preferences = QSettings(str(root / 'user.ini'), QSettings.Format.IniFormat)
+            with (
+                mock.patch('app.remote.login_ui.QSettings') as settings_type,
+                mock.patch('app.remote.login_ui.QTimer.singleShot'),
+                mock.patch.object(sys, 'frozen', True, create=True),
+                mock.patch.object(sys, 'executable', str(root / 'Biuro.exe')),
+                mock.patch.dict(os.environ, {'BIO_SERVER_URL': ''}),
+            ):
+                settings_type.Format = QSettings.Format
+                settings_type.side_effect = lambda org, app: preferences if org == 'Biuro' else QSettings(org, app)
+                self.assertEqual(ServerLoginDialog().server.text(), address)
+                os.environ['BIO_SERVER_URL'] = 'https://override.example:8443'
+                self.assertEqual(ServerLoginDialog().server.text(), 'https://override.example:8443')
+                preferences.setValue('office_server', 'https://saved.example:8443')
+                self.assertEqual(ServerLoginDialog().server.text(), 'https://saved.example:8443')
 
 
 def visible_texts(widget):

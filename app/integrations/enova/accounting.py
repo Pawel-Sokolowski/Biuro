@@ -5,10 +5,29 @@ import datetime
 import json
 from app.db.dao_conn import get_conn
 from app.security.authorization import allowed_tabs, assigned_company_ids
+from app.companies.cennik_keys import company_accounting_type
 from app.integrations.enova.checking import history_months
 
 
 SUBSTITUTION_KEYS = {'accounting': 'ksiegowosc', 'payroll': 'kadry'}
+SIMPLE_DOCUMENT_TYPES = ('SPU', 'ZR', 'DW')
+SALES_SYMBOLS = {'SPU', 'SPR', 'SPD', 'SPT', 'SPUUE', 'SPTUE', 'SPUEX', 'SPTEX', 'VME'}
+PURCHASE_SYMBOLS = {'ZR', 'ZP', 'ZT', 'ZUE', 'ZŚT', 'ZST'}
+
+
+def simple_accounting(row):
+    return company_accounting_type(row) in ('KPIR', 'RYCZALT')
+
+
+def accounting_breakdown(row, counts):
+    if counts is None or not simple_accounting(row) or counts.keys() <= set(SIMPLE_DOCUMENT_TYPES):
+        return counts
+    grouped = dict.fromkeys(SIMPLE_DOCUMENT_TYPES, 0)
+    for symbol, count in counts.items():
+        symbol = symbol.upper()
+        key = 'SPU' if symbol in SALES_SYMBOLS else 'ZR' if symbol in PURCHASE_SYMBOLS else 'DW'
+        grouped[key] += count
+    return grouped
 
 
 def _employee_names(ids):
@@ -24,10 +43,10 @@ def _employee_names(ids):
 
 
 def _month_last_day(month):
-    """Ostatni dzień miesiąca „RRRR-MM” jako ISO; None, gdy miesiąc jest nieznany."""
+    """Ostatni dzień miesiąca „RRRR-MM”; None, gdy miesiąc jest nieznany."""
     try:
         year, number = (int(part) for part in str(month).split('-')[:2])
-        return datetime.date(year, number, calendar.monthrange(year, number)[1]).isoformat()
+        return datetime.date(year, number, calendar.monthrange(year, number)[1])
     except (TypeError, ValueError):
         return None
 
@@ -106,12 +125,15 @@ def list_accounting(actor_id, month):
             LEFT JOIN app_settings pd ON pd.klucz='platnik_declarations_' || f.id::text || '_' || %s
             LEFT JOIN app_settings co ON co.klucz='checking_obligations_' || f.id::text
             WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (month, month, month, month, month, ids)).fetchall()
-        history = conn.execute('''SELECT f.id,a.klucz,a.wartosc FROM firmy f JOIN app_settings a
-            ON a.klucz='enova_checking_' || f.id::text || '_' || right(a.klucz,7)
-            WHERE f.id=ANY(%s) AND right(a.klucz,7)=ANY(%s)''', (ids, prior)).fetchall()
+        history = conn.execute('''SELECT company.id,a.klucz,a.wartosc
+            FROM unnest(%s::int[]) AS company(id) CROSS JOIN unnest(%s::text[]) AS period(month)
+            JOIN app_settings a ON a.klucz='enova_checking_' || company.id::text || '_' || period.month''',
+            (ids, prior)).fetchall()
     by_company = {}
     for record in history:
-        by_company.setdefault(record['id'], []).append({**decoded(record['wartosc']), 'month': record['klucz'][-7:]})
+        report = decoded(record['wartosc'])
+        report.pop('accounting_details', None)
+        by_company.setdefault(record['id'], []).append({**report, 'month': record['klucz'][-7:]})
     result = []
     for record in rows:
         row = dict(record)
@@ -126,10 +148,14 @@ def list_accounting(actor_id, month):
 def documents(row, department):
     report = decoded(row.get('checking'))
     if report:
-        return report.get('documents', {}).get(department)
+        counts = report.get('documents', {}).get(department)
+        if counts is not None:
+            return accounting_breakdown(row, counts) if department == 'accounting' else counts
     # Legacy totals can be shown, but missing types must not be invented as zero.
     if department == 'accounting':
-        return decoded(row.get('snapshot')).get('by_type')
+        snapshot = decoded(row.get('snapshot'))
+        counts = snapshot.get('report_types')
+        return accounting_breakdown(row, snapshot.get('by_type') if counts is None else counts)
     return None
 
 
@@ -149,9 +175,11 @@ def declaration_entries(row, department):
                    for entry in snapshot.get('declarations') or []]
     if department == 'accounting' and not any(entry['form'] == 'JPK_VAT' for entry in result):
         legacy = decoded(row.get('jpk'))
-        if legacy:
-            result.append({**legacy, 'form': 'JPK_VAT', 'employee_id': '', 'employee_name': '',
-                           'source_system': 'enova', 'sent_at': None, 'upo_at': None})
+        if legacy and report_applies(row, 'JPK_VAT', reported=bool(
+                legacy.get('form_variant') or legacy.get('status') not in ('unknown', 'not_applicable', None))):
+            result.append({'sent_at': None, 'upo_at': None, **legacy, 'form': 'JPK_VAT',
+                           'employee_id': '', 'employee_name': '', 'source_system': 'enova'})
+    result = [entry for entry in result if report_applies(row, entry['form'], reported=True)]
     owner = row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or ''
     original = (row.get('owner_original') or {}).get(department) or owner
     substitute = row.get(f'{department}_substitute')
@@ -159,13 +187,7 @@ def declaration_entries(row, department):
         entry['owner'] = owner
         entry['owner_original'] = original if substitute else ''
         entry['owner_is_substitute'] = bool(substitute)
-    result = [entry for entry in result if report_applies(row, entry['form'])]
-    # Data wysyłki i UPO muszą być widoczne nawet tam, gdzie źródło ich nie podaje
-    # (status JPK z Enovy). Wtedy data wysyłki = data odczytu statusu, a UPO jest
-    # oznaczone jako potwierdzone, bez wymyślania numeru.
     for entry in result:
-        if entry.get('upo_at') and not entry.get('sent_at'):
-            entry['sent_at'] = entry['upo_at']
         if entry.get('status') == 'accepted' and not entry.get('upo'):
             entry['upo_confirmed_at'] = entry.get('imported_at') or entry.get('upo_at')
             entry['upo_source'] = 'status Enova'

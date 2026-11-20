@@ -19,7 +19,7 @@ class MonthlyScopeRulesTests(TestCase):
         self.assertFalse(report_applies(row, 'RCA'))
         self.assertTrue(report_applies(row, 'DRA'))
         self.assertEqual([entry['form'] for entry in declaration_entries(row, 'payroll')], ['ZUS DRA'])
-        self.assertTrue(report_applies(row, 'RCA', '2026-10'))
+        self.assertTrue(report_applies(row, 'RCA', '2026-10', reported=True))
 
     def test_non_vat_company_can_have_eu_vat_and_special_vat_without_domestic_jpk(self):
         row = {'status_vat': 'Zwolniony', 'checking_obligations': {'periods': {
@@ -38,8 +38,8 @@ class MonthlyScopeRulesTests(TestCase):
             self.assertEqual(report_applies(row, 'VAT', month), month == '2026-03')
             self.assertEqual(report_applies(row, 'PIT', month), month == '2026-03')
         self.assertFalse(report_applies({**row, 'status_vat': 'Zwolniony'}, 'JPK_VAT', '2026-03'))
-        self.assertTrue(report_applies({'status_vat': 'Brak danych'}, 'JPK_VAT', '2026-03'))
-        self.assertTrue(report_applies({'status_vat': 'Zwolniony'}, 'JPK_CIT', '2026-03'))
+        self.assertTrue(report_applies({'status_vat': 'Brak danych'}, 'JPK_VAT', '2026-03', reported=True))
+        self.assertTrue(report_applies({'status_vat': 'Zwolniony'}, 'JPK_CIT', '2026-03', reported=True))
 
     def test_monthly_scope_changes_do_not_rewrite_previous_periods(self):
         settings = {'periods': {'2026-01': {'vat_period': 'monthly', 'forms': {'RCA': 'monthly'}},
@@ -76,7 +76,9 @@ class MonthlyScopeIntegrationTests(DbTestCase):
         from app.accounting.accounting_ui import AccountingPage
         rows = [{'id': 1, 'nazwa': 'DRA only', 'status_vat': 'Zwolniony',
                  'checking_obligations': {'periods': {'2026-01': {'vat_period': 'auto', 'forms': {'RCA': 'none'}}}}},
-                {'id': 2, 'nazwa': 'Reports required', 'status_vat': 'Czynny'}]
+                {'id': 2, 'nazwa': 'Reports required', 'status_vat': 'Czynny',
+                 'checking_obligations': {'periods': {'2026-01': {'vat_period': 'auto',
+                                                                 'forms': {'RCA': 'monthly', 'JPKVAT': 'monthly'}}}}}]
         page = AccountingPage(self.admin, department='payroll')
         self.addCleanup(page.close)
         page.render(rows, '2026-11')
@@ -87,9 +89,12 @@ class MonthlyScopeIntegrationTests(DbTestCase):
         self.assertEqual(table.item(0, 0).text(), 'Reports required')
         page.attention.setChecked(True)
         self.assertEqual(table.rowCount(), 1)
-        selector = page.report_selectors['accounting']
+        accounting = AccountingPage(self.admin, department='accounting')
+        self.addCleanup(accounting.close)
+        accounting.render(rows, '2026-11')
+        selector = accounting.report_selectors['accounting']
         selector.setCurrentIndex(selector.findData('form:JPKVAT'))
-        self.assertEqual(page.declaration_tables['accounting'].rowCount(), 1)
+        self.assertEqual(accounting.declaration_tables['accounting'].rowCount(), 1)
 
     def test_permission_and_invalid_monthly_cadences_cannot_change_settings(self):
         edit = {'2026-11': {'vat_period': 'quarterly', 'forms': {'DRA': 'monthly'}}}

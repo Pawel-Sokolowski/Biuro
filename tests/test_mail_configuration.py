@@ -113,7 +113,7 @@ class MailConfigurationTests(MailboxFixture):
     def test_reply_and_forward_do_not_resolve_a_replacement_by_uid(self):
         page = mock.Mock(current_account={'id': 1}, current_uid='1', current_folder_local='INBOX',
                          _current_message_row_id=self.row_id)
-        with mock.patch.object(email_ui, 'load_message', return_value=None) as load, \
+        with mock.patch("app.email.mail_actions.load_message", return_value=None) as load, \
                 mock.patch.object(email_ui.QMessageBox, 'warning'):
             self.assertIsNone(email_ui.EmailPage._current_original(page))
         load.assert_called_once_with(1, 'INBOX', '1', expected_row_id=self.row_id)

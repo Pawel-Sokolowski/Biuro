@@ -23,8 +23,9 @@ def postgres_query(name):
     sql = sql.replace('DATEADD(month,1,m.MonthStart)', "(m.MonthStart + interval '1 month')::date")
     sql = sql.replace('?', '%s').replace('dbo.', '').replace('COUNT_BIG(', 'COUNT(')
     sql = sql.replace("nip NOT LIKE N'%[^0-9]%'", "nip ~ '^[0-9]{10}$'")
-    sql = sql.replace("N'", "'").replace('LEN(nip)', 'length(nip)')
-    sql = sql.replace('NCHAR(', 'CHR(')
+    sql = sql.replace("N'", "'").replace('LEN(', 'length(')
+    sql = sql.replace('NCHAR(', 'CHR(').replace('CONVERT(date,GETDATE())', 'CURRENT_DATE')
+    sql = sql.replace("CONVERT(nvarchar(32), SESSION_CONTEXT('biuro_company_nip'))", 'NULL::text')
     sql = sql.replace('DATEADD(month, 1, m.MonthStart)', "(m.MonthStart + interval '1 month')::date")
     for column in ('d.Data', 'd.DataEwidencji', 'd.DocumentDate'):
         sql = sql.replace(f'DATEFROMPARTS(YEAR({column}), MONTH({column}), 1)',
@@ -42,7 +43,7 @@ class EnovaSourceQueryTests(DbTestCase):
         super().setUp()
         with get_conn() as conn:
             for statement in (
-                'CREATE TABLE OddzialyFirmy(DeklaracjeNIP text)',
+                'CREATE TABLE HstDanychFirmy(NIP text, Termin date DEFAULT CURRENT_DATE)',
                 'CREATE TABLE Dziennik(ID int, Data timestamp, KPiRLp int, Bufor int DEFAULT 1, Ewidencja int)',
                 'CREATE TABLE DefDokumentow(ID int, Symbol text)',
                 'CREATE TABLE DokEwidencja(ID int, DataEwidencji timestamp, Definicja int, Dokument int, DokumentType text)',
@@ -54,7 +55,7 @@ class EnovaSourceQueryTests(DbTestCase):
                 'CREATE TABLE Wyplaty(ID int, Data timestamp, Definicja int, Bufor int)',
             ):
                 conn.execute(statement)
-            conn.execute("INSERT INTO OddzialyFirmy VALUES ('PL 123-456-78-90'), ('1234567890')")
+            conn.execute("INSERT INTO HstDanychFirmy(nip) VALUES ('PL 123-456-78-90'), ('1234567890')")
 
     def query(self, name, start=date(2026, 6, 1), end=date(2026, 7, 1)):
         with get_conn() as conn:
@@ -116,18 +117,18 @@ class EnovaSourceQueryTests(DbTestCase):
 
     def test_missing_or_ambiguous_source_nip_cannot_become_a_zero_import(self):
         with get_conn() as conn:
-            conn.execute('DELETE FROM OddzialyFirmy')
+            conn.execute('DELETE FROM HstDanychFirmy')
         self.assertEqual(self.query('kpir.sql'), [])
         with get_conn() as conn:
-            conn.execute("INSERT INTO OddzialyFirmy VALUES ('1234567890'), ('9999999999')")
+            conn.execute("INSERT INTO HstDanychFirmy(nip) VALUES ('1234567890'), ('9999999999')")
         rows = self.query('kpir.sql')
         with self.assertRaises(ValueError):
             validate_rows(rows, {'nip': NIP, 'accounting_type': 'KPIR'}, ['2026-06'])
 
     def test_owner_nip_whitespace_matches_discovery_normalization_in_all_bundled_queries(self):
         with get_conn() as conn:
-            conn.execute('DELETE FROM OddzialyFirmy')
-            conn.execute('INSERT INTO OddzialyFirmy VALUES (%s)',('PL\t123-456-78-90\r\n\u00a0',))
+            conn.execute('DELETE FROM HstDanychFirmy')
+            conn.execute('INSERT INTO HstDanychFirmy(nip) VALUES (%s)',('PL\t123-456-78-90\r\n\u00a0',))
         for query in ('kpir.sql','kh.sql','ryczalt.sql','checking.sql'):
             with self.subTest(query=query):
                 rows = self.query(query)
@@ -182,10 +183,10 @@ class EnovaSourceQueryTests(DbTestCase):
     def test_payroll_rejects_missing_and_ambiguous_company_nip(self):
         from app.integrations.enova.checking import validate_payroll
         with get_conn() as conn:
-            conn.execute('DELETE FROM OddzialyFirmy')
+            conn.execute('DELETE FROM HstDanychFirmy')
         with self.assertRaises(ValueError):
             validate_payroll(self.payroll_rows(), {'nip': NIP}, ['2026-06', '2026-07'])
         with get_conn() as conn:
-            conn.execute("INSERT INTO OddzialyFirmy VALUES ('1234567890'),('9999999999')")
+            conn.execute("INSERT INTO HstDanychFirmy(nip) VALUES ('1234567890'),('9999999999')")
         with self.assertRaises(ValueError):
             validate_payroll(self.payroll_rows(), {'nip': NIP}, ['2026-06', '2026-07'])

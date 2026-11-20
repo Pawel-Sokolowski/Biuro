@@ -24,6 +24,18 @@ Run scripts/prepare_odbc_prerequisite.ps1 on Windows before compiling
 installer/biuro.iss in Inno Setup. The installer expects the PyInstaller output
 in dist/Biuro and the verified MSI in installer/prerequisites.
 
+To prefill the office HTTPS address on new workstations, build the installer
+with `DefaultServerUrl`. For example, from the repository root in PowerShell:
+
+```powershell
+& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DDefaultServerUrl=https://192.0.2.10:8443' installer\biuro.iss
+```
+
+Replace the example with the address of the Biuro HTTPS worker. If you use an
+IP address, the worker's trusted certificate must list it as an IP Subject
+Alternative Name. An address saved by an employee takes precedence, followed
+by `BIO_SERVER_URL` and the installer's default.
+
 Use the same Python environment for dependency installation and PyInstaller.
 The distribution is named `mt-940`; its Python import is `mt940`. The spec
 bundles its submodules, distribution metadata and supported bank-file encodings,

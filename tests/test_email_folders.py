@@ -129,9 +129,9 @@ class EmailPageTests(DbTestCase):
             email_ui, "get_email_accounts_for_employee",
             return_value=[{"id": 1, "email": "a@b.pl"}],
         ), mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
-                mock.patch.object(email_ui, "MailBrowser", QTextBrowser), \
-                mock.patch.object(email_ui, "get_setting", return_value="{}"), \
-                mock.patch.object(email_ui, "apply_rules_to_folder",
+                mock.patch("app.email.mail_area.MailBrowser", QTextBrowser), \
+                mock.patch("app.email.mail_shell.get_setting", return_value="{}"), \
+                mock.patch("app.email.mail_actions.apply_rules_to_folder",
                                   side_effect=lambda konto, folder: calls.append((konto, folder)) or 0), \
                 mock.patch.object(email_ui.EmailPage, "_run_async",
                                   lambda self, fn, done: done(fn(), None)), \
@@ -159,10 +159,9 @@ class EmailPageTests(DbTestCase):
             email_ui, "get_email_accounts_for_employee",
             return_value=[{"id": 1, "email": "a@b.pl"}],
         ), mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
-                mock.patch.object(email_ui, "MailBrowser", QTextBrowser), \
-                mock.patch.object(email_ui, "get_setting", return_value="{}"), \
-                mock.patch.object(
-                    email_ui, "set_setting", side_effect=lambda key, value: stored.update({key: value})
+                mock.patch("app.email.mail_area.MailBrowser", QTextBrowser), \
+                mock.patch("app.email.mail_shell.get_setting", return_value="{}"), \
+                mock.patch("app.email.mail_shell.set_setting", side_effect=lambda key, value: stored.update({key: value})
                 ):
             page = email_ui.EmailPage(5)
 
@@ -203,7 +202,7 @@ class EmailPageTests(DbTestCase):
                 mock.patch.object(email_ui.EmailPage, "start_background_sync"), \
                 mock.patch("app.email.email_sync._connect_imap", side_effect=AssertionError("Message should be loaded from PostgreSQL")), \
                 mock.patch("app.email.email_sync.mark_read_remote", return_value=True), \
-                mock.patch.object(email_ui, "mark_read_remote", return_value=True):
+                mock.patch("app.email.mail_area.mark_read_remote", return_value=True):
             page = email_ui.EmailPage(1)
             account = page.folder_tree.topLevelItem(0)
             self.assertEqual(account.text(0), "a@b.pl")

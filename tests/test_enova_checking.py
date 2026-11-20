@@ -91,7 +91,7 @@ class CheckingIntegrationTests(DbTestCase):
         with get_conn() as conn:
             conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,etap) VALUES (%s,'2026-11',77,'Brak')", (self.company,))
         config = {'enabled': True, 'months_back': 1, 'sources': [SOURCE]}
-        def fetch(config, source, months):
+        def fetch(config, source, months, *, result_kind):
             return [{'nip': NIP, 'miesiac': month, 'dokumenty': 1 if month == '2025-11' else 0,
                      'pozycje_bankowe': 0, 'rodzaje': {'AMO': 1} if month == '2025-11' else {}} for month in months]
         with patch('app.integrations.enova.checking.fetch_counts', side_effect=fetch) as remote:
@@ -130,15 +130,23 @@ class CheckingIntegrationTests(DbTestCase):
                 {**common, 'id': 999, 'nazwa': 'B', 'nip': '9999999999', 'forma_opodatkowania': 'KPiR', 'history': []}]
         page = AccountingPage(self.admin)
         page.render(rows, '2026-11')
-        column = next(i for i in range(page.table.columnCount()) if page.table.horizontalHeaderItem(i).text() == 'AMO')
+        headers = [page.table.horizontalHeaderItem(i).text() for i in range(page.table.columnCount())]
+        self.assertEqual(headers[4:8], ['Sprzedaż', 'Zakup', 'DW', 'Razem'])
+        self.assertNotIn('AMO', headers)
+        column = headers.index('DW')
         self.assertEqual(page.table.item(0, column).text(), '0')
         self.assertEqual(page.table.item(0, column).background().color().name(), '#fee2e2')
         self.assertNotEqual(page.table.item(1, column).background().color().name(), '#fee2e2')
         self.assertEqual(page.tabs.tabText(0), 'Księgowość')
         self.assertEqual(page.tabs.tabText(1), 'Kadry')
         self.assertNotIn('payroll', page.comparison_tables)
+        selector = page.report_selectors['accounting']
+        self.assertEqual(page.comparison_tables['accounting'].rowCount(), 0)
+        selector.setCurrentIndex(selector.findData('comparison'))
+        self.assertGreater(page.comparison_tables['accounting'].rowCount(), 0)
         self.assertNotIn('Rok temu', [page.comparison_tables['accounting'].horizontalHeaderItem(i).text()
                                      for i in range(page.comparison_tables['accounting'].columnCount())])
+        selector.setCurrentIndex(selector.findData('documents'))
         page.tax_filter.setCurrentIndex(page.tax_filter.findData('KPIR'))
         self.assertEqual(page.table.rowCount(), 1)
         self.assertEqual(page.table.item(0, 0).text(), 'B')
@@ -158,6 +166,8 @@ class CheckingIntegrationTests(DbTestCase):
             page.render([row], '2026-11')
             self.assertEqual(page.tabs.currentIndex(), 1)
             self.assertNotIn('payroll', page.comparison_tables)
+            reports = page.report_selectors['payroll']
+            reports.setCurrentIndex(reports.findData('declarations'))
             table = page.declaration_tables['payroll']
             self.assertEqual(table.item(0, 2).text(), 'Anna Test (23)')
             self.assertEqual(table.item(0, 1).text(), 'Kadrowa Biura')
@@ -166,9 +176,11 @@ class CheckingIntegrationTests(DbTestCase):
             self.assertEqual(table.rowCount(), 0)
             selector.setCurrentIndex(selector.findData('to_send'))
             self.assertEqual(table.rowCount(), 1)
+            reports.setCurrentIndex(reports.findData('hr'))
             page.hr_range.setCurrentIndex(page.hr_range.findData(None))
             self.assertEqual(page.hr_table.item(0, 3).text(), 'Anna Test (23)')
             self.assertEqual(page.hr_table.item(0, 4).text(), 'U/23')
+            reports.setCurrentIndex(reports.findData('ezla'))
             from app.integrations.ezla.report import Report, Certificate
             report = Report(nip=NIP, payer_name='Firma Test', generated_at='2026-11-12', certificates=[
                 Certificate('Anna Test', '00000000000', 'PESEL', 'ZZ', '1', 'Anulowane',

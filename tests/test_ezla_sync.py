@@ -1,7 +1,8 @@
 import json
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet
 from tests.base import DbTestCase
 from tests.test_ezla_report import report, certificate
@@ -9,6 +10,9 @@ from app.db.dao_conn import get_conn
 from app.integrations.ezla.settings import load_settings, save_settings
 from app.integrations.ezla.service import Download, ServiceError
 from app.integrations.ezla.sync import run_sync, load_reports
+
+
+MONDAY_AFTER_IMPORT_TIME = datetime(2026, 11, 16, 3, tzinfo=ZoneInfo('Europe/Warsaw'))
 
 
 class EzlaSyncTests(DbTestCase):
@@ -130,20 +134,25 @@ class EzlaSyncTests(DbTestCase):
         finally:
             page.close()
 
-    def test_worker_uses_independent_ezla_job_and_reports_partial_failure(self):
+    @patch('app.worker.datetime', wraps=datetime)
+    def test_worker_uses_independent_ezla_job_and_reports_partial_failure(self, worker_datetime):
         from app.worker import run_job
+        worker_datetime.now.return_value = MONDAY_AFTER_IMPORT_TIME
         with patch('app.integrations.ezla.sync.run_sync', return_value={'companies': 2, 'failed': 0}) as run:
             self.assertEqual(run_job('ezla'), {'companies': 2, 'failed': 0, 'mode': 'completed'})
             run.assert_called_once_with(stop=None)
+        worker_datetime.now.return_value = MONDAY_AFTER_IMPORT_TIME + timedelta(weeks=1)
         with patch('app.integrations.ezla.sync.run_sync', return_value={'companies': 2, 'failed': 1}):
             with self.assertRaises(RuntimeError):
                 run_job('ezla')
 
-    def test_unattended_worker_downloads_commits_and_exposes_live_company_log(self):
+    @patch('app.worker.datetime', wraps=datetime)
+    def test_unattended_worker_downloads_commits_and_exposes_live_company_log(self, worker_datetime):
         from app.worker import JOBS, serve
         from app.services.worker_settings import DEFAULTS, save_settings as save_worker
         from app.db.dao_app_settings import get_setting
         from app.services.worker_activity import KEY
+        worker_datetime.now.return_value = MONDAY_AFTER_IMPORT_TIME
         settings = {**DEFAULTS, **{name: False for name in JOBS}, 'enabled': True, 'ezla': True}
         save_worker(settings, actor_id=self.admin)
         with patch('app.integrations.ezla.sync.fetch_reports', return_value=[Download('2018-08-01', report(certificate()))]) as download:

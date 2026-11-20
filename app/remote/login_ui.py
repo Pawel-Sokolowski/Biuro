@@ -1,5 +1,7 @@
 """Employee connection UI: server address, employee login, optional OS-held session."""
 import os
+from pathlib import Path
+import sys
 from PyQt6.QtCore import QSettings,QTimer
 from PyQt6.QtWidgets import (QCheckBox,QDialog,QFormLayout,QHBoxLayout,QLabel,QLineEdit,
                              QMessageBox,QPushButton,QVBoxLayout,QInputDialog)
@@ -7,6 +9,22 @@ from app.remote.client import OfficeClient,normalize_server
 from app.remote import credential_store
 from app.remote.state import configure
 from app.utils.background import CommandRunner
+
+
+def _initial_server_address(settings: QSettings) -> str:
+    saved = settings.value('office_server')
+    if saved is not None:
+        return str(saved)
+    configured = os.getenv('BIO_SERVER_URL')
+    if configured or not getattr(sys, 'frozen', False):
+        return configured or ''
+    installed_path = Path(sys.executable).parent / 'office-server.ini'
+    defaults = QSettings(str(installed_path), QSettings.Format.IniFormat)
+    address = defaults.value('Office/ServerUrl', '', type=str)
+    try:
+        return normalize_server(address) if address else ''
+    except ValueError:
+        return ''
 
 
 class ServerLoginDialog(QDialog):
@@ -25,7 +43,7 @@ class ServerLoginDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
         form = QFormLayout()
-        self.server = QLineEdit(str(self.settings.value('office_server',os.getenv('BIO_SERVER_URL','')) or ''))
+        self.server = QLineEdit(_initial_server_address(self.settings))
         self.server.setPlaceholderText('https://serwer.biura:8443')
         self.email = QLineEdit(str(self.settings.value('saved_email','') or ''))
         self.password = QLineEdit()

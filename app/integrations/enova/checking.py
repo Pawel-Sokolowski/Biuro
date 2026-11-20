@@ -1,12 +1,12 @@
 """Independent checking snapshots; never update workflow stages or invoice counters."""
 from app.remote.boundary import endpoint as office_endpoint
-import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import json
 from zoneinfo import ZoneInfo
-from app.integrations.enova.document_counts import fetch_counts, normalize_nip, validate_rows, whole_count, requested_months
-from app.integrations.enova.jpk import STATUSES
+from app.integrations.enova.document_counts import fetch_counts, normalize_nip, resolve_source, validate_rows, whole_count, requested_months
+from app.integrations.enova.counting_rules import load_rules, effective_divisor
+from app.integrations.enova.jpk import STATUSES, filing_timestamp
 from app.utils.months import previous_month, month_bounds
 from app.services.worker_activity import record
 from app.db.import_audit import log_import
@@ -22,10 +22,19 @@ class CheckingBusy(ValueError):
 def checking_source(source, company):
     from app.companies.cennik_keys import company_accounting_type
     kind = company_accounting_type(company) or source.get('accounting_type')
-    # KPiR entries live in Dziennik, not the general DokEwidencja pivot.
-    query = 'kpir.sql' if kind=='KPIR' else 'checking.sql'
-    return {**source,'accounting_type':'KPIR' if kind=='KPIR' else 'KH',
-            'count_query':str(Path(__file__).resolve().parents[3] / 'docs/enova/queries' / query)}
+    if not kind:
+        return {**source, 'accounting_type': 'KH',
+                'count_query': str(Path(__file__).resolve().parents[3] / 'docs/enova/queries/checking.sql')}
+    return resolve_source({**source, 'count_query': None}, company)
+
+
+def _store_accounting_breakdown(snapshot, count):
+    snapshot.setdefault('documents', {})['accounting'] = count.report_breakdown
+    if count.report_types is not None:
+        snapshot['accounting_details'] = {'by_type': count.by_type, 'bank_transactions': count.bank_transactions,
+                                          'cash_transactions': count.cash_transactions}
+    else:
+        snapshot.pop('accounting_details', None)
 
 
 @office_endpoint('app.integrations.enova.checking.import_document_year')
@@ -47,6 +56,7 @@ def import_document_year(config, year, *, actor_id, progress=None):
         raise ValueError('Najpierw przypisz bazy Enovy do firm i zapisz połączenie.')
     months = [f'{year}-{month:02d}' for month in range(1, 13)]
     results = []
+    rules = load_rules()
     with get_conn() as conn:
         if not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Import sprawdzania jest już uruchomiony. Poczekaj na jego zakończenie.')
@@ -58,22 +68,23 @@ def import_document_year(config, year, *, actor_id, progress=None):
                 with conn.transaction():
                     company = find_company(conn, normalize_nip(source['nip']))
                     report_source = checking_source(source,company)
-                    counts = validate_rows(_counts(config, report_source, months, 'counts'), report_source, months)
-                    if any(count.by_type is None for count in counts):
+                    counts = validate_rows(_counts(config, report_source, months, 'counts', force=True), report_source,
+                                           months, effective_divisor(rules, company['id']))
+                    if any(count.report_breakdown is None for count in counts):
                         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
                     stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
                     for count in counts:
                         key = f'enova_checking_{company["id"]}_{count.month}'
                         old = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE', (key,)).fetchone()
                         snapshot = json.loads(old[0]) if old else {}
-                        snapshot.setdefault('documents', {})['accounting'] = count.by_type
+                        _store_accounting_breakdown(snapshot, count)
                         snapshot.update(database=database, accounting_imported_at=stamp)
                         snapshot.setdefault('imported_at', stamp)
                         conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                                      'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                                      (key, json.dumps(snapshot, ensure_ascii=False)))
                     details = {'year': year, 'company_id': company['id'], 'months': months,
-                               'counts': {count.month: count.documents for count in counts}}
+                               'counts': {count.month: count.total for count in counts}}
                     log_import(conn, 'enova_document_year', source=database, updated=len(months),
                                details=details)
                     results.append({'database': database, 'company': company['nazwa'], 'ok': True, **details})
@@ -109,26 +120,6 @@ def _identity(row, source, months):
     return month
 
 
-def _timestamp(value):
-    if value in (None, ''):
-        return None
-    if isinstance(value, date):
-        return value.isoformat()
-    if len(str(value)) == 10:
-        try:
-            return date.fromisoformat(str(value)).isoformat()
-        except ValueError:
-            raise ValueError('Nieprawidłowa data wysyłki lub UPO.') from None
-    text = str(value).strip().replace('Z', '+00:00') if str(value).strip().endswith('Z') else str(value).strip()
-    # ODBC oddaje niekiedy '2026-11-20 11:21:00.0000000 +02:00' — ucinamy nadmiar
-    # miejsc po przecinku, inaczej fromisoformat odrzuca całą datę.
-    text = re.sub(r'(\.\d{6})\d+', r'\1', text)
-    try:
-        return datetime.fromisoformat(text).isoformat()
-    except ValueError:
-        raise ValueError('Nieprawidłowa data wysyłki lub UPO.') from None
-
-
 def validate_declarations(rows, source, months):
     result = {month: [] for month in months}
     seen = set()
@@ -154,11 +145,11 @@ def validate_declarations(rows, source, months):
             raise ValueError('Nieprawidłowy status deklaracji lub brak UPO dla przyjętej deklaracji.')
         entry = {'department': department, 'form': form, 'status': status,
                  'employee_id': employee_id, 'employee_name': employee_name, 'source_system': source_system,
-                 'sent_at': _timestamp(row.get('sent_at')), 'upo': upo,
-                 'upo_at': _timestamp(row.get('upo_at'))}
+                 'sent_at': filing_timestamp(row.get('sent_at')), 'upo': upo,
+                 'upo_at': filing_timestamp(row.get('upo_at'))}
         # Data utworzenia deklaracji w Enovie (opcjonalna kolumna odczytu).
         if row.get('created_at'):
-            entry['created_at'] = _timestamp(row.get('created_at'))
+            entry['created_at'] = filing_timestamp(row.get('created_at'))
         result[month].append(entry)
         if row.get('raw_status'):
             result[month][-1]['raw_status'] = str(row['raw_status'])[:256]
@@ -196,6 +187,8 @@ CACHE_TTL_MINUTES = 10
 
 
 def _cache_key(source, result_kind, months):
+    if result_kind == 'counts':
+        result_kind = f"counts_{source['accounting_type']}_{source.get('vat_czynny')}"
     return f'enova_fetch_cache_{source["database"]}_{result_kind}_{months[0]}_{months[-1]}'
 
 
@@ -229,8 +222,8 @@ def _remember(source, result_kind, months, rows):
                                        ensure_ascii=False)))
 
 
-def _counts(config, source, months, result_kind):
-    if not config.get('fetch_cache', True):
+def _counts(config, source, months, result_kind, *, force=False):
+    if force or not config.get('fetch_cache', True):
         return fetch_counts(config, source, months, result_kind=result_kind)
     cached = _cached(source, result_kind, months)
     if cached is not None:
@@ -240,7 +233,7 @@ def _counts(config, source, months, result_kind):
     return rows
 
 
-def sync_checking(conn, config, source, company_id, day, *, apply, months=None, force=False):
+def sync_checking(conn, config, source, company, day, *, divisor, apply, months=None, force=False):
     requested_months(day, config.get('months_back', 3))
     month = day.strftime('%Y-%m')
     # Retain historical snapshots for period navigation; the UI compares only the previous month.
@@ -249,27 +242,28 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
         raise ValueError('Nieprawidłowy zakres sprawdzania.')
     for period in months:
         month_bounds(period)
+    company_id = company['id']
+    report_source = checking_source(source, company)
     key = f'enova_checking_checked_{company_id}'
     signature = {'version': 3, 'adapter_revision': ADAPTER_REVISION, 'day': day.isoformat(), 'server': config.get('server'),
                  'database': source['database'], 'months': months,
+                 'accounting_type': report_source['accounting_type'], 'vat_czynny': report_source.get('vat_czynny'),
+                 'divisor': divisor,
                  'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
     if apply and not force and checked and json.loads(checked[0]) == signature:
         return {'mode': 'skipped'}
-    from app.integrations.enova.document_counts import find_company
-    company = find_company(conn,normalize_nip(source['nip']))
-    report_source = checking_source(source,company)
-    counts = validate_rows(_counts(config, report_source, months, 'counts'), report_source, months)
-    if any(count.by_type is None for count in counts):
+    counts = validate_rows(_counts(config, report_source, months, 'counts', force=force), report_source, months, divisor)
+    if any(count.report_breakdown is None for count in counts):
         raise ValueError('Brak podziału na rodzaje dokumentów w odczycie sprawdzania.')
     payroll = None
     if source.get('payroll_query'):
         query = {**source, 'count_query': source['payroll_query']}
-        payroll = validate_payroll(_counts(config, query, months, 'payroll'), source, months)
+        payroll = validate_payroll(_counts(config, query, months, 'payroll', force=force), source, months)
     declarations = None
     if source.get('declarations_query'):
         query = {**source, 'count_query': source['declarations_query']}
-        declarations = validate_declarations(_counts(config, query, months, 'declarations'), source, months)
+        declarations = validate_declarations(_counts(config, query, months, 'declarations', force=force), source, months)
     events = None
     if source.get('hr_events_query'):
         from app.integrations.enova.hr_events import fetch_events
@@ -280,10 +274,10 @@ def sync_checking(conn, config, source, company_id, day, *, apply, months=None, 
     if apply:
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for count in counts:
-            value = {'documents': {'accounting': count.by_type,
-                                   'payroll': payroll[count.month] if payroll is not None else None},
+            value = {'documents': {'payroll': payroll[count.month] if payroll is not None else None},
                      'declarations': declarations[count.month] if declarations is not None else None,
                      'imported_at': stamp, 'database': source['database']}
+            _store_accounting_breakdown(value, count)
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                          (f'enova_checking_{company_id}_{count.month}', json.dumps(value, ensure_ascii=False)))
@@ -306,6 +300,7 @@ def run_checking_import(config, *, apply=False, today=None, months=None, force=F
         raise ValueError('Import Enova wyłączony.')
     day = today or datetime.now(ZoneInfo('Europe/Warsaw')).date()
     results = []
+    rules = load_rules()
     with get_conn() as conn:
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Import sprawdzania jest już uruchomiony.')
@@ -316,7 +311,8 @@ def run_checking_import(config, *, apply=False, today=None, months=None, force=F
                     company = find_company(conn, normalize_nip(source['nip']))
                     if apply:
                         record('enova', 'reading', company_id=company['id'])
-                    result = sync_checking(conn, config, source, company['id'], day, apply=apply, months=months, force=force)
+                    result = sync_checking(conn, config, source, company, day, apply=apply, months=months, force=force,
+                                           divisor=effective_divisor(rules, company['id']))
                     results.append({'database': source['database'], 'company_id':company['id'], 'kind': 'checking', 'ok': True, **result})
                 if apply:
                     record('enova', 'read', company_id=company['id'])

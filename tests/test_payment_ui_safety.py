@@ -4,10 +4,12 @@ import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from threading import Event
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox
 
@@ -98,10 +100,22 @@ class BankReviewSafetyTests(unittest.TestCase):
         self.dialog.encoding.setCurrentIndex(0)
         self.dialog.encoding.blockSignals(False)
         self.dialog.encoding.setCurrentIndex(self.dialog.encoding.findData("iso8859_2"))
+        gui_processed_events = Event()
+
+        def import_after_gui_event(*args, **kwargs):
+            if not gui_processed_events.wait(3):
+                raise RuntimeError('Interfejs nie obsłużył zdarzenia podczas importu.')
+            return {"all": 1, "new": 1, "duplicates": 0}
+
         with patch("app.invoices.payments_ui.QFileDialog.getOpenFileName", return_value=("statement.sta", "")), \
-             patch("app.invoices.payments_ui.import_mt940_file", return_value={"all": 1, "new": 1, "duplicates": 0}) as importer, \
-             patch.object(QMessageBox, "information"):
+             patch("app.invoices.payments_ui.import_mt940_file", side_effect=import_after_gui_event) as importer, \
+             patch.object(QMessageBox, "exec") as error:
             self.dialog._import_file()
+            self.assertFalse(self.dialog.btn_import.isEnabled())
+            QTimer.singleShot(0, gui_processed_events.set)
+            self.wait_for_import()
+            error.assert_not_called()
+        self.assertTrue(self.dialog.btn_import.isEnabled())
         importer.assert_called_once_with("statement.sta", 1, encoding="iso8859_2")
         self.dialog.settings.setValue.assert_called_with("mt940/encoding", "iso8859_2")
 
@@ -120,10 +134,18 @@ class BankReviewSafetyTests(unittest.TestCase):
              patch.object(self.dialog, "refresh") as refresh, \
              self.assertLogs("app.invoices.payments_ui", level="ERROR"):
             self.dialog._import_file()
+            self.wait_for_import()
         self.assertEqual(len(details), 1)
         self.assertIn("RuntimeError: missing bank column", details[0])
         success.assert_not_called()
         refresh.assert_not_called()
+
+    def wait_for_import(self):
+        for _ in range(200):
+            if self.dialog._import_thread is None:
+                break
+            QTest.qWait(10)
+        self.assertIsNone(self.dialog._import_thread)
 
     def test_choices_survive_refresh_after_another_transfer_is_settled(self):
         self.dialog.table.cellWidget(1, 5).setCurrentIndex(1)

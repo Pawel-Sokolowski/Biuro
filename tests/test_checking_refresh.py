@@ -37,7 +37,7 @@ class CheckingRefreshTests(DbTestCase):
                 conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,etap) VALUES (%s,'2026-11',77,'Brak')",(fid,))
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)',
                          (f'enova_checking_{self.other}_2026-11','{"old": true}'))
-        def fetch(config,source,months):
+        def fetch(config,source,months,*,result_kind):
             return [{'nip':source['nip'],'miesiac':month,'dokumenty':1,'pozycje_bankowe':0,'rodzaje':{'AMO':1}} for month in months]
         with patch('app.integrations.enova.connection_settings.load_connection',return_value=self.config), \
              patch('app.integrations.enova.checking.fetch_counts',side_effect=fetch) as remote:

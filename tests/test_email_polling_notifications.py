@@ -143,10 +143,10 @@ class AutomaticSyncTests(unittest.TestCase):
         def cached_folders(account_id):
             if account_id==1:
                 return []
-            return [{'server_name':'INBOX','attributes':''}]
-        with patch.object(email_sync,'get_folders_for_account',side_effect=cached_folders), \
+            return ['INBOX']
+        with patch.object(email_sync,'selectable_folder_names',side_effect=cached_folders), \
              patch.object(email_sync,'list_folders_from_imap_and_store',side_effect=lambda account:account!=1), \
-             patch.object(email_sync,'selectable_folder_names',return_value=['INBOX']), \
+             patch.object(email_sync,'sync_folder_flags',return_value=0), \
              patch.object(email_sync,'sync_and_prefetch') as sync, \
              patch.object(email_sync,'prefetch_recent',return_value=0):
             errors=email_sync.sync_automatic_accounts([{'id':1},{'id':2}])
@@ -226,10 +226,10 @@ class BadgeAndNotificationTests(unittest.TestCase):
         page.employee_filter=None;page.completed_filter=False;page._chips_signature=None
         page.employees=[{'id':7,'imie':'Jan','nazwisko':'Kowalski'}]
         page.label_numbers={7:1};page.chips_layout=QHBoxLayout(page);page.chips_group=QButtonGroup(page)
-        with patch.object(email_ui,'count_unread_assigned_by_employee',return_value={7:4}):
+        with patch('app.email.mail_shell.count_unread_assigned_by_employee',return_value={7:4}):
             page._refresh_chips()
         self.assertEqual(page.chips_layout.itemAt(2).widget().text(),'Jan Kowalski (4)')
-        with patch.object(email_ui,'count_unread_assigned_by_employee',return_value={7:3}):
+        with patch('app.email.mail_shell.count_unread_assigned_by_employee',return_value={7:3}):
             page._refresh_chips()
         self.assertEqual(page.chips_layout.itemAt(2).widget().text(),'Jan Kowalski (3)')
 

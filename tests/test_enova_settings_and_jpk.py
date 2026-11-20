@@ -22,6 +22,8 @@ class JpkValidationTests(TestCase):
             validate_jpk([], source, ['2026-11'])
         accepted = validate_jpk([{**row, 'status': 'accepted', 'upo': 'REF-123'}], source, ['2026-11'])
         self.assertEqual(accepted['2026-11']['upo'], 'REF-123')
+        self.assertIsNone(accepted['2026-11']['sent_at'])
+        self.assertIsNone(accepted['2026-11']['upo_at'])
 
     def test_breakdown_is_validated_against_count(self):
         source = {'nip': '1234567890', 'accounting_type': 'KH'}
@@ -86,7 +88,8 @@ class ConnectionAndJpkTests(DbTestCase):
     def test_jpk_sync_without_finished_accounting_and_daily_deduplication(self):
         config = {'enabled': True, 'server': 'sql', 'months_back': 1,
                   'sources': [{'nip': '1234567890', 'database': 'ClientA', 'jpk_query': 'jpk.sql'}]}
-        row = {'nip': '1234567890', 'miesiac': '2026-11', 'status': 'accepted', 'upo': 'REF-123'}
+        row = {'nip': '1234567890', 'miesiac': '2026-11', 'status': 'accepted', 'upo': 'REF-123',
+               'sent_at': '2026-11-05 09:15:00.1234567 +01:00', 'upo_at': '2026-11-05T09:30:00+01:00'}
         with patch('app.integrations.enova.jpk.fetch_counts', return_value=[row]) as fetch:
             for _ in range(2):
                 result = run_import(config, apply=True, today=date(2026, 11, 12))
@@ -105,7 +108,14 @@ class ConnectionAndJpkTests(DbTestCase):
         page.render(rows, '2026-11')
         column = next(i for i in range(page.table.columnCount()) if page.table.horizontalHeaderItem(i).text() == 'JPK_VAT\nStatus')
         self.assertEqual(page.table.item(0, column).text(), 'Przyjęty (UPO)')
+        self.assertEqual(page.table.item(0, column + 1).text(), '2026-11-05 09:15:00')
+        self.assertEqual(page.table.item(0, column + 3).text(), '2026-11-05 09:30:00')
         self.assertEqual(page.table.item(0, 3).text(), '—')
+        selector = page.report_selectors['accounting']
+        selector.setCurrentIndex(selector.findData('form:JPKVAT'))
+        detail = page.declaration_tables['accounting']
+        self.assertEqual(detail.item(0, 5).text(), '2026-11-05 09:15:00')
+        self.assertEqual(detail.item(0, 7).text(), '2026-11-05 09:30:00')
         page.close()
 
     def test_snapshot_and_total_are_saved_together_and_settings_form_loads(self):
@@ -126,6 +136,25 @@ class ConnectionAndJpkTests(DbTestCase):
         page = EnovaConnectionSettings(self.admin)
         self.assertEqual(page.table.columnCount(), 3)
         page.close()
+
+    def test_annual_read_retains_jpk_dates_and_records_the_import(self):
+        from app.integrations.enova.accounting import declarations, list_accounting
+        from app.services.declaration_year import read_enova
+
+        month = '2026-11'
+        source = {'nip': '1234567890', 'database': 'ClientA',
+                  'declarations_query': 'declarations.sql', 'jpk_query': 'jpk.sql'}
+        jpk = {'nip': source['nip'], 'miesiac': month, 'status': 'accepted', 'upo': 'ANNUAL-REF',
+               'sent_at': '2026-12-08T10:15:00+01:00', 'upo_at': '2026-12-08T10:25:00+01:00'}
+        with patch('app.services.declaration_year.fetch_counts', side_effect=[[], [jpk]]):
+            self.assertTrue(read_enova({}, source, self.company, [month])['ok'])
+        row = next(row for row in list_accounting(self.admin, month) if row['id'] == self.company)
+        saved = declarations(row, 'accounting')['JPK_VAT']
+        self.assertEqual((saved['sent_at'], saved['upo_at'], saved['upo']),
+                         (jpk['sent_at'], jpk['upo_at'], jpk['upo']))
+        with get_conn() as conn:
+            history = conn.execute("SELECT status FROM import_history WHERE import_type='enova_declarations'").fetchone()
+        self.assertEqual(history['status'], 'completed')
 
     def test_manual_counts_are_preserved_before_and_after_enova_import(self):
         config = {'enabled': True, 'months_back': 1, 'sources': [{'nip': '1234567890', 'database': 'ClientA'}]}

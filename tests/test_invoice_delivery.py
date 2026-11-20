@@ -132,7 +132,8 @@ class CompanyTabsTests(unittest.TestCase):
         patchers += [patch.object(company_form,'get_setting_bool',return_value=False)]
         for patcher in patchers:patcher.start();self.addCleanup(patcher.stop)
         form=company_form.CompanyForm();self.addCleanup(form.close)
-        self.assertEqual(form.section_tabs.count(),9)
+        self.assertEqual(set(form.section_pages), {'Dane podstawowe', 'Rozliczenia i deklaracje',
+                                                   'Faktury i ceny', 'Kontakty', 'Wspólnicy', 'Notatki'})
         for index in range(form.section_tabs.count()):
             self.assertIsInstance(form.section_tabs.widget(index),QScrollArea)
         form.inputs['email_faktury'].setText('invoices@firma.com')

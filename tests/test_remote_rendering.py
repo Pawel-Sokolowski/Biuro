@@ -29,6 +29,39 @@ class RemoteRenderingTests(unittest.TestCase):
                 self.assertEqual(profile({},'2026-11')['vat_period'],'auto')
         connection.call.assert_not_called()
 
+    def test_bank_review_fetches_batched_data_for_1000_companies(self):
+        from PyQt6.QtWidgets import QMessageBox
+        from app.invoices.payments_ui import BankPaymentReview
+        from tests.base import QT_APP
+
+        self.assertIsNotNone(QT_APP)
+        invoices = [
+            {'id': idx, 'firma_id': idx, 'numer': f'FV/{idx:04}/2026',
+             'buyer': f'Firma {idx}', 'balance': '150.00'}
+            for idx in range(1, 1001)
+        ]
+        transfers = [
+            {'id': idx, 'data_operacji': '2026-11-20', 'kwota': '150.00',
+             'remaining': '150.00', 'kontrahent': f'Firma {idx}', 'tytul': f'FV/{idx:04}/2026'}
+            for idx in range(1, 101)
+        ]
+        responses = {
+            'list_invoice_choices': invoices,
+            'list_unsettled_transfers': transfers,
+            'bank_import_summary': {'schema': 'public', 'total': len(transfers)},
+            'list_company_choices': [{'id': idx, 'buyer': f'Firma {idx}'} for idx in range(1, 1001)],
+        }
+        connection = mock.Mock(server='https://biuro.example.test')
+        connection.call.side_effect = lambda operation, *_: responses[operation.rsplit('.', 1)[-1]]
+        with mock.patch('app.remote.state._client', connection), mock.patch.object(QMessageBox, 'warning') as warning:
+            page = BankPaymentReview(7)
+            self.addCleanup(page.close)
+            self.assertEqual(page.table.rowCount(), 100)
+            self.assertEqual(page.table.cellWidget(99, page.COL_INVOICE).currentData(), 100)
+            warning.assert_not_called()
+        self.assertEqual([call.args[0] for call in connection.call.call_args_list],
+                         [f'app.db.dao_payments.{name}' for name in responses])
+
     def test_ui_hints_are_copied_and_only_apply_to_the_logged_in_employee(self):
         client = OfficeClient('https://localhost')
         client.employee_id,client.token = 7,'session-token'

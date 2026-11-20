@@ -3,7 +3,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6 import sip
+from PyQt6.QtCore import Qt, QCoreApplication, QEvent, QTimer
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QMessageBox, QTextBrowser, QTreeWidgetItem
 
 from app.config import schema_context
@@ -400,8 +402,21 @@ class MailListFollowupTests(MailboxFixture):
             self.addCleanup(patcher.stop)
         self.page = email_ui.EmailPage(1)
         self.page.current_folder_local = "INBOX"
-        self.addCleanup(self.page.deleteLater)
-        self.addCleanup(self.page.stop_background_sync)
+        self.addCleanup(self.close_mail_page)
+
+    def close_mail_page(self):
+        if not sip.isdeleted(self.page):
+            self.page.stop_background_sync()
+            self.page.deleteLater()
+
+    def test_loading_preview_timer_stops_when_the_page_is_destroyed(self):
+        self.load_first_page(1)
+        with mock.patch.object(self.page, '_run_async'):
+            self.page.on_mail_clicked(self.page.mail_list.topLevelItem(0))
+        self.close_mail_page()
+        QCoreApplication.sendPostedEvents(self.page, QEvent.Type.DeferredDelete)
+        self.assertTrue(sip.isdeleted(self.page))
+        QTest.qWait(450)
 
     def load_first_page(self, count=1002):
         self.add_messages(count)

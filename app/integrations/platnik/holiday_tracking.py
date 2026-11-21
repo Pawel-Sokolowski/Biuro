@@ -4,7 +4,9 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.companies.holiday_eligibility import RELIEF_CODES, insurance_code
+from app.companies.holiday_eligibility import (
+    context, default_relief_month, rca_holidays, worksheet_assessments, worksheet_label,
+)
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import employee_initials
 from app.integrations.enova.accounting import require_access
@@ -34,37 +36,12 @@ def decode_notes(raw):
     return json.loads(decrypt_password(json.loads(raw)['fields_enc']))
 
 
-def _rca_holidays(conn, company_ids, year):
-    if not company_ids:
-        return {}
-    from .declarations import decoded_snapshot
-
-    evidence = {}
-    for company_id, period, payload in conn.execute("""
-        SELECT company_id, period, payload FROM company_checking_snapshots
-        WHERE source='platnik_declarations' AND company_id=ANY(%s) AND period BETWEEN %s AND %s
-        ORDER BY company_id, period
-    """, (company_ids, max(f'{year}-01', '2024-12'), f'{year}-12')):
-        for entry in decoded_snapshot(payload).get('declarations', ()):
-            if entry.get('form') != 'ZUS RCA' or not entry.get('employee_id'):
-                continue
-            code = insurance_code(entry.get('insurance_code'))[:4]
-            status = entry.get('status')
-            if code not in RELIEF_CODES or status in ('draft', 'rejected'):
-                continue
-            sent = (status == 'sent' and bool(entry.get('sent_at'))) or (
-                status == 'accepted' and bool(entry.get('upo')))
-            key = (int(period[5:]), code)
-            company_evidence = evidence.setdefault(company_id, {})
-            company_evidence[key] = company_evidence.get(key, False) or sent
-    return {company: [{'month': month, 'code': code, 'sent': sent}
-                      for (month, code), sent in sorted(entries.items())]
-            for company, entries in evidence.items()}
-
-
 @office_endpoint('app.integrations.platnik.holiday_tracking.read_tracking_year')
-def read_tracking_year(actor_id, year):
+def read_tracking_year(actor_id, year, month=None):
     validate_year(year)
+    period = context(default_relief_month(year) if month is None else month)
+    if period['year'] != year:
+        raise ValueError('Miesiąc oceny musi należeć do wybranego roku.')
     payload = read_year(actor_id, year)
     companies = payload['companies']
     keys = [note_key(year, company['id']) for company in companies]
@@ -72,7 +49,10 @@ def read_tracking_year(actor_id, year):
         notes = {row['klucz']: decode_notes(row['wartosc']) for row in conn.execute(
             'SELECT klucz,wartosc FROM app_settings WHERE klucz=ANY(%s)', (keys,)).fetchall()}
         actor = conn.execute('SELECT imie,nazwisko FROM pracownicy WHERE id=%s', (actor_id,)).fetchone()
-        rca_by_company = _rca_holidays(conn, [company['id'] for company in companies], year)
+        rca_by_company = rca_holidays(conn, [company['id'] for company in companies], year)
+    assessed = worksheet_assessments(companies, period,
+                                     {c['id']: notes.get(note_key(year, c['id']), {}) for c in companies},
+                                     rca_by_company)
     grouped = {}
     for row in payload['rows']:
         if row.get('firma_id') is not None:
@@ -93,17 +73,19 @@ def read_tracking_year(actor_id, year):
                     values.append(str(value).strip())
             source_values[field] = '; '.join(values) or None
         if rca_months:
-            source_values['moze_skorzystac'] = 'Wykorzystano według RCA'
             months = {int(month) for month in (source_values['miesiac'] or '').split('; ') if month.isdigit()}
             source_values['miesiac'] = '; '.join(map(str, sorted(months | rca_months)))
+        eligibility = assessed[company['id']]
+        source_values['moze_skorzystac'] = worksheet_label(eligibility)
         fields = notes.get(note_key(year, company['id']), {})
         values = {field: fields[field]['value'] if fields.get(field, {}).get('value') is not None
                   else source_values[field] for field in WORKSHEET_FIELDS}
+        values['moze_skorzystac'] = source_values['moze_skorzystac']
         rows.append({**values, 'firma': company['nazwa'], 'firma_id': company['id'],
                      'nip': company['nip'], 'source_values': source_values,
-                     'sources': sources, 'notes': fields, 'rca_holidays': rca,
+                     'sources': sources, 'notes': fields, 'rca_holidays': rca, 'eligibility': eligibility,
                      'statuses': sorted({s.get('status_zrodlowy') or '?' for s in sources})})
-    return {**payload, 'rows': rows, 'source_rows': payload['rows'],
+    return {**payload, 'rows': rows, 'source_rows': payload['rows'], 'eligibility_month': period['month'],
             'unassigned': sum(row.get('firma_id') is None for row in payload['rows']),
             'source_count': len(payload['rows']),
             'current_initials': employee_initials(actor['imie'], actor['nazwisko']) if actor else ''}

@@ -52,6 +52,9 @@ class ImportTests(DbTestCase):
         self.key = patch.dict(os.environ,{'BIO_ENCRYPTION_KEY':Fernet.generate_key().decode()})
         self.key.start()
         self.addCleanup(self.key.stop)
+        clock = patch('app.companies.holiday_eligibility.current_month', return_value='2026-11')
+        clock.start()
+        self.addCleanup(clock.stop)
         self.company = self.make_company(nip='1112223344')
         with get_conn() as conn:
             self.admin = conn.execute('SELECT id FROM pracownicy WHERE is_admin=1').fetchone()[0]
@@ -103,7 +106,8 @@ class ImportTests(DbTestCase):
              'Złożone', 'Miesiąc zwolnienia', 'Stan'],
         )
         index = next(i for i, row in enumerate(view.displayed_rows) if row['firma_id'] == self.company)
-        self.assertEqual(view.table.item(index, 1).text(), 'Tak')
+        self.assertEqual(view.table.item(index, 1).text(), 'Do sprawdzenia')
+        self.assertIn('Wcześniejszy wpis biura: Tak', view.table.item(index, 1).toolTip())
         self.assertEqual(view.table.item(index, 3).text(), 'Tak, 09.11')
         self.assertEqual(view.table.item(index, 5).text(), 'Nieaktualny wpis RWS')
         save_field(self.admin, 2026, self.company, 'decyzja', 'Przyznano zwolnienie', 0)
@@ -117,7 +121,7 @@ class ImportTests(DbTestCase):
 
         def snapshot(period, code, **fields):
             entry = {'form': 'ZUS RCA', 'employee_id': '12', 'insurance_code': code,
-                     'status': 'unknown', 'raw_status': 'P', **fields}
+                     'payer_nip': '1112223344', 'status': 'unknown', 'raw_status': 'P', **fields}
             with get_conn() as conn:
                 save_snapshot(conn, 'platnik_declarations', self.company, period,
                               encrypt_password(json.dumps({'declarations': [entry]})))
@@ -128,7 +132,7 @@ class ImportTests(DbTestCase):
         snapshot('2025-12', '0514', status='accepted', upo='OLDER')
         row = self.company_row(read_tracking_year(self.admin, 2026))
         self.assertIsNone(row['miesiac'])
-        self.assertIsNone(row['moze_skorzystac'])
+        self.assertEqual(row['moze_skorzystac'], 'Do sprawdzenia')
         self.assertIn('sprawdź wysyłkę', _worksheet_state(row, False))
 
         snapshot('2026-11', '057401', status='sent', sent_at='2026-12-02')

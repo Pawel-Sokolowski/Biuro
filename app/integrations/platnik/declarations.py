@@ -112,10 +112,7 @@ def fetch(config, months, *, annual=False, selected_nips=None, expected_source=N
             if not expected<=set(columns) or set(columns)-expected-OPTIONAL_FIELDS or len(columns)!=len(set(columns)):
                 raise ValueError('Nieprawidłowy kontrakt kolumn formularzy ZUS.')
             rows = []
-            while True:
-                batch = cursor.fetchmany(1000)
-                if not batch:
-                    break
+            for batch in iter(lambda: cursor.fetchmany(1000) or None, None):
                 rows.extend(dict(zip(columns, row)) for row in batch)
                 if len(rows) > 100000:
                     raise ValueError('Odczyt formularzy ZUS przekracza 100000 rekordów. Poprzednie dane pozostawiono.')

@@ -310,9 +310,9 @@ psycopg-binary==3.3.8 ; implementation_name != 'pypy' \
     # via
     #   -c requirements.lock
     #   psycopg
-psycopg-pool==3.3.1 \
-    --hash=sha256:2af5b432941c4c9ad5c87b3fa410aec910ec8f7c122855897983a06c45f2e4b5 \
-    --hash=sha256:b10b10b7a175d5cc1592147dc5b7eec8a9e0834eb3ed2c4a92c858e2f51eb63c
+psycopg-pool==3.3.3 \
+    --hash=sha256:9b9cd6a4fcec47a410f7e82d408540e7f77b478509e91b44c1a5457a13e5ff37 \
+    --hash=sha256:df87b5d9d0ad7db37f6cdad4fa8ce113d250f5997f6db38e9a99192fb67f9e1d
     # via
     #   -c requirements.lock
     #   -r requirements-enova.txt
@@ -391,6 +391,12 @@ pyodbc==5.5.0 \
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc \
     --hash=sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0
+    # via
+    #   -c requirements.lock
+    #   -r requirements-enova.txt
+python-stdnum==2.2 \
+    --hash=sha256:bdf98fd117a0ca152e4047aa8ad254bae63853d4e915ddd4e0effb33ba0e9260 \
+    --hash=sha256:e95fcfa858a703d4a40130cb3eaac133c60d8808a7f3c98efeedac968c2479b9
     # via
     #   -c requirements.lock
     #   -r requirements-enova.txt

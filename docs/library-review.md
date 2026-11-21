@@ -86,3 +86,17 @@ wymagają ponownego rozwiązania zależności i wygenerowania lockfile ze skrót
 - Wstęp do C API dotyczy rozszerzeń i osadzania interpretera. Do raportu
   miesięcznego wystarczają moduły Pythona i dotychczasowe zależności.
   [Wprowadzenie do C API](https://docs.python.org/pl/3.14/c-api/intro.html)
+
+## Zmiany z agentem Płatnika
+
+- `psycopg-pool` 3.3.3 jest zapisany w zależnościach aplikacji i workera Enova.
+  `XlsxWriter` 3.3.3 jest zapisany w lockfile aplikacji. Skróty archiwum i koła
+  pochodzą z opublikowanych plików. [psycopg-pool 3.3.3](https://pypi.org/project/psycopg-pool/3.3.3/)
+  · [XlsxWriter 3.3.3](https://pypi.org/project/XlsxWriter/3.3.3/)
+- Agent ma własne środowisko Windows z `pywinauto` do kontrolek i `pywin32`
+  do sprawdzania stanu sesji. `psycopg` obsługuje kolejkę, a `subprocess.run`
+  kończy odczyt po przekroczeniu czasu. [Dokumentacja agenta](platnik/gui-agent.md)
+- Biuro i agent używają jednej funkcji `stdnum.pl.nip.compact`. Dopasowanie
+  zachowuje dotychczasowy format dziesięciu cyfr także dla historycznych danych.
+  Formatowanie miesiąca korzysta z `date.isoformat`, a import ODBC iteruje
+  po porcjach przez standardowe `iter`. [Dokumentacja NIP](https://arthurdejong.org/python-stdnum/doc/2.2/stdnum.pl.nip.html)

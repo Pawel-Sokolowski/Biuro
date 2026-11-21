@@ -98,6 +98,19 @@ class ContractorMatchingTests(unittest.TestCase):
         self.assertEqual(indexed, {row['id']: match_invoice_contractor(row, rows) for row in transfers})
         self.assertFalse(indexed[1]['confident'])
 
+    def test_batch_matcher_leaves_explicit_unmatched_nip_unresolved(self):
+        rows = [invoice(1, 10, 'FV/1/11/2026', 'ALFA', nip='1234567890', buyer_account=ACCOUNT)]
+        transfers = [
+            dict(id=1, kontrahent_nip='9876543210', kontrahent='ALFA'),
+            dict(id=2, kontrahent_nip='9876543210', kontrahent_rachunek=ACCOUNT),
+            dict(id=3, kontrahent_nip='1234567890', kontrahent='BETA'),
+        ]
+        indexed = match_invoice_contractors(transfers, rows)
+        self.assertEqual(indexed, {row['id']: match_invoice_contractor(row, rows) for row in transfers})
+        self.assertFalse(indexed[1]['confident'])
+        self.assertFalse(indexed[2]['confident'])
+        self.assertEqual(indexed[3]['company_key'], ('firma', 10))
+
     def test_suggestions_index_respects_number_variants_nip_amount_and_scope(self):
         rows = [invoice(1, 10, 'FV/12/2026', 'Alfa', nip='1234567890'),
                 invoice(2, 20, 'FV-12-2026', 'Beta'),

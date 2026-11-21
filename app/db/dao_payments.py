@@ -750,9 +750,10 @@ def match_invoice_contractors(transactions: list[dict], invoices: list[dict]) ->
                     unresolved,
                     "Dopasowano nabywcę po numerze faktury w tytule przelewu.",
                 )
-        elif len(nip) == 10 and nip_keys:
-            match = _resolved_contractor(
-                nip_keys, grouped, unresolved, "Dopasowano kontrahenta po NIP."
+        elif len(nip) == 10:
+            match = (
+                _resolved_contractor(nip_keys, grouped, unresolved, "Dopasowano kontrahenta po NIP.")
+                if nip_keys else unresolved
             )
         else:
             account = _normalize_account(

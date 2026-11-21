@@ -5,7 +5,9 @@ from tests.base import DbTestCase
 from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting
-from app.services.checking_refresh import _save, enqueue,process_next,latest,recover_interrupted
+from app.services.checking_refresh import (
+    _save, enqueue, latest, process_next, recover_interrupted, retry_request, run_now,
+)
 from app.integrations.enova.checking import CheckingBusy
 
 
@@ -63,6 +65,40 @@ class CheckingRefreshTests(DbTestCase):
         _save(value)
         recover_interrupted()
         self.assertEqual(latest(self.admin)['state'],'queued')
+
+    def test_status_poll_recovers_direct_read_only_after_executor_releases_lock(self):
+        def interrupt(value, stop):
+            recover_interrupted()
+            self.assertEqual(latest(self.admin)['state'], 'running')
+            raise SystemExit()
+
+        with patch('app.services.checking_refresh._execute', side_effect=interrupt):
+            with self.assertRaises(SystemExit):
+                run_now(self.admin, 'enova', [self.company], '2026-11')
+
+        result = latest(self.admin)
+        self.assertEqual(result['state'], 'failed')
+        self.assertIn('przerwane', result['error'])
+        self.assertTrue(result['finished_at'])
+        with get_conn() as conn:
+            row = conn.execute('SELECT state, finished_at FROM checking_requests WHERE id=%s',
+                               (result['id'],)).fetchone()
+        self.assertEqual(row['state'], 'failed')
+        self.assertIsNotNone(row['finished_at'])
+
+    def test_worker_recovers_interrupted_retry_of_direct_read(self):
+        with patch('app.services.checking_refresh._execute', side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                run_now(self.admin, 'enova', [self.company], '2026-11')
+            recover_interrupted()
+            failed = latest(self.admin)
+            self.assertEqual(failed['state'], 'failed')
+            self.assertEqual(retry_request(failed['id'], self.admin)['state'], 'queued')
+            with self.assertRaises(SystemExit):
+                process_next()
+
+        recover_interrupted()
+        self.assertEqual(latest(self.admin)['state'], 'queued')
 
     def test_missing_mapping_is_reported_without_stopping_next_selected_company(self):
         config = {**self.config,'sources':self.config['sources'][1:]}
@@ -126,7 +162,6 @@ class CheckingRefreshTests(DbTestCase):
         self.assertEqual([r['ok'] for r in latest(self.admin)['results']],[True,True,False,False])
 
     def test_direct_full_year_platnik_starts_without_automatic_worker_flags(self):
-        from app.services.checking_refresh import _save, run_now
         with patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':17}) as monthly, \
              patch('app.integrations.platnik.declarations.import_year',return_value={'mode':'applied','documents':2}) as annual, \
              patch('app.integrations.enova.connection_settings.load_connection',side_effect=AssertionError('unselected source')):
@@ -141,7 +176,6 @@ class CheckingRefreshTests(DbTestCase):
         self.assertIsNone(get_setting('background_worker'))
 
     def test_direct_monthly_success_is_visible_when_annual_reports_fail(self):
-        from app.services.checking_refresh import _save, run_now
         with patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':17}), \
              patch('app.integrations.platnik.declarations.import_year',side_effect=ValueError('Brak IWA/ZSWA')):
             value = run_now(self.admin,'declaration_year',[self.company],2026,['platnik'])
@@ -151,7 +185,6 @@ class CheckingRefreshTests(DbTestCase):
         self.assertIn('IWA',value['results'][0]['error'])
 
     def test_direct_busy_source_returns_a_failure_instead_of_leaving_a_queued_request(self):
-        from app.services.checking_refresh import _save, run_now
         with patch('app.services.checking_refresh._execute',return_value=None):
             value = run_now(self.admin,'declaration_year',[self.company],2026,['platnik'])
         self.assertEqual(value['state'],'failed')

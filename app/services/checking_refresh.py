@@ -21,6 +21,7 @@ KINDS = (
     'platnik_annual',
     'declaration_year',
 )
+READ_LOCK = 748219
 
 
 def stamp():
@@ -258,7 +259,7 @@ def run_now(
             set(sources)
         )
 
-    with advisory_lock(748219) as acquired:
+    with advisory_lock(READ_LOCK) as acquired:
         if not acquired:
             raise ValueError(
                 'Trwa już pobieranie danych. '
@@ -357,6 +358,9 @@ def latest(actor_id):
         row = conn.execute("""
             SELECT payload FROM checking_requests WHERE actor_id=%s ORDER BY created_at DESC,id DESC LIMIT 1
         """, (actor_id,)).fetchone()
+        if row and row['payload']['state'] == 'running' and _try_recover_interrupted(conn):
+            row = conn.execute('SELECT payload FROM checking_requests WHERE id=%s',
+                               (row['payload']['id'],)).fetchone()
     if not row:
         return None
     value = row['payload']
@@ -365,14 +369,31 @@ def latest(actor_id):
 
 
 def recover_interrupted():
-    # Worker leadership is held by the caller. Reads and upserts in this queue
-    # are idempotent, while direct requests have their own executor.
     with get_conn() as conn:
-        conn.execute("""
-            UPDATE checking_requests SET state='queued',
-                payload=payload || jsonb_build_object('state','queued','resumed_at',%s::text)
-            WHERE state='running' AND payload->>'execution' IS DISTINCT FROM 'direct'
-        """, (stamp(),))
+        _try_recover_interrupted(conn)
+
+
+def _try_recover_interrupted(conn):
+    # Use the same lock as the executors. A worker restart or a status poll
+    # can happen while a direct read in another process is still running.
+    if not conn.execute('SELECT pg_try_advisory_xact_lock(%s)', (READ_LOCK,)).fetchone()[0]:
+        return False
+    _recover_interrupted(conn)
+    return True
+
+
+def _recover_interrupted(conn):
+    finished_at = stamp()
+    conn.execute("""
+        UPDATE checking_requests SET state='failed', finished_at=%s,
+            payload=payload || jsonb_build_object('state','failed','finished_at',%s::text,'error',%s::text)
+        WHERE state='running' AND payload->>'execution'='direct'
+    """, (finished_at, finished_at, 'Pobieranie zostało przerwane. Uruchom je ponownie.'))
+    conn.execute("""
+        UPDATE checking_requests SET state='queued',
+            payload=payload || jsonb_build_object('state','queued','resumed_at',%s::text)
+        WHERE state='running' AND payload->>'execution' IS DISTINCT FROM 'direct'
+    """, (finished_at,))
 
 
 def _execute(
@@ -626,13 +647,14 @@ def _execute(
 
 
 def process_next(stop=None):
-    with advisory_lock(748219) as acquired:
+    with advisory_lock(READ_LOCK) as acquired:
         if not acquired:
             return {
                 'mode': 'busy',
             }
 
         with get_conn() as conn:
+            _recover_interrupted(conn)
             row = conn.execute("""
                 SELECT payload FROM checking_requests WHERE state='queued'
                 ORDER BY created_at,id LIMIT 1 FOR UPDATE
@@ -640,6 +662,7 @@ def process_next(stop=None):
             if not row:
                 return {'mode': 'idle'}
             value = row['payload']
+            value.pop('execution', None)  # A retried direct request now belongs to the worker.
             value.update(state='running', started_at=stamp(), attempts=int(value.get('attempts') or 0))
             _write(conn, value)
 

@@ -147,6 +147,43 @@ class OfficeHttpsTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM faktury_platnosci').fetchone()[0], 0)
 
+    def test_mt940_review_suggests_older_invoice_beyond_the_first_page(self):
+        from app.db.dao_conn import get_conn
+        from app.db.dao_payments import INVOICE_CHOICE_PAGE_SIZE, InvoiceSuggestionIndex
+        from app.invoices.payments_ui import _read_bank_review
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Abonament')
+        with get_conn() as conn:
+            old_invoice = conn.execute("""
+                INSERT INTO faktury(firma_id,miesiac,numer,kwota_netto,kwota_brutto,pozycje_json,
+                                    rodzaj,eksportowana,data_wystawienia)
+                VALUES (%s,'2026-08','FV/1/08/2026',100,123,'[]','faktura',1,'2026-08-01') RETURNING id
+            """, (company,)).fetchone()[0]
+            conn.execute("""
+                INSERT INTO faktury(miesiac,numer,kwota_netto,kwota_brutto,pozycje_json,
+                                    rodzaj,eksportowana,data_wystawienia)
+                SELECT '2026-11','FV/'||i||'/11/2026',100,123,'[]','faktura',1,'2026-11-01'
+                FROM generate_series(1,%s) s(i)
+            """, (INVOICE_CHOICE_PAGE_SIZE,))
+            conn.execute("""
+                INSERT INTO bank_transakcje(hash,data_operacji,kwota,waluta,kierunek,tytul)
+                VALUES ('older-invoice-receipt','2026-11-15',123,'PLN','C','Zapłata FV/1/08/2026')
+            """)
+        operation = 'app.db.dao_payments.list_invoice_choices'
+        first = self.client.call(operation, (1,))
+        second = self.client.call(operation, (1,), {'offset': INVOICE_CHOICE_PAGE_SIZE})
+        self.assertEqual(len(first), INVOICE_CHOICE_PAGE_SIZE)
+        self.assertNotIn(old_invoice, {row['id'] for row in first})
+        self.assertEqual([row['id'] for row in second], [old_invoice])
+        lookup = self.client.call(operation, (1,), {'references': ['fv-1-08-2026']})
+        self.assertEqual([row['id'] for row in lookup], [old_invoice])
+        with mock.patch('app.remote.state._client', self.client):
+            invoices, transfers, _, _, matches, has_more, _ = _read_bank_review(1, False, 100)
+        self.assertTrue(has_more)
+        self.assertTrue(matches[transfers[0]['id']]['confident'])
+        self.assertEqual(InvoiceSuggestionIndex(invoices).rank(transfers[0]), [old_invoice])
+
     def test_company_form_initial_read_is_batched_off_the_gui_thread(self):
         from app.companies.company_form import CompanyForm
         from tests.test_review_optimizations import wait_until

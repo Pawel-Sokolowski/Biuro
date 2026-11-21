@@ -7,7 +7,7 @@ from app.remote.boundary import endpoint as office_endpoint
 from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
-from app.db.reminder_index_schema import VERSION as SCHEMA_VERSION
+from app.db.review_fixes_schema import VERSION as SCHEMA_VERSION
 
 
 def init_db():
@@ -43,6 +43,8 @@ def init_db():
         apply_query_indexes(conn)
         from app.db.reminder_index_schema import apply as apply_reminder_indexes
         apply_reminder_indexes(conn)
+        from app.db.review_fixes_schema import apply as apply_review_fixes
+        apply_review_fixes(conn)
 
 
 @office_endpoint('app.db.schema.schema_is_current')

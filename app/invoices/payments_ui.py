@@ -4,13 +4,14 @@ from __future__ import annotations
 import logging
 import traceback
 from decimal import Decimal, DecimalException
+from itertools import batched
 from time import perf_counter
 
 from PyQt6.QtCore import QDate, QObject, QSettings, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QInputDialog,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
@@ -19,7 +20,7 @@ from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
     list_unsettled_transfers, record_manual_payment, record_cash_payment, delete_bank_transaction,
     match_invoice_contractors, contractor_key, InvoiceSuggestionIndex, transfer_block_reason,
-    apply_invoice_correction,
+    apply_invoice_correction, bank_invoice_references, INVOICE_CHOICE_PAGE_SIZE,
 )
 from app.remote.state import client
 from app.utils.background import TaskRunner
@@ -42,16 +43,39 @@ def _payment_amount(text: str) -> Decimal:
         raise PaymentError("Nieprawidłowa kwota płatności.") from exc
 
 
-def _read_bank_review(actor_id, include_all, limit):
-    invoices = list_invoice_choices(actor_id)
+def _invoice_paging_available():
+    connection = client()
+    if connection is None:
+        return True
+    features = getattr(connection, 'server_features', ())
+    return isinstance(features, (frozenset, set, tuple, list)) and 'bank_invoice_paging' in features
+
+
+def _read_bank_review(actor_id, include_all, limit, pages=1, search=''):
+    page = list_invoice_choices(actor_id)
     transfers = list_unsettled_transfers(actor_id, include_all=include_all, limit=limit)
+    invoices = {row['id']: row for row in page}
+    paging = _invoice_paging_available()
+    if paging:
+        for number in range(1, pages):
+            if len(page) < INVOICE_CHOICE_PAGE_SIZE:
+                break
+            page = list_invoice_choices(actor_id, offset=number * INVOICE_CHOICE_PAGE_SIZE)
+            invoices.update((row['id'], row) for row in page)
+        references = (ref for ref in bank_invoice_references(transfers) if len(ref) <= 240)
+        for batch in batched(references, 1000):
+            invoices.update((row['id'], row) for row in list_invoice_choices(actor_id, references=list(batch)))
+    found = list_invoice_choices(actor_id, references=[search]) if paging and search else []
+    invoices.update((row['id'], row) for row in found)
+    invoices = list(invoices.values())
     summary = bank_import_summary(actor_id)
     try:
         companies = list_company_choices(actor_id)
     except Exception:
         logger.exception("Nie udało się wczytać listy firm do rozliczeń")
         companies = []
-    return invoices, transfers, summary, companies, match_invoice_contractors(transfers, invoices)
+    return (invoices, transfers, summary, companies, match_invoice_contractors(transfers, invoices),
+            paging and len(page) == INVOICE_CHOICE_PAGE_SIZE, found)
 
 
 class Mt940ImportWorker(QObject):
@@ -119,6 +143,8 @@ class BankPaymentReview(QDialog):
         self._suggestions = InvoiceSuggestionIndex([])
         self._invoices_by_id = {}
         self._bank_limit = 100
+        self._invoice_pages = 1
+        self._invoice_search = ''
         self._import_thread = None
         self._import_worker = None
         self._import_in_progress = False
@@ -183,6 +209,19 @@ class BankPaymentReview(QDialog):
         self.more_imports = QPushButton("Wczytaj kolejne 100 operacji")
         self.more_imports.clicked.connect(self._load_more_imports)
         layout.addWidget(self.more_imports)
+        invoice_controls = QHBoxLayout()
+        self.more_invoices = QPushButton("Wczytaj kolejną stronę faktur")
+        self.more_invoices.clicked.connect(self._load_more_invoices)
+        self.more_invoices.hide()
+        invoice_controls.addWidget(self.more_invoices)
+        self.find_invoice = QPushButton("Szukaj faktury po numerze…")
+        self.find_invoice.clicked.connect(self._find_invoice)
+        self.find_invoice.setVisible(_invoice_paging_available())
+        invoice_controls.addWidget(self.find_invoice)
+        self.invoice_status = QLabel()
+        self.invoice_status.setTextFormat(Qt.TextFormat.PlainText)
+        invoice_controls.addWidget(self.invoice_status, 1)
+        layout.addLayout(invoice_controls)
         self.data_status = QLabel()
         self.data_status.setWordWrap(True)
         layout.addWidget(self.data_status)
@@ -205,6 +244,21 @@ class BankPaymentReview(QDialog):
 
     def _load_more_imports(self):
         self._bank_limit += 100
+        self.refresh()
+
+    def _load_more_invoices(self):
+        self._invoice_pages += 1
+        self.more_invoices.setEnabled(False)
+        self.refresh()
+
+    def _find_invoice(self):
+        number, accepted = QInputDialog.getText(self, 'Szukaj faktury', 'Pełny numer faktury:', text=self._invoice_search)
+        if not accepted or not number.strip():
+            return
+        if len(number) > 240:
+            QMessageBox.warning(self, 'Szukaj faktury', 'Numer faktury jest za długi.')
+            return
+        self._invoice_search = number.strip()
         self.refresh()
 
     def _remember_encoding(self):
@@ -255,6 +309,8 @@ class BankPaymentReview(QDialog):
         self.btn_correction.setEnabled(not busy)
         self.btn_delete.setEnabled(not busy)
         self.more_imports.setEnabled(not busy)
+        self.more_invoices.setEnabled(not busy)
+        self.find_invoice.setEnabled(not busy)
         self.btn_import.setText(
             "Importowanie MT940…" if busy else "Importuj ING MT940"
         )
@@ -308,21 +364,23 @@ class BankPaymentReview(QDialog):
             )
             return
         actor_id, include_all, limit = self.actor_id, self.all_imports.isChecked(), self._bank_limit
+        pages, search = self._invoice_pages, self._invoice_search
         if client() is not None:
             self.data_status.setText("Odczytuję operacje bankowe i faktury…")
             self._bank_reads.submit(
-                lambda: _read_bank_review(actor_id, include_all, limit), self._render_bank_review,
-                self._bank_read_failed, key=(actor_id, include_all, limit),
+                lambda: _read_bank_review(actor_id, include_all, limit, pages, search), self._render_bank_review,
+                self._bank_read_failed, key=(actor_id, include_all, limit, pages, search),
             )
             return
         try:
-            snapshot = _read_bank_review(actor_id, include_all, limit)
+            snapshot = _read_bank_review(actor_id, include_all, limit, pages, search)
         except Exception as error:
             self._bank_read_failed(error)
             return
         self._render_bank_review(snapshot)
 
     def _bank_read_failed(self, error):
+        self.more_invoices.setEnabled(not self._import_in_progress)
         self.data_status.setText("Nie udało się odczytać rozliczeń bankowych.")
         if isinstance(error, (PaymentError, PermissionError)):
             QMessageBox.warning(self, "Rozliczenie", str(error))
@@ -331,8 +389,14 @@ class BankPaymentReview(QDialog):
             QMessageBox.warning(self, "Rozliczenie", "Nie udało się odczytać rozliczeń. Szczegóły w logach.")
 
     def _render_bank_review(self, snapshot):
-        invoices, transactions, summary, companies, self._matches = snapshot
+        invoices, transactions, summary, companies, self._matches, more_invoices, found = snapshot
         self.companies = companies
+        self.more_invoices.setVisible(more_invoices)
+        self.more_invoices.setEnabled(not self._import_in_progress)
+        self.invoice_status.setText(
+            f'Znaleziono faktury: {len(found)}. W razie potrzeby zaznacz „Wszystkie faktury” przy przelewie.'
+            if self._invoice_search else ''
+        )
         from app.config import get_database
         self.data_status.setText(
             f"Wspólna baza: {get_database()} · schemat: {summary['schema']}. "

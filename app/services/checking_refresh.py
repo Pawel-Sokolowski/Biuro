@@ -424,6 +424,7 @@ def _execute(
         from app.integrations.platnik.declarations import (
             import_months,
         )
+        from app.integrations.platnik.insurance import company_registry_error
 
         result = import_months(
             [
@@ -442,14 +443,13 @@ def _execute(
                 'w ustawieniach Płatnika.'
             )
 
-        return [
-            {
-                'company_id': row['id'],
-                'ok': True,
-                'months': result['months'],
-            }
-            for row in companies
-        ]
+        results = []
+        for row in companies:
+            entry = {'company_id': row['id'], 'ok': True, 'months': result['months']}
+            if error := company_registry_error(result, row['id']):
+                entry.update(ok=False, monthly_imported=True, error=error)
+            results.append(entry)
+        return results
 
     if value['kind'] == 'ezla':
         from app.integrations.ezla.settings import (

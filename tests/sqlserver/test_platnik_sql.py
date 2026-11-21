@@ -171,9 +171,11 @@ class PlatnikSqlTests(unittest.TestCase):
         cursor = self.reader.cursor()
         cursor.execute(INSURANCE_QUERY, '<p><n>1112223344</n></p>')
         self.assertNotIn('PESEL', {column[0].upper() for column in cursor.description})
-        self.assertEqual(normalize_periods(cursor.fetchall(), {NIP: 1}), {
+        periods, errors = normalize_periods(cursor.fetchall(), {NIP: 1})
+        self.assertEqual(periods, {
             1: [{'nip': NIP, 'code': '059000', 'from': '2026-01-01', 'until': None}],
         })
+        self.assertEqual(errors, {})
 
     def test_registration_and_deregistration_use_their_document_insurance_codes(self):
         for identity, (code, prefix) in enumerate((('ZUA','V_1_'), ('ZZA','V_1_'), ('ZWUA','IV_1_')), 1):

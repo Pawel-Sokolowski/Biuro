@@ -32,6 +32,7 @@ class AlembicDeploymentTests(unittest.TestCase):
                              'idx_faktury_miesiac_id', 'idx_firmy_normalized_nip'} <= indexes)
             self.assertTrue({'idx_company_contacts_firma_id', 'idx_udzialowcy_firma_id',
                              'idx_faktury_kosz_active_invoice'} <= indexes)
+            self.assertTrue({'idx_faktury_bank_reference', 'idx_enova_stage_requests_retry'} <= indexes)
             self.assertEqual(history(), [])
         finally:
             drop_test_schema(schema, previous)

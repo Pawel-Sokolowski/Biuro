@@ -94,6 +94,8 @@ Miesięczny odczyt uzupełnia kody z dokumentów okresami właścicieli z rejest
 po swojej kartotece i identyfikatorze. PESEL służy do dopasowania w Płatniku.
 Do Biuro trafia zaszyfrowany zestaw NIP-ów, kodów i dat obowiązywania.
 Źródłowa data wyrejestrowania jest pierwszym dniem poza okresem.
+Przy niejednoznacznej kartotece lub błędnym okresie Biuro zachowuje poprzedni
+rejestr tej firmy, zapisuje poprawne firmy i pokazuje wynik częściowy.
 
 W widoku miesięcznym **Kadry** kolumna **Ulga ZUS do** pokazuje źródłową datę
 lub prognozę, z oznaczeniem jej pochodzenia. Dla ulgi na start i składek
@@ -107,6 +109,9 @@ na podstawie zapisanych okresów ubezpieczenia, licząc miesiąc z choć jednym
 dniem i pomijając wykorzystanie sprzed 2026 r. Uprawnienie wymaga osobnej
 weryfikacji warunków rocznych, kompletności historii i ewentualnego dodatkowego
 limitu 12 miesięcy. [Mały ZUS Plus od 2026 r. – ZUS](https://www.zus.pl/pl/-/%E2%80%9Ema%C5%82y-zus-plus-nowe-zasady-od-2026-r.)
+
+Jeśli kartoteka zawiera datę końca Małego ZUS Plus dla tego płatnika, kolumna
+pokazuje datę z kartoteki. Różniąca się prognoza jest widoczna w szczegółach.
 
 ## Własny zamiennik
 

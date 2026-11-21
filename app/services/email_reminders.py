@@ -269,7 +269,9 @@ def run_reminders(now=None, *, stop=None):
     from app.email.email_actions import send_email_smtp
     from app.services.manual_reminders import lock_day, sent_manually_today
     from app.utils.system_mailbox import get_system_account
-    now = (now or datetime.now(ZoneInfo('Europe/Warsaw'))).astimezone(ZoneInfo('Europe/Warsaw'))
+    zone = ZoneInfo('Europe/Warsaw')
+    fixed_now = now.astimezone(zone) if now is not None else None
+    now = fixed_now or datetime.now(zone)
     settings = load_settings()
     rules = {kind: settings[kind] for kind in ('documents', 'payments')
              if settings[kind]['enabled'] and _send_window_is_open(settings[kind], now)}
@@ -285,10 +287,17 @@ def run_reminders(now=None, *, stop=None):
         # Unique claims span workstations and are committed before SMTP.
         # Uncertain attempts never retry automatically.
         for kind, rule in rules.items():
+            window = fixed_now or datetime.now(zone)
+            if not _send_window_is_open(rule, window):
+                continue
             template = next(t for t in settings['templates'] if t['name'] == rule['template'])
-            for target_id in _unclaimed_targets(conn, kind, now, rule):
+            for target_id in _unclaimed_targets(conn, kind, window, rule):
                 if stop is not None and stop.is_set():
                     return sent
+                now = fixed_now or datetime.now(zone)
+                # A new day can change the target period, slot and manual-send lock.
+                if now.date() != window.date() or not _send_window_is_open(rule, now):
+                    break
                 # Recheck status/balance after earlier SMTP operations in this batch.
                 candidate = next(_candidates(conn, kind, now, rule, target_id), None)
                 if candidate is None:
@@ -309,6 +318,10 @@ def run_reminders(now=None, *, stop=None):
                 values['termin'] = candidate['due'].isoformat()
                 subject, body = (template[key].format(**values) for key in ('subject', 'body'))
                 lock_day(conn,kind,candidate['target'],now.date())
+                sending_at = fixed_now or datetime.now(zone)
+                if sending_at.date() != now.date() or not _send_window_is_open(rule, sending_at):
+                    conn.rollback()
+                    break
                 if sent_manually_today(conn,kind,candidate['target'],now.date()):
                     conn.commit()
                     continue
@@ -319,6 +332,13 @@ def run_reminders(now=None, *, stop=None):
                 conn.commit()
                 if claim is None:
                     continue
+                sending_at = fixed_now or datetime.now(zone)
+                if (sending_at.date() != now.date() or not _send_window_is_open(rule, sending_at)
+                        or (stop is not None and stop.is_set())):
+                    # The committed reservation belongs to this worker and SMTP has not started.
+                    conn.execute('DELETE FROM email_reminder_log WHERE id=%s', (claim[0],))
+                    conn.commit()
+                    break
                 try:
                     ok, error = send_email_smtp(account['id'], recipients, subject, body)
                 except Exception as exc:

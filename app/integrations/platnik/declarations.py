@@ -226,7 +226,7 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         nips_by_company = {}
         for nip, company_id in mapped.items():
             nips_by_company.setdefault(company_id, []).append(nip)
-        from app.services.worker_activity import batch
+        from app.services.worker_activity import batch, record
         from app.companies.checking_obligations import add_imported_periods
         with batch('platnik', sorted(nips_by_company)):
             rows = fetch(config, months, annual=annual, selected_nips=mapped)
@@ -243,14 +243,17 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
                         if not annual:
                             add_imported_periods(conn, fid, periods, 'platnik')
                     save_snapshots(conn, 'platnik_declarations', snapshots)
-            registry = None
-            if not annual and config.get('server'):
-                from app.integrations.platnik.insurance import refresh
-                try:
-                    registry = refresh(config, mapped)
-                except (ValueError, RuntimeError, DatabaseError) as error:
-                    registry = 'failed'
-                    logging.getLogger(__name__).warning('Odczyt tytułów ZUS właścicieli: %s', type(error).__name__)
+        registry, registry_errors = None, {}
+        if not annual and config.get('server'):
+            from app.integrations.platnik.insurance import refresh
+            try:
+                registry, registry_errors = refresh(config, mapped)
+            except (ValueError, RuntimeError, DatabaseError) as error:
+                registry = 'failed'
+                registry_errors = dict.fromkeys(nips_by_company, 'InsuranceRegistryReadFailed')
+                logging.getLogger(__name__).warning('Odczyt tytułów ZUS właścicieli: %s', type(error).__name__)
+            for company_id, reason in registry_errors.items():
+                record('platnik', 'failed', company_id=company_id, error_type=reason)
         documents = sum(len(entries) for by_month in records.values() for entries in by_month.values())
         # Jeden wpis w historii importów na cały odczyt Płatnika (miesiące albo rok).
         from app.db.import_audit import log_import_safely
@@ -263,6 +266,7 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         result = {'mode': 'applied', 'companies': len(nips_by_company), 'months': months, 'documents': documents}
         if registry is not None:
             result['insurance_registry'] = registry
+            result['insurance_registry_errors'] = registry_errors
         return result
 
 

@@ -89,9 +89,9 @@ def invoices_job():
     return {'queued': len(rows), 'sent': sent}
 
 
-def enova_job(stop=None):
+def enova_job(stop=None, *, now=None):
     from app.services.enova_stage import run
-    return run(stop)
+    return run(stop, now=now)
 
 
 def ksef_import_job():
@@ -142,6 +142,9 @@ def platnik_job():
             failed.append(name + ': ' + (str(error) if isinstance(error, (PlatnikSqlError, ValueError)) else 'Odczyt nie powiódł się'))
     if failed:
         raise RuntimeError('Nieukończone odczyty Płatnika: ' + ', '.join(failed))
+    monthly = results.get('declarations', {}).get('monthly', {})
+    if monthly.get('insurance_registry_errors'):
+        results['mode'] = 'partial'
     return results
 
 
@@ -229,8 +232,13 @@ def serve(*, once=False, stop=None):
                 started_at = statuses[name].get('started_at')
                 try:
                     outcome = future.result()
-                    statuses[name] = {'state': 'skipped' if isinstance(outcome, dict) and outcome.get('mode') in
-                                      ('waiting', 'checked_today', 'checked_this_week', 'disabled', 'not_configured', 'busy', 'idle', 'empty', 'cancelled') else 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                    mode = outcome.get('mode') if isinstance(outcome, dict) else None
+                    state = mode if mode in ('partial', 'failed') else 'ok'
+                    if mode in ('waiting', 'retry_waiting', 'checked_today', 'checked_this_week', 'disabled',
+                                'not_configured', 'busy', 'idle', 'empty', 'cancelled'):
+                        state = 'skipped'
+                    statuses[name] = {'state': state, 'result': outcome,
+                                      'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
                 except Exception as exc:
                     # Avoid logging arbitrary third-party exception strings/credentials.
                     logger.error('worker_job_failed job=%s error_type=%s', name, type(exc).__name__)
@@ -279,7 +287,7 @@ def serve(*, once=False, stop=None):
                     'enabled': settings['enabled'], 'jobs': statuses}))
                 last_heartbeat_write = now_monotonic
             if once and not running:
-                return int(any(value['state'] == 'failed' for value in statuses.values()))
+                return int(any(value['state'] in ('failed', 'partial') for value in statuses.values()))
             stop.wait(1 if once else 5)
     return 0
 

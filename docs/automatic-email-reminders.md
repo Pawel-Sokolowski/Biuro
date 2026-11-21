@@ -36,7 +36,9 @@ W instalacji HTTPS terminy sprawdza worker. Domyślny odstęp wynosi minutę.
 Po przerwie worker wybiera jedno najnowsze zaległe przypomnienie na firmę
 lub fakturę. Włączenie reguły płatności obejmuje również już zaległe faktury.
 Wspólna historia w PostgreSQL zapobiega powielaniu prób za ten sam termin.
-Worker tuż przed wysyłką ponownie sprawdza stan dokumentów albo saldo faktury.
+Worker tuż przed każdą wysyłką ponownie sprawdza dozwolony dzień, godzinę
+i stan dokumentów albo saldo faktury. Zaległe pozycje wracają do kolejki
+w następnym dozwolonym terminie.
 
 ## Wysyłka przy zamkniętej aplikacji
 

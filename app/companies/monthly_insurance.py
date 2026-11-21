@@ -10,7 +10,9 @@ TITLES = {
     '0570': 'Preferencyjny ZUS', '0572': 'Preferencyjny ZUS',
     '0590': 'Mały ZUS Plus', '0592': 'Mały ZUS Plus',
 }
-MANUAL_ENDS = {'Ulga na start': 'data_koniec_zus_start', 'Preferencyjny ZUS': 'data_koniec_zus_pref'}
+PREFERENTIAL_MONTHS = {'Ulga na start': 6, 'Preferencyjny ZUS': 24}
+MANUAL_ENDS = {'Ulga na start': 'data_koniec_zus_start', 'Preferencyjny ZUS': 'data_koniec_zus_pref',
+               'Mały ZUS Plus': 'data_koniec_maly_zus'}
 
 
 def _shift_month(day, months):
@@ -26,7 +28,7 @@ def _months(start, end):
 
 
 def estimate_end(title, periods, as_of):
-    if title in MANUAL_ENDS:
+    if title in PREFERENTIAL_MONTHS:
         intervals = sorted((start, min(end - timedelta(days=1), as_of) if end else as_of)
                            for start, end, kind in periods if kind == title and start <= as_of)
         if not intervals:
@@ -36,7 +38,7 @@ def estimate_end(title, periods, as_of):
             if start > last + timedelta(days=1):
                 return None  # Re-registration alone cannot identify the start of the statutory clock.
             last = max(last, end)
-        length = 6 if title == 'Ulga na start' else 24
+        length = PREFERENTIAL_MONTHS[title]
         return _shift_month(first, length + (first.day != 1)) - timedelta(days=1)
     if title != 'Mały ZUS Plus' or as_of.year < 2026:
         return None
@@ -95,6 +97,10 @@ def summarize_periods(registry, month, company):
         confirmed = company.get(MANUAL_ENDS.get(title)) if nip == company_nip else None
         if confirmed:
             deadline = f'{confirmed} · kartoteka'
+            if title == 'Mały ZUS Plus':
+                estimate = estimate_end(title, [(start, end, TITLES.get(code[:4])) for code, start, end in rows], as_of)
+                if estimate and estimate.isoformat() != confirmed:
+                    notes.append(f'NIP {nip}: {title} do {estimate.isoformat()} · prognoza')
         else:
             estimate = estimate_end(title, [(start, end, TITLES.get(code[:4])) for code, start, end in rows], as_of)
             if registered_end and (not estimate or registered_end <= estimate):

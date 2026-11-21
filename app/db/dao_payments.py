@@ -18,6 +18,7 @@ import mt940
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice, create_draft_after_payment
 from app.db.query_index_schema import BANK_RECEIPTS, NORMALIZED_BANK_ACCOUNT
+from app.db.review_fixes_schema import BANK_INVOICE_ELIGIBLE, INVOICE_REFERENCE
 from app.security.authorization import can, is_administrator
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class PaymentError(ValueError):
 
 
 PAYABLE_KINDS = ("faktura", "zaliczkowa", "proforma", "korekta")
+INVOICE_CHOICE_PAGE_SIZE = 2000
 
 
 @office_endpoint('app.db.dao_payments.invoice_payment_total')
@@ -67,6 +69,27 @@ def _extract_invoice_number(text: str) -> str:
             return m.group(1).strip()
 
     return ""
+
+
+def _invoice_reference(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def bank_invoice_references(transfers):
+    references = set()
+    for transfer in transfers:
+        title = str(transfer.get('tytul') or '')
+        words = re.findall(r'\b[A-Z0-9]+(?:[/.-][A-Z0-9]+)*', title, flags=re.IGNORECASE | re.ASCII)
+        references.update(_invoice_reference(word) for word in words if len(word) >= 5 and any(c.isdigit() for c in word))
+        raw = str(transfer.get('opis_surowy') or '')
+        references.update(_numbered_references(raw + ' ' + title))
+    return sorted(references - {''})
+
+
+def _numbered_references(text):
+    return {_invoice_reference(value) for value in re.findall(
+        r'\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*', text, re.IGNORECASE
+    )}
 
 
 def _normalize_account(value: Any) -> str:
@@ -398,6 +421,9 @@ def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit:
 @office_endpoint('app.db.dao_payments.list_invoice_choices')
 def list_invoice_choices(
     actor_id: int,
+    *,
+    offset: int = 0,
+    references: list[str] | None = None,
 ) -> list[dict[str, Any]]:
 
     if not _allowed(actor_id):
@@ -405,22 +431,40 @@ def list_invoice_choices(
             "Brak uprawnień do rozliczania faktur."
         )
 
+    if type(offset) is not int or offset < 0:
+        raise PaymentError('Nieprawidłowa strona faktur.')
+    if references is not None:
+        if (not isinstance(references, (list, tuple)) or len(references) > 1000
+                or any(not isinstance(value, str) or len(value) > 240 for value in references)):
+            raise PaymentError('Nieprawidłowe numery faktur.')
+        references = sorted({_invoice_reference(value) for value in references} - {''})
+        if not references:
+            return []
+    candidate_filter = f'AND {INVOICE_REFERENCE} = ANY(%s)' if references is not None else ''
+    page = '' if references is not None else 'LIMIT %s OFFSET %s'
+    params = (references,) if references is not None else (INVOICE_CHOICE_PAGE_SIZE, offset)
     conn = get_conn()
 
     try:
 
         rows = conn.execute(
-            """
-            WITH RECURSIVE balances AS (
+            f"""
+            WITH RECURSIVE candidates AS (
+                SELECT id, firma_id, kontrahent_id, numer, miesiac, kwota_brutto, rodzaj,
+                       korygowana_faktura_id, nabywca_pelna, nabywca_nip, data_wystawienia
+                FROM faktury WHERE {BANK_INVOICE_ELIGIBLE} {candidate_filter}
+            ), balances AS (
                 SELECT faktura_id, SUM(kwota) AS paid,
                        SUM(kwota) FILTER (WHERE transakcja_id IS NULL AND sposob = 'bank') AS manual_unlinked,
                        jsonb_agg(jsonb_build_object('id', id, 'kwota', kwota, 'data_zaplaty', data_zaplaty) ORDER BY data_zaplaty, id)
                            FILTER (WHERE transakcja_id IS NULL AND sposob = 'bank') AS manual_payments
                 FROM (
                     SELECT faktura_id, id, kwota, data_zaplaty, sposob, transakcja_id FROM faktury_platnosci
+                    {"WHERE faktura_id IN (SELECT id FROM candidates)" if references is not None else ""}
                     UNION ALL
                     SELECT source_correction_id, id, kwota, data_zaplaty, 'kompensata', NULL FROM faktury_platnosci
                     WHERE source_correction_id IS NOT NULL
+                    {"AND source_correction_id IN (SELECT id FROM candidates)" if references is not None else ""}
                 ) all_payments GROUP BY faktura_id
             ), choices AS (
                 SELECT i.id,i.firma_id,i.kontrahent_id,i.numer,i.miesiac,i.kwota_brutto,i.rodzaj,
@@ -428,13 +472,11 @@ def list_invoice_choices(
                        CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
                             ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END - COALESCE(p.paid, 0) AS balance,
                        COALESCE(p.manual_payments, '[]'::jsonb) AS manual_payments
-                FROM faktury i LEFT JOIN balances p ON p.faktura_id = i.id
-                WHERE i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma', 'korekta')
-                  AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
-                  AND (CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
+                FROM candidates i LEFT JOIN balances p ON p.faktura_id = i.id
+                WHERE (CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
                             ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END > COALESCE(p.paid, 0)
                        OR COALESCE(p.manual_unlinked, 0) > 0)
-                ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
+                ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC {page}
             ), families(invoice_id, ancestor_id, parent_id, visited) AS (
                 SELECT id,id,korygowana_faktura_id,ARRAY[id] FROM choices WHERE korygowana_faktura_id IS NOT NULL
                 UNION ALL
@@ -457,11 +499,11 @@ def list_invoice_choices(
             LEFT JOIN firmy f ON f.id=i.firma_id
             LEFT JOIN kontrahenci k ON k.id=i.kontrahent_id
             ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC
-            """
+            """, params
         ).fetchall()
 
         # _allowed already requires finance-wide access; do not re-read the
-        # employee's permissions for each of up to 2000 invoice choices.
+        # employee's permissions for each invoice choice.
         return [dict(row) for row in rows]
 
     finally:
@@ -620,9 +662,7 @@ def match_invoice_contractor(transaction: dict, invoices: list[dict]) -> dict:
         grouped.setdefault(contractor_key(invoice), []).append(invoice)
     raw = str(transaction.get("opis_surowy") or transaction.get("raw_title") or transaction.get("tytul") or transaction.get("title") or "")
     text = raw + " " + str(transaction.get("tytul") or transaction.get("title") or "")
-    numbers = {re.sub(r"[^A-Z0-9]", "", value.upper()) for value in re.findall(
-        r"\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*", text, re.IGNORECASE
-    )}
+    numbers = _numbered_references(text)
     invoice_keys = {contractor_key(inv) for inv in invoices if numbers and re.sub(
         r"[^A-Z0-9]", "", str(inv.get("numer") or "").upper()) in numbers}
     details = _description_details(raw)
@@ -678,14 +718,7 @@ def match_invoice_contractors(transactions: list[dict], invoices: list[dict]) ->
             or ""
         )
         text = raw + " " + str(transaction.get("tytul") or transaction.get("title") or "")
-        numbers = {
-            re.sub(r"[^A-Z0-9]", "", value.upper())
-            for value in re.findall(
-                r"\b(?:FV|FS|FA)[/-][A-Z0-9]+(?:[/-][A-Z0-9]+)*",
-                text,
-                re.IGNORECASE,
-            )
-        }
+        numbers = _numbered_references(text)
         number_keys = set()
         for number in numbers:
             number_keys.update(index["by_number"].get(number, ()))

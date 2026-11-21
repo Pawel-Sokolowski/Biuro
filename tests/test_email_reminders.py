@@ -116,6 +116,29 @@ class ReminderDeliveryTests(DbTestCase):
         self.assertEqual(len(jobs['documents']), 1)
         self.sender.assert_not_called()
 
+    def test_batch_stops_at_midnight_and_catches_up_on_next_allowed_day(self):
+        self.invoice(termin_platnosci='2026-11-20', numer='FV/1')
+        self.invoice(termin_platnosci='2026-11-20', numer='FV/2')
+        self.settings['payments'].update(time='23:59', offsets=[0], repeat=0)
+        self.enable('payments')
+        friday = at('2026-11-20', 23).replace(minute=59)
+        saturday = at('2026-11-21', 0).replace(minute=1)
+        with patch('app.services.email_reminders.datetime', wraps=datetime) as clock:
+            clock.now.return_value = friday
+
+            def send(*args):
+                clock.now.return_value = saturday
+                return True, 'OK'
+
+            self.sender.side_effect = send
+            self.assertEqual(run_reminders(), 1)
+        self.assertEqual(self.sender.call_count, 1)
+        self.sender.side_effect = None
+        monday = at('2026-11-23', 23).replace(minute=59)
+        self.assertEqual(run_reminders(monday), 1)
+        self.assertEqual(run_reminders(monday), 0)
+        self.assertEqual(self.sender.call_count, 2)
+
     def test_worker_resumes_after_stopping_between_deliveries(self):
         from app.worker import run_job
 

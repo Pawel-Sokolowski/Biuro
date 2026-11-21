@@ -11,6 +11,12 @@ from app.integrations.platnik.holidays import connect, sql_operation
 from app.utils.crypto import encrypt_password
 
 SOURCE = 'platnik_insurance'
+ERROR_MESSAGES = {
+    'InsuranceOwnerAmbiguous': 'Kilka kartotek właściciela w rejestrze ubezpieczeń Płatnika.',
+    'InsurancePeriodInvalid': 'Nieprawidłowy okres ubezpieczenia właściciela w Płatniku.',
+    'InsuranceRegistryReadFailed': 'Odczyt rejestru ubezpieczeń Płatnika nie powiódł się.',
+    'InsuranceRegistryUnavailable': 'Brak wymaganych tabel lub kolumn rejestru ubezpieczeń Płatnika.',
+}
 REQUIRED = {
     'PLATN_IDENT': {'ID_PLATNIK', 'NIP', 'PESEL'},
     'UBEZPIECZONY': {'ID', 'ID_PLATNIK'},
@@ -78,33 +84,42 @@ def normalize_periods(rows, mapped):
     from app.companies.holiday_eligibility import insurance_code
 
     periods = {company_id: [] for company_id in mapped.values()}
-    owners = {}
+    owners, errors = {}, {}
     for raw_nip, payer_id, person_id, base, pension, disability, begin, stop in rows:
         nip = normalize_nip(raw_nip)
-        if nip not in mapped:
+        company_id = mapped.get(nip)
+        if company_id is None or company_id in errors:
             continue
         if owners.setdefault(nip, (payer_id, person_id)) != (payer_id, person_id):
-            raise ValueError('Kilka kartotek właściciela w rejestrze ubezpieczeń Płatnika.')
-        code = insurance_code(base)
+            errors[company_id] = 'InsuranceOwnerAmbiguous'
+            continue
         suffix = ''.join(str(value).strip() for value in (pension, disability) if value is not None)
+        try:
+            code = insurance_code(base)
+            start, end = _date(begin), _date(stop)
+        except ValueError:
+            errors[company_id] = 'InsurancePeriodInvalid'
+            continue
         if len(code) == 4 and len(suffix) == 2 and suffix.isascii() and suffix.isdigit():
             code += suffix
-        start, end = _date(begin), _date(stop)
         if end and end.year == 9999:
             end = None
         if not code or not start or start.year < 1900 or (end and end < start):
-            raise ValueError('Nieprawidłowy okres ubezpieczenia właściciela w Płatniku.')
+            errors[company_id] = 'InsurancePeriodInvalid'
+            continue
         if end != start:
-            periods[mapped[nip]].append({'nip': nip, 'code': code, 'from': start.isoformat(),
-                                         'until': end.isoformat() if end else None})
-    return periods
+            periods[company_id].append({'nip': nip, 'code': code, 'from': start.isoformat(),
+                                        'until': end.isoformat() if end else None})
+    for company_id in errors:
+        periods.pop(company_id)
+    return periods, errors
 
 
 def refresh(config, mapped):
     rows = fetch_periods(config, mapped)
     if rows is None:
-        return 'unavailable'
-    periods = normalize_periods(rows, mapped)
+        return 'unavailable', dict.fromkeys(mapped.values(), 'InsuranceRegistryUnavailable')
+    periods, errors = normalize_periods(rows, mapped)
     stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
     with get_conn() as conn:
         for batch in batched(sorted(periods.items()), 100):
@@ -112,4 +127,10 @@ def refresh(config, mapped):
                 (company_id, '', encrypt_password(json.dumps({'imported_at': stamp, 'periods': values})))
                 for company_id, values in batch
             ])
-    return 'applied'
+    mode = ('partial' if periods else 'failed') if errors else 'applied'
+    return mode, errors
+
+
+def company_registry_error(result, company_id):
+    code = result.get('insurance_registry_errors', {}).get(company_id)
+    return ERROR_MESSAGES.get(code)

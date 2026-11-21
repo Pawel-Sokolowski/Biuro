@@ -124,6 +124,30 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
              patch('app.integrations.platnik.declarations.fetch', return_value=rows):
             return import_months(['2026-10', '2026-11'], company_ids=[self.company])
 
+    def test_ambiguous_registry_keeps_old_company_data_and_reports_partial_import(self):
+        from app.integrations.platnik.insurance import SOURCE
+        from app.services.checking_refresh import run_now
+
+        first = (NIP, 7, 12, '0590', 0, 0, '2026-01-01', None)
+        second = ('9999999999', 8, 13, '0570', 0, 0, '2026-03-01', None)
+        with get_conn() as conn:
+            save_snapshot(conn, SOURCE, self.company, '', 'previous registry')
+        with patch('app.integrations.platnik.declarations.load', return_value={'enabled': True, 'server': 'fixture'}), \
+             patch('app.integrations.platnik.declarations.fetch', return_value=[ROW]), \
+             patch('app.integrations.platnik.insurance.fetch_periods',
+                   return_value=[first, (NIP, 7, 14, *first[3:]), second]):
+            result = run_now(self.admin, 'platnik_declarations', [self.company, self.other], '2026-11')
+        self.assertEqual(result['state'], 'partial')
+        company, other = result['results']
+        self.assertFalse(company['ok'])
+        self.assertTrue(company['monthly_imported'])
+        self.assertIn('Kilka kartotek', company['error'])
+        self.assertTrue(other['ok'])
+        with get_conn() as conn:
+            self.assertEqual(read_snapshot(conn, SOURCE, self.company), 'previous registry')
+            self.assertEqual(decoded_snapshot(read_snapshot(conn, SOURCE, self.other))['periods'][0]['code'], '057000')
+            self.assertEqual(len(decoded_snapshot(read_snapshot(conn, 'platnik_declarations', self.company, '2026-11'))['declarations']), 1)
+
     def test_encrypted_company_snapshot_does_not_replace_enova_or_unselected_company(self):
         with get_conn() as conn:
             save_snapshot(conn, 'enova_checking', self.company, '2026-11', {'declarations': [

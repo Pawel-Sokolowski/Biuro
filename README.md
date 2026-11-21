@@ -28,6 +28,8 @@ Migracja `20261121_02` przenosi historię Sprawdzania i oczekujące odczyty do i
 
 Migracja `20261121_03` dodaje indeksy dla kolejki MT940, rozpoznawania rachunków własnych, faktur według miesiąca i wyszukiwania firmy po znormalizowanym NIP.
 
+Migracja `20261121_05` dodaje indeks wyszukiwania faktur po numerze w MT940 oraz zapisuje terminy ponowień odczytów Enovy.
+
 ## Sprawdzanie i deklaracje
 
 - **Enova365.** Zmiana etapu na **Wysłane wyniki** zleca odczyt dokumentów dla danej firmy i miesiąca. Reguły licznika zależą od KPiR, ksiąg handlowych lub ryczałtu i statusu VAT. KPiR i ryczałt mają zestawienie **Sprzedaż | Zakup | DW | Razem**. Raporty kasowe podlegają ustawionemu dzielnikowi, a LT i OT są wyłączone z licznika środków trwałych. [Reguły i konfiguracja Enova](docs/enova/README.md)
@@ -48,7 +50,7 @@ python -m scripts.odtworz_zaznaczenia_deklaracji --year 2025 --apply
 
 ## Faktury i wyciągi ING MT940
 
-W **Faktury → Rozlicz ING MT940** wybierz plik banku i ewentualnie ustaw kodowanie. Plik jest odczytywany w tle, a operacje są zapisywane zbiorczo w PostgreSQL. Podsumowanie pokazuje nowe operacje, duplikaty i pominięte przelewy własne. Przycisk **Odśwież** wczytuje kolejkę uzgodnień partiami, a klient oblicza propozycje faktur na pobranych danych. Aby rozliczyć przelew, wybierz fakturę, sprawdź kwotę i potwierdź zapis.
+W **Faktury → Rozlicz ING MT940** wybierz plik banku i ewentualnie ustaw kodowanie. Plik jest odczytywany w tle, a operacje są zapisywane zbiorczo w PostgreSQL. Podsumowanie pokazuje nowe operacje, duplikaty i pominięte przelewy własne. Przycisk **Odśwież** wczytuje kolejkę uzgodnień partiami. Numery z tytułów przelewów są sprawdzane również w otwartych fakturach spoza pierwszej strony. Fakturę możesz też wyszukać po pełnym numerze lub wczytać kolejną stronę. Aby rozliczyć przelew, wybierz fakturę, sprawdź kwotę i potwierdź zapis.
 
 Biuro obsługuje też wystawianie faktur, korekty, wysyłkę KSeF, podgląd PDF i płatności gotówkowe. [Instrukcja faktur i płatności](docs/user-guide.md#rozliczenia-i-ksef) · [Uprawnienia do faktur](docs/invoice-permissions.md)
 

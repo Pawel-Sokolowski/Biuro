@@ -21,6 +21,12 @@ def snapshot(actor_id):
         rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,s.payload::text AS wartosc FROM firmy f
             LEFT JOIN company_checking_snapshots s ON s.source='ezla_sync' AND s.company_id=f.id AND s.period=''
             ORDER BY lower(f.nazwa)''').fetchall()
+        retries = conn.execute("""
+            SELECT DISTINCT ON (company_id) company_id,period,attempts,next_attempt_at,last_error
+            FROM enova_stage_requests WHERE last_error IS NOT NULL
+            ORDER BY company_id,next_attempt_at,period
+        """).fetchall()
     return {'heartbeat': heartbeat, 'events': events, 'progress': progress,
             'ezla_enabled': bool(config.get('enabled')), 'ezla_companies': config.get('companies', []),
+            'enova_retries': [dict(row) for row in retries],
             'companies': [{**dict(row), 'sync': json.loads(row['wartosc'] or '{}')} for row in rows]}

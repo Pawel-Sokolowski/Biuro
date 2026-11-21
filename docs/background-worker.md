@@ -20,8 +20,11 @@ Worker odświeża własne przełączniki i odstępy co kilka sekund.
   odbiorców. Uprawnienia zapisanego użytkownika są sprawdzane ponownie.
   Worker nie wystawia sam nowych faktur ani nie wysyła niezatwierdzonych roboczych
   faktur do KSeF. Wysyłki SMTP o niepewnym wyniku wymagają sprawdzenia przez człowieka.
-- Enova raz dziennie po ustawionej godzinie (Europe/Warsaw); błędy są ponawiane
-  według odstępu workera. Zachowana jest istniejąca reguła etapu „Wysłane wyniki”.
+- Enova po zmianie etapu miesięcznego. Worker sprawdza kolejkę co 30 sekund.
+  Po błędzie pierwsze ponowienie następuje najwcześniej po minucie, a odstęp
+  rośnie po kolejnych błędach do godziny. Kolejna zmiana etapu uaktywnia nowe
+  żądanie od razu. W panelu workera widać firmy, przyczyny błędów i terminy ponowień.
+  Licznik dokumentów jest pobierany po etapie „Wysłane wyniki”.
   Importer nie zmienia etapu ani ręcznych liczników. Suma automatyczna trafia do
   `Ilość dokumentów` w Widoku miesięcznym i jest odświeżana, dopóki nie zostanie
   ręcznie zmieniona. Ręczna edycja (także zero) chroni licznik. Starych ręcznych zer

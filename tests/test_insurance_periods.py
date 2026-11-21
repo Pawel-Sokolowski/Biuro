@@ -44,8 +44,21 @@ class InsuranceRuleTests(unittest.TestCase):
 
     def test_source_rejects_two_different_owners_for_one_nip(self):
         row = (NIP, 1, 5, '0570', 0, 0, date(2026, 1, 1), None)
-        with self.assertRaises(ValueError):
-            normalize_periods([row, (NIP, 1, 6, *row[3:])], {NIP: 1})
+        invalid = ('2223334455', 2, 5, 'bad', 0, 0, date(2026, 1, 1), None)
+        periods, errors = normalize_periods([row, invalid, (NIP, 1, 6, *row[3:])], {NIP: 1, invalid[0]: 2})
+        self.assertEqual(periods, {})
+        self.assertEqual(errors, {1: 'InsuranceOwnerAmbiguous', 2: 'InsurancePeriodInvalid'})
+
+    def test_plus_uses_card_date_for_matching_payer_and_keeps_forecast_in_details(self):
+        registry = {'imported_at': '2026-11-21', 'periods': [
+            {'nip': NIP, 'code': '059000', 'from': '2026-01-01', 'until': None},
+        ]}
+        card = {'nip': NIP, 'data_koniec_maly_zus': '2027-06-30'}
+        _, notes, deadlines = summarize_periods(registry, '2026-11', card)
+        self.assertEqual(deadlines, ['2027-06-30 · kartoteka'])
+        self.assertTrue(any('2028-12-31 · prognoza' in note for note in notes))
+        self.assertEqual(summarize_periods(registry, '2026-11', {**card, 'nip': '2223334455'})[2],
+                         ['2028-12-31 · prognoza'])
 
 
 class InsuranceViewTests(DbTestCase):

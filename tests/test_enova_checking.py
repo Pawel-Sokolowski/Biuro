@@ -1,4 +1,3 @@
-import json
 from datetime import date
 from unittest import TestCase
 from unittest.mock import patch
@@ -7,6 +6,7 @@ from app.integrations.enova.document_counts import sql_connection_string
 from app.integrations.enova.checking import (history_months, validate_declarations,
     validate_payroll, run_checking_import)
 from app.integrations.enova.accounting import list_accounting
+from app.db.checking_storage import save_snapshot
 from app.db.dao_conn import get_conn
 from tests.base import DbTestCase
 
@@ -108,16 +108,18 @@ class CheckingIntegrationTests(DbTestCase):
 
     def test_history_is_bounded_and_isolated_between_company_ids(self):
         # IDs such as 1 and 11 must never overlap through SQL LIKE wildcards.
+        another = self.make_company('Other history')
         with get_conn() as conn:
-            for company_id, month, kind in ((self.company, '2025-10', 'TOO_OLD'), (self.company, '2026-10', 'AMO')):
-                value = json.dumps({'documents': {'accounting': {kind: 1}, 'payroll': None}})
-                conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)', (f'enova_checking_{company_id}_{month}', value))
-        with get_conn() as conn:
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)',
-                         (f'enova_checking_{self.company}1_2026-10', json.dumps({'documents': {'accounting': {'WRONG_COMPANY': 3}}})))
+            conn.execute('UPDATE firmy SET id=%s WHERE id=%s', (int(f'{self.company}1'), another))
+            for company_id, month, kind in ((self.company, '2025-10', 'TOO_OLD'), (self.company, '2026-10', 'AMO'),
+                                            (int(f'{self.company}1'), '2026-10', 'WRONG_COMPANY')):
+                save_snapshot(conn, 'enova_checking', company_id, month,
+                              {'documents': {'accounting': {kind: 1}, 'payroll': None}, 'accounting_details': {'private': True}})
         row = next(row for row in list_accounting(self.admin, '2026-11') if row['id'] == self.company)
         from app.integrations.enova.accounting import active_types
         self.assertEqual(active_types(row, 'accounting'), {'AMO'})
+        self.assertEqual([report['month'] for report in row['history']], ['2026-10'])
+        self.assertNotIn('accounting_details', row['history'][0])
 
     def test_view_uses_per_company_history_for_red_zero_and_filters_tax(self):
         from app.accounting.accounting_ui import AccountingPage

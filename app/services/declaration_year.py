@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.db.dao_conn import get_conn
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.import_audit import log_import
 from app.companies.checking_obligations import add_imported
 from app.integrations.enova.checking import validate_declarations,CheckingBusy
@@ -31,13 +32,10 @@ def read_enova(config, source, company_id, months):
         declarations, jpk = fetch_enova(config, source, months)
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for month in months:
-            key = f'enova_checking_{company_id}_{month}'
-            row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE',(key,)).fetchone()
-            snapshot = json.loads(row[0]) if row else {}
+            snapshot = read_snapshot(conn, 'enova_checking', company_id, month, lock=True) or {}
             snapshot.update(declarations=declarations[month],declarations_imported_at=stamp,database=source['database'])
             snapshot.setdefault('imported_at',stamp)
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                         'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',(key,json.dumps(snapshot)))
+            save_snapshot(conn, 'enova_checking', company_id, month, snapshot)
             add_imported(conn,company_id,month,declarations[month],'enova')
             if jpk is not None:
                 save_jpk(conn, company_id, month, {**jpk[month], 'imported_at': stamp, 'database': source['database']})

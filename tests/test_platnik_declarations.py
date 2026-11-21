@@ -1,8 +1,8 @@
-import json
 import re
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
 from app.integrations.platnik.declarations import REQUIRED, source_query, normalize, import_months, import_year, decoded_snapshot, read_year
 from app.integrations.platnik.form_catalog import MONTHLY, ANNUAL
@@ -88,24 +88,19 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
 
     def test_encrypted_company_snapshot_does_not_replace_enova_or_unselected_company(self):
         with get_conn() as conn:
-            conn.execute("INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)",
-                         (f'enova_checking_{self.company}_2026-11', json.dumps({'declarations': [
-                             {'department': 'payroll', 'form': 'PIT-11', 'status': 'prepared'}]})))
-            conn.execute("INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)",
-                         (f'platnik_declarations_{self.other}_2026-11', 'unchanged'))
+            save_snapshot(conn, 'enova_checking', self.company, '2026-11', {'declarations': [
+                {'department': 'payroll', 'form': 'PIT-11', 'status': 'prepared'}]})
+            save_snapshot(conn, 'platnik_declarations', self.other, '2026-11', 'unchanged')
         # Select only A when reading its snapshot; B's unrelated payload is not accessed.
         self.import_rows([ROW, {**ROW, 'source_id': 2, 'form': 'ZUS RCA', 'employee_id': 12, 'employee_name': 'Test Person'}])
         with get_conn() as conn:
-            stored = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                                  (f'platnik_declarations_{self.company}_2026-11',)).fetchone()[0]
-            other = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                                 (f'platnik_declarations_{self.other}_2026-11',)).fetchone()[0]
-            enova = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                                 (f'enova_checking_{self.company}_2026-11',)).fetchone()[0]
+            stored = read_snapshot(conn, 'platnik_declarations', self.company, '2026-11')
+            other = read_snapshot(conn, 'platnik_declarations', self.other, '2026-11')
+            enova = read_snapshot(conn, 'enova_checking', self.company, '2026-11')
         self.assertNotIn('Test Person', stored)
         self.assertEqual(len(decoded_snapshot(stored)['declarations']), 2)
         self.assertEqual(other, 'unchanged')
-        self.assertEqual(json.loads(enova)['declarations'][0]['form'], 'PIT-11')
+        self.assertEqual(enova['declarations'][0]['form'], 'PIT-11')
         with patch('app.integrations.enova.accounting.assigned_company_ids', return_value={self.company}):
             row = list_accounting(self.admin, '2026-11')[0]
         self.assertEqual({entry['form'] for entry in declaration_entries(row, 'payroll')}, {'PIT-11', 'ZUS DRA', 'ZUS RCA'})
@@ -120,20 +115,17 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
             self.assertEqual(import_months(['2026-11'])['mode'],'disabled')
             self.assertEqual(read.call_count,1)
         with get_conn() as conn:
-            stored = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                                 (f'platnik_declarations_{self.company}_2026-11',)).fetchone()[0]
+            stored = read_snapshot(conn, 'platnik_declarations', self.company, '2026-11')
         self.assertEqual({entry['form'] for entry in decoded_snapshot(stored)['declarations']},{'ZUS DRA','ZUS RCA'})
 
     def test_failed_read_and_duplicate_nip_preserve_previous_snapshot(self):
         self.import_rows([ROW])
         with get_conn() as conn:
-            before = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                                  (f'platnik_declarations_{self.company}_2026-11',)).fetchone()[0]
+            before = read_snapshot(conn, 'platnik_declarations', self.company, '2026-11')
         with self.assertRaises(ValueError):
             self.import_rows([{**ROW, 'valid_link': 0}])
         with get_conn() as conn:
-            after = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                                 (f'platnik_declarations_{self.company}_2026-11',)).fetchone()[0]
+            after = read_snapshot(conn, 'platnik_declarations', self.company, '2026-11')
         self.assertEqual(before, after)
         # Normal company saves merge by NIP; model an actual legacy duplicate.
         with get_conn() as conn:
@@ -144,7 +136,6 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
 
     def test_annual_reads_use_reporting_year_and_yearly_obligations_without_changing_office_filings(self):
         from app.db.dao_year_end import save_company_year_declarations
-        from app.db.dao_app_settings import get_setting
         save_company_year_declarations(self.company, {2025: ['ZUS IWA']}, self.admin)
         rows = [{**ROW, 'form': 'ZUS IWA', 'rok': '2025'},
                 {**ROW, 'form': 'ZUS ZSWA', 'rok': '2025', 'source_id': 2}]
@@ -152,8 +143,9 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
              patch('app.integrations.platnik.declarations.fetch', return_value=rows) as fetch:
             import_year(2025, company_ids=[self.company])
         fetch.assert_called_once_with({'enabled': False}, ['2025'], annual=True)
-        self.assertIsNone(get_setting(f'platnik_declarations_{self.company}_2025-12'))
-        stored = decoded_snapshot(get_setting(f'platnik_declarations_{self.company}_year_2025'))
+        with get_conn() as conn:
+            self.assertIsNone(read_snapshot(conn, 'platnik_declarations', self.company, '2025-12'))
+            stored = decoded_snapshot(read_snapshot(conn, 'platnik_declarations', self.company, '2025'))
         self.assertEqual(len(stored['declarations']), 2)
         payload = read_year(self.admin, 2025)
         company = next(company for company in payload['companies'] if company['id'] == self.company)

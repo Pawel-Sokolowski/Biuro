@@ -8,7 +8,7 @@ from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
 
 from app.db.dao_companies import list_mailing_companies
 from app.email.email_actions import send_email_smtp
-from app.email.email_storage import get_email_accounts_for_employee
+from app.email import email_storage
 from app.security.authorization import allowed_tabs
 from app.utils.background import CommandRunner
 
@@ -98,7 +98,7 @@ def send_bulk_batch(plan, recipients):
         if 'E-mail' not in allowed_tabs(plan.actor_id):
             raise PermissionError('Utracono dostęp do modułu E-mail.')
 
-        accounts = get_email_accounts_for_employee(plan.actor_id)
+        accounts = email_storage.get_email_accounts_for_employee(plan.actor_id)
 
         account = next(
             (a for a in accounts if a['id'] == plan.account_id),

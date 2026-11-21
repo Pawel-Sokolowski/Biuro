@@ -109,31 +109,30 @@ def list_accounting(actor_id, month):
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
         rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,f.status_vat,f.vat_czynny,s.ilosc_dok,
-            a.wartosc AS snapshot,j.wartosc AS jpk,c.wartosc AS checking,h.wartosc AS hr,z.wartosc AS ezla_sync,
-            pd.wartosc AS platnik_declarations,
-            co.wartosc AS checking_obligations,
+            a.payload::text AS snapshot,j.payload::text AS jpk,c.payload::text AS checking,
+            h.payload::text AS hr,z.payload::text AS ezla_sync,
+            pd.payload AS platnik_declarations,
+            co.payload::text AS checking_obligations,
             trim(COALESCE(pk.imie,'') || ' ' || COALESCE(pk.nazwisko,'')) AS ksiegowa,
             trim(COALESCE(ph.imie,'') || ' ' || COALESCE(ph.nazwisko,'')) AS kadrowa
             FROM firmy f LEFT JOIN pracownicy pk ON pk.id=f.ksiegowa_id
             LEFT JOIN pracownicy ph ON ph.id=f.kadrowa_id
             LEFT JOIN statusy_miesieczne s ON s.firma_id=f.id AND s.miesiac=%s
-            LEFT JOIN app_settings a ON a.klucz='enova_snapshot_' || f.id::text || '_' || %s
-            LEFT JOIN app_settings j ON j.klucz='enova_jpk_' || f.id::text || '_' || %s
-            LEFT JOIN app_settings c ON c.klucz='enova_checking_' || f.id::text || '_' || %s
-            LEFT JOIN app_settings h ON h.klucz='enova_hr_' || f.id::text
-            LEFT JOIN app_settings z ON z.klucz='ezla_sync_' || f.id::text
-            LEFT JOIN app_settings pd ON pd.klucz='platnik_declarations_' || f.id::text || '_' || %s
-            LEFT JOIN app_settings co ON co.klucz='checking_obligations_' || f.id::text
+            LEFT JOIN company_checking_snapshots a ON a.source='enova_snapshot' AND a.company_id=f.id AND a.period=%s
+            LEFT JOIN company_checking_snapshots j ON j.source='enova_jpk' AND j.company_id=f.id AND j.period=%s
+            LEFT JOIN company_checking_snapshots c ON c.source='enova_checking' AND c.company_id=f.id AND c.period=%s
+            LEFT JOIN company_checking_snapshots h ON h.source='enova_hr' AND h.company_id=f.id AND h.period=''
+            LEFT JOIN company_checking_snapshots z ON z.source='ezla_sync' AND z.company_id=f.id AND z.period=''
+            LEFT JOIN company_checking_snapshots pd ON pd.source='platnik_declarations' AND pd.company_id=f.id AND pd.period=%s
+            LEFT JOIN company_checking_snapshots co ON co.source='checking_obligations' AND co.company_id=f.id AND co.period=''
             WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (month, month, month, month, month, ids)).fetchall()
-        history = conn.execute('''SELECT company.id,a.klucz,a.wartosc
-            FROM unnest(%s::int[]) AS company(id) CROSS JOIN unnest(%s::text[]) AS period(month)
-            JOIN app_settings a ON a.klucz='enova_checking_' || company.id::text || '_' || period.month''',
-            (ids, prior)).fetchall()
+        history = conn.execute('''SELECT company_id,period,payload-'accounting_details' AS payload
+            FROM company_checking_snapshots
+            WHERE source='enova_checking' AND company_id=ANY(%s) AND period BETWEEN %s AND %s
+            ORDER BY period,company_id''', (ids, min(prior), max(prior))).fetchall()
     by_company = {}
     for record in history:
-        report = decoded(record['wartosc'])
-        report.pop('accounting_details', None)
-        by_company.setdefault(record['id'], []).append({**report, 'month': record['klucz'][-7:]})
+        by_company.setdefault(record['company_id'], []).append({**decoded(record['payload']), 'month': record['period']})
     result = []
     for record in rows:
         row = dict(record)

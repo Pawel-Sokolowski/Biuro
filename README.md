@@ -24,6 +24,8 @@ Biuro to aplikacja Windows dla biura rachunkowego. Łączy kartotekę firm, wido
 
 Przed aktualizacją schematu zachowaj kopię PostgreSQL i klucz Biuro oraz sprawdź procedurę odzyskania. [Kopia zapasowa i odtworzenie](docs/database-recovery.md)
 
+Migracja `20261121_02` przenosi historię Sprawdzania i oczekujące odczyty do indeksowanych tabel PostgreSQL. Zachowuje daty JPK i UPO, zaznaczenia deklaracji oraz szyfrowanie raportów Płatnika. Na czas tej migracji zatrzymaj usługę HTTPS i zadania workera, które korzystają ze wspólnej bazy. Po migracji uruchom zaktualizowanego workera.
+
 ## Sprawdzanie i deklaracje
 
 - **Enova365.** Zmiana etapu na **Wysłane wyniki** zleca odczyt dokumentów dla danej firmy i miesiąca. Reguły licznika zależą od KPiR, ksiąg handlowych lub ryczałtu i statusu VAT. KPiR i ryczałt mają zestawienie **Sprzedaż | Zakup | DW | Razem**. Raporty kasowe podlegają ustawionemu dzielnikowi, a LT i OT są wyłączone z licznika środków trwałych. [Reguły i konfiguracja Enova](docs/enova/README.md)

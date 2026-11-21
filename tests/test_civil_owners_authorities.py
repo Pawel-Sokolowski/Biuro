@@ -1,10 +1,10 @@
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 from pypdf import PdfWriter
 from tests.base import DbTestCase
+from app.db.checking_storage import read_snapshot
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import set_setting
 from app.db.dao_companies import save_partner, get_partners, get_company, list_mailing_companies
@@ -156,6 +156,6 @@ class CivilOwnersAuthorityTests(DbTestCase):
         self.assertEqual(reports['reports'][0]['company']['id'],self.company)
         self.assertEqual(reports['reports'][0]['report'].nip,'2223334455')
         with get_conn() as conn:
-            status=json.loads(conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',(f'ezla_sync_{self.company}',)).fetchone()[0])
+            status = read_snapshot(conn, 'ezla_sync', self.company)
         self.assertEqual(status['payers']['2223334455']['state'],'ok')
         self.assertEqual(status['payers']['1112223344']['state'],'failed')

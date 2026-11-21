@@ -1,14 +1,13 @@
 """Yearly filing scope, monthly insurance titles, folder linking and SMTP/IMAP."""
-import json
 from contextlib import contextmanager
 from email import policy
 from email.parser import BytesParser
 from unittest.mock import patch,Mock
 
 from tests.base import DbTestCase
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
-from app.db.dao_app_settings import get_setting,set_setting
-from app.companies.checking_obligations import add_imported,profile,report_applies,save
+from app.companies.checking_obligations import add_imported,load,profile,report_applies,save
 from app.email.company_folders import link_account
 from app.email.email_storage import save_folder
 from app.services.declaration_year import read_enova
@@ -65,7 +64,8 @@ class ImportAndMailTests(DbTestCase):
         company_id = self.company
         months = [f'2026-{n:02d}' for n in range(1,13)]
         save(company_id,{'2026-01':{'vat_period':'monthly','forms':{'RCA':'none','DRA':'monthly'}}},1)
-        set_setting(f'enova_checking_{company_id}_2026-01',json.dumps({'documents':{'accounting':{'old':3}}}))
+        with get_conn() as conn:
+            save_snapshot(conn, 'enova_checking', company_id, '2026-01', {'documents': {'accounting': {'old': 3}}})
         with get_conn() as conn:
             conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,etap) VALUES (%s,'2026-01',77,'Brak')",(company_id,))
         def fetch(config,source,periods,*,result_kind):
@@ -79,31 +79,30 @@ class ImportAndMailTests(DbTestCase):
             result = read_enova({}, {'nip':'1112223344','database':'A','declarations_query':'decl.sql','jpk_query':'jpk.sql'},company_id,months)
         self.assertTrue(result['ok'])
         self.assertEqual(remote.call_count,2)
-        settings = json.loads(get_setting(f'checking_obligations_{company_id}'))
+        settings = load(company_id)
         self.assertEqual(len(settings['imported']),12)
         chosen = profile(settings,'2026-02')
         self.assertEqual(chosen['vat_period'],'monthly')  # manual VAT cadence wins
         self.assertEqual(chosen['forms']['RCA'],'none')
         self.assertEqual(chosen['forms']['VATUE'],'monthly')
         self.assertEqual(chosen['forms']['JPKVAT'],'monthly')
-        self.assertEqual(json.loads(get_setting(f'enova_checking_{company_id}_2026-01'))['documents'],{'accounting':{'old':3}})
         with get_conn() as conn:
+            self.assertEqual(read_snapshot(conn, 'enova_checking', company_id, '2026-01')['documents'], {'accounting': {'old': 3}})
             row = conn.execute('SELECT ilosc_dok,etap FROM statusy_miesieczne WHERE firma_id=%s',(company_id,)).fetchone()
         self.assertEqual(tuple(row),(77,'Brak'))
 
     def test_missing_documents_preserve_positive_scope_and_quarterly_source_cadence(self):
         month = '2026-01'
-        settings_key = f'checking_obligations_{self.company}'
         with get_conn() as conn:
             add_imported(conn, self.company, month, [{'form': 'JPK_VAT', 'form_variant': 'JPK_V7K'}], 'enova')
-        company = {'checking_obligations': json.loads(get_setting(settings_key))}
+        company = {'checking_obligations': load(self.company)}
         self.assertFalse(report_applies(company, 'RCA', month))
 
         with get_conn() as conn:
             add_imported(conn, self.company, month, [{'form': 'ZUS RCA'}], 'platnik')
             add_imported(conn, self.company, month, [], 'enova')
             add_imported(conn, self.company, month, [], 'platnik')
-        company = {'checking_obligations': json.loads(get_setting(settings_key))}
+        company = {'checking_obligations': load(self.company)}
         value = profile(company['checking_obligations'], month)
         self.assertEqual(value['forms'], {'JPKVAT': 'monthly', 'RCA': 'monthly'})
         self.assertEqual(value['vat_period'], 'quarterly')
@@ -122,14 +121,13 @@ class ImportAndMailTests(DbTestCase):
         prior = {'vat_period': 'monthly', 'forms': {'RCA': 'none', 'RSA': 'monthly'}, 'document_types': ['ZR']}
         for company in (self.company, another):
             save(company, {month: prior}, 1)
-        key = f'checking_obligations_{self.company}'
-        skipped_original = get_setting(f'checking_obligations_{another}')
+        skipped_original = load(another)
         save_company_year_declarations(self.company, {year: ['ZUS ZSWA', 'PIT-36']}, 1)
         with get_conn() as conn:
             conn.execute('INSERT INTO zakonczenie_roku(firma_id,rok,deklaracja,zlozona,data_zlozenia,upo) '
                          'VALUES (%s,%s,%s,1,%s,%s)', (self.company, year, 'CIT-8', '2026-03-31', 'reference'))
             add_imported(conn, self.company, month, [{'form': 'ZUS RZA'}], 'platnik')
-        original = get_setting(key)
+        original = load(self.company)
         sources = [{'nip': nip, 'declarations_query': str(bundled_directory() / 'declarations.sql'), 'jpk_query': 'jpk.sql'}
                    for nip in ('1112223344', '2223334455')]
 
@@ -150,16 +148,16 @@ class ImportAndMailTests(DbTestCase):
                 patch('app.integrations.enova.connection_settings.load_connection', return_value={'sources': sources}), \
                 patch('app.services.declaration_year.fetch_enova', side_effect=enova), patch('builtins.print'):
             self.assertEqual(rebuild(year), 1)
-            self.assertEqual(get_setting(key), original)
+            self.assertEqual(load(self.company), original)
             self.assertEqual(rebuild(year, apply=True), 1)
-        value = json.loads(get_setting(key))
+        value = load(self.company)
         january = profile(value, month)
         self.assertEqual(january['forms'], {'RCA': 'monthly', 'JPKVAT': 'monthly'})
         self.assertEqual(january['vat_period'], 'quarterly')
         self.assertEqual(january['document_types'], ['ZR'])
         self.assertEqual(profile(value, '2025-02')['forms'], {})
         self.assertEqual(profile(value, '2026-01')['forms'], prior['forms'])
-        self.assertEqual(get_setting(f'checking_obligations_{another}'), skipped_original)
+        self.assertEqual(load(another), skipped_original)
         self.assertEqual(get_company_year_declarations(self.company, year), ['PIT-36', 'ZUS IWA', 'CIT-8'])
         with get_conn() as conn:
             recorded = conn.execute('SELECT data_zlozenia,upo FROM zakonczenie_roku WHERE firma_id=%s',
@@ -201,7 +199,8 @@ class ImportAndMailTests(DbTestCase):
         with patch('app.integrations.platnik.declarations.load',return_value={'enabled':False}), \
              patch('app.integrations.platnik.declarations.fetch',return_value=rows):
             import_months(['2026-11'],company_ids=[self.company])
-        entries = decoded_snapshot(get_setting(f'platnik_declarations_{self.company}_2026-11'))['declarations']
+        with get_conn() as conn:
+            entries = decoded_snapshot(read_snapshot(conn, 'platnik_declarations', self.company, '2026-11'))['declarations']
         self.assertEqual({e['payer_nip'] for e in entries},{'1112223344','2223334455','3334445566'})
         self.assertEqual(len(entries),3)
 

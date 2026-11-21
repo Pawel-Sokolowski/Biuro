@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+from app.db.checking_storage import read_snapshot, save_snapshot
 import os
 from pathlib import Path
 import re
@@ -367,9 +368,8 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
     for count in counts:
         previous = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
                                 (company['id'], count.month)).fetchone()
-        key = f"enova_snapshot_{company['id']}_{count.month}"
-        old_snapshot = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
-        old_total = json.loads(old_snapshot[0]).get('total') if old_snapshot else None
+        old_snapshot = read_snapshot(conn, 'enova_snapshot', company['id'], count.month)
+        old_total = old_snapshot.get('total') if old_snapshot is not None else None
         manual_key = f"manual_document_count_{company['id']}_{count.month}"
         manual = conn.execute('SELECT 1 FROM app_settings WHERE klucz=%s', (manual_key,)).fetchone()
         provenance = conn.execute('SELECT source_name FROM monthly_document_imports WHERE firma_id=%s AND miesiac=%s',
@@ -378,8 +378,8 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
         # Legacy nonzero values and other imports belong to the user. Imported values
         # remain refreshable only while they still match our last successful write.
         protected = bool(manual or (provenance and not provenance[0].startswith('Enova: ')) or
-                         (old_snapshot and current != old_total) or
-                         (not old_snapshot and current not in (None, 0)))
+                         (old_snapshot is not None and current != old_total) or
+                         (old_snapshot is None and current not in (None, 0)))
         if protected:
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) ON CONFLICT DO NOTHING',
                          (manual_key, '1'))
@@ -396,9 +396,7 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
                     'report_types': count.report_types, 'total': count.total, 'bank_divisor': bank_divisor,
                     'database': source['database'], 'accounting_type': source['accounting_type'],
                     'imported_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
-        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                     (f"enova_snapshot_{company['id']}_{count.month}", json.dumps(snapshot)))
+        save_snapshot(conn, 'enova_snapshot', company['id'], count.month, snapshot)
         changes.append({'month': count.month, 'before': previous[0] if previous else None,
                         'after': current if protected else count.total, 'manual_preserved': protected, 'documents': count.documents, 'bank_transactions': count.bank_transactions})
     details = {'company_id': company['id'], 'database': source['database'],

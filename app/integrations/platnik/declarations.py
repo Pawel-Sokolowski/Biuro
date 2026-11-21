@@ -2,6 +2,7 @@
 from app.remote.boundary import endpoint as office_endpoint
 from datetime import datetime
 import json
+from app.db.checking_storage import save_snapshot
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -184,19 +185,20 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         mapped = payer_mapping(companies, company_ids)
         if not mapped:
             return {'mode': 'empty', 'companies': 0}
+        nips_by_company = {}
+        for nip, company_id in mapped.items():
+            nips_by_company.setdefault(company_id, []).append(nip)
         from app.services.worker_activity import batch
-        with batch('platnik', sorted(set(mapped.values()))):
+        with batch('platnik', sorted(nips_by_company)):
             rows = fetch(config, months, annual=True) if annual else fetch(config, months)
             records = normalize(rows, months, mapped, annual=annual)
             stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
             with get_conn() as conn:
-                for fid in set(mapped.values()):
+                for fid, nips in nips_by_company.items():
                     for month in months:
-                        entries = [entry for nip in mapped if mapped[nip]==fid for entry in records[nip][month]]
+                        entries = [entry for nip in nips for entry in records[nip][month]]
                         snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
-                        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                                     (f"platnik_declarations_{fid}_{'year_' if annual else ''}{month}", encrypt_password(snapshot)))
+                        save_snapshot(conn, 'platnik_declarations', fid, str(month), encrypt_password(snapshot))
                         if not annual:
                             from app.companies.checking_obligations import add_imported
                             add_imported(conn,fid,month,entries,'platnik')
@@ -240,9 +242,10 @@ def read_year(actor_id, year):
         raise ValueError('Nieprawidłowy rok raportów ZUS.')
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute('''SELECT f.*, y.company_json, a.wartosc AS platnik_annual
+        rows = conn.execute('''SELECT f.*, y.company_json, a.payload AS platnik_annual
             FROM firmy f LEFT JOIN year_end_snapshots y ON y.firma_id=f.id AND y.rok=%s
-            LEFT JOIN app_settings a ON a.klucz='platnik_declarations_' || f.id::text || '_year_' || %s
+            LEFT JOIN company_checking_snapshots a
+                ON a.source='platnik_declarations' AND a.company_id=f.id AND a.period=%s
             WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (year, str(year), ids)).fetchall()
     result = []
     for row in rows:

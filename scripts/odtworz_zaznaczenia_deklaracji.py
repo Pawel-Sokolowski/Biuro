@@ -84,13 +84,13 @@ def monthly_selection(previous, monthly, declarations, jpk, stamp):
 def update_company(company_id, year, monthly, yearly, declarations, jpk, source, *, apply):
     from app.accounting.report_types import form_key
     from app.companies.annual_declarations import DECLARATION_DETAILS
+    from app.db.checking_storage import read_snapshot, save_snapshot
     from app.db.dao_conn import get_conn
     from app.db.dao_year_end import company_declarations, write_company_year_declarations
     from app.integrations.enova.document_counts import normalize_nip
     from app.integrations.enova.query_defaults import bundled_directory
     from app.integrations.platnik.form_catalog import ANNUAL
 
-    key = f'checking_obligations_{company_id}'
     stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
     with get_conn() as conn:
         if apply:
@@ -99,8 +99,7 @@ def update_company(company_id, year, monthly, yearly, declarations, jpk, source,
         company = conn.execute('SELECT * FROM firmy WHERE id=%s', (company_id,)).fetchone()
         if not company or normalize_nip(company['nip']) != normalize_nip(source['nip']):
             raise ValueError('Firma zmieniła się podczas odczytu.')
-        row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
-        previous = json.loads(row[0]) if row else {}
+        previous = read_snapshot(conn, 'checking_obligations', company_id, lock=apply) or {}
         value = monthly_selection(previous, monthly, declarations, jpk, stamp)
         annual = conn.execute('SELECT company_json FROM year_end_snapshots WHERE rok=%s AND firma_id=%s',
                               (year, company_id)).fetchone()
@@ -119,9 +118,7 @@ def update_company(company_id, year, monthly, yearly, declarations, jpk, source,
         codes = list(dict.fromkeys([code for code in current if form_key(code) not in covered]
                                    + sorted(names[code] for code in detected) + [row[0] for row in filed]))
         if apply:
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                         'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                         (key, json.dumps(value)))
+            save_snapshot(conn, 'checking_obligations', company_id, '', value)
             write_company_year_declarations(conn, company, year, codes, None)
             conn.execute("INSERT INTO audit_log(tabela,rekord_id,akcja,szczegoly) "
                          "VALUES ('firmy',%s,'odtworzenie_deklaracji',%s)",

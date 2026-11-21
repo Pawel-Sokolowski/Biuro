@@ -225,7 +225,7 @@ class OfficeHttpsTests(DbTestCase):
             self.assertFalse(results[0]['error'])
             history = bulk_mail_log.history()
             self.assertEqual(history[0]['actor_id'], 1)
-            self.assertEqual(history[0]['remaining'], 0)
+            self.assertEqual(history[0]['remaining'], 0, results[0]['entries'])
             self.assertEqual(history[0]['attachments'], ['notice.txt'])
             self.assertEqual(history[0]['batches'][0]['status'], 'sent')
             self.assertFalse(self.server.office_service.files.items)

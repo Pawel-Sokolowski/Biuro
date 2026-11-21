@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet
 from tests.base import DbTestCase
 from tests.test_ezla_report import report, certificate
+from app.db.checking_storage import read_snapshot
 from app.db.dao_conn import get_conn
 from app.integrations.ezla.settings import load_settings, save_settings
 from app.integrations.ezla.service import Download, ServiceError
@@ -29,8 +30,7 @@ class EzlaSyncTests(DbTestCase):
 
     def status(self):
         with get_conn() as conn:
-            return json.loads(conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                              (f'ezla_sync_{self.company}',)).fetchone()[0])
+            return read_snapshot(conn, 'ezla_sync', self.company)
 
     def test_shared_passwords_are_preserved_and_reports_are_encrypted_and_deduplicated(self):
         first = load_settings()

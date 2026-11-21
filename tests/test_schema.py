@@ -1,4 +1,6 @@
+import json
 import unittest
+from pathlib import Path
 
 import psycopg
 
@@ -25,6 +27,97 @@ class AlembicDeploymentTests(unittest.TestCase):
                     'SELECT tablename FROM pg_tables WHERE schemaname=%s', (schema,))}
             self.assertTrue({'bulk_mail_runs', 'bulk_mail_batches'} <= tables)
             self.assertEqual(history(), [])
+        finally:
+            drop_test_schema(schema, previous)
+
+    def test_checking_upgrade_preserves_legacy_history_and_pending_requests(self):
+        from alembic import command
+        from alembic.config import Config
+        from app.config import get_schema
+        from app.db.checking_storage import read_snapshot
+        from app.db.schema import schema_is_current, upgrade_database
+        from app.db.service_tables_schema import apply_checking_queue
+        from app.integrations.platnik.declarations import decoded_snapshot
+        from app.services.checking_refresh import purge_finished, recover_interrupted
+        from app.utils.crypto import encrypt_password
+        from tests.base import create_test_schema, drop_test_schema
+
+        previous = get_schema()
+        schema = create_test_schema()
+        try:
+            config = Config()
+            config.set_main_option('script_location', str(Path(__file__).resolve().parents[1] / 'app/db/migrations'))
+            command.upgrade(config, '20261121_01')
+            self.assertFalse(schema_is_current())
+            period = '2026-01'
+            request_id = 'a' * 32
+            timestamp = '2020-02-01T08:00:00+01:00'
+            jpk = {'status': 'accepted', 'sent_at': '2026-02-01', 'upo_at': '2026-02-02', 'upo': 'ref'}
+            obligations = {'periods': {period: {'vat_period': 'quarterly', 'forms': {'CIT': 'quarterly'}}},
+                           'imported': {period: {'forms': {'RCA': 'monthly'}}}}
+            platnik = {'declarations': [{'form': 'ZUS RCA'}]}
+            encrypted = encrypt_password(json.dumps(platnik))
+            with get_conn() as conn:
+                company_id = conn.execute("INSERT INTO firmy(nazwa,status) VALUES ('Historia','Archiwalna') RETURNING id").fetchone()[0]
+                request = {'id': request_id, 'actor_id': 1, 'kind': 'enova', 'company_ids': [company_id],
+                           'period': period, 'state': 'running', 'created_at': timestamp, 'attempts': 2}
+                snapshots = {
+                    ('enova_checking', period): {'documents': {'accounting': {'AMO': 8}}},
+                    ('enova_snapshot', period): {'total': 8},
+                    ('enova_jpk', period): jpk,
+                    ('enova_hr', ''): {'events': []},
+                    ('ezla_sync', ''): {'state': 'downloaded'},
+                    ('checking_obligations', ''): obligations,
+                    ('platnik_declarations', period): encrypted,
+                    ('platnik_declarations', '2025'): encrypted,
+                }
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        'INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)',
+                        [
+                            (f'{source}_{company_id}' + (
+                                f'_year_{month}' if len(month) == 4 else f'_{month}' if month else ''),
+                             payload if source == 'platnik_declarations' else json.dumps(payload))
+                            for (source, month), payload in snapshots.items()
+                        ] + [
+                            (f'checking_refresh_{request_id}', json.dumps(request)),
+                            (f'enova_stage_pending_{company_id}_{period}', json.dumps(
+                                {'company_id': company_id, 'month': period, 'revision': 'revision-1'})),
+                            (f'enova_checking_checked_{company_id}', 'signature'),
+                        ],
+                    )
+                # The prior bootstrap could already have an empty queue table.
+                # Seed a completed row to also exercise its column conversion.
+                apply_checking_queue(conn)
+                conn.execute("""
+                    INSERT INTO checking_requests(id,actor_id,kind,company_ids,period,state,created_at,finished_at,results)
+                    VALUES ('old',1,'declaration_year',%s,'2025','completed',%s,%s,'[{"ok": true}]')
+                """, (json.dumps([company_id]), timestamp, timestamp))
+            upgrade_database()
+            upgrade_database()
+            self.assertTrue(schema_is_current())
+            with get_conn() as conn:
+                for (source, month), payload in snapshots.items():
+                    self.assertEqual(read_snapshot(conn, source, company_id, month), payload)
+                self.assertEqual(decoded_snapshot(read_snapshot(conn, 'platnik_declarations', company_id, period)), platnik)
+                self.assertEqual(conn.execute('SELECT payload FROM checking_requests WHERE id=%s', (request_id,)).fetchone()[0],
+                                 request)
+                old = conn.execute("SELECT payload,company_ids FROM checking_requests WHERE id='old'").fetchone()
+                self.assertEqual(old['company_ids'], [company_id])
+                self.assertEqual(old['payload']['period'], 2025)
+                self.assertEqual(old['payload']['results'], [{'ok': True}])
+                self.assertEqual(tuple(conn.execute('SELECT company_id,period,revision FROM enova_stage_requests').fetchone()),
+                                 (company_id, period, 'revision-1'))
+                legacy = conn.execute("""
+                    SELECT wartosc FROM app_settings WHERE klucz ~
+                      '^(enova_(checking|snapshot|jpk|hr)|ezla_sync|checking_(obligations|refresh)|platnik_declarations|enova_stage_pending)_'
+                """).fetchall()
+                self.assertEqual([row[0] for row in legacy], ['signature'])
+            recover_interrupted()
+            self.assertEqual(purge_finished(), 1)
+            with get_conn() as conn:
+                row = conn.execute('SELECT state,payload FROM checking_requests').fetchone()
+                self.assertEqual((row['state'], row['payload']['state'], row['payload']['attempts']), ('queued', 'queued', 2))
         finally:
             drop_test_schema(schema, previous)
 

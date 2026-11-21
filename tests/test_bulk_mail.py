@@ -62,7 +62,7 @@ class BulkMailTests(DbTestCase):
         value = plan(2)
         rows = [{'id': i, 'adres_email': f'client{i}@example.com'} for i in range(2)]
         with mock.patch.object(bulk_mail, 'allowed_tabs', return_value=['E-mail']), \
-                mock.patch.object(bulk_mail, 'get_email_accounts_for_employee', return_value=[{'id': 10, 'email': value.sender}]), \
+                mock.patch.object(bulk_mail.email_storage, 'get_email_accounts_for_employee', return_value=[{'id': 10, 'email': value.sender}]), \
                 mock.patch.object(bulk_mail, 'list_mailing_companies', return_value=rows), \
                 mock.patch.object(bulk_mail, 'send_email_smtp', return_value=(True, 'OK')) as smtp:
             self.assertTrue(send_bulk_batch(value, value.recipients)['ok'])
@@ -74,7 +74,7 @@ class BulkMailTests(DbTestCase):
 
     def test_lost_account_access_blocks_smtp(self):
         with mock.patch.object(bulk_mail, 'allowed_tabs', return_value=['E-mail']), \
-                mock.patch.object(bulk_mail, 'get_email_accounts_for_employee', return_value=[]), \
+                mock.patch.object(bulk_mail.email_storage, 'get_email_accounts_for_employee', return_value=[]), \
                 mock.patch.object(bulk_mail, 'send_email_smtp') as smtp:
             result = send_bulk_batch(plan(), ('client0@example.com',))
         self.assertTrue(result['blocked'])

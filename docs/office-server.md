@@ -45,6 +45,20 @@ serwerze; dołączone do instalatora zapytania nadal działają domyślnie.
 
 ## Sesje i uprawnienia
 
+Po zalogowaniu klient ponownie wykorzystuje połączenia HTTPS. Worker
+domyślnie utrzymuje połączenie przez 30 sekund bezczynności. Gdy zostanie
+zamknięte, kolejna operacja otwiera nowe w ramach tej samej sesji pracownika.
+Limit bezczynności i połączeń ustawisz w `worker.env` przez
+`BIO_API_IDLE_TIMEOUT` i `BIO_API_CONNECTIONS`. Pule workera do PostgreSQL
+są odrębne od połączeń komputerów pracowników.
+
+W domenie AD DS można dostarczyć publiczny certyfikat zaufanego urzędu CA
+przez zasadę komputera **Zasady klucza publicznego → Zaufane główne urzędy
+certyfikacji**. Certyfikat HTTPS workera powinien zawierać używaną nazwę DNS
+lub adres IP w SAN. Sprawdź logowanie na stanowisku domenowym po zastosowaniu
+GPO. Klient korzysta z zaufania systemu Windows. Prywatny klucz certyfikatu
+HTTPS pozostaje na VM workera.
+
 Serwer przechowuje wyłącznie skrót tokena sesji. Zwykła sesja wygasa po 12 godzinach,
 zapamiętana po 14 dniach. Wylogowanie unieważnia token; dezaktywacja pracownika
 lub zmiana/reset hasła odbiera dostęp istniejącym sesjom przy następnym żądaniu.

@@ -1,5 +1,4 @@
 """Weekly ZUS and durable, company-scoped Enova reads; run on CI only."""
-import json
 from datetime import datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -7,7 +6,6 @@ from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting
 from app.db.dao_monthly import save_month_status
-from app.services.enova_stage import PREFIX
 from app.worker import enova_job,ezla_job
 
 
@@ -20,7 +18,7 @@ class WorkerSchedulingTests(DbTestCase):
 
     def pending(self):
         with get_conn() as conn:
-            return conn.execute('SELECT klucz,wartosc FROM app_settings WHERE starts_with(klucz,%s)',(PREFIX,)).fetchall()
+            return conn.execute('SELECT company_id,period,revision FROM enova_stage_requests').fetchall()
 
     def test_no_change_never_reads_enova_and_repeated_stage_is_coalesced(self):
         with patch('app.integrations.enova.connection_settings.load_connection',return_value=self.config), \
@@ -28,9 +26,9 @@ class WorkerSchedulingTests(DbTestCase):
             self.assertEqual(enova_job()['mode'],'idle')
             remote.assert_not_called()
             save_month_status(self.company,'2026-11',{'etap':'Zaksięgowane'})
-            revision = json.loads(self.pending()[0]['wartosc'])['revision']
+            revision = self.pending()[0]['revision']
             save_month_status(self.company,'2026-11',{'etap':'Zaksięgowane','ilosc_dok':3})
-            self.assertEqual(json.loads(self.pending()[0]['wartosc'])['revision'],revision)
+            self.assertEqual(self.pending()[0]['revision'],revision)
             self.assertEqual(enova_job()['mode'],'applied')
             self.assertEqual(remote.call_args.kwargs['months'],['2026-11'])
             self.assertEqual(remote.call_args.args[0]['sources'],self.config['sources'])
@@ -97,15 +95,15 @@ class WorkerSchedulingTests(DbTestCase):
             self.assertEqual(enova_job()['mode'], 'applied')
             self.assertEqual(get_month_status(self.company, month)['ilosc_dok'], 57)
 
-    def test_ezla_downloads_only_monday_and_completion_survives_restart(self):
+    def test_ezla_catches_up_after_monday_and_completion_survives_restart(self):
         zone = ZoneInfo('Europe/Warsaw')
         monday = datetime(2026,11,16,3,tzinfo=zone)
+        tuesday = datetime(2026,11,17,3,tzinfo=zone)
         with patch('app.integrations.ezla.sync.run_sync',return_value={'mode':'completed','companies':2,'failed':0}) as remote:
-            self.assertEqual(ezla_job(now=datetime(2026,11,16,1,tzinfo=zone))['mode'],'waiting')
-            self.assertEqual(ezla_job(now=datetime(2026,11,17,3,tzinfo=zone))['mode'],'waiting')
+            self.assertEqual(ezla_job(now=monday.replace(hour=1))['mode'],'waiting')
             remote.assert_not_called()
-            ezla_job(now=monday)
-            self.assertEqual(ezla_job(now=monday)['mode'],'checked_this_week')
+            self.assertEqual(ezla_job(now=tuesday)['mode'],'completed')
+            self.assertEqual(ezla_job(now=tuesday)['mode'],'checked_this_week')
             self.assertEqual(remote.call_count,1)
             ezla_job(now=datetime(2026,11,23,3,tzinfo=zone))
             self.assertEqual(remote.call_count,2)

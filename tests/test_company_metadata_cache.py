@@ -7,6 +7,7 @@ from unittest import mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 from app.companies import company_ui
 
@@ -111,14 +112,28 @@ class CompanySearchMetadataTests(unittest.TestCase):
 
     def test_identical_records_keep_items_and_selection_but_changed_values_render(self):
         self.page._load_table([self.row], {}, {})
-        selected = self.page.table.item(0, 1)
+        selected = self.page.table.model().rows[0]
         self.page.table.selectRow(0)
         self.page._load_table([dict(self.row)], {}, {})
-        self.assertIs(self.page.table.item(0, 1), selected)
+        self.assertIs(self.page.table.model().rows[0], selected)
         self.assertEqual(self.page.table.currentRow(), 0)
         self.row['nazwa_skrocona'] = 'Updated surname'
         self.page._load_table([self.row], {}, {})
         self.assertEqual(self.page.table.item(0, 1).text(), 'Updated surname')
+
+    def test_filtering_preserves_the_selected_firm_and_its_display_roles(self):
+        preceding = dict(self.row, id=6, nazwa='First')
+        suspended = dict(self.row, uslugi_zawieszone=True)
+        stored = {7: ('2026-11-07', '2026-11-07 09:00')}
+        self.page._load_table([preceding, suspended], {}, stored)
+        self.page.table.selectRow(1)
+        self.page._load_table([suspended], {}, stored)
+        self.assertEqual(self.page.table.currentRow(), 0)
+        self.assertEqual(self.page.table.item(0, 1).toolTip(), suspended['nazwa'])
+        cell = self.page.table.item(0, 13)
+        self.assertEqual(cell.text(), '2026-11-07')
+        self.assertIn('z ostatniego maila', cell.toolTip())
+        self.assertEqual(cell.data(Qt.ItemDataRole.BackgroundRole).color().name(), '#f4a6a6')
 
     def test_editing_company_invalidates_metadata_name_mapping(self):
         self.page._load_table([self.row], {}, {})

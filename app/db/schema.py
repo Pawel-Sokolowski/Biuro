@@ -7,8 +7,7 @@ from app.remote.boundary import endpoint as office_endpoint
 from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
-
-SCHEMA_VERSION = "2026-11-16.1"
+from app.db.reminder_index_schema import VERSION as SCHEMA_VERSION
 
 
 def init_db():
@@ -35,8 +34,15 @@ def init_db():
         apply_saldeo_web(conn)
         from app.db.billing_label_schema import apply as remove_billing_label
         remove_billing_label(conn)
-        from app.db.service_tables_schema import apply as apply_service_tables
-        apply_service_tables(conn)
+        from app.db.office_delivery_schema import apply as apply_office_delivery
+        apply_office_delivery(conn)
+        from app.db.checking_schema import apply as apply_checking, migrate_legacy
+        apply_checking(conn)
+        migrate_legacy(conn)
+        from app.db.query_index_schema import apply as apply_query_indexes
+        apply_query_indexes(conn)
+        from app.db.reminder_index_schema import apply as apply_reminder_indexes
+        apply_reminder_indexes(conn)
 
 
 @office_endpoint('app.db.schema.schema_is_current')

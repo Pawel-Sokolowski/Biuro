@@ -414,6 +414,12 @@ class BulkMailDialog(QDialog):
         self.progress.setValue(sent)
         self.status.setText(f'Wysłano: {sent}. Niepotwierdzony wynik: {uncertain}. Niewysłane: {result["remaining"]}. '
                             'Nie wykonano automatycznych ponowień. Raport zawiera szczegóły każdej partii.')
+        if result.get('error'):
+            self.status.setText(self.status.text() + ' ' + result['error'])
+            if not result['entries']:
+                for control in self._controls:
+                    control.setEnabled(True)
+                self.send_button.setEnabled(True)
         self.details.setPlainText('\n'.join(f'{STATUS_LABELS[entry["status"]]}: {", ".join(entry["recipients"])}\n{entry["info"]}'
                                             for entry in result['entries']))
         self.details.show()

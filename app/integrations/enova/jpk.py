@@ -3,6 +3,7 @@ import json
 import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+from app.db.checking_storage import save_snapshot
 from app.integrations.enova.document_counts import fetch_counts, normalize_nip
 
 STATUSES = {'failed': 'Błąd przetwarzania', 'cancelled': 'Anulowany', 'unknown': 'Nieustalony — sprawdź źródło', 'prepared': 'Przygotowany', 'processing': 'Przetwarzany', 'not_sent': 'Niewysłany', 'sent': 'Wysłany', 'accepted': 'Przyjęty (UPO)', 'rejected': 'Odrzucony', 'not_applicable': 'Nie dotyczy'}
@@ -71,6 +72,4 @@ def save_jpk(conn, company_id, month, value):
     from app.companies.checking_obligations import add_imported
     if value.get('form_variant') or value['status'] not in ('unknown', 'not_applicable'):
         add_imported(conn, company_id, month, [{'form': 'JPK_VAT', **value}], 'enova-jpk')
-    conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                 'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                 (f'enova_jpk_{company_id}_{month}', json.dumps(value)))
+    save_snapshot(conn, 'enova_jpk', company_id, month, value)

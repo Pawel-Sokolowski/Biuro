@@ -1,11 +1,11 @@
-import json
 import os
 from unittest.mock import Mock,patch
 from cryptography.fernet import Fernet
 from tests.base import DbTestCase
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting
-from app.services.checking_refresh import enqueue,process_next,latest,recover_interrupted
+from app.services.checking_refresh import _save, enqueue,process_next,latest,recover_interrupted
 from app.integrations.enova.checking import CheckingBusy
 
 
@@ -35,8 +35,7 @@ class CheckingRefreshTests(DbTestCase):
         with get_conn() as conn:
             for fid in (self.company,self.other):
                 conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,etap) VALUES (%s,'2026-11',77,'Brak')",(fid,))
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)',
-                         (f'enova_checking_{self.other}_2026-11','{"old": true}'))
+            save_snapshot(conn, 'enova_checking', self.other, '2026-11', {'old': True})
         def fetch(config,source,months,*,result_kind):
             return [{'nip':source['nip'],'miesiac':month,'dokumenty':1,'pozycje_bankowe':0,'rodzaje':{'AMO':1}} for month in months]
         with patch('app.integrations.enova.connection_settings.load_connection',return_value=self.config), \
@@ -48,7 +47,8 @@ class CheckingRefreshTests(DbTestCase):
             self.assertEqual(remote.call_args.args[1]['database'],'A')
             self.assertEqual(remote.call_args.args[2],['2026-10','2026-11'])
         self.assertFalse(self.config['enabled'])
-        self.assertEqual(json.loads(get_setting(f'enova_checking_{self.other}_2026-11')),{'old':True})
+        with get_conn() as conn:
+            self.assertEqual(read_snapshot(conn, 'enova_checking', self.other, '2026-11'), {'old': True})
         self.assertIsNone(get_setting(f'enova_checking_checked_{self.company}'))
         self.assertIsNone(get_setting('worker_enova_completed'))
         with get_conn() as conn:
@@ -59,9 +59,8 @@ class CheckingRefreshTests(DbTestCase):
         with patch('app.integrations.enova.connection_settings.load_connection',return_value=self.config), \
              patch('app.integrations.enova.checking.run_checking_import',side_effect=CheckingBusy('busy')):
             self.assertEqual(process_next()['state'],'queued')
-        with get_conn() as conn:
-            value.update(state='running')
-            conn.execute('UPDATE app_settings SET wartosc=%s WHERE klucz=%s',(json.dumps(value),'checking_refresh_'+value['id']))
+        value.update(state='running')
+        _save(value)
         recover_interrupted()
         self.assertEqual(latest(self.admin)['state'],'queued')
 
@@ -87,8 +86,9 @@ class CheckingRefreshTests(DbTestCase):
             self.assertEqual(process_next()['state'],'completed')
         fetch.assert_called_once()
         self.assertEqual(fetch.call_args.args[0],'1112223344')
-        self.assertIsNotNone(get_setting(f'ezla_sync_{self.company}'))
-        self.assertIsNone(get_setting(f'ezla_sync_{self.other}'))
+        with get_conn() as conn:
+            self.assertIsNotNone(read_snapshot(conn, 'ezla_sync', self.company))
+            self.assertIsNone(read_snapshot(conn, 'ezla_sync', self.other))
 
     def test_monthly_platnik_declarations_use_selected_companies_and_previous_month(self):
         enqueue(self.admin, 'platnik_declarations', [self.company], '2026-01')
@@ -126,7 +126,7 @@ class CheckingRefreshTests(DbTestCase):
         self.assertEqual([r['ok'] for r in latest(self.admin)['results']],[True,True,False,False])
 
     def test_direct_full_year_platnik_starts_without_automatic_worker_flags(self):
-        from app.services.checking_refresh import run_now
+        from app.services.checking_refresh import _save, run_now
         with patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':17}) as monthly, \
              patch('app.integrations.platnik.declarations.import_year',return_value={'mode':'applied','documents':2}) as annual, \
              patch('app.integrations.enova.connection_settings.load_connection',side_effect=AssertionError('unselected source')):
@@ -141,7 +141,7 @@ class CheckingRefreshTests(DbTestCase):
         self.assertIsNone(get_setting('background_worker'))
 
     def test_direct_monthly_success_is_visible_when_annual_reports_fail(self):
-        from app.services.checking_refresh import run_now
+        from app.services.checking_refresh import _save, run_now
         with patch('app.integrations.platnik.declarations.import_months',return_value={'mode':'applied','documents':17}), \
              patch('app.integrations.platnik.declarations.import_year',side_effect=ValueError('Brak IWA/ZSWA')):
             value = run_now(self.admin,'declaration_year',[self.company],2026,['platnik'])
@@ -151,7 +151,7 @@ class CheckingRefreshTests(DbTestCase):
         self.assertIn('IWA',value['results'][0]['error'])
 
     def test_direct_busy_source_returns_a_failure_instead_of_leaving_a_queued_request(self):
-        from app.services.checking_refresh import run_now
+        from app.services.checking_refresh import _save, run_now
         with patch('app.services.checking_refresh._execute',return_value=None):
             value = run_now(self.admin,'declaration_year',[self.company],2026,['platnik'])
         self.assertEqual(value['state'],'failed')

@@ -51,6 +51,7 @@ class OfficeService:
         self.executor.shutdown(wait=True,cancel_futures=True)
         for item in self.preparations.values():
             item['value'].close()
+            self.files.release_path(item['owner'],item['value'].path)
         self.preparations.clear()
 
     def forget(self,token):
@@ -70,9 +71,10 @@ class OfficeService:
                     del self.preparations[key]
         self.files.forget(owner)
 
-    def submit(self,token,payload):
+    def submit(self,token,payload,*,actor=None):
         from app.remote.operations import OPERATIONS
-        actor = self.identity(token)
+        if actor is None:
+            actor = self.identity(token)
         operation = payload.get('operation')
         spec = OPERATIONS.get(operation)
         if spec is None:
@@ -125,6 +127,7 @@ class OfficeService:
         for key,item in list(self.preparations.items()):
             if now-item['created']>3600:
                 item['value'].close()
+                self.files.release_path(item['owner'],item['value'].path)
                 del self.preparations[key]
         for key,value in list(self.objects.items()):
             if now-value['created']>14*86400:
@@ -250,6 +253,7 @@ class OfficeService:
                     raise PermissionError('Plan importu wygasł. Sprawdź plik ponownie.')
                 if operation.endswith('.release_preparation'):
                     item['value'].close()
+                    self.files.release_path(item['owner'],item['value'].path)
                     del self.preparations[reference]
                     return None
                 bound.arguments['prepared'] = item['value']
@@ -291,8 +295,9 @@ class OfficeService:
                 result = PRESENT if result else ''
         return result
 
-    def poll(self,token,payload):
-        self.identity(token)
+    def poll(self,token,payload,*,actor=None):
+        if actor is None:
+            self.identity(token)
         owner = auth.digest(token)
         with self.lock:
             job_key = payload.get('job')

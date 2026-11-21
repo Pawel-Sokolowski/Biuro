@@ -254,6 +254,7 @@ class MonthlyViewLogic:
         sql = """
             SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
                    f.status, f.uslugi_zawieszone, f.ksiegowa_id, f.kadrowa_id,
+                   f.nip AS insurance_company_nip, f.data_koniec_zus_start, f.data_koniec_zus_pref,
                    f.vat_status, f.vat_sprawdzono, f.vat_sprawdzil,
                    f.vat_ue_status, f.vat_ue_sprawdzono, f.vat_ue_sprawdzil,
                    COALESCE(sm.etap, 'Brak') AS etap,
@@ -301,9 +302,17 @@ class MonthlyViewLogic:
 
         rows = [dict(r) for r in cur.fetchall()]
         from app.companies.monthly_insurance import read_codes
-        insurance = read_codes(conn,[r['id'] for r in rows if r['id'] in permitted],selected_month)
+        company_dates = {row['id']: {
+            'nip': row['insurance_company_nip'],
+            'data_koniec_zus_start': row['data_koniec_zus_start'],
+            'data_koniec_zus_pref': row['data_koniec_zus_pref'],
+        } for row in rows if row['id'] in permitted}
+        insurance = read_codes(conn, company_dates, selected_month, company_dates)
         for row in rows:
             row.update(insurance.get(row['id'],{}))
+            row.pop('insurance_company_nip', None)
+            row.pop('data_koniec_zus_start', None)
+            row.pop('data_koniec_zus_pref', None)
         from app.utils.polish_sort import polish_sort_key
 
         rows.sort(key=lambda row: polish_sort_key(row.get("nazwa") or ""))

@@ -1,8 +1,4 @@
-"""Trwałe tabele wprowadzone poza Alembic: historia wysyłki masowej i kolejka odczytów.
-
-Zakładane przy starcie aplikacji (`init_db`) i na bazie testowej, żeby nie zależeć od
-migracji Alembica i żeby pierwsze użycie funkcji nie kończyło się brakiem tabeli.
-"""
+"""DDL współdzielone przez migrację historii wysyłki oraz bootstrap testów."""
 
 BULK_MAIL_TABLES = (
     '''

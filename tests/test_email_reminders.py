@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import date, datetime
+from threading import Event
 from unittest import TestCase
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -92,6 +93,53 @@ class ReminderDeliveryTests(DbTestCase):
             conn.execute("INSERT INTO faktury_platnosci (faktura_id, kwota, data_zaplaty, sposob) VALUES (%s, 100, '2026-11-10', 'gotowka')", (invoice,))
         self.assertEqual(run_reminders(at('2026-11-12')), 0)
 
+    def test_before_send_window_and_after_claim_skip_detailed_reads(self):
+        self.invoice()
+        self.enable('documents')
+        self.enable('payments')
+        with patch('app.services.email_reminders.get_conn') as connect:
+            self.assertEqual(run_reminders(at('2026-11-12', 8)), 0)
+            self.assertEqual(run_reminders(at('2026-11-14', 10)), 0)
+            connect.assert_not_called()
+        self.assertEqual(run_reminders(at('2026-11-12')), 2)
+        with patch('app.services.email_reminders._candidates') as check:
+            self.assertEqual(run_reminders(at('2026-11-12', 10)), 0)
+            check.assert_not_called()
+        self.assertEqual(self.sender.call_count, 2)
+
+    def test_candidate_preview_is_read_only_and_independent_of_send_window(self):
+        from app.remote.screen_data import reminder_preview_jobs
+
+        invoice_id = self.invoice()
+        jobs = reminder_preview_jobs(self.settings, 1)
+        self.assertEqual([row['target'] for row in jobs['payments']], [str(invoice_id)])
+        self.assertEqual(len(jobs['documents']), 1)
+        self.sender.assert_not_called()
+
+    def test_worker_resumes_after_stopping_between_deliveries(self):
+        from app.worker import run_job
+
+        self.invoice(numer='FV/1')
+        self.invoice(numer='FV/2')
+        self.enable('payments')
+        stop = Event()
+
+        def send(*args):
+            stop.set()
+            return True, 'OK'
+
+        self.sender.side_effect = send
+        clock = at('2026-11-09')
+        with patch('app.services.email_reminders.datetime', wraps=datetime) as current:
+            current.now.return_value = clock
+            self.assertEqual(run_job('reminders', stop), {'sent': 1})
+            stop.clear()
+            self.assertEqual(run_job('reminders', stop), {'sent': 1})
+            stop.clear()
+            self.assertEqual(run_job('reminders', stop), {'sent': 0})
+        self.assertEqual(self.sender.call_count, 2)
+        self.assertNotEqual(self.sender.call_args_list[0].args[2], self.sender.call_args_list[1].args[2])
+
     def test_drafts_cancelled_proformas_credits_and_invalid_due_dates_are_skipped(self):
         self.invoice(status='robocza')
         self.invoice(cancelled_at=at('2026-11-08'))
@@ -168,7 +216,6 @@ class ReminderDeliveryTests(DbTestCase):
 
     def test_concurrent_workstations_claim_only_one_delivery(self):
         from concurrent.futures import ThreadPoolExecutor
-        from threading import Event
         from app.config import schema_context
         self.invoice()
         self.enable('payments')

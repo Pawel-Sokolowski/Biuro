@@ -1,5 +1,6 @@
 name: Enova e-ZLA add-on
 on:
+  workflow_dispatch:
   pull_request:
     paths: ['addons/enova/**', 'app/integrations/ezla/enova_export.py', '.github/workflows/enova-addon.yml']
   push:

@@ -85,3 +85,52 @@ Błędy odczytu są widoczne w statusie i logach jako `mail_sidebar_failed` lub
 `calendar_snapshot_failed` z typem i bezpiecznym komunikatem błędu. Nie wymagają
 odczytywania tokenów, kluczy ani danych logowania. W razie problemu potrzebne
 są wpisy z tej samej próby otwarcia widoku po stronie klienta i serwera.
+
+## Firmy i masowa obsługa faktur
+
+Lista firm wyświetla rekordy przez model Qt. Zmiana filtra aktualizuje wiersze
+według identyfikatorów firm i zachowuje zaznaczenie, jeśli firma nadal pasuje.
+Karta firmy pobiera historię zapisów czasu w tle po otwarciu zakładki Czasomierz.
+
+W trybie HTTPS dane podstawowe karty firmy są pobierane jednym żądaniem w tle.
+Obejmują firmę, słowniki, pracowników, pełnomocnictwa i cenniki. Kontakty,
+wspólnicy, deklaracje, reguły pocztowe i notatki są odczytywane przy otwieraniu
+odpowiednich zakładek. Okno ponownie wykorzystuje już pobrane informacje o
+kontaktach i wspólnikach. Pierwszy odczyt poczty zawiera nadawców i foldery
+wybranego konta. Przy zmianie konta nadawcy i foldery pobierają się razem.
+
+W teście 1000 syntetycznych firm na lokalnym HTTPS i PostgreSQL 17 otwarcie
+wszystkich kart trwało 241,9 s przed zmianą i 21,9–25,1 s po zmianie. Liczba
+żądań na otwarcie spadła z 28 do 1. W próbce 30 kart przejście przez wszystkie
+zakładki zajęło 8,15 s przed zmianą i 1,93 s po zmianie, z 6 żądaniami na kartę.
+Środowisko Linux miało limit 2 vCPU i 8 GiB pamięci. Pomiar obejmował tworzenie
+interfejsu i dostarczenie danych. Opóźnienia między VM należy zmierzyć osobno.
+
+Worker z funkcją `invoice_selection` udostępnia zbiorczy odczyt wybranych
+faktur przed wystawieniem, wysyłką do KSeF, wysyłką PDF i eksportem. Starszy
+worker obsługuje te akcje przez dotychczasowe odczyty pojedynczych faktur.
+Eksport Saldeo pobiera dane firm jednym zapytaniem PostgreSQL.
+
+## Dalsze pomiary PostgreSQL i Enovy
+
+W logu workera wpis `enova_source_read` podaje osobno czas otwarcia połączenia
+ODBC i czas odczytu z SQL Server. Wpis dla operacji dłuższych niż 250 ms ma
+poziom INFO. Krótsze odczyty są dostępne przy poziomie DEBUG.
+
+W PostgreSQL `pg_stat_statements` pozwala ustalić liczbę wywołań i łączny czas
+zapytań. Analiza planu najdroższych odczytów za pomocą `EXPLAIN (ANALYZE, BUFFERS)`
+na kopii danych pomaga dobrać indeksy do faktycznych filtrów. W dalszym rozwoju
+warto rozważyć wyodrębnienie historii i kolejki zapisanych dziś pod kluczami
+tekstowymi w `app_settings`. Kolumny firmy, miesiąca, źródła i stanu umożliwią
+indeksowanie zakresów oraz statusów bez przeglądania dokumentów JSON.
+
+## Import i lista rozliczeń MT940
+
+W trybie HTTPS klient odczytuje wskazany plik i wysyła go na serwer workera.
+Worker rozpoznaje transakcje, a PostgreSQL zapisuje je zbiorczo. Otwieranie
+i odświeżanie listy rozliczeń pobiera dane w tle i buduje podpowiedzi na stanowisku.
+
+W logu klienta `mt940_import_client` podaje łączny czas od rozpoczęcia importu
+pliku do odpowiedzi. W logu workera `mt940_import_postgres` podaje liczbę operacji,
+czas odczytu i parsowania pliku (`read_parse_s`) oraz czas połączenia i zapisu
+w PostgreSQL (`postgres_s`). Zestaw wpisy z tej samej próby według czasu zapisu.

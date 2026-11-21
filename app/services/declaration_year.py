@@ -4,10 +4,11 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.db.dao_conn import get_conn
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.import_audit import log_import
 from app.companies.checking_obligations import add_imported
 from app.integrations.enova.checking import validate_declarations,CheckingBusy
-from app.integrations.enova.document_counts import fetch_counts,normalize_nip
+from app.integrations.enova.document_counts import fetch_counts,normalize_nip,sources_by_nip
 from app.integrations.enova.jpk import save_jpk, validate_jpk
 from app.services.worker_activity import record
 
@@ -31,13 +32,10 @@ def read_enova(config, source, company_id, months):
         declarations, jpk = fetch_enova(config, source, months)
         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
         for month in months:
-            key = f'enova_checking_{company_id}_{month}'
-            row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE',(key,)).fetchone()
-            snapshot = json.loads(row[0]) if row else {}
+            snapshot = read_snapshot(conn, 'enova_checking', company_id, month, lock=True) or {}
             snapshot.update(declarations=declarations[month],declarations_imported_at=stamp,database=source['database'])
             snapshot.setdefault('imported_at',stamp)
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                         'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',(key,json.dumps(snapshot)))
+            save_snapshot(conn, 'enova_checking', company_id, month, snapshot)
             add_imported(conn,company_id,month,declarations[month],'enova')
             if jpk is not None:
                 save_jpk(conn, company_id, month, {**jpk[month], 'imported_at': stamp, 'database': source['database']})
@@ -98,6 +96,7 @@ def run(value, stop):
     config,config_error = None,None
     try:
         config = load_connection()
+        indexed_sources = sources_by_nip(config['sources'])
     except Exception as error:
         config_error = error
     for index,company in enumerate(companies):
@@ -110,7 +109,7 @@ def run(value, stop):
         try:
             if config_error is not None:
                 raise config_error
-            sources = [s for s in config['sources'] if normalize_nip(s['nip'])==normalize_nip(company['nip'])]
+            sources = indexed_sources.get(normalize_nip(company['nip']), [])
             if len(sources)!=1:
                 raise ValueError('Brak jednoznacznego powiązania firmy z bazą Enovy.')
             results.append(read_enova(config,sources[0],company['id'],months))

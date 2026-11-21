@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import traceback
 from decimal import Decimal, DecimalException
+from time import perf_counter
 
 from PyQt6.QtCore import QDate, QObject, QSettings, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
@@ -16,19 +17,15 @@ from PyQt6.QtWidgets import (
 
 from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
-    list_unsettled_transfers, record_manual_payment, record_cash_payment, suggested_invoice_ids, delete_bank_transaction,
-    invoice_choices_for_transaction, match_invoice_contractor, match_invoice_contractors,
-    invoice_contractor_key,
-    bank_transfer_block_reason, apply_invoice_correction,
+    list_unsettled_transfers, record_manual_payment, record_cash_payment, delete_bank_transaction,
+    match_invoice_contractors, contractor_key, InvoiceSuggestionIndex, transfer_block_reason,
+    apply_invoice_correction,
 )
+from app.remote.state import client
+from app.utils.background import TaskRunner
 from app.utils.view_state import ItemViewState
 
 logger = logging.getLogger(__name__)
-
-
-def _contractor_data(invoice: dict) -> str:
-    kind, value = invoice_contractor_key(invoice)
-    return f"{kind}:{value}"
 
 
 def money_text(value) -> str:
@@ -45,6 +42,18 @@ def _payment_amount(text: str) -> Decimal:
         raise PaymentError("Nieprawidłowa kwota płatności.") from exc
 
 
+def _read_bank_review(actor_id, include_all, limit):
+    invoices = list_invoice_choices(actor_id)
+    transfers = list_unsettled_transfers(actor_id, include_all=include_all, limit=limit)
+    summary = bank_import_summary(actor_id)
+    try:
+        companies = list_company_choices(actor_id)
+    except Exception:
+        logger.exception("Nie udało się wczytać listy firm do rozliczeń")
+        companies = []
+    return invoices, transfers, summary, companies, match_invoice_contractors(transfers, invoices)
+
+
 class Mt940ImportWorker(QObject):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str, str)
@@ -56,6 +65,8 @@ class Mt940ImportWorker(QObject):
         self.encoding = encoding
 
     def run(self):
+        started = perf_counter()
+        remote = client() is not None
         try:
             report = import_mt940_file(
                 self.path,
@@ -72,6 +83,8 @@ class Mt940ImportWorker(QObject):
             )
         else:
             self.finished.emit(report)
+        finally:
+            logger.info('mt940_import_client duration_s=%.3f remote=%s', perf_counter() - started, remote)
 
 
 class InvoiceChoiceCombo(QComboBox):
@@ -101,11 +114,16 @@ class BankPaymentReview(QDialog):
         self.companies = []
         self.transactions = []
         self._matches = {}
-        self._invoices_by_contractor = {}
+        self._choice_groups = {}
+        self._choice_ids = {}
+        self._suggestions = InvoiceSuggestionIndex([])
+        self._invoices_by_id = {}
         self._bank_limit = 100
         self._import_thread = None
         self._import_worker = None
         self._import_in_progress = False
+        self._bank_reads = TaskRunner(self)
+        self.finished.connect(self._bank_reads.invalidate)
         self.setWindowTitle("Uzgadnianie przelewów ING MT940 z fakturami")
         self.resize(1600, 1000)
         layout = QVBoxLayout(self)
@@ -289,22 +307,32 @@ class BankPaymentReview(QDialog):
                 "Poczekaj na zakończenie importu MT940.",
             )
             return
+        actor_id, include_all, limit = self.actor_id, self.all_imports.isChecked(), self._bank_limit
+        if client() is not None:
+            self.data_status.setText("Odczytuję operacje bankowe i faktury…")
+            self._bank_reads.submit(
+                lambda: _read_bank_review(actor_id, include_all, limit), self._render_bank_review,
+                self._bank_read_failed, key=(actor_id, include_all, limit),
+            )
+            return
         try:
-            invoices = list_invoice_choices(self.actor_id)
-            transactions = list_unsettled_transfers(self.actor_id, include_all=self.all_imports.isChecked(), limit=self._bank_limit)
-            summary = bank_import_summary(self.actor_id)
-            try:
-                self.companies = list_company_choices(self.actor_id)
-            except Exception:
-                logger.exception("Nie udało się wczytać listy firm do rozliczeń")
-                self.companies = []
-        except (PaymentError, PermissionError) as exc:
-            QMessageBox.warning(self, "Rozliczenie", str(exc))
+            snapshot = _read_bank_review(actor_id, include_all, limit)
+        except Exception as error:
+            self._bank_read_failed(error)
             return
-        except Exception:
-            logger.exception("Błąd odświeżania rozliczeń bankowych")
+        self._render_bank_review(snapshot)
+
+    def _bank_read_failed(self, error):
+        self.data_status.setText("Nie udało się odczytać rozliczeń bankowych.")
+        if isinstance(error, (PaymentError, PermissionError)):
+            QMessageBox.warning(self, "Rozliczenie", str(error))
+        else:
+            logger.error("Błąd odświeżania rozliczeń bankowych", exc_info=error)
             QMessageBox.warning(self, "Rozliczenie", "Nie udało się odczytać rozliczeń. Szczegóły w logach.")
-            return
+
+    def _render_bank_review(self, snapshot):
+        invoices, transactions, summary, companies, self._matches = snapshot
+        self.companies = companies
         from app.config import get_database
         self.data_status.setText(
             f"Wspólna baza: {get_database()} · schemat: {summary['schema']}. "
@@ -315,36 +343,38 @@ class BankPaymentReview(QDialog):
         saved_choices = self._snapshot_choices()
         state = ItemViewState(self.table, lambda index: index.data()) if self.table.rowCount() else None
         self.invoices, self.transactions = invoices, transactions
-        self._invoices_by_contractor = {}
+        self._invoices_by_id = {invoice["id"]: invoice for invoice in invoices}
+        self._choice_groups = {}
         for invoice in invoices:
-            self._invoices_by_contractor.setdefault(
-                invoice_contractor_key(invoice), []
-            ).append(invoice)
-        self._matches = match_invoice_contractors(transactions, invoices)
+            refund = invoice.get('rodzaj') == 'korekta' and Decimal(str(invoice.get('kwota_brutto', 0))) < 0
+            self._choice_groups.setdefault((refund, None), []).append(invoice['id'])
+            self._choice_groups.setdefault((refund, contractor_key(invoice)), []).append(invoice['id'])
+        self._choice_ids = {scope: set(invoice_ids) for scope, invoice_ids in self._choice_groups.items()}
+        self._suggestions = InvoiceSuggestionIndex(invoices)
         old_model = getattr(self, '_contractor_model', None)
         self._contractor_model = QStandardItemModel(self)
         first = QStandardItem('Wszyscy kontrahenci')
         self._contractor_model.appendRow(first)
-        seen = set()
+        contractor_rows = {}
         for invoice in sorted(invoices, key=lambda item: str(item.get('buyer') or '').casefold()):
-            key = invoice_contractor_key(invoice)
-            if key not in seen:
-                seen.add(key)
+            kind, value = contractor_key(invoice)
+            key = f'{kind}:{value}'
+            if key not in contractor_rows:
                 item = QStandardItem(invoice.get('buyer') or '(bez nazwy)')
-                item.setData(_contractor_data(invoice), Qt.ItemDataRole.UserRole)
+                item.setData(key, Qt.ItemDataRole.UserRole)
+                contractor_rows[key] = self._contractor_model.rowCount()
                 self._contractor_model.appendRow(item)
         for company in self.companies:
-            key = (company.get('kind', 'firma'), company['id'])
-            if key not in seen:
-                seen.add(key)
+            key = f"{company.get('kind', 'firma')}:{company['id']}"
+            if key not in contractor_rows:
                 item = QStandardItem(company['buyer'])
-                item.setData(f'{key[0]}:{key[1]}', Qt.ItemDataRole.UserRole)
+                item.setData(key, Qt.ItemDataRole.UserRole)
+                contractor_rows[key] = self._contractor_model.rowCount()
                 self._contractor_model.appendRow(item)
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
-        for entry in self.transactions:
-            idx = self.table.rowCount()
-            self.table.insertRow(idx)
+        self.table.setRowCount(len(self.transactions))
+        for idx, entry in enumerate(self.transactions):
             values = (
                 entry["id"], entry["data_operacji"],
                 f"{money_text(entry['kwota'])} / {money_text(entry['remaining'])}",
@@ -366,7 +396,7 @@ class BankPaymentReview(QDialog):
             contractor.setModel(self._contractor_model)
             if match.get("confident"):
                 kind, value = match["company_key"]
-                contractor.setCurrentIndex(max(0, contractor.findData(f"{kind}:{value}")))
+                contractor.setCurrentIndex(contractor_rows.get(f'{kind}:{value}', 0))
             else:
                 contractor.setCurrentText(entry.get("kontrahent") or "Wszyscy kontrahenci")
             completer = contractor.completer()
@@ -402,7 +432,7 @@ class BankPaymentReview(QDialog):
             choices.currentIndexChanged.connect(lambda _index, row=idx: self._invoice_choice_changed(row))
             mode.currentIndexChanged.connect(lambda _index, row=idx: self._mode_changed(row))
             amount.textEdited.connect(lambda _text, row=idx: self.table.setCurrentCell(row, self.COL_SETTLEMENT))
-            reason = bank_transfer_block_reason(entry)
+            reason = transfer_block_reason(entry)
             if reason:
                 choices.blockSignals(True)
                 choices.clear()
@@ -454,7 +484,8 @@ class BankPaymentReview(QDialog):
             contractor.setCurrentIndex(index)
         self.table.cellWidget(row, self.COL_FILTER).setChecked(saved["override"])
         self._populate_invoice_choices(row)
-        if invoice_id is None or not any(item["id"] == invoice_id for item in self.invoices):
+        invoice = self._invoices_by_id.get(invoice_id)
+        if invoice is None:
             return
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         index = combo.findData(invoice_id)
@@ -464,7 +495,6 @@ class BankPaymentReview(QDialog):
         self._populate_modes(row)
         mode = self.table.cellWidget(row, self.COL_MODE)
         mode.setCurrentIndex(max(0, mode.findData(saved.get('mode'))))
-        invoice = next(item for item in self.invoices if item["id"] == invoice_id)
         remaining = Decimal(str(self.transactions[row]["remaining"]))
         try:
             wanted = Decimal(saved["amount"].replace(",", "."))
@@ -477,35 +507,36 @@ class BankPaymentReview(QDialog):
         entry = self.transactions[row]
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         selected = combo.currentData()
-        contractor_key = self.table.cellWidget(row, self.COL_CONTRACTOR).currentData()
+        contractor_selection = self.table.cellWidget(row, self.COL_CONTRACTOR).currentData()
         if self.table.cellWidget(row, self.COL_FILTER).isChecked():
-            invoices = self.invoices
-        elif contractor_key is not None:
-            kind, value = contractor_key.split(":", 1)
+            selected_key = None
+        elif contractor_selection is not None:
+            kind, value = contractor_selection.split(":", 1)
             try:
                 value = int(value)
             except ValueError:
                 pass
-            invoices = self._invoices_by_contractor.get((kind, value), [])
+            selected_key = (kind, value)
         else:
-            match = self._matches.get(int(entry["id"]), {})
-            invoices = self._invoices_by_contractor.get(match.get("company_key"), self.invoices)
+            selected_key = self._matches.get(int(entry["id"]), {}).get('company_key')
         refund = Decimal(str(entry['kwota'])) < 0
-        invoices = [item for item in invoices if (item.get('rodzaj') == 'korekta'
-                    and Decimal(str(item.get('kwota_brutto', 0))) < 0) == refund]
-        suggestions = suggested_invoice_ids(entry, invoices)
-        by_id = {invoice["id"]: invoice for invoice in invoices}
-        ordering = suggestions + [invoice["id"] for invoice in invoices if invoice["id"] not in suggestions]
-        deferred = not full and len(ordering) > 50
+        scope = (refund, selected_key)
+        invoice_ids = self._choice_groups.get(scope, ())
+        allowed = self._choice_ids.get(scope, ())
+        suggestions = self._suggestions.rank(entry, allowed)
+        suggested = set(suggestions)
+        deferred = not full and len(invoice_ids) > 50
         if deferred:
-            ordering = list(dict.fromkeys(suggestions + ([selected] if selected in by_id else [])))
+            ordering = suggestions + ([selected] if selected in allowed and selected not in suggested else [])
+        else:
+            ordering = suggestions + [invoice_id for invoice_id in invoice_ids if invoice_id not in suggested]
         combo.setProperty('deferred_choices', deferred)
         combo.blockSignals(True)
         combo.clear()
-        combo.addItem(f'— Rozwiń / wyszukaj fakturę ({len(invoices)}) —' if deferred else '— Wybierz fakturę (wymagane potwierdzenie) —', None)
+        combo.addItem(f'— Rozwiń / wyszukaj fakturę ({len(invoice_ids)}) —' if deferred else '— Wybierz fakturę (wymagane potwierdzenie) —', None)
         for invoice_id in ordering:
-            invoice = by_id[invoice_id]
-            prefix = "★ " if invoice_id in suggestions else ""
+            invoice = self._invoices_by_id[invoice_id]
+            prefix = "★ " if invoice_id in suggested else ""
             combo.addItem(
                 f"{prefix}{invoice['numer'] or '(bez numeru)'} — {invoice['buyer']} — saldo {money_text(invoice['balance'])} zł"
                 + ('; dostępna wpłata ręczna' if invoice.get('manual_payments') else ''),
@@ -519,7 +550,7 @@ class BankPaymentReview(QDialog):
         mode = self.table.cellWidget(row, self.COL_MODE)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
         old = mode.currentData() if mode.property('invoice_id') == invoice_id else None
-        invoice = next((item for item in self.invoices if item['id'] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         mode.blockSignals(True)
         mode.clear()
         if invoice is None or Decimal(str(invoice['balance'])) > 0:
@@ -547,7 +578,7 @@ class BankPaymentReview(QDialog):
     def _mode_changed(self, row):
         self.table.setCurrentCell(row, self.COL_MODE)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
-        invoice = next((item for item in self.invoices if item['id'] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         if invoice is not None:
             self.table.cellWidget(row, self.COL_SETTLEMENT).setText(money_text(
                 min(Decimal(str(self.transactions[row]['remaining'])), self._mode_limit(row, invoice))))
@@ -578,7 +609,7 @@ class BankPaymentReview(QDialog):
         self.table.setCurrentCell(row, self.COL_INVOICE)
         self.table.cellWidget(row, self.COL_INVOICE).setProperty("auto_selected", None)
         invoice_id = self.table.cellWidget(row, self.COL_INVOICE).currentData()
-        invoice = next((item for item in self.invoices if item["id"] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         if invoice is not None:
             self._populate_modes(row)
             amount = min(Decimal(str(self.transactions[row]["remaining"])), self._mode_limit(row, invoice))
@@ -589,7 +620,7 @@ class BankPaymentReview(QDialog):
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         if combo.currentData() is not None or combo.count() < 2 or not combo.itemText(1).startswith("★"):
             return
-        invoice = next((item for item in self.invoices if item["id"] == combo.itemData(1)), None)
+        invoice = self._invoices_by_id.get(combo.itemData(1))
         if invoice is None:
             return
         combo.setCurrentIndex(1)
@@ -610,13 +641,13 @@ class BankPaymentReview(QDialog):
         if invoice_id is None:
             QMessageBox.warning(self, "Rozliczenie", "Wybierz konkretną fakturę.")
             return
-        invoice = next((i for i in self.invoices if i["id"] == invoice_id), None)
+        invoice = self._invoices_by_id.get(invoice_id)
         if invoice is None:
             QMessageBox.warning(self, "Rozliczenie", "Faktura nie jest już dostępna. Odśwież listę.")
             return
         try:
             amount = _payment_amount(self.table.cellWidget(selected, self.COL_SETTLEMENT).text().strip())
-            reason = bank_transfer_block_reason(transfer)
+            reason = transfer_block_reason(transfer)
             if reason:
                 raise PaymentError(reason)
             if amount > min(Decimal(str(transfer["remaining"])), self._mode_limit(selected, invoice)):
@@ -677,8 +708,8 @@ class BankPaymentReview(QDialog):
                 if invoice is None:
                     raise PaymentError("Faktura nie jest już dostępna. Odśwież listę.")
                 amount = _payment_amount(self.table.cellWidget(row, self.COL_SETTLEMENT).text().strip())
-                if bank_transfer_block_reason(transfer):
-                    raise PaymentError(bank_transfer_block_reason(transfer))
+                if reason := transfer_block_reason(transfer):
+                    raise PaymentError(reason)
                 if amount > Decimal(str(transfer["remaining"])):
                     raise PaymentError(f"Kwota przekracza saldo przelewu #{transfer['id']}.")
                 manual_id = self.table.cellWidget(row, self.COL_MODE).currentData()
@@ -742,7 +773,7 @@ class BankPaymentReview(QDialog):
             return item.get('root_id') or item.get('korygowana_faktura_id') or item['id']
         def limit_amount():
             credit = next(item for item in credits if item['id'] == credit_choice.currentData())
-            debit = next((item for item in self.invoices if item['id'] == debit_choice.currentData()), None)
+            debit = self._invoices_by_id.get(debit_choice.currentData())
             amount.setText(money_text(min(Decimal(str(credit['balance'])), Decimal(str(debit['balance']))) if debit else '0.00'))
         def populate():
             credit = next(item for item in credits if item['id'] == credit_choice.currentData())
@@ -750,7 +781,7 @@ class BankPaymentReview(QDialog):
             debit_choice.clear()
             for item in self.invoices:
                 if (Decimal(str(item.get('kwota_brutto', item['balance']))) > 0 and Decimal(str(item['balance'])) > 0
-                        and family(item) == family(credit) and invoice_contractor_key(item) == invoice_contractor_key(credit)):
+                        and family(item) == family(credit) and contractor_key(item) == contractor_key(credit)):
                     debit_choice.addItem(f'{item["numer"]} — pozostało {money_text(item["balance"])} zł', item['id'])
             debit_choice.blockSignals(False)
             limit_amount()

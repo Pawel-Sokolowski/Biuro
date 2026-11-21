@@ -49,7 +49,9 @@ class BankReconciliationTests(DbTestCase):
         self.assertEqual(payments.get_invoice_payment_summary(invoice, 1)['paid'], Decimal('123'))
         self.assertEqual(self.remaining(transfer), Decimal('110'))
         correction = self.invoice('110', original=invoice)
-        self.assertIn(correction, {row['id'] for row in payments.list_invoice_choices(1)})
+        choices = {row['id']: row for row in payments.list_invoice_choices(1)}
+        self.assertNotIn(invoice, choices)
+        self.assertEqual(choices[correction]['root_id'], invoice)
         payments.confirm_bank_payment(transfer, correction, '110', 1)
         self.assertEqual(self.remaining(transfer), 0)
         self.assertNotIn(transfer,{row['id'] for row in payments.list_unsettled_transfers(1)})

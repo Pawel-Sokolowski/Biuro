@@ -23,6 +23,22 @@ i schemat, bez loginu/hasła. Sam wspólny adres serwera nie oznacza tej samej b
 `worker.env` jest konfiguracją PostgreSQL/klucza konta Windows; nie zastępuje
 połączeń Enovy/Płatnika zapisanych w bazie Biuro.
 
+## PostgreSQL na osobnej VM
+
+W nowej konfiguracji workera domyślnym trybem jest `verify-full`. Użyj nazwy
+DNS zgodnej z certyfikatem PostgreSQL i wskaż plik PEM urzędu CA w
+polu **Plik CA PostgreSQL** na VM workera. Puste pole korzysta z domyślnego
+magazynu libpq. Dostęp do pliku musi mieć konto Windows, na którym działa
+worker. Sprawdź połączenie przed zapisaniem ustawień.
+
+Istniejące połączenia mogą używać `prefer` lub `require`. `prefer` dopuszcza
+połączenie bez TLS, a `verify-full` weryfikuje urząd CA i nazwę serwera. Przy
+wdrożeniu TLS administrator PostgreSQL ustawia certyfikat i regułę `hostssl`
+dla VM workera oraz dopuszcza wyłącznie potrzebny ruch z tej VM. Certyfikat
+HTTPS klienta i certyfikat PostgreSQL mogą pochodzić z tego samego urzędu CA.
+
+[Kopia i odzyskanie bazy](database-recovery.md)
+
 W obu formularzach SQL można wpisać limit od **30 do 1200 sekund**. Domyślne
 120 sekund dotyczy pojedynczego zapytania, nie całej operacji.
 W Enovie ten sam limit obejmuje wyszukiwanie baz i odczyt dokumentów.
@@ -63,15 +79,9 @@ widok `DokEwidencja`. VAT nie jest przełącznikiem dostępu do dokumentów.
 Brak wierszy miesięcy nie oznacza zerowej liczby dokumentów. Pusty wynik zapytania
 wbudowanego jest dodatkowo sprawdzany pod kątem NIP-u właściciela w Enovie.
 
-Pola **Deklaracje i UPO**, **Dokumenty kadrowe**, **Umowy/BHP** i **JPK** to opcjonalne
-adaptery w plikach **`.sql`**, z zapytaniami zgodnymi z kontraktem opisanym w
-[instrukcji Enovy](enova/README.md). Nie są to pliki `.ps1`/`.cmd` instalatora.
-Instalacja zawiera gotowe zapytania do dokumentów księgowych, list płac i wypłat.
-Worker wybiera je automatycznie, również po aktualizacji istniejących ustawień.
-Nie trzeba kopiować ani wskazywać plików SQL. Puste pole **Dokumenty kadrowe**
-oznacza adapter wbudowany; opcjonalna ścieżka zastępuje go własnym zapytaniem.
-Trzy pozostałe puste pola oznaczają brak danego adaptera. Deklaracje/UPO i terminy
-nadal wymagają potwierdzonego mapowania; pomaga `docs/enova/profile-declarations.sql`.
+Pola **Deklaracje i UPO**, **Dokumenty kadrowe**, **Umowy/BHP** i **JPK** pozwalają
+wskazać własne zapytania SQL. Przy pustych polach worker korzysta z zapytań
+dołączonych przez instalator. Kontrakty zapytań opisuje [instrukcja Enovy](enova/README.md).
 Plik wskazany własną ścieżką musi znajdować się na serwerze workera, najlepiej
 poza katalogiem instalacyjnym (aby aktualizacja go nie nadpisała).
 Eksport struktury Enovy daje metadane do

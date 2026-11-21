@@ -49,6 +49,14 @@ class ShippedEnovaSqlTests(unittest.TestCase):
             CREATE TABLE dbo.DefListPlac (ID int PRIMARY KEY, Symbol nvarchar(64));
             CREATE TABLE dbo.ListyPlac (ID int PRIMARY KEY, Data datetime, Definicja int);
             CREATE TABLE dbo.Wyplaty (ID int PRIMARY KEY, Data datetime, Definicja int, Bufor bit);
+            CREATE TABLE dbo.Pracownicy (ID int PRIMARY KEY, Imie nvarchar(32), Nazwisko nvarchar(64));
+            CREATE TABLE dbo.PracHistorie (ID int PRIMARY KEY, Pracownik int, AktualnoscFrom date,
+                AktualnoscTo date, EtatOkresFrom date, EtatOkresTo date);
+            CREATE TABLE dbo.Umowy (ID int PRIMARY KEY, Pracownik int, OkresFrom date, OkresTo date, Anulowana bit);
+            CREATE TABLE dbo.BadaniaLekarskie (ID int PRIMARY KEY, Pracownik int, Definicja int, Data date,
+                Termin date, WazneDo date, Anulowany bit);
+            CREATE TABLE dbo.SzkoleniaBHP (ID int PRIMARY KEY, Pracownik int, Definicja int, Data date,
+                Termin date, Anulowany bit);
             CREATE USER import_reader WITHOUT LOGIN;
             GRANT SELECT ON SCHEMA::dbo TO import_reader;
         ''')
@@ -66,7 +74,8 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         self.reader.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=NULL")
         for table in ('OddzialyFirmy', 'HstDanychFirmy', 'DefDokumentow', 'Deklaracje', 'EDeklaracje', 'ETransmisje',
                       'JednolitePK', 'DefListPlac', 'ListyPlac', 'Wyplaty', 'Dziennik', 'DokEwidencja',
-                      'DokumentyST', 'RaportyESP', 'Zaplaty'):
+                      'DokumentyST', 'RaportyESP', 'Zaplaty', 'Pracownicy', 'PracHistorie', 'Umowy',
+                      'BadaniaLekarskie', 'SzkoleniaBHP'):
             self.writer.execute('DELETE FROM dbo.' + table)
         self.writer.execute("INSERT INTO dbo.OddzialyFirmy VALUES (N'999-888-77-66')")
         self.writer.execute("INSERT INTO dbo.HstDanychFirmy VALUES ('2000-01-01',N'PL 111-222-33-44')")
@@ -283,3 +292,30 @@ class ShippedEnovaSqlTests(unittest.TestCase):
         import pyodbc
         with self.assertRaises(pyodbc.Error):
             self.reader.execute('DELETE FROM dbo.JednolitePK')
+
+    def test_hr_import_reads_active_staff_and_current_medical_and_training_terms(self):
+        from app.integrations.enova.hr_events import validate_events
+        self.writer.execute("""
+            INSERT INTO Pracownicy VALUES (1,N'Anna',N'Test'),(2,N'Jan',N'Test'),(3,N'Dawny',N'Test');
+            INSERT INTO PracHistorie VALUES
+                (1,1,'2024-01-01','2026-10-31','2024-01-01','2026-10-31'),
+                (2,1,'2026-11-01','9999-12-31','2024-01-01','9999-12-31'),
+                (3,3,'2025-01-01','9999-12-31','2025-01-01','2026-10-30');
+            INSERT INTO Umowy VALUES (1,2,'2026-10-01','2026-11-18',0),(2,3,'2026-10-01','2026-11-18',1);
+            INSERT INTO BadaniaLekarskie VALUES
+                (1,1,1,'2025-01-01','2025-01-01','2026-01-01',0),
+                (2,1,1,'2026-03-15','2026-03-15','2026-10-31',0),
+                (3,3,1,'2026-03-15','2026-03-15','2026-10-31',0);
+            INSERT INTO SzkoleniaBHP VALUES
+                (1,1,1,'2026-03-15','2026-03-15',0),
+                (2,1,1,NULL,'2026-10-30',0),
+                (3,2,1,NULL,'2026-11-10',1),
+                (4,2,1,NULL,'2027-02-01',0);
+        """)
+        self.reader.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=?", '1112223344')
+        events = validate_events(self.query('hr_events.sql', start=date(2026,11,7)), {'nip': '1112223344'})
+        self.assertEqual({e['employee_id'] for e in events}, {'1', '2'})
+        self.assertEqual({e['event_id']:e['due_date'] for e in events}, {
+            'pracownik:1': None, 'pracownik:2': None, 'etat:2': None, 'cywilna:1': '2026-11-18',
+            'badanie:2': '2026-10-31', 'bhp:2': '2026-10-30',
+        })

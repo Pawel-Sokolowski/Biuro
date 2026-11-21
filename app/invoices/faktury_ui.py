@@ -22,7 +22,8 @@ from app.db.dao_invoices import (
     update_invoice_draft,
     validate_invoice_extra_services_ready,
 )
-from app.invoices.positions import normalize_position, totals
+from app.invoices.positions import decode_positions, normalize_position, totals
+from app.remote.view_reads import invoice_selection
 from app.utils.background import TaskRunner, CommandRunner
 from app.utils.table_records import TableRecord
 from app.invoices.vat_summary import VatSummary
@@ -505,8 +506,9 @@ class FakturyPage(QWidget):
         self.btn_trash.clicked.connect(self._trash_selected_issued)
         self.btn_trash_bin = QPushButton("Kosz…")
         self.btn_trash_bin.clicked.connect(self._open_trash)
+        administrator = is_administrator(self.pracownik_id)
         for button in (self.btn_trash, self.btn_trash_bin):
-            button.setVisible(is_administrator(self.pracownik_id))
+            button.setVisible(administrator)
         for button in (self.btn_view, self.btn_jpk, self.btn_correction, self.btn_delete_issued,
                        self.btn_ksef_download, self.btn_ksef_download_one, self.btn_send_ksef, self.btn_status_ksef,
                        self.btn_bank, self.btn_cash, self.btn_email_pdf, self.btn_remind_payment, self.btn_trash, self.btn_trash_bin):
@@ -929,8 +931,8 @@ class FakturyPage(QWidget):
         if not ksef_configured():
             QMessageBox.warning(self, "KSeF", "Wymagany certyfikat i klucz prywatny KSeF oraz NIP w ustawieniach.")
             return
-        invoices = [get_invoice_by_id(invoice_id) for invoice_id in ids]
-        if any(not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")) for invoice in invoices):
+        invoices = invoice_selection(ids, self.pracownik_id)
+        if len(invoices) != len(ids):
             QMessageBox.warning(self, "KSeF", "Brak dostępu do jednej z wybranych faktur.")
             return
         email_plan = None
@@ -984,8 +986,8 @@ class FakturyPage(QWidget):
         if not ids:
             QMessageBox.information(self, "Wysyłka PDF", "Zaznacz faktury przyjęte w KSeF.")
             return
-        invoices = [get_invoice_by_id(invoice_id) for invoice_id in ids]
-        if any(not invoice or not invoice.get("ksef_numer") for invoice in invoices):
+        invoices = invoice_selection(ids, self.pracownik_id)
+        if len(invoices) != len(ids) or any(not invoice.get("ksef_numer") for invoice in invoices):
             QMessageBox.warning(self, "Wysyłka PDF", "Najpierw wyślij faktury do KSeF i poczekaj na nadanie numerów.")
             return
         try:
@@ -1319,7 +1321,7 @@ class FakturyPage(QWidget):
                     values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
-                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Błąd PDF/SMTP", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
+                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Oczekuje na ponowienie PDF", "blocked_before_send":"Popraw dane wysyłki PDF", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
                     roles = {c: {Qt.ItemDataRole.TextAlignmentRole: Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter} for c in (6,7,8,9)}
                     def tooltip(column, text):
                         roles.setdefault(column, {})[Qt.ItemDataRole.ToolTipRole] = text
@@ -1680,15 +1682,13 @@ class FakturyPage(QWidget):
             QMessageBox.information(self, "Faktury", "Zaznacz faktury robocze do wystawienia.")
             return
         try:
-            for invoice_id in ids:
-                invoice = get_invoice_by_id(invoice_id)
-                if not invoice or not can_access_invoice(self.pracownik_id, invoice.get("firma_id")):
-                    raise PermissionError("Brak dostępu do faktury.")
+            invoices = invoice_selection(ids, self.pracownik_id)
+            if len(invoices) != len(ids):
+                raise PermissionError("Brak dostępu do faktury.")
         except Exception as exc:
             QMessageBox.warning(self, "Wystawianie faktur", str(exc))
             return
-        numbers = "\n".join(str((get_invoice_by_id(invoice_id) or {}).get("numer") or "(numer nadany automatycznie)")
-                            for invoice_id in ids[:20])
+        numbers = "\n".join(str(invoice.get("numer") or "(numer nadany automatycznie)") for invoice in invoices[:20])
         if len(ids) > 20:
             numbers += f"\n… i {len(ids)-20} kolejnych"
         ksef = ksef_configured()
@@ -1736,11 +1736,8 @@ class FakturyPage(QWidget):
         if not ids:
             QMessageBox.information(self, "JPK_V7M", "Zaznacz wystawione faktury do eksportu.")
             return
-        invoices = []
-        for invoice_id in ids:
-            invoice = get_invoice_by_id(invoice_id)
-            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                invoices.append(dict(invoice, positions=get_invoice_positions(invoice_id)))
+        invoices = [dict(invoice, positions=decode_positions(invoice.get("pozycje_json")))
+                    for invoice in invoice_selection(ids, self.pracownik_id, details=True)]
         office = get_setting("jpk_kod_urzedu") or ""
         office, ok = QInputDialog.getText(self, "JPK_V7M", "Kod urzędu skarbowego (4 cyfry):", text=office)
         if not ok:
@@ -1771,21 +1768,8 @@ class FakturyPage(QWidget):
         if not ids:
             QMessageBox.information(self, "Eksport", "Zaznacz faktury do eksportu.")
             return
-        invoices = []
-        for invoice_id in ids:
-            invoice = get_invoice_by_id(invoice_id)
-            if invoice and can_access_invoice(self.pracownik_id, invoice["firma_id"]):
-                company_name = self._company_name(invoice["firma_id"]) if invoice["firma_id"] else ""
-                invoices.append(dict(
-                    invoice,
-                    firma_nazwa=company_name or invoice.get("nabywca_pelna") or invoice.get("nabywca_skrocona") or "",
-                    firma_nip=invoice.get("nabywca_nip") or "",
-                    firma_regon=invoice.get("nabywca_regon") or "",
-                    firma_miasto=invoice.get("nabywca_miasto") or "",
-                    firma_kod=invoice.get("nabywca_kod") or "",
-                    firma_ulica=invoice.get("nabywca_adres") or "",
-                    firma_email=invoice.get("nabywca_email") or "",
-                ))
+        invoices = [dict(invoice, firma_nazwa=invoice.get("nabywca_pelna") or invoice.get("nabywca_skrocona") or "")
+                    for invoice in invoice_selection(ids, self.pracownik_id, details=True)]
         if not invoices:
             QMessageBox.warning(self, "Eksport", "Brak faktur dostępnych do eksportu.")
             return
@@ -1818,12 +1802,6 @@ class FakturyPage(QWidget):
             logger.exception("Błąd eksportu faktur")
             QMessageBox.critical(self, "Błąd", f"Nie udało się wyeksportować faktur: {exc}")
         self.refresh_async()
-
-    @staticmethod
-    def _company_name(firma_id):
-        from app.db.dao_companies import get_company
-        company = get_company(firma_id)
-        return company['nazwa'] if company else ''
 
     # ---------------- faktury wystawione ----------------
     def _view_selected_issued(self):

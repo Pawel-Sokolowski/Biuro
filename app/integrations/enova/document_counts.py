@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+from app.db.checking_storage import read_snapshot, save_snapshot
 import os
 from pathlib import Path
 import re
@@ -70,6 +71,19 @@ def normalize_nip(value):
     if not re.fullmatch(r'[0-9]{10}', text):
         raise ValueError('NIP musi zawierać 10 cyfr.')
     return text
+
+
+def sources_by_nip(sources):
+    """Index mappings without collapsing duplicate matches."""
+    indexed = {}
+    for source in sources:
+        try:
+            nip = normalize_nip(source.get('nip'))
+        except ValueError:
+            # Configuration saves reject these; old data can contain isolated invalid mappings.
+            continue
+        indexed.setdefault(nip, []).append(source)
+    return indexed
 
 
 def whole_count(value):
@@ -251,20 +265,24 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
     if not query.strip():
         raise ValueError('Plik zapytania jest pusty.')
     connection_string = sql_connection_string(config, source['database'], user, password)
+    from time import perf_counter
+    started = perf_counter()
     connection = pyodbc.connect(connection_string, timeout=15, attrs_before={101: 1})
+    connected = perf_counter()
     try:
         cursor = connection.cursor()
         from app.integrations.enova.discovery import query_timeout
         connection.timeout = query_timeout(config)
         bundled = query_path.resolve().parent == bundled_directory().resolve() and query_path.name in (
-            DOCUMENTS_QUERY, 'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql')
+            DOCUMENTS_QUERY, 'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql','hr_events.sql')
         if bundled:
             _bind_company_identity(cursor,source)
         if bundled and query_path.name == DOCUMENTS_QUERY:
             cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_accounting_type', @value=?", source['accounting_type'])
             cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_vat_czynny', @value=?", source.get('vat_czynny'))
         # Exactly two positional date parameters: inclusive start, exclusive end.
-        cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
+        start = source['hr_as_of'] if bundled and query_path.name == 'hr_events.sql' else date.fromisoformat(month_bounds(months[0])[0])
+        cursor.execute(query, start,
                        date.fromisoformat(month_bounds(months[-1])[1]))
         columns = [column[0].lower() for column in cursor.description or []]
         contracts = {
@@ -277,7 +295,7 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         required = contracts[result_kind]
         optional = ({'rodzaje', 'pozycje_kasowe', 'sprzedaz', 'zakup'} if result_kind == 'counts' else
                     {'employee_id', 'employee_name', 'source_system', 'raw_status', 'form_variant', 'created_at'} if result_kind == 'declarations' else
-                    {'document_number'} if result_kind == 'hr_events' else
+                    {'document_number', 'detail'} if result_kind == 'hr_events' else
                     {'raw_status', 'form_variant', 'sent_at', 'upo_at'} if result_kind == 'jpk' else set())
         if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
             raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))
@@ -290,12 +308,19 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
                              'mimo ustalonego powiązania firmy. Nie zapisano zer; sprawdź adapter i okres importu.')
         return [dict(zip(columns, row)) for row in rows]
     finally:
+        import logging
+        duration = perf_counter() - connected
+        logging.getLogger(__name__).log(
+            logging.INFO if duration + connected - started >= .25 else logging.DEBUG,
+            'enova_source_read kind=%s connect_s=%.3f query_s=%.3f',
+            result_kind, connected - started, duration)
         connection.close()
 
 
 def find_company(conn, nip):
-    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania, forma_dzialalnosci, status_vat, vat_czynny FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
-                        "IN (%s, %s)", (nip, 'PL' + nip)).fetchall()
+    from app.db.query_index_schema import NORMALIZED_COMPANY_NIP
+    rows = conn.execute(f"""SELECT id,nazwa,forma_opodatkowania,forma_dzialalnosci,status_vat,vat_czynny
+        FROM firmy WHERE {NORMALIZED_COMPANY_NIP} IN (%s, %s)""", (nip, 'PL' + nip)).fetchall()
     if len(rows) != 1:
         raise ValueError('NIP musi wskazywać dokładnie jedną firmę w Biuro.')
     return dict(rows[0])
@@ -345,9 +370,8 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
     for count in counts:
         previous = conn.execute('SELECT ilosc_dok FROM statusy_miesieczne WHERE firma_id=%s AND miesiac=%s FOR UPDATE',
                                 (company['id'], count.month)).fetchone()
-        key = f"enova_snapshot_{company['id']}_{count.month}"
-        old_snapshot = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
-        old_total = json.loads(old_snapshot[0]).get('total') if old_snapshot else None
+        old_snapshot = read_snapshot(conn, 'enova_snapshot', company['id'], count.month)
+        old_total = old_snapshot.get('total') if old_snapshot is not None else None
         manual_key = f"manual_document_count_{company['id']}_{count.month}"
         manual = conn.execute('SELECT 1 FROM app_settings WHERE klucz=%s', (manual_key,)).fetchone()
         provenance = conn.execute('SELECT source_name FROM monthly_document_imports WHERE firma_id=%s AND miesiac=%s',
@@ -356,8 +380,8 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
         # Legacy nonzero values and other imports belong to the user. Imported values
         # remain refreshable only while they still match our last successful write.
         protected = bool(manual or (provenance and not provenance[0].startswith('Enova: ')) or
-                         (old_snapshot and current != old_total) or
-                         (not old_snapshot and current not in (None, 0)))
+                         (old_snapshot is not None and current != old_total) or
+                         (old_snapshot is None and current not in (None, 0)))
         if protected:
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) ON CONFLICT DO NOTHING',
                          (manual_key, '1'))
@@ -374,9 +398,7 @@ def apply_counts(conn, company, source, counts, *, bank_divisor=3):
                     'report_types': count.report_types, 'total': count.total, 'bank_divisor': bank_divisor,
                     'database': source['database'], 'accounting_type': source['accounting_type'],
                     'imported_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
-        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                     (f"enova_snapshot_{company['id']}_{count.month}", json.dumps(snapshot)))
+        save_snapshot(conn, 'enova_snapshot', company['id'], count.month, snapshot)
         changes.append({'month': count.month, 'before': previous[0] if previous else None,
                         'after': current if protected else count.total, 'manual_preserved': protected, 'documents': count.documents, 'bank_transactions': count.bank_transactions})
     details = {'company_id': company['id'], 'database': source['database'],

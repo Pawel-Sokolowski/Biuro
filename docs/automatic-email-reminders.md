@@ -32,10 +32,11 @@ reguły są wyłączone. Najpierw skonfiguruj konto nadawcy w **Konto systemowe 
   firmy/kontrahenta albo jednoznaczny zapisany kontakt. Same spacje są pomijane.
   Kilka adresów można oddzielić przecinkiem albo średnikiem (maks. 10).
 
-Aplikacja sprawdza terminy co minutę, gdy jest uruchomiona. Po przerwie wysyła
-jedno najnowsze zaległe przypomnienie, bez serii wiadomości za wszystkie pominięte
-terminy. Włączenie reguły płatności obejmuje również już zaległe faktury.
-Wspólna historia w PostgreSQL zapobiega powielaniu wysyłki z kilku stanowisk.
+W instalacji HTTPS terminy sprawdza worker. Domyślny odstęp wynosi minutę.
+Po przerwie worker wybiera jedno najnowsze zaległe przypomnienie na firmę
+lub fakturę. Włączenie reguły płatności obejmuje również już zaległe faktury.
+Wspólna historia w PostgreSQL zapobiega powielaniu prób za ten sam termin.
+Worker tuż przed wysyłką ponownie sprawdza stan dokumentów albo saldo faktury.
 
 ## Wysyłka przy zamkniętej aplikacji
 
@@ -47,7 +48,8 @@ Windows dla przypomnień. Szczegóły w [konfiguracji workera](worker-configurat
 
 Historia w ustawieniach pokazuje 100 ostatnich prób. `sent` oznacza potwierdzoną
 wysyłkę SMTP, `failed` błąd, a `sending` próbę rozpoczętą (może wymagać sprawdzenia
-po przerwaniu procesu). Nie ma automatycznego ponawiania tego samego terminu po
-niejednoznacznym błędzie SMTP, aby uniknąć duplikatu. Kolejny zaplanowany termin
-nadal obowiązuje. Brak adresu lub niepoprawny adres jest pomijany i odnotowany
-w logu aplikacji. Samo zapisanie ustawień ani testy nie wysyłają wiadomości.
+po przerwaniu procesu). Po niejednoznacznym wyniku SMTP obowiązuje kolejny
+zaplanowany termin. Gdy worker otrzyma sygnał zamknięcia, kończy bieżącą próbę.
+Przed następną wysyłką sprawdzi historię po ponownym uruchomieniu. Brak
+jednoznacznego adresu trafia do logu diagnostycznego, a błędny adres jest
+logowany jako ostrzeżenie. Samo zapisanie ustawień ani testy nie wysyłają wiadomości.

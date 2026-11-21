@@ -347,7 +347,7 @@ class OfficeHttpsTests(DbTestCase):
             selected = invoice_selection([*ids, -1], 1, details=True)
         calls = request.call_args_list
         self.assertEqual(calls[0].args[0], 'operations')
-        self.assertEqual(calls[0].args[1]['operation'], 'app.remote.view_reads.invoice_selection')
+        self.assertEqual(calls[0].args[1]['operation'], 'app.db.dao_invoices.get_invoice_selection')
         self.assertTrue(all(call.args[0] == 'jobs' for call in calls[1:]))
         self.assertEqual([row['id'] for row in selected], ids)
         self.assertEqual(selected[0]['numer'], 'FV/1000')

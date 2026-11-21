@@ -24,10 +24,11 @@ def _field_options():
 
 def _mail_accounts(actor_id):
     from app.email.email_storage import get_all_email_accounts, get_email_accounts_for_employee
-    from app.remote.state import client
-    from app.security.authorization import is_administrator
+    from app.security.authorization import allowed_tabs, is_administrator
 
-    if client() is None and actor_id and not is_administrator(actor_id):
+    if actor_id and not is_administrator(actor_id):
+        if 'E-mail' not in allowed_tabs(actor_id):
+            return []
         accounts = get_email_accounts_for_employee(actor_id)
     else:
         accounts = get_all_email_accounts()

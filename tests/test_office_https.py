@@ -184,6 +184,22 @@ class OfficeHttpsTests(DbTestCase):
         self.assertFalse(target.exists())
         self.assertFalse(self.server.office_service.files.items)
 
+    def test_company_card_mail_section_preserves_mail_module_permissions(self):
+        from app.db.dao_conn import get_conn
+        employee = self.make_employee('companies@example.test', haslo='Haslo12345')
+        company = self.make_company('Kartoteka pracownika')
+        with get_conn() as conn:
+            role = conn.execute("INSERT INTO role(nazwa,zakladki) VALUES ('Kartoteka test','Klienci') RETURNING id").fetchone()[0]
+            conn.execute('UPDATE pracownicy SET rola_id=%s WHERE id=%s', (role, employee))
+            conn.execute("INSERT INTO konta_email(id,email) VALUES (10,'assigned@example.test')")
+            conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (%s,10)', (employee,))
+        self.client.login('companies@example.test', 'Haslo12345')
+        operation = 'app.companies.form_data.company_form_snapshot'
+        self.assertEqual(self.client.call(operation, (company, employee, 'mail')),
+                         {'accounts': [], 'filters': [], 'choices': {'senders': [], 'folders': []}})
+        with self.assertRaises(PermissionError):
+            self.client.call(operation, (company, employee, 'mail_choices'), {'account_id': 10})
+
     def test_bulk_campaign_history_and_idempotent_smtp_through_https(self):
         from app.db.dao_conn import get_conn
         from app.email.bulk_mail import BulkMailPlan, BulkMailSender

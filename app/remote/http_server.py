@@ -26,6 +26,7 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.connection.settimeout(20)
+        self._handled_request = False
 
     def log_message(self,*args):
         # Request headers and session tokens must never reach access logs.
@@ -45,9 +46,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def handle_one_request(self):
-        # Idle keep-alive clients must release bounded connection threads quickly.
-        self.connection.settimeout(self.server.keepalive_timeout)
+        # A new connection has a short handshake budget. An established
+        # connection may stay idle longer so the desktop can reuse its TLS session.
+        self.connection.settimeout(self.server.keepalive_timeout if self._handled_request else 5)
         super().handle_one_request()
+        self._handled_request = True
 
     def do_GET(self):
         self._answer(405,{'message':'Użyj aplikacji Biuro.'})

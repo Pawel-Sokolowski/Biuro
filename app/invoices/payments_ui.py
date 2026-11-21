@@ -62,9 +62,10 @@ def _read_bank_review(actor_id, include_all, limit, pages=1, search=''):
                 break
             page = list_invoice_choices(actor_id, offset=number * INVOICE_CHOICE_PAGE_SIZE)
             invoices.update((row['id'], row) for row in page)
-        references = (ref for ref in bank_invoice_references(transfers) if len(ref) <= 240)
-        for batch in batched(references, 1000):
-            invoices.update((row['id'], row) for row in list_invoice_choices(actor_id, references=list(batch)))
+        if len(page) == INVOICE_CHOICE_PAGE_SIZE:
+            references = (ref for ref in bank_invoice_references(transfers) if len(ref) <= 240)
+            for batch in batched(references, 1000):
+                invoices.update((row['id'], row) for row in list_invoice_choices(actor_id, references=list(batch)))
     found = list_invoice_choices(actor_id, references=[search]) if paging and search else []
     invoices.update((row['id'], row) for row in found)
     invoices = list(invoices.values())

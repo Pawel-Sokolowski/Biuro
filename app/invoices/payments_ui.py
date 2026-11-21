@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
     list_unsettled_transfers, record_manual_payment, record_cash_payment, delete_bank_transaction,
-    match_invoice_contractors, contractor_key, suggest_invoice_ids, transfer_block_reason,
+    match_invoice_contractors, contractor_key, InvoiceSuggestionIndex, transfer_block_reason,
     apply_invoice_correction,
 )
 from app.remote.state import client
@@ -114,7 +114,9 @@ class BankPaymentReview(QDialog):
         self.companies = []
         self.transactions = []
         self._matches = {}
-        self._invoices_by_contractor = {}
+        self._choice_groups = {}
+        self._choice_ids = {}
+        self._suggestions = InvoiceSuggestionIndex([])
         self._invoices_by_id = {}
         self._bank_limit = 100
         self._import_thread = None
@@ -342,36 +344,37 @@ class BankPaymentReview(QDialog):
         state = ItemViewState(self.table, lambda index: index.data()) if self.table.rowCount() else None
         self.invoices, self.transactions = invoices, transactions
         self._invoices_by_id = {invoice["id"]: invoice for invoice in invoices}
-        self._invoices_by_contractor = {}
+        self._choice_groups = {}
         for invoice in invoices:
-            self._invoices_by_contractor.setdefault(
-                contractor_key(invoice), []
-            ).append(invoice)
+            refund = invoice.get('rodzaj') == 'korekta' and Decimal(str(invoice.get('kwota_brutto', 0))) < 0
+            self._choice_groups.setdefault((refund, None), []).append(invoice['id'])
+            self._choice_groups.setdefault((refund, contractor_key(invoice)), []).append(invoice['id'])
+        self._choice_ids = {scope: set(invoice_ids) for scope, invoice_ids in self._choice_groups.items()}
+        self._suggestions = InvoiceSuggestionIndex(invoices)
         old_model = getattr(self, '_contractor_model', None)
         self._contractor_model = QStandardItemModel(self)
         first = QStandardItem('Wszyscy kontrahenci')
         self._contractor_model.appendRow(first)
-        seen = set()
+        contractor_rows = {}
         for invoice in sorted(invoices, key=lambda item: str(item.get('buyer') or '').casefold()):
-            key = contractor_key(invoice)
-            if key not in seen:
-                seen.add(key)
+            kind, value = contractor_key(invoice)
+            key = f'{kind}:{value}'
+            if key not in contractor_rows:
                 item = QStandardItem(invoice.get('buyer') or '(bez nazwy)')
-                kind, value = key
-                item.setData(f"{kind}:{value}", Qt.ItemDataRole.UserRole)
+                item.setData(key, Qt.ItemDataRole.UserRole)
+                contractor_rows[key] = self._contractor_model.rowCount()
                 self._contractor_model.appendRow(item)
         for company in self.companies:
-            key = (company.get('kind', 'firma'), company['id'])
-            if key not in seen:
-                seen.add(key)
+            key = f"{company.get('kind', 'firma')}:{company['id']}"
+            if key not in contractor_rows:
                 item = QStandardItem(company['buyer'])
-                item.setData(f'{key[0]}:{key[1]}', Qt.ItemDataRole.UserRole)
+                item.setData(key, Qt.ItemDataRole.UserRole)
+                contractor_rows[key] = self._contractor_model.rowCount()
                 self._contractor_model.appendRow(item)
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
-        for entry in self.transactions:
-            idx = self.table.rowCount()
-            self.table.insertRow(idx)
+        self.table.setRowCount(len(self.transactions))
+        for idx, entry in enumerate(self.transactions):
             values = (
                 entry["id"], entry["data_operacji"],
                 f"{money_text(entry['kwota'])} / {money_text(entry['remaining'])}",
@@ -393,7 +396,7 @@ class BankPaymentReview(QDialog):
             contractor.setModel(self._contractor_model)
             if match.get("confident"):
                 kind, value = match["company_key"]
-                contractor.setCurrentIndex(max(0, contractor.findData(f"{kind}:{value}")))
+                contractor.setCurrentIndex(contractor_rows.get(f'{kind}:{value}', 0))
             else:
                 contractor.setCurrentText(entry.get("kontrahent") or "Wszyscy kontrahenci")
             completer = contractor.completer()
@@ -481,7 +484,8 @@ class BankPaymentReview(QDialog):
             contractor.setCurrentIndex(index)
         self.table.cellWidget(row, self.COL_FILTER).setChecked(saved["override"])
         self._populate_invoice_choices(row)
-        if invoice_id is None or not any(item["id"] == invoice_id for item in self.invoices):
+        invoice = self._invoices_by_id.get(invoice_id)
+        if invoice is None:
             return
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         index = combo.findData(invoice_id)
@@ -491,7 +495,6 @@ class BankPaymentReview(QDialog):
         self._populate_modes(row)
         mode = self.table.cellWidget(row, self.COL_MODE)
         mode.setCurrentIndex(max(0, mode.findData(saved.get('mode'))))
-        invoice = next(item for item in self.invoices if item["id"] == invoice_id)
         remaining = Decimal(str(self.transactions[row]["remaining"]))
         try:
             wanted = Decimal(saved["amount"].replace(",", "."))
@@ -504,35 +507,36 @@ class BankPaymentReview(QDialog):
         entry = self.transactions[row]
         combo = self.table.cellWidget(row, self.COL_INVOICE)
         selected = combo.currentData()
-        contractor_key = self.table.cellWidget(row, self.COL_CONTRACTOR).currentData()
+        contractor_selection = self.table.cellWidget(row, self.COL_CONTRACTOR).currentData()
         if self.table.cellWidget(row, self.COL_FILTER).isChecked():
-            invoices = self.invoices
-        elif contractor_key is not None:
-            kind, value = contractor_key.split(":", 1)
+            selected_key = None
+        elif contractor_selection is not None:
+            kind, value = contractor_selection.split(":", 1)
             try:
                 value = int(value)
             except ValueError:
                 pass
-            invoices = self._invoices_by_contractor.get((kind, value), [])
+            selected_key = (kind, value)
         else:
-            match = self._matches.get(int(entry["id"]), {})
-            invoices = self._invoices_by_contractor.get(match.get("company_key"), self.invoices)
+            selected_key = self._matches.get(int(entry["id"]), {}).get('company_key')
         refund = Decimal(str(entry['kwota'])) < 0
-        invoices = [item for item in invoices if (item.get('rodzaj') == 'korekta'
-                    and Decimal(str(item.get('kwota_brutto', 0))) < 0) == refund]
-        suggestions = suggest_invoice_ids(entry, invoices)
-        by_id = {invoice["id"]: invoice for invoice in invoices}
-        ordering = suggestions + [invoice["id"] for invoice in invoices if invoice["id"] not in suggestions]
-        deferred = not full and len(ordering) > 50
+        scope = (refund, selected_key)
+        invoice_ids = self._choice_groups.get(scope, ())
+        allowed = self._choice_ids.get(scope, ())
+        suggestions = self._suggestions.rank(entry, allowed)
+        suggested = set(suggestions)
+        deferred = not full and len(invoice_ids) > 50
         if deferred:
-            ordering = list(dict.fromkeys(suggestions + ([selected] if selected in by_id else [])))
+            ordering = suggestions + ([selected] if selected in allowed and selected not in suggested else [])
+        else:
+            ordering = suggestions + [invoice_id for invoice_id in invoice_ids if invoice_id not in suggested]
         combo.setProperty('deferred_choices', deferred)
         combo.blockSignals(True)
         combo.clear()
-        combo.addItem(f'— Rozwiń / wyszukaj fakturę ({len(invoices)}) —' if deferred else '— Wybierz fakturę (wymagane potwierdzenie) —', None)
+        combo.addItem(f'— Rozwiń / wyszukaj fakturę ({len(invoice_ids)}) —' if deferred else '— Wybierz fakturę (wymagane potwierdzenie) —', None)
         for invoice_id in ordering:
-            invoice = by_id[invoice_id]
-            prefix = "★ " if invoice_id in suggestions else ""
+            invoice = self._invoices_by_id[invoice_id]
+            prefix = "★ " if invoice_id in suggested else ""
             combo.addItem(
                 f"{prefix}{invoice['numer'] or '(bez numeru)'} — {invoice['buyer']} — saldo {money_text(invoice['balance'])} zł"
                 + ('; dostępna wpłata ręczna' if invoice.get('manual_payments') else ''),

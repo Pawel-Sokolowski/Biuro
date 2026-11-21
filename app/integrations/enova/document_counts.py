@@ -318,8 +318,9 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
 
 
 def find_company(conn, nip):
-    rows = conn.execute("SELECT id, nazwa, forma_opodatkowania, forma_dzialalnosci, status_vat, vat_czynny FROM firmy WHERE regexp_replace(upper(nip), '[[:space:]-]', '', 'g') "
-                        "IN (%s, %s)", (nip, 'PL' + nip)).fetchall()
+    from app.db.query_index_schema import NORMALIZED_COMPANY_NIP
+    rows = conn.execute(f"""SELECT id,nazwa,forma_opodatkowania,forma_dzialalnosci,status_vat,vat_czynny
+        FROM firmy WHERE {NORMALIZED_COMPANY_NIP} IN (%s, %s)""", (nip, 'PL' + nip)).fetchall()
     if len(rows) != 1:
         raise ValueError('NIP musi wskazywać dokładnie jedną firmę w Biuro.')
     return dict(rows[0])

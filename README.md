@@ -26,6 +26,8 @@ Przed aktualizacją schematu zachowaj kopię PostgreSQL i klucz Biuro oraz spraw
 
 Migracja `20261121_02` przenosi historię Sprawdzania i oczekujące odczyty do indeksowanych tabel PostgreSQL. Zachowuje daty JPK i UPO, zaznaczenia deklaracji oraz szyfrowanie raportów Płatnika. Na czas tej migracji zatrzymaj usługę HTTPS i zadania workera, które korzystają ze wspólnej bazy. Po migracji uruchom zaktualizowanego workera.
 
+Migracja `20261121_03` dodaje indeksy dla kolejki MT940, rozpoznawania rachunków własnych, faktur według miesiąca i wyszukiwania firmy po znormalizowanym NIP.
+
 ## Sprawdzanie i deklaracje
 
 - **Enova365.** Zmiana etapu na **Wysłane wyniki** zleca odczyt dokumentów dla danej firmy i miesiąca. Reguły licznika zależą od KPiR, ksiąg handlowych lub ryczałtu i statusu VAT. KPiR i ryczałt mają zestawienie **Sprzedaż | Zakup | DW | Razem**. Raporty kasowe podlegają ustawionemu dzielnikowi, a LT i OT są wyłączone z licznika środków trwałych. [Reguły i konfiguracja Enova](docs/enova/README.md)

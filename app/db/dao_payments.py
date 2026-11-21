@@ -17,6 +17,7 @@ import mt940
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice, create_draft_after_payment
+from app.db.query_index_schema import BANK_RECEIPTS, NORMALIZED_BANK_ACCOUNT
 from app.security.authorization import can, is_administrator
 
 logger = logging.getLogger(__name__)
@@ -227,10 +228,21 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
         # wcześniej zaimportowanych transakcji).  Partition in one pass rather
         # than repeatedly comparing dictionaries against a second list.
         own_accounts = {_normalize_account(entry["account"]) for entry in parsed} - {""}
-        own_accounts |= {
-            _normalize_account(row[0])
-            for row in conn.execute("SELECT DISTINCT rachunek FROM bank_transakcje").fetchall()
-        } - {""}
+        candidate_accounts = {entry["contractor_account"] for entry in parsed} - own_accounts - {""}
+        if candidate_accounts:
+            # An ordered seek returns the first account at or after the candidate.
+            # The equality check below removes misses without scanning rows for each miss.
+            own_accounts.update(row[0] for row in conn.execute(f"""
+                SELECT candidate.account
+                FROM unnest(%s::text[]) AS candidate(account)
+                JOIN LATERAL (
+                    SELECT {NORMALIZED_BANK_ACCOUNT} AS account
+                    FROM bank_transakcje
+                    WHERE {NORMALIZED_BANK_ACCOUNT} >= candidate.account
+                    ORDER BY {NORMALIZED_BANK_ACCOUNT}
+                    LIMIT 1
+                ) found ON found.account = candidate.account
+            """, (sorted(candidate_accounts),)))
         records = []
         own_count = 0
         for entry in parsed:
@@ -297,7 +309,11 @@ def import_mt940_file(path: str, actor_id: int, encoding: str | None = None) -> 
                     kontrahent_nip = EXCLUDED.kontrahent_nip,
                     kontrahent_rachunek = EXCLUDED.kontrahent_rachunek,
                     opis_surowy = EXCLUDED.opis_surowy
-                WHERE NOT EXISTS (
+                WHERE (bank_transakcje.kontrahent, bank_transakcje.tytul, bank_transakcje.kontrahent_nip,
+                       bank_transakcje.kontrahent_rachunek, bank_transakcje.opis_surowy)
+                      IS DISTINCT FROM (EXCLUDED.kontrahent, EXCLUDED.tytul, EXCLUDED.kontrahent_nip,
+                                        EXCLUDED.kontrahent_rachunek, EXCLUDED.opis_surowy)
+                  AND NOT EXISTS (
                     SELECT 1 FROM faktury_platnosci p
                     WHERE p.transakcja_id = bank_transakcje.id
                 )
@@ -362,19 +378,18 @@ def list_unsettled_transfers(actor_id: int, *, include_all: bool = False, limit:
         raise PaymentError("Nieprawidłowy limit operacji.")
     conn = get_conn()
     try:
+        conditions = "" if include_all else f"WHERE {BANK_RECEIPTS} AND b.kwota - COALESCE(p.used, 0) > 0.009"
         rows = conn.execute(
-            """
+            f"""
             SELECT b.*, ABS(b.kwota) - COALESCE(p.used, 0) AS remaining
             FROM bank_transakcje b
-            LEFT JOIN (
-                SELECT transakcja_id, SUM(kwota) AS used FROM faktury_platnosci
-                WHERE transakcja_id IS NOT NULL GROUP BY transakcja_id
-            ) p ON p.transakcja_id = b.id
-            WHERE %s OR (b.kwota > 0 AND b.waluta = 'PLN' AND COALESCE(NULLIF(b.kierunek, ''), 'C') = 'C'
-              AND b.kwota - COALESCE(p.used, 0) > 0.009)
+            LEFT JOIN LATERAL (
+                SELECT SUM(kwota) AS used FROM faktury_platnosci WHERE transakcja_id=b.id
+            ) p ON true
+            {conditions}
             ORDER BY b.data_operacji DESC, b.id DESC
             LIMIT %s
-            """, (include_all, limit),
+            """, (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -396,33 +411,7 @@ def list_invoice_choices(
 
         rows = conn.execute(
             """
-            WITH RECURSIVE families(id, root_id) AS (
-                SELECT id, id FROM faktury WHERE korygowana_faktura_id IS NULL
-                UNION ALL
-                SELECT child.id, parent.root_id FROM faktury child
-                JOIN families parent ON child.korygowana_faktura_id = parent.id
-            )
-            SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto, family.root_id,
-                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
-                   i.rodzaj, i.korygowana_faktura_id,
-                   COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, k.nip, '') AS nip,
-                   COALESCE(f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa) AS buyer_full_name,
-                   f.nazwa_skrocona AS buyer_short_name, i.nabywca_pelna AS buyer_invoice_name,
-                   k.nazwa AS buyer_contractor_name,
-                   f.konto_bankowe AS buyer_account,
-                   CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
-                        ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END - COALESCE(p.paid, 0) AS balance,
-                   COALESCE(p.manual_payments, '[]'::jsonb) AS manual_payments
-            FROM faktury i
-            LEFT JOIN families family ON family.id = i.id
-
-            LEFT JOIN firmy f
-                ON f.id = i.firma_id
-
-            LEFT JOIN kontrahenci k
-                ON k.id = i.kontrahent_id
-
-            LEFT JOIN (
+            WITH RECURSIVE balances AS (
                 SELECT faktura_id, SUM(kwota) AS paid,
                        SUM(kwota) FILTER (WHERE transakcja_id IS NULL AND sposob = 'bank') AS manual_unlinked,
                        jsonb_agg(jsonb_build_object('id', id, 'kwota', kwota, 'data_zaplaty', data_zaplaty) ORDER BY data_zaplaty, id)
@@ -433,11 +422,41 @@ def list_invoice_choices(
                     SELECT source_correction_id, id, kwota, data_zaplaty, 'kompensata', NULL FROM faktury_platnosci
                     WHERE source_correction_id IS NOT NULL
                 ) all_payments GROUP BY faktura_id
-            ) p ON p.faktura_id = i.id
-            WHERE i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma', 'korekta') AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
-              AND (CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
-                        ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END > COALESCE(p.paid, 0) OR COALESCE(p.manual_unlinked, 0) > 0)
-            ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
+            ), choices AS (
+                SELECT i.id,i.firma_id,i.kontrahent_id,i.numer,i.miesiac,i.kwota_brutto,i.rodzaj,
+                       i.korygowana_faktura_id,i.nabywca_pelna,i.nabywca_nip,i.data_wystawienia,
+                       CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
+                            ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END - COALESCE(p.paid, 0) AS balance,
+                       COALESCE(p.manual_payments, '[]'::jsonb) AS manual_payments
+                FROM faktury i LEFT JOIN balances p ON p.faktura_id = i.id
+                WHERE i.rodzaj IN ('faktura', 'zaliczkowa', 'proforma', 'korekta')
+                  AND COALESCE(i.eksportowana, 0) = 1 AND i.cancelled_at IS NULL
+                  AND (CASE WHEN i.rodzaj = 'korekta' THEN ABS(CAST(i.kwota_brutto AS NUMERIC(14,2)))
+                            ELSE CAST(i.kwota_brutto AS NUMERIC(14,2)) END > COALESCE(p.paid, 0)
+                       OR COALESCE(p.manual_unlinked, 0) > 0)
+                ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC LIMIT 2000
+            ), families(invoice_id, ancestor_id, parent_id, visited) AS (
+                SELECT id,id,korygowana_faktura_id,ARRAY[id] FROM choices WHERE korygowana_faktura_id IS NOT NULL
+                UNION ALL
+                SELECT f.invoice_id,parent.id,parent.korygowana_faktura_id,f.visited || parent.id
+                FROM families f JOIN faktury parent ON parent.id=f.parent_id
+                WHERE parent.id <> ALL(f.visited)
+            )
+            SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto,
+                   CASE WHEN i.korygowana_faktura_id IS NULL THEN i.id ELSE family.ancestor_id END AS root_id,
+                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
+                   i.rodzaj, i.korygowana_faktura_id,
+                   COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, k.nip, '') AS nip,
+                   COALESCE(f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa) AS buyer_full_name,
+                   f.nazwa_skrocona AS buyer_short_name, i.nabywca_pelna AS buyer_invoice_name,
+                   k.nazwa AS buyer_contractor_name,
+                   f.konto_bankowe AS buyer_account,
+                   i.balance, i.manual_payments
+            FROM choices i
+            LEFT JOIN families family ON family.invoice_id=i.id AND family.parent_id IS NULL
+            LEFT JOIN firmy f ON f.id=i.firma_id
+            LEFT JOIN kontrahenci k ON k.id=i.kontrahent_id
+            ORDER BY i.data_wystawienia DESC NULLS LAST, i.id DESC
             """
         ).fetchall()
 
@@ -474,6 +493,11 @@ def _normalize_contractor_name(value) -> str:
     return value
 
 
+def _name_tokens(name):
+    stop = {"SP", "Z", "O", "J", "K", "SA", "S", "A", "I", "W", "ZOO", "SPOLKA"}
+    return frozenset(token for token in name.split() if len(token) >= 2 and token not in stop)
+
+
 def _contractor_name_matches(bank_name: str, invoice_name: str) -> bool:
     """Porównuje nazwę bez zależności od kolejności imienia i nazwiska.
 
@@ -487,9 +511,8 @@ def _contractor_name_matches(bank_name: str, invoice_name: str) -> bool:
         return False
     if bank_name == invoice_name:
         return True
-    stop = {"SP", "Z", "O", "J", "K", "SA", "S", "A", "I", "W", "ZOO", "SPOLKA"}
-    bank_tokens = {token for token in bank_name.split() if len(token) >= 2 and token not in stop}
-    invoice_tokens = {token for token in invoice_name.split() if len(token) >= 2 and token not in stop}
+    bank_tokens = _name_tokens(bank_name)
+    invoice_tokens = _name_tokens(invoice_name)
     if len(invoice_tokens) >= 2 and invoice_tokens.issubset(bank_tokens):
         return True
     # Bank często ucina nazwę, więc dopuszczamy też odwrotny kierunek.
@@ -502,7 +525,7 @@ def _contractor_match_index(invoices: list[dict]) -> dict:
     by_number = {}
     by_nip = {}
     by_account = {}
-    names = {}
+    by_name = {}
 
     for invoice in invoices:
         key = contractor_key(invoice)
@@ -520,7 +543,6 @@ def _contractor_match_index(invoices: list[dict]) -> dict:
         if account:
             by_account.setdefault(account, set()).add(key)
 
-        bucket = names.setdefault(key, set())
         for candidate in (
             invoice.get("buyer"),
             invoice.get("buyer_full_name"),
@@ -530,15 +552,48 @@ def _contractor_match_index(invoices: list[dict]) -> dict:
         ):
             normalized = _normalize_contractor_name(candidate)
             if normalized:
-                bucket.add(normalized)
+                by_name.setdefault(normalized, set()).add(key)
+
+    by_tokens, by_token, by_anchor = {}, {}, {}
+    for name, keys in by_name.items():
+        tokens = _name_tokens(name)
+        if len(tokens) >= 2:
+            by_tokens.setdefault(tokens, set()).update(keys)
+    for tokens in by_tokens:
+        for token in tokens:
+            by_token.setdefault(token, set()).add(tokens)
+    for tokens in by_tokens:
+        anchor = min(tokens, key=lambda token: (len(by_token[token]), token))
+        by_anchor.setdefault(anchor, set()).add(tokens)
 
     return {
         "grouped": grouped,
         "by_number": by_number,
         "by_nip": by_nip,
         "by_account": by_account,
-        "names": names,
+        "by_name": by_name,
+        "by_tokens": by_tokens,
+        "by_token": by_token,
+        "by_anchor": by_anchor,
     }
+
+
+def _indexed_name_keys(name, index):
+    keys = set(index["by_name"].get(name, ()))
+    tokens = _name_tokens(name)
+    if len(tokens) < 2:
+        return keys
+    # A longer invoice name contains every bank token. A shorter name must
+    # share its rarest token with the bank, even when word order changes.
+    postings = [index["by_token"].get(token, ()) for token in tokens]
+    for candidate in min(postings, key=len):
+        if tokens <= candidate:
+            keys.update(index["by_tokens"][candidate])
+    for token in tokens:
+        for candidate in index["by_anchor"].get(token, ()):
+            if candidate < tokens:
+                keys.update(index["by_tokens"][candidate])
+    return keys
 
 
 def _resolved_contractor(keys, grouped, unresolved, reason):
@@ -683,11 +738,7 @@ def match_invoice_contractors(transactions: list[dict], invoices: list[dict]) ->
                     or transaction.get("contractor")
                     or details["contractor"]
                 )
-                name_keys = {
-                    key
-                    for key, candidates in index["names"].items()
-                    if name and any(_contractor_name_matches(name, candidate) for candidate in candidates)
-                }
+                name_keys = _indexed_name_keys(name, index)
                 match = (
                     _resolved_contractor(
                         name_keys, grouped, unresolved, "Dopasowano kontrahenta po nazwie nadawcy."
@@ -707,39 +758,62 @@ def invoice_choices_for_transaction(transaction: dict, invoices: list[dict]) -> 
     return [inv for inv in invoices if contractor_key(inv) == match["company_key"]] if match["confident"] else list(invoices)
 
 
-def suggest_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
-    """Propozycje wg numeru faktury, NIP i kwoty, zawsze do potwierdzenia.
+class InvoiceSuggestionIndex:
+    """Index the possible suggestions once, then apply the original ranking."""
 
-    Kwota, numer czy NIP same w sobie nie stanowią dowodu zapłaty.
-    """
-    title = re.sub(r"\s+", "", str(transaction.get("tytul") or "")).casefold()
-    numeric_title = re.sub(r"\D", "", title)
-    amount = _money(str(transaction.get("remaining") or transaction.get("kwota") or 0))
-    normalized_number = re.sub(r"[^A-Z0-9]", "", _extract_invoice_number(title).upper())
-    results = []
-    for inv in invoices:
-        number = re.sub(r"\s+", "", str(inv.get("numer") or "")).casefold()
-        nip = re.sub(r"\D", "", str(inv.get("nip") or ""))
-        balance = _money(str(inv["balance"]))
-        normalized_invoice = re.sub(r"[^A-Z0-9]", "", number.upper())
-        invoice_in_title = bool(number and len(number) >= 5 and (
-            number in title or (normalized_number and normalized_invoice == normalized_number)
-        ))
-        nip_in_title = bool(len(nip) == 10 and nip in numeric_title)
-        exact_amount = balance == amount
-        if invoice_in_title and nip_in_title and exact_amount:
-            score = 0
-        elif invoice_in_title and exact_amount:
-            score = 1
-        elif invoice_in_title:
-            score = 2
-        elif nip_in_title and exact_amount:
-            score = 3
-        else:
-            continue
-        results.append((score, int(inv["id"])))
-    results.sort()
-    return [invoice_id for _, invoice_id in results]
+    def __init__(self, invoices):
+        self.invoices = {}
+        self.by_reference = {}
+        self.by_prefix = {}
+        self.by_nip_and_amount = {}
+        for invoice in invoices:
+            invoice_id = int(invoice["id"])
+            number = re.sub(r"\s+", "", str(invoice.get("numer") or "")).casefold()
+            normalized = re.sub(r"[^A-Z0-9]", "", number.upper())
+            nip = re.sub(r"\D", "", str(invoice.get("nip") or ""))
+            balance = _money(str(invoice["balance"]))
+            self.invoices[invoice_id] = (number, normalized, nip, balance)
+            if len(number) >= 5:
+                if normalized:
+                    self.by_reference.setdefault(normalized, set()).add(invoice_id)
+                prefix = number[:10]
+                self.by_prefix.setdefault(len(prefix), {}).setdefault(prefix, set()).add(invoice_id)
+            if len(nip) == 10:
+                self.by_nip_and_amount.setdefault((nip, balance), set()).add(invoice_id)
+
+    def rank(self, transaction, allowed=None):
+        title = re.sub(r"\s+", "", str(transaction.get("tytul") or "")).casefold()
+        numeric_title = re.sub(r"\D", "", title)
+        amount = _money(str(transaction.get("remaining") or transaction.get("kwota") or 0))
+        reference = re.sub(r"[^A-Z0-9]", "", _extract_invoice_number(title).upper())
+        candidates = set(self.by_reference.get(reference, ()))
+        for length, prefixes in self.by_prefix.items():
+            for offset in range(len(title) - length + 1):
+                candidates.update(prefixes.get(title[offset:offset + length], ()))
+        for offset in range(len(numeric_title) - 9):
+            candidates.update(self.by_nip_and_amount.get((numeric_title[offset:offset + 10], amount), ()))
+        if allowed is not None:
+            candidates.intersection_update(allowed)
+        results = []
+        for invoice_id in candidates:
+            number, normalized, nip, balance = self.invoices[invoice_id]
+            invoice_in_title = len(number) >= 5 and (number in title or bool(reference and normalized == reference))
+            nip_in_title = len(nip) == 10 and nip in numeric_title
+            if invoice_in_title and balance == amount:
+                score = 0 if nip_in_title else 1
+            elif invoice_in_title:
+                score = 2
+            elif nip_in_title and balance == amount:
+                score = 3
+            else:
+                continue
+            results.append((score, invoice_id))
+        return [invoice_id for _, invoice_id in sorted(results)]
+
+
+def suggest_invoice_ids(transaction: dict[str, Any], invoices: list[dict[str, Any]]) -> list[int]:
+    """Rank suggestions for a single transfer. Confirmation is always manual."""
+    return InvoiceSuggestionIndex(invoices).rank(transaction)
 
 
 @office_endpoint('app.db.dao_payments.suggested_invoice_ids')

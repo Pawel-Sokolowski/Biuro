@@ -97,6 +97,56 @@ class OfficeHttpsTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM bank_transakcje').fetchone()[0], 12)
 
+    def test_monthly_mt940_keeps_customer_receipts_and_outgoing_payments_separate(self):
+        from app.db.dao_conn import get_conn
+        from app.db.dao_payments import InvoiceSuggestionIndex, match_invoice_contractors
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        with get_conn() as conn:
+            conn.execute("""
+                INSERT INTO faktury(miesiac,numer,kwota_netto,kwota_brutto,pozycje_json,
+                                     rodzaj,eksportowana,data_wystawienia,nabywca_pelna)
+                SELECT '2026-11','FV/'||lpad(i::text,4,'0')||'/11/2026',i,i,'[]',
+                       'faktura',1,'2026-11-01','Nabywca '||i
+                FROM generate_series(1,1000) s(i)
+            """)
+            conn.execute("""
+                INSERT INTO bank_transakcje(hash,rachunek,data_operacji,kwota,waluta,kierunek)
+                VALUES ('historical-own-account',%s,'2026-10-31',-5,'PLN','D')
+            """, ('/pl22\u00a01050 0099-7603 1234 5678 9124',))
+        lines = [':20:MONTHLY', ':25:PL44105000997603123456789123', ':28C:301/1', ':60F:C261101PLN10000,00']
+        for i in range(1, 1501):
+            if i <= 1000:
+                entry = f':61:2611181118C{i},00NTRFREF{i:06}//BANK{i:06}'
+                details = f':86:~20FV/{i:04}/11/2026~32Nabywca {i}'
+            else:
+                account = '22105000997603123456789124' if i <= 1250 else '33105000997603123456789125'
+                entry = f':61:2611181118D5,00NTRFREF{i:06}//BANK{i:06}'
+                details = f':86:~20Płatność~38{account}'
+            lines.extend((entry, details))
+        lines.append(':62F:C261130PLN508000,00')
+        source = Path(self.temporary.name) / 'monthly.sta'
+        source.write_bytes(('\r\n'.join(lines) + '\r\n').encode('cp1250'))
+
+        operation = 'app.db.dao_payments.import_mt940_file'
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 1500, 'new': 1250, 'duplicates': 0, 'own': 250})
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 1500, 'new': 0, 'duplicates': 1250, 'own': 250})
+        operation = 'app.db.dao_payments.list_unsettled_transfers'
+        receipts = self.client.call(operation, (1,), {'limit': 1000})
+        all_records = self.client.call(operation, (1,), {'include_all': True, 'limit': 1250})
+        self.assertEqual(len(receipts), 1000)
+        self.assertEqual(sum(row['kwota'] < 0 for row in all_records), 250)
+        invoices = self.client.call('app.db.dao_payments.list_invoice_choices', (1,))
+        self.assertEqual(len(invoices), 1000)
+        self.assertTrue(all(match['confident'] for match in match_invoice_contractors(receipts, invoices).values()))
+        index = InvoiceSuggestionIndex(invoices)
+        by_number = {invoice['numer']: invoice['id'] for invoice in invoices}
+        self.assertTrue(all(index.rank(row) == [by_number[row['tytul']]] for row in receipts))
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM faktury_platnosci').fetchone()[0], 0)
+
     def test_company_form_initial_read_is_batched_off_the_gui_thread(self):
         from app.companies.company_form import CompanyForm
         from tests.test_review_optimizations import wait_until

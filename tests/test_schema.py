@@ -25,7 +25,11 @@ class AlembicDeploymentTests(unittest.TestCase):
             with get_conn() as conn:
                 tables = {row[0] for row in conn.execute(
                     'SELECT tablename FROM pg_tables WHERE schemaname=%s', (schema,))}
+                indexes = {row[0] for row in conn.execute(
+                    'SELECT indexname FROM pg_indexes WHERE schemaname=%s', (schema,))}
             self.assertTrue({'bulk_mail_runs', 'bulk_mail_batches'} <= tables)
+            self.assertTrue({'idx_bank_transakcje_account', 'idx_bank_transakcje_order', 'idx_bank_transakcje_receipts',
+                             'idx_faktury_miesiac_id', 'idx_firmy_normalized_nip'} <= indexes)
             self.assertEqual(history(), [])
         finally:
             drop_test_schema(schema, previous)

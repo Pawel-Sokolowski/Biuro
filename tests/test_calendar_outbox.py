@@ -208,6 +208,21 @@ class CalendarOutboxTests(DbTestCase):
         self.assertEqual(outbox.operations(1, 'google', 'old')[0]['action'], 'delete')
         self.assertEqual(outbox.operations(1, 'google', 'new')[0]['action'], 'upsert')
 
+    def test_moving_to_google_queues_caldav_deletion_and_detaches_old_identity(self):
+        caldav_sync.save_config('https://fake/', 'u', 'secret')
+        scope = outbox.caldav_scope()
+        event = self.event(caldav_uid='previous-uid', caldav_calendar_id=scope)
+        events.save_event(1, {**event, 'google_calendar_id': 'google-destination'})
+        changed = events.get_event(event['id'])
+        self.assertIsNone(changed['caldav_uid'])
+        self.assertIsNone(changed['caldav_calendar_id'])
+        self.assertEqual(changed['google_calendar_id'], 'google-destination')
+        old_op, = outbox.operations(1, 'caldav', scope)
+        self.assertEqual((old_op['action'], old_op['remote_id']), ('delete', 'previous-uid'))
+        self.assertTrue(outbox.remote_pending(1, 'caldav', scope, 'previous-uid'))
+        new_op, = outbox.operations(1, 'google', 'google-destination')
+        self.assertEqual(new_op['action'], 'upsert')
+
     def test_caldav_offline_edits_are_pushed_on_the_next_sync(self):
         caldav_sync.save_config('https://fake/', 'u', 'secret')
         event, calendar = self.event(), FakeCalendar()

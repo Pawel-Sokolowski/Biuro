@@ -37,6 +37,26 @@ class BankReconciliationTests(DbTestCase):
     def remaining(self, transfer):
         return next(row['remaining'] for row in payments.list_unsettled_transfers(1, include_all=True) if row['id'] == transfer)
 
+    def test_bank_review_finds_account_on_invoice_outside_first_page(self):
+        from app.invoices import payments_ui
+        older = self.invoice()
+        newer = self.invoice()
+        transfer = self.transfer()
+        account = '44105000997603123456789123'
+        with get_conn() as conn:
+            conn.execute("UPDATE firmy SET konto_bankowe=%s WHERE id=(SELECT firma_id FROM faktury WHERE id=%s)",
+                         ('PL 44-1050 0099 7603 1234 5678 9123', older))
+            conn.execute("UPDATE bank_transakcje SET kontrahent_rachunek=%s WHERE id=%s", (account, transfer))
+            conn.execute("UPDATE faktury SET data_wystawienia='2026-10-30' WHERE id=%s", (older,))
+            conn.execute("UPDATE faktury SET data_wystawienia='2026-11-01' WHERE id=%s", (newer,))
+        with mock.patch.object(payments, 'INVOICE_CHOICE_PAGE_SIZE', 1), \
+             mock.patch.object(payments_ui, 'INVOICE_CHOICE_PAGE_SIZE', 1):
+            self.assertEqual([row['id'] for row in payments.list_invoice_choices(1)], [newer])
+            self.assertEqual([row['id'] for row in payments.list_invoice_choices(1, accounts=[account])], [older])
+            review = payments_ui._read_bank_review(1, False, 100)
+        self.assertTrue(review[4][transfer]['confident'])
+        self.assertEqual({row['id'] for row in review[0]}, {older, newer})
+
     def test_manual_payment_links_once_then_remaining_110_pays_positive_correction(self):
         invoice = self.invoice()
         manual_id = self.manual(invoice, '123')

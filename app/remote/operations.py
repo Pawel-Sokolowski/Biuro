@@ -1695,7 +1695,7 @@ OPERATIONS = {
                                               'function': 'list_company_choices',
                                               'module': 'app.db.dao_payments'},
  'app.db.dao_payments.list_invoice_choices': {'actors': ['actor_id'],
-                                              'arguments': ['actor_id', 'offset', 'references'],
+                                              'arguments': ['actor_id', 'offset', 'references', 'accounts'],
                                               'capability': 'tab:Faktury',
                                               'function': 'list_invoice_choices',
                                               'module': 'app.db.dao_payments'},

@@ -225,7 +225,12 @@ def send_email_smtp(
         + list(cc or [])
         + list(bcc or [])
     )
+    return _send_smtp_message(konto_id, cfg, msg, recipients, subject, timeout=timeout,
+                              bcc=bcc, save_copy=save_copy, copy_folder=copy_folder)
 
+
+def _send_smtp_message(konto_id, cfg, msg, recipients, subject, *, timeout=30,
+                       bcc=None, save_copy=False, copy_folder=None):
     try:
         # Wiadomość bez odbiorców nie może zostać uznana za wysłaną: SMTP przyjmie
         # kopię, a do nikogo ona nie dotrze. Ten błąd jest wyłapywany przed wysyłką.

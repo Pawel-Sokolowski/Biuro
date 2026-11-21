@@ -14,7 +14,7 @@ import base64
 from xml.etree import ElementTree
 
 from app.db.dao_app_settings import get_setting
-from app.db.dao_conn import get_conn
+from app.db.dao_conn import advisory_lock, get_conn
 from app.db.dao_invoices import can_access_invoice
 from app.invoices.ksef_client import KsefError
 from app.invoices.fa3_builder import build_fa3_xml
@@ -168,9 +168,34 @@ def _update_attempt(invoice_id: int, status: str, document_hash: str, *, expecte
         conn.close()
 
 
+def _submission_lock_id(invoice_id):
+    return (748221 << 32) | int(invoice_id)
+
+
+def _recover_before_upload(invoice, actor_id):
+    if invoice.get("ksef_status") != "wysylanie" or invoice.get("ksef_referencja_faktury"):
+        return invoice
+    # This state precedes the committed before_upload callback. Hold the same
+    # lock as the submitter so an active attempt cannot be reset.
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE faktury SET ksef_status='blad_przed_wysylka'
+            WHERE id=%s AND ksef_status='wysylanie' AND NULLIF(BTRIM(ksef_numer),'') IS NULL
+              AND ksef_referencja_faktury IS NULL AND ksef_hash_faktury=%s
+        """, (invoice["id"], invoice.get("ksef_hash_faktury")))
+    return _authorized_invoice(invoice["id"], actor_id)
+
+
 def _send_invoice_bytes(invoice_id: int, xml: bytes, actor_id: int, *, client=None) -> dict:
+    with advisory_lock(_submission_lock_id(invoice_id)) as acquired:
+        if not acquired:
+            raise KsefError("Trwa przygotowanie innej wysyłki tej faktury.")
+        invoice = _recover_before_upload(_authorized_invoice(invoice_id, actor_id), actor_id)
+        return _submit_locked_invoice(invoice_id, invoice, xml, client=client)
+
+
+def _submit_locked_invoice(invoice_id, invoice, xml, *, client=None):
     """Reserve and send exactly one document; uncertain attempts cannot resend."""
-    invoice = _authorized_invoice(invoice_id, actor_id)
     if invoice.get("ksef_numer"):
         raise KsefError("Faktura ma już numer KSeF; nie można wysłać jej ponownie.")
     if invoice.get("ksef_status") in ("wysylanie", "oczekuje", "do_sprawdzenia", "przyjeta"):
@@ -255,6 +280,13 @@ def _send_invoice_bytes(invoice_id: int, xml: bytes, actor_id: int, *, client=No
 @office_endpoint('app.invoices.ksef_submission.refresh_invoice_submission')
 def refresh_invoice_submission(invoice_id: int, actor_id: int, *, client=None) -> dict:
     invoice = _authorized_invoice(invoice_id, actor_id)
+    if invoice.get("ksef_status") == "wysylanie" and not invoice.get("ksef_referencja_faktury"):
+        with advisory_lock(_submission_lock_id(invoice_id)) as acquired:
+            if not acquired:
+                return {"status": {"code": 100}}
+            invoice = _recover_before_upload(_authorized_invoice(invoice_id, actor_id), actor_id)
+        if invoice.get("ksef_status") == "blad_przed_wysylka":
+            raise KsefError("Przygotowanie wysyłki zostało przerwane przed przekazaniem faktury. Ponów wysyłkę.")
     session = invoice.get("ksef_referencja_sesji")
     ref = invoice.get("ksef_referencja_faktury")
     environment = invoice.get("ksef_srodowisko_wysylki")
@@ -499,7 +531,7 @@ def process_invoice_batch(invoice_ids, actor_id, *, send=False, progress=None):
             delivery = deliver_if_queued(invoice_id, actor_id, path)
             accepted = _authorized_invoice(invoice_id, actor_id)
             result["accepted"].append({"id": invoice_id, "number": accepted.get("ksef_numer"), "path": path, "delivery": delivery})
-            if delivery and delivery.get("status") == "uncertain":
+            if delivery and delivery.get("status") in ("uncertain", "blocked_before_send"):
                 result["errors"].append({"id":invoice_id, "description":delivery.get("error") or "Sprawdź wynik wysyłki e-mail."})
         except Exception as exc:
             result["errors"].append({"id": invoice_id, "description": str(exc)})

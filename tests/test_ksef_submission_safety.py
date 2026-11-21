@@ -172,6 +172,24 @@ class SubmissionSafetyTests(DbTestCase):
         self.send()
         self.assertEqual(self.invoice()['ksef_status'], 'oczekuje')
 
+    def test_interrupted_pre_upload_attempt_can_be_reported_and_retried(self):
+        def terminate(*args, **kwargs):
+            with self.assertRaisesRegex(KsefError, 'Trwa przygotowanie'):
+                self.send()
+            self.assertEqual(submission.refresh_invoice_submission(self.invoice_id, 1),
+                             {'status': {'code': 100}})
+            raise SystemExit()
+        self.client.send_fa3_xml.side_effect = terminate
+        with self.assertRaises(SystemExit):
+            self.send()
+        self.assertEqual(self.invoice()['ksef_status'], 'wysylanie')
+        with self.assertRaisesRegex(KsefError, 'przerwane'):
+            submission.refresh_invoice_submission(self.invoice_id, 1)
+        self.assertEqual(self.invoice()['ksef_status'], 'blad_przed_wysylka')
+        self.client.send_fa3_xml.side_effect = self.upload
+        self.send()
+        self.assertEqual(self.invoice()['ksef_status'], 'oczekuje')
+
     def test_failure_after_session_before_upload_allows_retry(self):
         def fail(xml, **callbacks):
             callbacks['on_session']('EMPTY-SESSION')

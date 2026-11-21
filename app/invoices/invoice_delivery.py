@@ -112,17 +112,12 @@ def official_pdf(invoice, xml_path):
     return str(destination)
 
 
-def _log_delivery(invoice_id, recipients, pdf_path):
+def _log_delivery(invoice_id, recipients, attachment_size, message_id):
     """Ślad wysyłki: kto dostał, ile ważył załącznik. Bez treści i bez adresów w logu."""
     import logging
-    from pathlib import Path as _Path
-    try:
-        size = _Path(pdf_path).stat().st_size
-    except OSError:
-        size = 0
     logging.getLogger(__name__).info(
-        'invoice_email_sent invoice=%s recipients=%d attachment_bytes=%d',
-        invoice_id, len(recipients or []), size)
+        'invoice_email_sent invoice=%s recipients=%d attachment_bytes=%d message_id=%s',
+        invoice_id, len(recipients), attachment_size, message_id)
 
 
 def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
@@ -151,7 +146,7 @@ def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
 def deliver_if_queued(invoice_id, actor_id, xml_path):
     from app.invoices.ksef_submission import _authorized_invoice
     from app.email.email_storage import get_email_accounts_for_employee
-    from app.email.email_actions import get_smtp_config_for_account, send_email_smtp
+    from app.email.email_actions import _send_smtp_message, get_smtp_config_for_account, prepare_message
     invoice = _authorized_invoice(invoice_id,actor_id)
     status = invoice.get('invoice_email_status')
     if not status:
@@ -177,6 +172,15 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
         if not config.get('host') or not config.get('user'):
             raise ValueError('Uzupełnij konfigurację SMTP wybranego nadawcy.')
         pdf = official_pdf(invoice,xml_path)
+        attachment = Path(pdf).read_bytes()
+        if not attachment.startswith(b'%PDF-') or not attachment.rstrip().endswith(b'%%EOF'):
+            raise OSError('Plik PDF faktury jest niekompletny. Wiadomość nie została wysłana.')
+        subject = 'Faktura ' + str(invoice['numer'])
+        body = (f"Dzień dobry,\n\nw załączeniu faktura {invoice['numer']}.\n"
+                f"Numer KSeF: {invoice['ksef_numer']}\n\nPozdrawiamy")
+        message = prepare_message(config['user'], config.get('display_name'), recipients, subject, body)
+        # Freeze the validated bytes in the MIME message before reserving SMTP.
+        message.add_attachment(attachment, maintype='application', subtype='pdf', filename=Path(pdf).name)
     except (PermissionError, ValueError) as exc:
         _delivery_state(invoice_id,'blocked_before_send',error=str(exc),expected=invoice)
         raise
@@ -199,14 +203,12 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
     if not reserved:
         return {'status':'uncertain','error':'Inny proces obsłużył tę wysyłkę. Nie wysyłam ponownie.'}
     try:
-        ok, info = send_email_smtp(account_id,recipients,'Faktura '+str(invoice['numer']),
-                                  f"Dzień dobry,\n\nw załączeniu faktura {invoice['numer']}.\nNumer KSeF: {invoice['ksef_numer']}\n\nPozdrawiamy",
-                                  attachments=[pdf],save_copy=True,require_attachments=True)
+        ok, info = _send_smtp_message(account_id, config, message, recipients, subject, save_copy=True)
         # Jedna wiadomość na fakturę: lista odbiorców trafia do „Do", nigdy do
         # UDW, więc klient widzi własny adres i załącznik. Zapisujemy rozmiar,
         # żeby dało się sprawdzić, czy PDF naprawdę poszedł.
         if ok:
-            _log_delivery(invoice_id, recipients, pdf)
+            _log_delivery(invoice_id, recipients, len(attachment), message['Message-ID'])
     except Exception as exc:
         ok, info = False, str(exc)
     if not ok:

@@ -17,6 +17,7 @@ import mt940
 
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import can_access_invoice, create_draft_after_payment
+from app.db.company_bank_account_schema import NORMALIZED_COMPANY_BANK_ACCOUNT
 from app.db.query_index_schema import BANK_RECEIPTS, NORMALIZED_BANK_ACCOUNT
 from app.db.review_fixes_schema import BANK_INVOICE_ELIGIBLE, INVOICE_REFERENCE
 from app.security.authorization import can, is_administrator
@@ -142,6 +143,18 @@ def _description_details(raw_text: str) -> dict[str, str]:
             "contractor_nip": re.sub(r"\D", "", nip_match[1]) if nip_match else ""}
 
 @office_endpoint('app.db.dao_payments.parse_ing_mt940')
+def bank_account_references(transfers):
+    accounts = set()
+    for row in transfers:
+        account = row.get('kontrahent_rachunek')
+        if not account:
+            raw = str(row.get('opis_surowy') or row.get('tytul') or '')
+            account = _description_details(raw)['contractor_account']
+        if normalized := _normalize_account(account):
+            accounts.add(normalized)
+    return sorted(accounts)
+
+
 def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, Any]]:
     """Parser biblioteki mt-940; import zachowuje walutę i rodzaj operacji.
 
@@ -424,6 +437,7 @@ def list_invoice_choices(
     *,
     offset: int = 0,
     references: list[str] | None = None,
+    accounts: list[str] | None = None,
 ) -> list[dict[str, Any]]:
 
     if not _allowed(actor_id):
@@ -433,6 +447,8 @@ def list_invoice_choices(
 
     if type(offset) is not int or offset < 0:
         raise PaymentError('Nieprawidłowa strona faktur.')
+    if references is not None and accounts is not None:
+        raise PaymentError('Wybierz wyszukiwanie po numerze faktury albo rachunku.')
     if references is not None:
         if (not isinstance(references, (list, tuple)) or len(references) > 1000
                 or any(not isinstance(value, str) or len(value) > 240 for value in references)):
@@ -440,9 +456,21 @@ def list_invoice_choices(
         references = sorted({_invoice_reference(value) for value in references} - {''})
         if not references:
             return []
-    candidate_filter = f'AND {INVOICE_REFERENCE} = ANY(%s)' if references is not None else ''
-    page = '' if references is not None else 'LIMIT %s OFFSET %s'
-    params = (references,) if references is not None else (INVOICE_CHOICE_PAGE_SIZE, offset)
+        candidate_filter, params = f'AND {INVOICE_REFERENCE} = ANY(%s)', (references,)
+    elif accounts is not None:
+        if (not isinstance(accounts, (list, tuple)) or len(accounts) > 1000
+                or any(not isinstance(value, str) or len(value) > 80 for value in accounts)):
+            raise PaymentError('Nieprawidłowe numery rachunków.')
+        accounts = sorted({_normalize_account(value) for value in accounts} - {''})
+        if not accounts:
+            return []
+        candidate_filter = f'''AND firma_id IN (SELECT id FROM firmy
+                                WHERE {NORMALIZED_COMPANY_BANK_ACCOUNT} = ANY(%s))'''
+        params = (accounts,)
+    else:
+        candidate_filter, params = '', (INVOICE_CHOICE_PAGE_SIZE, offset)
+    filtered = bool(candidate_filter)
+    page = '' if filtered else 'LIMIT %s OFFSET %s'
     conn = get_conn()
 
     try:
@@ -460,11 +488,11 @@ def list_invoice_choices(
                            FILTER (WHERE transakcja_id IS NULL AND sposob = 'bank') AS manual_payments
                 FROM (
                     SELECT faktura_id, id, kwota, data_zaplaty, sposob, transakcja_id FROM faktury_platnosci
-                    {"WHERE faktura_id IN (SELECT id FROM candidates)" if references is not None else ""}
+                    {"WHERE faktura_id IN (SELECT id FROM candidates)" if filtered else ""}
                     UNION ALL
                     SELECT source_correction_id, id, kwota, data_zaplaty, 'kompensata', NULL FROM faktury_platnosci
                     WHERE source_correction_id IS NOT NULL
-                    {"AND source_correction_id IN (SELECT id FROM candidates)" if references is not None else ""}
+                    {"AND source_correction_id IN (SELECT id FROM candidates)" if filtered else ""}
                 ) all_payments GROUP BY faktura_id
             ), choices AS (
                 SELECT i.id,i.firma_id,i.kontrahent_id,i.numer,i.miesiac,i.kwota_brutto,i.rodzaj,

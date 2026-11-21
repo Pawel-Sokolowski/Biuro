@@ -2,7 +2,8 @@
 
 RWS status codes deliberately stay raw. No inferred payments, notifications or senders.
 """
-QUERY = r'''
+def report_query(payer_filter=''):
+    return r'''
 SELECT r.ID AS source_id,r.ID_PLATNIK AS source_payer_id,r.ID_UBEZPIECZONY AS source_person_id,
     CASE WHEN p.nip_count=1 THEN p.nip END AS nip,
     CASE WHEN u.name_count=1 THEN u.person_name END AS imiona_nazwiska,
@@ -24,6 +25,16 @@ OUTER APPLY (
     FROM dbo.UBEZP_IDENT i WHERE i.ID_UBEZPIECZONY=r.ID_UBEZPIECZONY
         OR (r.ID_UB_ZUS>0 AND i.ID_UB_ZUS=r.ID_UB_ZUS AND i.ID_PL_ZUS=r.ID_PL_ZUS)
 ) u
-WHERE r.ROK=?
+WHERE r.ROK=?''' + payer_filter + r'''
 ORDER BY r.ID_PLATNIK,r.ID_UBEZPIECZONY,r.MIESIAC,r.ID
 '''
+
+
+QUERY = report_query()
+
+
+def scoped_query():
+    from app.integrations.platnik.insurance import payer_scope
+
+    return payer_scope() + report_query('''
+      AND EXISTS (SELECT 1 FROM PayerIdentities s WHERE s.ID_PLATNIK=r.ID_PLATNIK)''')

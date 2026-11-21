@@ -100,9 +100,12 @@ def ksef_import_job():
     if not is_configured():
         return {'mode': 'not_configured'}
     month = datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
+    unmatched_by_month = {}
     for period in (previous_month(month), month):
-        sync_month(period)
-    return {'months': 2}
+        result = sync_month(period)
+        unmatched_by_month[period] = len(result.get('niedopasowane', ()))
+    return {'months': len(unmatched_by_month), 'unmatched_by_month': unmatched_by_month,
+            'mode': 'partial' if any(unmatched_by_month.values()) else 'completed'}
 
 
 def ezla_job(stop=None,now=None):

@@ -2,6 +2,9 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 import base64
+from contextlib import nullcontext
+from email import policy
+from email.parser import BytesParser
 import hashlib
 import json
 from pathlib import Path
@@ -40,7 +43,9 @@ class InvoiceDeliveryTests(unittest.TestCase):
         self.invoice={**INVOICE,'ksef_hash_faktury':base64.b64encode(hashlib.sha256(self.xml).digest()).decode()}
         for patcher in (patch('app.invoices.ksef_submission._authorized_invoice',side_effect=lambda *args:dict(self.invoice)),
                         patch('app.email.email_storage.get_email_accounts_for_employee',return_value=[{'id':8,'email':'office@example.com'}]),
-                        patch('app.email.email_actions.get_smtp_config_for_account',return_value={'host':'smtp.example.com','user':'office@example.com'}),
+                        patch('app.email.email_actions.get_smtp_config_for_account',
+                              return_value={'host':'smtp.example.com','user':'office@example.com',
+                                            'port':587,'ssl':False,'password':''}),
                         patch('app.invoices.invoice_preview.get_setting',return_value=None),
                         patch('app.invoices.ksef.get_setting',return_value=None),
                         patch('app.invoices.invoice_preview.get_setting_first',return_value='Changed Config Seller')):
@@ -68,54 +73,78 @@ class InvoiceDeliveryTests(unittest.TestCase):
 
     def test_no_smtp_before_acceptance(self):
         self.invoice.update(ksef_status='oczekuje',ksef_numer=None)
-        with patch('app.email.email_actions.send_email_smtp') as smtp,self.assertRaises(KsefError):
+        with patch('app.email.email_actions.open_smtp') as smtp,self.assertRaises(KsefError):
             delivery.deliver_if_queued(1,7,str(self.xml_path))
         smtp.assert_not_called()
 
     def test_no_queued_delivery_does_not_send(self):
         self.invoice['invoice_email_status']=None
-        with patch('app.email.email_actions.send_email_smtp') as smtp:
+        with patch('app.email.email_actions.open_smtp') as smtp:
             self.assertIsNone(delivery.deliver_if_queued(1,7,str(self.xml_path)))
         smtp.assert_not_called()
 
     def test_success_sends_pdf_once_to_frozen_recipients(self):
-        conn=Mock();conn.execute.return_value.fetchone.return_value=(1,)
+        conn, smtp = Mock(), Mock()
+        smtp.send_message.return_value = {}
+        def reserve(*args):
+            self.xml_path.with_suffix('.pdf').unlink()
+            return Mock(**{'fetchone.return_value': (1,)})
+        conn.execute.side_effect = reserve
         def update(invoice_id,status,**kwargs):self.invoice['invoice_email_status']=status
         with patch.object(delivery,'get_conn',return_value=conn), \
              patch.object(delivery,'_delivery_state',side_effect=update), \
-             patch('app.email.email_actions.send_email_smtp',return_value=(True,'OK')) as smtp:
+             patch('app.email.email_actions.store_sent_copy', return_value=True), \
+             patch('app.email.email_actions.open_smtp',return_value=nullcontext(smtp)):
             result=delivery.deliver_if_queued(1,7,str(self.xml_path))
             self.assertEqual(result['status'],'sent')
             delivery.deliver_if_queued(1,7,str(self.xml_path))
-        smtp.assert_called_once()
-        self.assertEqual(smtp.call_args.args[1],['invoices@example.com'])
-        self.assertTrue(smtp.call_args.kwargs['require_attachments'])
-        self.assertTrue(Path(smtp.call_args.kwargs['attachments'][0]).read_bytes().startswith(b'%PDF'))
-        self.assertIn('\n',smtp.call_args.args[3])
+        smtp.send_message.assert_called_once()
+        self.assertEqual(smtp.send_message.call_args.kwargs['to_addrs'], ['invoices@example.com'])
+        message = smtp.send_message.call_args.args[0]
+        wire_message = BytesParser(policy=policy.default).parsebytes(message.as_bytes(policy=policy.SMTP))
+        attachment, = wire_message.iter_attachments()
+        self.assertEqual(attachment.get_content_type(), 'application/pdf')
+        self.assertEqual(attachment.get_content_disposition(), 'attachment')
+        self.assertEqual(attachment.get_filename(), 'accepted.pdf')
+        self.assertTrue(attachment.get_payload(decode=True).startswith(b'%PDF-'))
+        self.assertIn(self.invoice['ksef_numer'], wire_message.get_body().get_content())
+
+    def test_truncated_pdf_fails_before_smtp_reservation(self):
+        pdf = self.xml_path.with_suffix('.pdf')
+        pdf.write_bytes(b'%PDF-1.4\nIncomplete')
+        with patch.object(delivery, 'official_pdf', return_value=str(pdf)), \
+             patch.object(delivery, 'get_conn') as reserve, \
+             patch.object(delivery, '_delivery_state') as state, \
+             patch('app.email.email_actions.open_smtp') as smtp:
+            with self.assertRaises(OSError):
+                delivery.deliver_if_queued(1, 7, self.xml_path)
+        self.assertEqual(state.call_args.args, (1, 'failed_before_send'))
+        reserve.assert_not_called()
+        smtp.assert_not_called()
 
     def test_uncertain_smtp_result_does_not_retry_and_revoked_sender_cannot_send(self):
         conn=Mock();conn.execute.return_value.fetchone.return_value=(1,)
         def update(invoice_id,status,**kwargs):self.invoice['invoice_email_status']=status
         with patch.object(delivery,'get_conn',return_value=conn),patch.object(delivery,'_delivery_state',side_effect=update), \
-             patch('app.email.email_actions.send_email_smtp',return_value=(False,'timeout after DATA')) as smtp:
+             patch('app.email.email_actions._send_smtp_message',return_value=(False,'timeout after DATA')) as smtp:
             self.assertEqual(delivery.deliver_if_queued(1,7,str(self.xml_path))['status'],'uncertain')
             delivery.deliver_if_queued(1,7,str(self.xml_path))
         smtp.assert_called_once()
         self.invoice['invoice_email_status']='queued'
         with patch('app.email.email_storage.get_email_accounts_for_employee',return_value=[]), \
-             patch.object(delivery,'_delivery_state'),patch('app.email.email_actions.send_email_smtp') as smtp, self.assertRaises(PermissionError):
+             patch.object(delivery,'_delivery_state'),patch('app.email.email_actions.open_smtp') as smtp, self.assertRaises(PermissionError):
             delivery.deliver_if_queued(1,7,str(self.xml_path))
         smtp.assert_not_called()
 
     def test_competing_reservation_does_not_send(self):
         conn=Mock();conn.execute.return_value.fetchone.return_value=None
-        with patch.object(delivery,'get_conn',return_value=conn),patch('app.email.email_actions.send_email_smtp') as smtp:
+        with patch.object(delivery,'get_conn',return_value=conn),patch('app.email.email_actions.open_smtp') as smtp:
             self.assertEqual(delivery.deliver_if_queued(1,7,str(self.xml_path))['status'],'uncertain')
         smtp.assert_not_called()
 
     def test_pdf_without_qr_is_not_sent(self):
         with patch('app.invoices.invoice_preview._qr_data_url',return_value=''), \
-             patch.object(delivery,'_delivery_state'),patch('app.email.email_actions.send_email_smtp') as smtp,self.assertRaises(KsefError):
+             patch.object(delivery,'_delivery_state'),patch('app.email.email_actions.open_smtp') as smtp,self.assertRaises(KsefError):
             delivery.deliver_if_queued(1,7,str(self.xml_path))
         smtp.assert_not_called()
 

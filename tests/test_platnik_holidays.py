@@ -8,7 +8,7 @@ from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting,set_setting
 from app.integrations.platnik.holidays import normalize,_import_year,read_year,import_year
-from app.integrations.platnik.holiday_query import QUERY
+from app.integrations.platnik.holiday_query import QUERY, scoped_query
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
 
 
@@ -74,7 +74,10 @@ class ImportTests(DbTestCase):
              patch('app.integrations.platnik.holidays.connect',return_value=connection):
             result = _import_year(2026,self.admin,company_ids=company_ids)
         connection.close.assert_called_once()
-        cursor.execute.assert_called_once_with(QUERY,2026)
+        if company_ids is None:
+            cursor.execute.assert_called_once_with(QUERY, 2026)
+        else:
+            cursor.execute.assert_called_once_with(scoped_query(), '<p><n>1112223344</n></p>', 2026)
         return result
 
     def test_selected_company_refresh_preserves_other_payers(self):
@@ -85,6 +88,27 @@ class ImportTests(DbTestCase):
         rows = read_year(self.admin,2026)['rows']
         self.assertEqual({row['nip']:row['imiona_nazwiska'] for row in rows},
                          {'1112223344':'Updated selected','2223334455':'Old other'})
+
+    def test_six_column_worksheet_preserves_office_fields_and_distinguishes_rws_state(self):
+        from app.accounting.holiday_ui import ContributionHolidays
+        self.import_mock([source_row(status_zrodlowy='N')])
+        save_field(self.admin, 2026, self.company, 'moze_skorzystac', 'Tak', 0)
+        save_field(self.admin, 2026, self.company, 'zlozone', 'Tak, 09.11', 0)
+        view = ContributionHolidays(self.admin)
+        self.addCleanup(view.deleteLater)
+        view.loaded(read_tracking_year(self.admin, 2026))
+        self.assertEqual(
+            [view.table.horizontalHeaderItem(col).text() for col in range(view.table.columnCount())],
+            ['Firma', 'Może skorzystać ze zwolnienia', 'Wysłane powiadomienie',
+             'Złożone', 'Miesiąc zwolnienia', 'Stan'],
+        )
+        index = next(i for i, row in enumerate(view.displayed_rows) if row['firma_id'] == self.company)
+        self.assertEqual(view.table.item(index, 1).text(), 'Tak')
+        self.assertEqual(view.table.item(index, 3).text(), 'Tak, 09.11')
+        self.assertEqual(view.table.item(index, 5).text(), 'Nieaktualny wpis RWS')
+        save_field(self.admin, 2026, self.company, 'decyzja', 'Przyznano zwolnienie', 0)
+        view.loaded(read_tracking_year(self.admin, 2026))
+        self.assertEqual(view.table.item(index, 5).text(), 'Przyznano zwolnienie')
 
     def test_import_keeps_n_records_encrypted_and_filters_by_company_access(self):
         self.assertEqual(self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N')])['rows'],2)

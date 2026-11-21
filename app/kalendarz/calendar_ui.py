@@ -62,6 +62,8 @@ class EventDialog(QDialog):
             self.gcal.addItem(cal["nazwa"], cal["id"])
         if self.gcal.count() == 0:
             self.gcal.addItem("— brak kalendarza Google —", None)
+        elif self.event.get("id") and not self.event.get("google_calendar_id"):
+            self.gcal.insertItem(0, "— lokalny / CalDAV —", None)
         current_cal = self.event.get("google_calendar_id")
         if current_cal and self.gcal.findData(current_cal) < 0:
             self.gcal.addItem(current_cal, current_cal)

@@ -7,10 +7,23 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QSpinBox,QLineEdit,
     QCheckBox,QPushButton,QTableWidgetItem,QAbstractItemView,
     QDialog,QDialogButtonBox,QPlainTextEdit,QMessageBox)
-from app.integrations.platnik.holidays import FIELDS,LABELS
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
 from app.utils.background import TaskRunner,CommandRunner
 from app.utils.month_names import display_months
+
+WORKSHEET_COLUMNS = (
+    ('moze_skorzystac', 'Może skorzystać ze zwolnienia'),
+    ('wyslane_powiadomienie', 'Wysłane powiadomienie'),
+    ('zlozone', 'Złożone'),
+    ('miesiac', 'Miesiąc zwolnienia'),
+    ('decyzja', 'Stan'),
+)
+
+
+def _rws_state(row, imported_at):
+    labels = {'A': 'Aktualne zwolnienie (RWS)', 'N': 'Nieaktualny wpis RWS'}
+    states = [labels.get(code, f'Do sprawdzenia (RWS {code})') for code in row.get('statuses', [])]
+    return ' · '.join(states) or ('Brak wpisu RWS' if imported_at else 'Nie odczytano roku')
 
 
 class ContributionHolidays(QWidget):
@@ -33,10 +46,10 @@ class ContributionHolidays(QWidget):
         self.year.valueChanged.connect(self.refresh)
         bar.addWidget(self.year)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Firma, NIP, imię, nazwisko lub kod ubezpieczenia')
+        self.search.setPlaceholderText('Szukaj firmy, NIP-u lub stanu')
         self.search.textChanged.connect(self.filter_rows)
         bar.addWidget(self.search)
-        self.active = QCheckBox('Tylko aktualne (A)')
+        self.active = QCheckBox('Tylko aktualne zwolnienia')
         self.active.toggled.connect(self.filter_rows)
         bar.addWidget(self.active)
         self.refresh_button = QPushButton('Odśwież zapisany odczyt')
@@ -46,17 +59,15 @@ class ContributionHolidays(QWidget):
         details.clicked.connect(self.show_sources)
         bar.addWidget(details)
         layout.addLayout(bar)
-        self.note = QLabel('Jeden wiersz sprawy klienta na rok. Dwuklik edytuje komórkę; wpisy biura nie są nadpisywane przez import. '
-                           '„Kto wysłał” to inicjały pracownika biura. Status RWS i szczegóły źródła są osobno. '
-                           'A — aktualne zwolnienie; N — nieaktualny wpis, nie odmowa.')
+        self.note = QLabel('Dwuklik edytuje wpis biura. Stan pokazuje odpowiedź ZUS zapisaną przez biuro lub status RWS z Płatnika.')
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
-        self.table = FrozenFirstColumnTable(0,2+len(FIELDS))
-        self.table.setHorizontalHeaderLabels(['Firma',*LABELS,'Status RWS (Płatnik)'])
+        self.table = FrozenFirstColumnTable(0, 1 + len(WORKSHEET_COLUMNS))
+        self.table.setHorizontalHeaderLabels(['Firma', *[label for _, label in WORKSHEET_COLUMNS]])
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -95,17 +106,27 @@ class ContributionHolidays(QWidget):
         self.company_query = query.casefold()
         self.filter_rows()
 
+    def _worksheet_value(self, row, field):
+        value = row.get(field)
+        if field == 'miesiac':
+            return display_months(value)
+        if value is None and field == 'decyzja':
+            return _rws_state(row, self.payload.get('imported_at'))
+        if value is None and field == 'moze_skorzystac':
+            return 'Do sprawdzenia'
+        return value
+
     def filter_rows(self,*_):
         rows = list(self.payload.get('rows',[]))
         query = self.search.text().strip().casefold()
-        rows = [row for row in rows if query in ' '.join(str(display_months(row.get(k)) if k=='miesiac' else row.get(k) or '') for k in ('firma','nip',*FIELDS)).casefold()
+        fields = ('firma', 'nip', *(field for field, _ in WORKSHEET_COLUMNS))
+        rows = [row for row in rows if query in ' '.join(str(self._worksheet_value(row, field) or '') for field in fields).casefold()
                 and self.company_query in (str(row.get('firma',''))+' '+str(row.get('nip',''))).casefold()
                 and (not self.active.isChecked() or 'A' in row.get('statuses',[]))]
         self.displayed_rows = rows
         self.table.setRowCount(len(rows))
         for index,row in enumerate(rows):
-            source_status = ', '.join(row.get('statuses',[])) or ('Brak wpisu RWS' if self.payload.get('imported_at') else 'Nie odczytano roku')
-            values = [row.get('firma'),*[display_months(row.get(key)) if key=='miesiac' else row.get(key) for key in FIELDS],source_status]
+            values = [row.get('firma'), *[self._worksheet_value(row, field) for field, _ in WORKSHEET_COLUMNS]]
             info = f"NIP: {row.get('nip','—')}\n"
             for source in row.get('sources',[]):
                 amounts = ', '.join(key.removeprefix('skladka_').upper()+': '+str(source.get(key) or '—')
@@ -119,8 +140,9 @@ class ContributionHolidays(QWidget):
                 if column==0:
                     item.setData(Qt.ItemDataRole.UserRole,row.get('firma_id'))
                 detail = info
-                if 1<=column<=len(FIELDS):
-                    metadata = row.get('notes',{}).get(FIELDS[column-1],{})
+                if column:
+                    field, _ = WORKSHEET_COLUMNS[column-1]
+                    metadata = row.get('notes',{}).get(field,{})
                     if metadata.get('value') is not None:
                         detail += f"\nWpis biura: {metadata.get('actor_name','—')}, {metadata.get('updated_at','—')}."
                         item.setBackground(QColor('#e8f3ff'))
@@ -128,7 +150,7 @@ class ContributionHolidays(QWidget):
                     else:
                         detail += '\nDane źródłowe / brak wpisu biura.'
                 item.setToolTip(detail)
-                if column==len(values)-1 and row.get('statuses')==['N']:
+                if column==len(values)-1 and row.get('decyzja') is None and row.get('statuses')==['N']:
                     item.setForeground(QColor('#7c7c7c'))
                 self.table.setItem(index,column,item)
         self.table.resizeColumnsToContents()
@@ -169,17 +191,19 @@ class ContributionHolidays(QWidget):
         dialog.exec()
 
     def edit_cell(self,index,column):
-        if self.saving or not 1<=column<=len(FIELDS) or index>=len(self.displayed_rows):
+        if self.saving or not 1<=column<=len(WORKSHEET_COLUMNS) or not 0<=index<len(self.displayed_rows):
             return
         row = self.displayed_rows[index]
-        field = FIELDS[column-1]
+        field, label_text = WORKSHEET_COLUMNS[column-1]
         year = self.loaded_year
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"{LABELS[column-1]} — {row['firma']} ({year})")
+        dialog.setWindowTitle(f"{label_text} — {row['firma']} ({year})")
         layout = QVBoxLayout(dialog)
         source = row.get('source_values',{}).get(field)
         if field=='miesiac':
             source = display_months(source)
+        if field=='decyzja':
+            source = _rws_state(row, self.payload.get('imported_at'))
         label = QLabel('Płatnik: '+str(source or 'Brak danych'))
         label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)
@@ -187,12 +211,6 @@ class ContributionHolidays(QWidget):
         value = display_months(row.get(field)) if field=='miesiac' else row.get(field)
         edit = QPlainTextEdit(str(value or ''))
         layout.addWidget(edit)
-        if field=='kto_wyslal':
-            initials = self.payload.get('current_initials','')
-            mine = QPushButton(f'Wstaw moje inicjały ({initials})')
-            mine.setEnabled(bool(initials))
-            mine.clicked.connect(lambda: edit.setPlainText(initials))
-            layout.addWidget(mine)
         reset = QCheckBox('Przywróć dane źródłowe / usuń wpis biura')
         reset.toggled.connect(lambda checked: edit.setEnabled(not checked))
         layout.addWidget(reset)

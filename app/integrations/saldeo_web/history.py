@@ -62,7 +62,8 @@ def apply_pending():
         for company in companies:
             by_name.setdefault(fold(company[1]), []).append(company[0])
         events = conn.execute("""SELECT event_key,company_name,miesiac FROM saldeo_web_events
-            WHERE state IN ('pending','needs_mapping') ORDER BY detected_at LIMIT 500
+            WHERE state IN ('pending','needs_mapping')
+            ORDER BY (state='pending') DESC, attempts, detected_at, event_key LIMIT 500
             FOR UPDATE SKIP LOCKED""").fetchall()
         for key, name, month in events:
             ids = by_name.get(fold(name), [])

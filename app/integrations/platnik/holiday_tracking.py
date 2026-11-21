@@ -11,6 +11,8 @@ from app.security.authorization import assigned_company_ids
 from app.utils.crypto import encrypt_password, decrypt_password
 from .holidays import FIELDS, read_year
 
+WORKSHEET_FIELDS = (*FIELDS, 'moze_skorzystac', 'zlozone')
+
 
 class WorksheetConflict(ValueError):
     pass
@@ -50,7 +52,7 @@ def read_tracking_year(actor_id, year):
         sources = grouped.get(company['id'], [])
         # One office case per company and year. Multiple source persons/months
         # remain available in details; no arbitrary "latest" record is selected.
-        source_values = {field: None for field in FIELDS}
+        source_values = {field: None for field in WORKSHEET_FIELDS}
         for field in ('imiona_nazwiska', 'kod_ubezpieczenia', 'miesiac'):
             values = []
             for source in sources:
@@ -60,7 +62,7 @@ def read_tracking_year(actor_id, year):
             source_values[field] = '; '.join(values) or None
         fields = notes.get(note_key(year, company['id']), {})
         values = {field: fields[field]['value'] if fields.get(field, {}).get('value') is not None
-                  else source_values[field] for field in FIELDS}
+                  else source_values[field] for field in WORKSHEET_FIELDS}
         rows.append({**values, 'firma': company['nazwa'], 'firma_id': company['id'],
                      'nip': company['nip'], 'source_values': source_values,
                      'sources': sources, 'notes': fields,
@@ -81,7 +83,7 @@ def save_field(actor_id, year, company_id, field, value, expected_revision):
     require_access(actor_id)
     if type(company_id) is not int or not 0 < company_id < 2**31 or company_id not in assigned_company_ids(actor_id):
         raise PermissionError('Brak dostępu do firmy.')
-    if field not in FIELDS or (value is not None and (not isinstance(value, str) or len(value) > 2000)):
+    if field not in WORKSHEET_FIELDS or (value is not None and (not isinstance(value, str) or len(value) > 2000)):
         raise ValueError('Nieprawidłowa komórka zestawienia (maksymalnie 2000 znaków).')
     if type(expected_revision) is not int or expected_revision < 0:
         raise ValueError('Nieprawidłowa wersja komórki.')

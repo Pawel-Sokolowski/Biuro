@@ -154,8 +154,30 @@ def _import_year(year, actor_id=None, *, progress=None, company_ids=None):
     config = load()
     if not config['enabled'] and company_ids is None:
         return {'mode':'disabled'}
-    from .holiday_query import QUERY
-    query = QUERY
+    from .holiday_query import QUERY, scoped_query
+    nips = None
+    if company_ids is not None:
+        from app.db.dao_conn import get_conn
+        from app.integrations.platnik.insurance import scope_xml
+        with get_conn() as conn:
+            companies = conn.execute('SELECT id,nip FROM firmy').fetchall()
+        selected_ids = set(company_ids)
+        selected = [company for company in companies if company['id'] in selected_ids]
+        if not selected or len(selected) != len(selected_ids):
+            raise ValueError('Nieznana firma w odczycie Płatnika.')
+        nips = {normalize_nip(company['nip']) for company in selected}
+        seen = set()
+        for company in companies:
+            try:
+                nip = normalize_nip(company['nip'])
+            except ValueError:
+                continue
+            if nip in nips and nip in seen:
+                raise ValueError('NIP wybranej firmy występuje w Biuro kilka razy. Uporządkuj przypisania przed odczytem Płatnika.')
+            seen.add(nip)
+        query, params = scoped_query(), (scope_xml(nips), year)
+    else:
+        query, params = QUERY, (year,)
     if progress:
         progress(f'Łączenie z SQL Płatnika — rok {year}…')
     connection = connect(config)
@@ -164,7 +186,7 @@ def _import_year(year, actor_id=None, *, progress=None, company_ids=None):
             cursor = connection.cursor()
             if progress:
                 progress(f'Odczyt wpisów RWS — rok {year}…')
-            cursor.execute(query,year)
+            cursor.execute(query, *params)
             columns = [column[0].lower() for column in cursor.description or []]
             if not {'source_id','nip','rok','imiona_nazwiska'}.issubset(columns) or len(columns)!=len(set(columns)):
                 raise ValueError('Adapter wymaga unikalnych kolumn nip, rok, imiona_nazwiska.')
@@ -176,29 +198,13 @@ def _import_year(year, actor_id=None, *, progress=None, company_ids=None):
             rows = normalize([dict(zip(columns,row)) for row in values],year)
         finally:
             connection.close()
-    if company_ids is not None:
-        from app.db.dao_conn import get_conn
-        with get_conn() as conn:
-            companies = conn.execute('SELECT id,nip FROM firmy WHERE id=ANY(%s)',(company_ids,)).fetchall()
-            all_companies = conn.execute('SELECT id,nip FROM firmy').fetchall()
-        if len(companies)!=len(set(company_ids)):
-            raise ValueError('Nieznana firma w odczycie Płatnika.')
-        nips = {normalize_nip(company['nip']) for company in companies}
-        seen = set()
-        for company in all_companies:
-            try:
-                nip = normalize_nip(company['nip'])
-            except ValueError:
-                continue
-            if nip in nips and nip in seen:
-                raise ValueError('NIP wybranej firmy występuje w Biuro kilka razy. Uporządkuj przypisania przed odczytem Płatnika.')
-            seen.add(nip)
+    if nips is not None:
         old = json.loads(get_setting(f'platnik_holidays_{year}') or '{}')
         old_rows = json.loads(decrypt_password(old['rows_enc'])) if old.get('rows_enc') else []
         rows = [row for row in old_rows if row.get('nip') not in nips] + [row for row in rows if row.get('nip') in nips]
     snapshot = {'imported_at':datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
                 'source':'Płatnik SQL — RWS_ZWOLNIENIE','rows_enc':encrypt_password(json.dumps(rows,ensure_ascii=False))}
-    snapshot['scope_nips'] = sorted(nips) if company_ids is not None else None
+    snapshot['scope_nips'] = sorted(nips) if nips is not None else None
     # Atomic replacement only after the entire source result was read and validated.
     if progress:
         progress(f'Zapisywanie {len(rows)} wpisów w Biuro — rok {year}…')

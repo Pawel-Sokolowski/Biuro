@@ -7,7 +7,7 @@ from app.db.dao_conn import get_conn
 from app.db.import_audit import log_import
 from app.companies.checking_obligations import add_imported
 from app.integrations.enova.checking import validate_declarations,CheckingBusy
-from app.integrations.enova.document_counts import fetch_counts,normalize_nip
+from app.integrations.enova.document_counts import fetch_counts,normalize_nip,sources_by_nip
 from app.integrations.enova.jpk import save_jpk, validate_jpk
 from app.services.worker_activity import record
 
@@ -98,6 +98,7 @@ def run(value, stop):
     config,config_error = None,None
     try:
         config = load_connection()
+        indexed_sources = sources_by_nip(config['sources'])
     except Exception as error:
         config_error = error
     for index,company in enumerate(companies):
@@ -110,7 +111,7 @@ def run(value, stop):
         try:
             if config_error is not None:
                 raise config_error
-            sources = [s for s in config['sources'] if normalize_nip(s['nip'])==normalize_nip(company['nip'])]
+            sources = indexed_sources.get(normalize_nip(company['nip']), [])
             if len(sources)!=1:
                 raise ValueError('Brak jednoznacznego powiązania firmy z bazą Enovy.')
             results.append(read_enova(config,sources[0],company['id'],months))

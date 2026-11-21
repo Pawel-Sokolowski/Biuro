@@ -95,6 +95,26 @@ class WorkerTests(DbTestCase):
             self.assertIn("invoice_email_status IN ('queued','failed_before_send')", sql)
             self.assertIn('cancelled_at IS NULL', sql)
 
+    def test_invoice_worker_does_not_starve_the_next_invoice_after_50_failures(self):
+        from app.worker import invoices_job
+        with get_conn() as conn:
+            ids = [row[0] for row in conn.execute("""
+                INSERT INTO faktury(miesiac,kwota_netto,kwota_brutto,pozycje_json,invoice_email_status,
+                                    invoice_email_actor_id,ksef_status,status,eksportowana)
+                SELECT '2026-11',100,123,'[]',
+                       CASE WHEN n=51 THEN 'queued' ELSE 'failed_before_send' END,%s,'przyjeta','wystawiona',1
+                FROM generate_series(1,51) AS n RETURNING id
+            """, (self.admin,))]
+        with patch('app.invoices.ksef_submission.process_invoice_batch',
+                   return_value={'accepted': [], 'errors': [{}]}) as process:
+            with self.assertRaises(RuntimeError):
+                invoices_job()
+            self.assertEqual({call.args[0][0] for call in process.call_args_list}, set(ids[:50]))
+        with patch('app.invoices.ksef_submission.process_invoice_batch',
+                   return_value={'accepted': [{'delivery': {'status': 'sent'}}], 'errors': []}) as process:
+            self.assertEqual(invoices_job()['sent'], 1)
+            process.assert_called_once_with([ids[-1]], self.admin, send=False)
+
     def test_worker_settings_and_local_key_pages_construct(self):
         from app.admin.settings.worker_settings import WorkerSettings
         from app.admin.settings.encryption_settings import EncryptionSettings

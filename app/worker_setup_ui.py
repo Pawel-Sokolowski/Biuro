@@ -42,12 +42,17 @@ class ConnectionDialog(QDialog):
         self.tls = QComboBox()
         for value in ('prefer', 'require', 'verify-full'):
             self.tls.addItem(value, value)
-        self.tls.setCurrentIndex(max(0, self.tls.findData(parse_qs(old.query).get('sslmode', ['prefer'])[0])))
+        tls_options = parse_qs(old.query)
+        default_tls = 'prefer' if old.hostname else 'verify-full'
+        self.tls.setCurrentIndex(max(0, self.tls.findData(tls_options.get('sslmode', [default_tls])[0])))
+        self.tls_root = QLineEdit(tls_options.get('sslrootcert', [''])[0])
+        self.tls_root.setPlaceholderText('Plik PEM urzędu CA lub domyślny magazyn libpq')
         self.key = QLineEdit(os.getenv('BIO_ENCRYPTION_KEY', ''))
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         for label, field in (('Adres PostgreSQL', self.host), ('Port', self.port), ('Baza Biuro', self.database),
                              ('Użytkownik PostgreSQL', self.username), ('Hasło PostgreSQL', self.password),
-                             ('TLS PostgreSQL', self.tls), ('Wspólny klucz szyfrowania', self.key)):
+                             ('TLS PostgreSQL', self.tls), ('Plik CA PostgreSQL', self.tls_root),
+                             ('Wspólny klucz szyfrowania', self.key)):
             form.addRow(label, field)
         layout.addLayout(form)
         key_button = QPushButton('Importuj wspólny klucz z pliku')
@@ -73,7 +78,8 @@ class ConnectionDialog(QDialog):
 
     def values(self):
         return (database_url(self.host.text(), self.port.value(), self.database.text(),
-                             self.username.text(), self.password.text(), self.tls.currentData()), self.key.text().strip())
+                             self.username.text(), self.password.text(), self.tls.currentData(),
+                             self.tls_root.text()), self.key.text().strip())
 
     def import_key(self):
         filename, _ = QFileDialog.getOpenFileName(self, 'Wspólny klucz', '', 'Klucz (*.key);;Wszystkie pliki (*)')

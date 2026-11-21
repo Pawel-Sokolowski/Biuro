@@ -9,10 +9,12 @@ import threading
 
 from app.remote import auth
 from app.remote.secrets import safe_error
-from app.remote.service import OfficeService
+from app.remote.service import OfficeService, _limit
 from app.remote.state import service_scope
 
 MAX_BODY = 48*1024*1024
+UI_FEATURES = ('mail_sidebar_snapshot', 'calendar_view_snapshot', 'checking_run_now',
+               'invoice_selection', 'bulk_mail_history', 'file_release', 'company_form_snapshot')
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +46,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_one_request(self):
         # Idle keep-alive clients must release bounded connection threads quickly.
-        self.connection.settimeout(5)
+        self.connection.settimeout(self.server.keepalive_timeout)
         super().handle_one_request()
 
     def do_GET(self):
@@ -60,13 +62,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._answer(404,{'message':'Nieznana operacja.'})
                 return
             # Authenticate before allocating or parsing an upload body.
+            service = self.server.office_service
             if self.path in private_routes:
                 header = self.headers.get('Authorization','')
                 if not header.startswith('Bearer '):
                     self._answer(401,{'message':'Zaloguj się do serwera biura.'})
                     return
                 try:
-                    self.server.office_service.identity(header[7:])
+                    token = header[7:]
+                    actor = service.identity(token)
                 except PermissionError:
                     self._answer(401,{'message':'Sesja wygasła. Zaloguj się ponownie.'})
                     return
@@ -89,7 +93,6 @@ class Handler(BaseHTTPRequestHandler):
             value = json.loads(raw)
             if not isinstance(value,dict):
                 raise ValueError('Nieprawidłowe żądanie.')
-            service = self.server.office_service
             if self.path in ('/api/v1/reset','/api/v1/redeem'):
                 email = value.get('email')
                 if not isinstance(email,str) or not 1<=len(email)<=320:
@@ -124,23 +127,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._answer(401,{'message':str(error)})
                     return
                 result['ui_authorization'] = auth.ui_authorization(result['employee_id'])
-                result['ui_features'] = ['mail_sidebar_snapshot','calendar_view_snapshot','checking_run_now','invoice_selection']
+                result['ui_features'] = UI_FEATURES
                 self._answer(200,result)
-                return
-            header = self.headers.get('Authorization','')
-            if not header.startswith('Bearer '):
-                self._answer(401,{'message':'Zaloguj się do serwera biura.'})
-                return
-            token = header[7:]
-            try:
-                actor = service.identity(token)
-            except PermissionError:
-                self._answer(401,{'message':'Sesja wygasła. Zaloguj się ponownie.'})
                 return
             if self.path=='/api/v1/session':
                 from app.version import __version__
                 result = {'employee_id':actor,'version':__version__,'ui_authorization':auth.ui_authorization(actor),
-                          'ui_features':['mail_sidebar_snapshot','calendar_view_snapshot','checking_run_now','invoice_selection']}
+                          'ui_features':UI_FEATURES}
             elif self.path=='/api/v1/logout':
                 service.forget(token)
                 result = {'ok':True}
@@ -149,12 +142,17 @@ class Handler(BaseHTTPRequestHandler):
                 with service_scope():
                     result = export_reports(actor,value)
             elif self.path=='/api/v1/operations':
-                result = service.submit(token,value)
+                result = service.submit(token,value,actor=actor)
             elif self.path=='/api/v1/jobs':
-                result = service.poll(token,value)
+                result = service.poll(token,value,actor=actor)
             elif self.path=='/api/v1/files':
-                data = base64.b64decode(value['data'],validate=True) if value.get('data') is not None else None
-                result = service.files.put(auth.digest(token),value.get('name','plik'),data)
+                owner = auth.digest(token)
+                if 'release' in value:
+                    service.files.release(owner,value['release'])
+                    result = {'ok': True}
+                else:
+                    data = base64.b64decode(value['data'],validate=True) if value.get('data') is not None else None
+                    result = service.files.put(owner,value.get('name','plik'),data)
             elif self.path=='/api/v1/download':
                 result = {'data':base64.b64encode(service.files.get(auth.digest(token),value)).decode('ascii')}
             else:
@@ -181,7 +179,8 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self,address,service):
         self.office_service = service
-        self.slots = threading.BoundedSemaphore(64)
+        self.keepalive_timeout = _limit('BIO_API_IDLE_TIMEOUT',30,5,120)
+        self.slots = threading.BoundedSemaphore(_limit('BIO_API_CONNECTIONS',128,16,512))
         self.large_bodies = threading.BoundedSemaphore(4)
         super().__init__(address,Handler)
 

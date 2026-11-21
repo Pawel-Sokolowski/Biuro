@@ -93,6 +93,8 @@ class BulkMailPlan:
 @office_endpoint('app.email.bulk_mail.send_bulk_batch')
 def send_bulk_batch(plan, recipients):
     try:
+        if not recipients or not set(recipients) <= set(plan.recipients) or len(recipients) > plan.batch_size:
+            raise ValueError('Lista partii musi pochodzić z zatwierdzonej kampanii.')
         if 'E-mail' not in allowed_tabs(plan.actor_id):
             raise PermissionError('Utracono dostęp do modułu E-mail.')
 
@@ -135,7 +137,8 @@ def send_bulk_batch(plan, recipients):
         plan.body,
         bcc=list(recipients),
         save_copy=True,
-        attachments=list(plan.attachments)
+        attachments=list(plan.attachments),
+        **({'require_attachments': True} if plan.attachments else {})
     )
 
     return {
@@ -143,17 +146,6 @@ def send_bulk_batch(plan, recipients):
         'blocked': False,
         'info': str(info).splitlines()[0] if info else ''
     }
-
-
-def resend_uncertain(plan, entry):
-    """Ponowienie jednej niepewnej partii po decyzji użytkownika (zapis w historii)."""
-    result = send_bulk_batch(plan, entry['recipients'])
-    status = 'sent' if result['ok'] else 'blocked' if result['blocked'] else 'uncertain'
-    from app.services.bulk_mail_log import record_batch
-    record_batch(getattr(plan, 'run_id', None),
-                 {'recipients': entry['recipients'], 'status': status,
-                  'info': result['info'], 'retry': True})
-    return result
 
 
 class BulkMailSender(QObject):
@@ -179,10 +171,38 @@ class BulkMailSender(QObject):
         self._stopped = False
         self.report = []
         self.running = True
-        # Raport wysyłki jest zapisywany od razu, więc zamknięcie okna nie gubi historii.
+        self._busy = True
+        from app.remote.state import client
+        connection = client()
         from app.services.bulk_mail_log import start_run
-        self._run_id = start_run(plan)
-        self._next()
+        from pathlib import Path
+        from dataclasses import replace
+
+        def begin():
+            if connection and 'bulk_mail_history' not in connection.server_features:
+                raise ValueError('Zaktualizuj worker, aby wysłać kampanię i zapisać jej historię.')
+            transport_plan = plan
+            names = tuple(Path(path).name for path in plan.attachments)
+            if connection:
+                transport_plan = replace(plan, attachments=connection.upload_campaign_attachments(plan.attachments))
+            try:
+                run_id = start_run(transport_plan, names)
+            except Exception:
+                if connection:
+                    connection.release_files(transport_plan.attachments)
+                raise
+            return run_id, transport_plan
+
+        def started(result):
+            self._run_id, self._transport_plan = result
+            self._connection = connection
+            self._busy = False
+            self._next()
+
+        try:
+            self._jobs.submit(begin, started, self._complete_error)
+        except Exception as error:
+            self._complete_error(error)
 
     def cancel(self):
         if not self.running:
@@ -199,6 +219,7 @@ class BulkMailSender(QObject):
             self._finish()
             return
         batch = self.plan.recipients[self._index:self._index + self.plan.batch_size]
+        batch_no = self._index // self.plan.batch_size
         self._busy = True
         self.progress.emit({'done': self._index, 'total': len(self.plan.recipients), 'waiting': False})
         def done(result):
@@ -211,8 +232,6 @@ class BulkMailSender(QObject):
                 # ponowienia — użytkownik decyduje, czy wysłać ponownie.
                 entry['retry_allowed'] = True
             self.report.append(entry)
-            from app.services.bulk_mail_log import record_batch
-            record_batch(self._run_id, entry)
             if status != 'blocked':
                 self._index += len(batch)
             if not result['ok'] or self._stopped or self._index >= len(self.plan.recipients):
@@ -223,7 +242,8 @@ class BulkMailSender(QObject):
         def failed(exc):
             done({'ok': False, 'blocked': False, 'info': str(exc)})
         try:
-            self._jobs.submit(lambda: send_bulk_batch(self.plan, batch), done, failed)
+            from app.services.bulk_mail_log import send_campaign_batch
+            self._jobs.submit(lambda: send_campaign_batch(self._run_id, self._transport_plan, batch_no), done, failed)
         except Exception as exc:
             done({'ok': False, 'blocked': True, 'info': str(exc)})
 
@@ -231,8 +251,24 @@ class BulkMailSender(QObject):
         if not self.running:
             return
         self._timer.stop()
-        self.running = False
+        self._busy = True
         from app.services.bulk_mail_log import finish_run
-        finish_run(self._run_id, remaining=len(self.plan.recipients) - self._index, stopped=self._stopped)
+
+        def finish():
+            released = finish_run(self._run_id, self.plan.actor_id, stopped=self._stopped)
+            if self._connection and released:
+                self._connection.release_files(self._transport_plan.attachments)
+
+        try:
+            self._jobs.submit(finish, lambda _: self._complete(), self._complete_error)
+        except Exception as error:
+            self._complete_error(error)
+
+    def _complete_error(self, error):
+        self._complete(str(error))
+
+    def _complete(self, error=''):
+        self._busy = False
+        self.running = False
         self.finished.emit({'entries': list(self.report), 'remaining': len(self.plan.recipients) - self._index,
-                            'stopped': self._stopped, 'total': len(self.plan.recipients)})
+                            'stopped': self._stopped, 'total': len(self.plan.recipients), 'error': error})

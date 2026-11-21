@@ -29,7 +29,14 @@ def plan(count=5, **kwargs):
                         tuple((i, (f'client{i}@example.com',)) for i in range(count)), **kwargs)
 
 
-class BulkMailTests(unittest.TestCase):
+class BulkMailTests(DbTestCase):
+    def setUp(self):
+        super().setUp()
+        from app.db.dao_conn import get_conn
+        with get_conn() as conn:
+            conn.execute("INSERT INTO konta_email(id,email) VALUES (10,'office@example.com')")
+            conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (1,10)')
+
     def test_addresses_validate_and_deduplicate(self):
         self.assertEqual(client_addresses('Jan <a@example.com>; A@example.com, b@example.com'),
                          ('a@example.com', 'b@example.com'))
@@ -144,7 +151,7 @@ class BulkMailTests(unittest.TestCase):
             return {'ok': True, 'blocked': False, 'info': 'OK'}
         with mock.patch.object(bulk_mail, 'send_bulk_batch', side_effect=send) as send_mock:
             sender.start(plan(batch_size=2))
-            self.assertTrue(entered.wait(1))
+            self.assertTrue(wait_until(entered.is_set))
             sender.cancel()
             self.assertTrue(sender.running)
             release.set()

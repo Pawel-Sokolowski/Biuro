@@ -40,6 +40,7 @@ from app.companies.constants import (
 )
 from app.companies.company_lookup import lookup_company_by_nip
 from app.companies.annual_declarations import ANNUAL_DECLARATIONS, DECLARATION_DETAILS
+from app.companies.form_data import CASH_DEFAULT_KEYS
 from app.utils.background import TaskRunner
 from app.companies.cennik_keys import (
     filter_cennik_keys, parse_cennik_key, typ_from_forma, vat_flag_from_status,
@@ -57,10 +58,10 @@ ADDR_FIELDS = ["miasto", "kod", "ulica", "budynek", "lokal",
                "wojewodztwo", "powiat", "gmina", "kraj"]
 
 
-def _merged_options(field: str, defaults) -> list:
+def _merged_options(field: str, defaults, available=None) -> list:
     """Wartości domyślne + te, które już występują w bazie."""
     values = list(defaults)
-    for value in get_company_field_options(field):
+    for value in get_company_field_options(field) if available is None else available[field]:
         if value not in values:
             values.append(value)
     return values
@@ -119,7 +120,7 @@ class CompanyForm(QDialog):
     _DEFAULT_CHECKED = {"fakturowac"}
     # pole firmy -> klucze ustawień globalnych (domyślna wartość dla nowych firm)
     _GLOBAL_DEFAULTS = {
-        "metoda_kasowa": ("eksport_kasowa", "faktury_metoda_kasowa", "domyslnie_metoda_kasowa"),
+        "metoda_kasowa": CASH_DEFAULT_KEYS,
     }
 
     @classmethod
@@ -143,13 +144,58 @@ class CompanyForm(QDialog):
 
         self.setWindowTitle("Firma")
         self.resize(1200, 900)
+        from app.remote.state import client
+        self._remote_card = client() is not None
+        if not self._remote_card:
+            self._build(None)
+            return
 
+        self._card_reads = {}
+        self._card_data = {}
+        self._card_pending = {}
+        self._card_tabs = set()
+        layout = QVBoxLayout(self)
+        waiting = QLabel('Wczytywanie karty firmy…')
+        layout.addWidget(waiting)
+        retry = QPushButton('Ponów odczyt')
+        retry.hide()
+        retry.clicked.connect(lambda: self._read_section('basic', loaded, failed))
+        layout.addWidget(retry)
+        cancel = QPushButton('Anuluj')
+        cancel.clicked.connect(self.reject)
+        layout.addWidget(cancel)
+
+        def loaded(snapshot):
+            for widget in (waiting, retry, cancel):
+                layout.removeWidget(widget)
+                widget.deleteLater()
+            self._build(snapshot)
+            if hasattr(self, '_pending_import_payload'):
+                self._load_company_from_payload(self._pending_import_payload)
+                del self._pending_import_payload
+
+        def failed(error):
+            waiting.setText(f'Nie udało się wczytać karty firmy. {error}')
+            retry.show()
+
+        self._read_section('basic', loaded, failed)
+
+    def _build(self, snapshot):
+        options = snapshot['options'] if snapshot is not None else None
+        employees = snapshot['employees'] if snapshot is not None else get_employees_list()
+        self._employees = employees
+        cash_default = snapshot['cash_default'] if snapshot is not None else self._checkbox_default('metoda_kasowa')
+        self._cash_default = cash_default
+        if snapshot is not None:
+            self._cennik_cache = {row['klucz']: row for row in snapshot['accounting_prices']}
         content = QWidget()
         main_layout = QVBoxLayout(content)
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
-        root_layout = QVBoxLayout(self)
+        root_layout = self.layout()
+        if root_layout is None:
+            root_layout = QVBoxLayout(self)
         root_layout.addWidget(scroll)
 
         # SEKCJA: DANE FIRMY
@@ -211,7 +257,7 @@ class CompanyForm(QDialog):
         krs = QLineEdit()
         pesel = QLineEdit()
         forma_dzialalnosci = QComboBox()
-        forma_dzialalnosci.addItems(_merged_options("forma_dzialalnosci", FORMA_DZIALALNOSCI))
+        forma_dzialalnosci.addItems(_merged_options("forma_dzialalnosci", FORMA_DZIALALNOSCI, options))
         make_searchable(forma_dzialalnosci)
         forma_dzialalnosci.setToolTip('Decyduje m.in. o tym, czy firma ma wspólników (sekcja Wspólnicy).')
 
@@ -226,11 +272,11 @@ class CompanyForm(QDialog):
 
         urzad_skarbowy = QComboBox()
         urzad_skarbowy.addItem("", None)
-        for office in get_tax_offices():
+        for office in snapshot['tax_offices'] if snapshot is not None else get_tax_offices():
             urzad_skarbowy.addItem(office["nazwa"], office["nazwa"])
         make_searchable(urzad_skarbowy)
         forma_opodatkowania = QComboBox()
-        forma_opodatkowania.addItems(_merged_options("forma_opodatkowania", FORMA_OPODATKOWANIA))
+        forma_opodatkowania.addItems(_merged_options("forma_opodatkowania", FORMA_OPODATKOWANIA, options))
         make_searchable(forma_opodatkowania)
         # Bez tej pozycji import Enovy nie ma jak wyliczyć rodzaju księgowości
         # (Ryczałt/KPiR/Księgi rachunkowe/Karta podatkowa) i pomija firmę.
@@ -250,7 +296,7 @@ class CompanyForm(QDialog):
             'status_vat': status_vat.currentText(),
             'forma_opodatkowania': forma_opodatkowania.currentText(),
             'forma_dzialalnosci': forma_dzialalnosci.currentText(),
-        })
+        }, defer_load=self._remote_card)
         monthly_box = QVBoxLayout(monthly_group)
         monthly_box.addWidget(self.monthly_setup)
 
@@ -273,6 +319,7 @@ class CompanyForm(QDialog):
         self.declaration_checks = {}
         self._annual_edits = {}
         self._owner_annual_edits = {}
+        self._annual_codes = {}
         self._annual_displayed_year = self.annual_year.value()
         self._annual_loading = False
         self._annual_next_row = 0
@@ -311,10 +358,10 @@ class CompanyForm(QDialog):
         )
 
         sposob_zaplaty = QComboBox()
-        sposob_zaplaty.addItems(_merged_options("sposob_zaplaty", SPOSOB_ZAPLATY))
+        sposob_zaplaty.addItems(_merged_options("sposob_zaplaty", SPOSOB_ZAPLATY, options))
         make_searchable(sposob_zaplaty)
         status_podatkowy = QComboBox()
-        status_podatkowy.addItems(_merged_options("status_podatkowy", STATUS_PODATKOWY))
+        status_podatkowy.addItems(_merged_options("status_podatkowy", STATUS_PODATKOWY, options))
         make_searchable(status_podatkowy)
         kategoria_domyslna = QLineEdit()
 
@@ -341,7 +388,7 @@ class CompanyForm(QDialog):
         kadrowa_id = QComboBox()
         for combo in (ksiegowa_id, kadrowa_id):
             combo.addItem("— brak —", 0)
-            for emp in get_employees_list():
+            for emp in employees:
                 combo.addItem(f"{emp['imie']} {emp['nazwisko']}", emp["id"])
             make_searchable(combo)
 
@@ -555,7 +602,7 @@ class CompanyForm(QDialog):
         wysylac_do_ksef = QCheckBox()
         wysylac_do_kontrahenta = QCheckBox()
         metoda_kasowa = QCheckBox()
-        metoda_kasowa.setChecked(self._checkbox_default("metoda_kasowa"))
+        metoda_kasowa.setChecked(cash_default)
         wliczac_zdrowotna = QCheckBox()
         wliczac_zdrowotna.setToolTip("Zaznaczone: zdrowotna jest już w cenie usługi księgowej — bez osobnej pozycji i bez dopłaty.")
 
@@ -610,7 +657,7 @@ class CompanyForm(QDialog):
         def add_kadry_row(labels, widgets):
             _grid_row(kadry_layout, labels, widgets)
 
-        kadry_opts = get_pricing_kadry()
+        kadry_opts = snapshot['payroll_prices'] if snapshot is not None else get_pricing_kadry()
 
         def add_kadry_cennik_options(combo: QComboBox, typ: str) -> None:
             """Pokaż nazwę usługi z cennika, zapisując techniczny klucz."""
@@ -746,7 +793,7 @@ class CompanyForm(QDialog):
         self.pel_table.setMinimumHeight(180)
         pel_layout.addWidget(self.pel_table)
         main_layout.addWidget(pel_box)
-        self._populate_pelnomocnictwa()
+        self._populate_pelnomocnictwa(employees, snapshot['authorizations'] if snapshot is not None else None)
         # ============================================================
         # FILTRY EMAIL FIRMY
         # ============================================================
@@ -764,7 +811,7 @@ class CompanyForm(QDialog):
 
         filter_form = QHBoxLayout()
         self.filter_account = QComboBox()
-        for account in get_all_email_accounts():
+        for account in [] if self._remote_card else get_all_email_accounts():
             self.filter_account.addItem(account["email"], account["id"])
         self.filter_sender = QComboBox()
         self.filter_sender.setEditable(True)
@@ -774,8 +821,9 @@ class CompanyForm(QDialog):
         sender_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         sender_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.filter_sender.setCompleter(sender_completer)
-        self.filter_account.currentIndexChanged.connect(self._reload_filter_senders)
-        self._reload_filter_senders()
+        if not self._remote_card:
+            self.filter_account.currentIndexChanged.connect(lambda _: self._reload_filter_senders())
+            self._reload_filter_senders()
         self.filter_folder = QComboBox()
         self.filter_folder.setEditable(True)
         self.filter_folder.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -784,8 +832,11 @@ class CompanyForm(QDialog):
         folder_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         folder_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.filter_folder.setCompleter(folder_completer)
-        self.filter_account.currentIndexChanged.connect(self._reload_filter_folders)
-        self._reload_filter_folders()
+        if self._remote_card:
+            self.filter_account.currentIndexChanged.connect(self._load_mail_choices)
+        else:
+            self.filter_account.currentIndexChanged.connect(lambda _: self._reload_filter_folders())
+            self._reload_filter_folders()
         btn_add_filter = QPushButton("Dodaj filtr")
         btn_delete_filter = QPushButton("Usuń zaznaczony")
         btn_add_filter.clicked.connect(self._add_company_email_filter)
@@ -1021,16 +1072,104 @@ class CompanyForm(QDialog):
         # ŁADOWANIE DANYCH FIRMY
         # ============================================================
         if self.firma_id:
-            self._load_company()
-            self._load_contacts()
-            self._load_email_filters()
-            self._load_partners()
-            self._load_notes()
+            self._load_company(snapshot['company'] if snapshot is not None else None)
+            if not self._remote_card:
+                self._load_contacts()
+                self._load_email_filters()
+                self._load_partners()
+                self._load_notes()
             self._refresh_cennik_options()
+        if self._remote_card:
+            self._card_status = QLabel()
+            self._card_status.setWordWrap(True)
+            root_layout.insertWidget(root_layout.indexOf(self.section_tabs) + 1, self._card_status)
+            self.section_tabs.currentChanged.connect(self._load_secondary_tab)
 
         for name in ("forma_opodatkowania", "status_vat"):
             self.inputs[name].currentTextChanged.connect(lambda _t: self._refresh_cennik_options())
         self.inputs["glowny_cennik"].activated.connect(lambda _i: self._on_cennik_chosen())
+
+    def _read_section(self, section, done, failed):
+        from app.remote.view_reads import company_form_section
+
+        if section in self._card_data:
+            done(self._card_data[section])
+            return
+        if section in self._card_pending:
+            self._card_pending[section].append((done, failed))
+            return
+        self._card_pending[section] = [(done, failed)]
+        if section not in self._card_reads:
+            self._card_reads[section] = TaskRunner(self)
+        company_id, actor_id = self.firma_id, self.actor_id
+        options = {'year': self.annual_year.value()} if section == 'filings' else {}
+
+        def loaded(value):
+            self._card_data[section] = value
+            for callback, _ in self._card_pending.pop(section):
+                callback(value)
+
+        def rejected(error):
+            for _, callback in self._card_pending.pop(section):
+                callback(error)
+
+        self._card_reads[section].submit(lambda: company_form_section(company_id, actor_id, section, **options),
+                                         loaded, rejected)
+
+    def _load_secondary_tab(self, index):
+        label = self.section_tabs.tabText(index)
+        self._card_status.clear()
+        if label in self._card_tabs:
+            return
+        sections = {
+            'Kontakty': ('people', 'mail'),
+            'Wspólnicy': ('people',),
+            'Rozliczenia i deklaracje': ('people', 'filings'),
+            'Notatki': ('notes',),
+        }.get(label)
+        if sections is None:
+            return
+        page = self.section_pages[label]
+        page.setEnabled(False)
+        self._card_status.setText('Wczytywanie danych zakładki…')
+        pending = set(sections)
+
+        def completed(section, value):
+            pending.discard(section)
+            if pending or label in self._card_tabs:
+                return
+            self._card_tabs.add(label)
+            if label == 'Kontakty':
+                people = self._card_data['people']
+                mail = self._card_data['mail']
+                self._load_contacts(people['contacts'], people['partners'])
+                self.filter_account.blockSignals(True)
+                for account in mail['accounts']:
+                    self.filter_account.addItem(account['email'], account['id'])
+                self.filter_account.blockSignals(False)
+                self._load_email_filters(mail['filters'])
+                self._show_mail_choices(mail['choices'])
+            elif label == 'Wspólnicy':
+                self._load_partners(self._card_data['people']['partners'])
+            elif label == 'Rozliczenia i deklaracje':
+                filings = self._card_data['filings']
+                self.monthly_setup.saved = filings['monthly']
+                self.monthly_setup.show_month()
+                self._annual_codes[(filings['year'], 0)] = filings['annual']
+                self._load_partners(self._card_data['people']['partners'])
+                self._annual_year_changed(self.annual_year.value())
+            else:
+                self._load_notes(value)
+            page.setEnabled(True)
+            if self.section_tabs.currentWidget() is page:
+                self._card_status.clear()
+
+        def failed(error):
+            if self.section_tabs.currentWidget() is page:
+                self._card_status.setText(f'Nie udało się wczytać danych. Otwórz zakładkę ponownie. {error}')
+
+        for section in sections:
+            self._read_section(section, lambda value, name=section: completed(name, value), failed)
 
     # ============================================================
     # CENNIK GŁÓWNY: filtr, sortowanie, autowypełnianie
@@ -1189,16 +1328,39 @@ class CompanyForm(QDialog):
         self._annual_displayed_year = year
         from app.db.dao_year_end import get_company_year_declarations
         owner_id = self.annual_owner.currentData() or 0
-        if owner_id:
-            from app.db.dao_year_end import get_owner_year_declarations
-            selected = self._owner_annual_edits.get((year, owner_id))
-            if selected is None:
-                selected = get_owner_year_declarations(self.firma_id, year, owner_id)
-        else:
-            selected = self._annual_edits.get(year)
-            if selected is None:
-                selected = get_company_year_declarations(self.firma_id, year) if self.firma_id else []
-        self._show_annual_selection(selected)
+        from app.db.dao_year_end import get_owner_year_declarations
+        selected = self._owner_annual_edits.get((year, owner_id)) if owner_id else self._annual_edits.get(year)
+        if selected is None:
+            selected = self._annual_codes.get((year, owner_id))
+        if selected is not None or not self.firma_id:
+            if hasattr(self, '_annual_reads'):
+                self._annual_reads.invalidate()
+            self._show_annual_selection(selected or [])
+            for check in self.declaration_checks.values():
+                check.setEnabled(True)
+            return
+        company_id = self.firma_id
+
+        def read():
+            return (get_owner_year_declarations(company_id, year, owner_id) if owner_id
+                    else get_company_year_declarations(company_id, year))
+
+        if not self._remote_card:
+            self._show_annual_selection(read())
+            return
+        if not hasattr(self, '_annual_reads'):
+            self._annual_reads = TaskRunner(self)
+        for check in self.declaration_checks.values():
+            check.setEnabled(False)
+
+        def loaded(codes):
+            self._annual_codes[(year, owner_id)] = codes
+            self._show_annual_selection(codes)
+            for check in self.declaration_checks.values():
+                check.setEnabled(True)
+
+        self._annual_reads.submit(read, loaded, lambda error: self._card_status.setText(
+            f'Nie udało się wczytać deklaracji rocznych. {error}'))
 
     def _show_annual_selection(self, selected):
         self._annual_loading = True
@@ -1214,16 +1376,11 @@ class CompanyForm(QDialog):
     def _load_declaration_checkboxes(self, data):
         self._annual_year_changed(self.annual_year.value())
 
-    def _load_email_filters(self):
-        company = get_company(self.firma_id)
-        folder_name = (
-            (company or {}).get("nazwa_skrocona")
-            or (company or {}).get("nazwa")
-            or str(self.firma_id)
-        )
-        ensure_contact_email_filters(self.firma_id, folder_name)
+    def _load_email_filters(self, rows=None):
+        if rows is None:
+            rows = get_email_filters_for_company(self.firma_id)
         self.email_filters_table.setRowCount(0)
-        for rule in get_email_filters_for_company(self.firma_id):
+        for rule in rows:
             row = self.email_filters_table.rowCount()
             self.email_filters_table.insertRow(row)
             self.email_filters_table.setItem(row, 0, QTableWidgetItem(rule.get("od") or rule.get("nadawca_zawiera") or ""))
@@ -1232,30 +1389,50 @@ class CompanyForm(QDialog):
             self.email_filters_table.setItem(row, 2, QTableWidgetItem(friendly_folder_name(rule.get("folder_docelowy", ""))))
             self.email_filters_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, rule["id"])
 
-    def _reload_filter_folders(self):
+    def _reload_filter_folders(self, folders=None):
         from app.email.email_helpers import friendly_folder_name
         from app.email.email_sync import selectable_folder_names
         account_id = self.filter_account.currentData()
-        names = (
-            sorted({friendly_folder_name(n) for n in selectable_folder_names(int(account_id))} - {""}, key=str.casefold)
-            if account_id is not None else []
-        )
+        if folders is None:
+            folders = selectable_folder_names(int(account_id)) if account_id is not None else []
+        names = sorted({friendly_folder_name(name) for name in folders} - {''}, key=str.casefold)
         self.filter_folder.clear()
         self.filter_folder.addItems(names)
         self.filter_folder.setCurrentIndex(-1)
         self.filter_folder.setEditText("")
 
-    def _reload_filter_senders(self):
+    def _reload_filter_senders(self, available=None, contacts=None):
         current = self.filter_sender.currentText()
-        addresses = set(get_known_sender_addresses(self.filter_account.currentData()))
+        addresses = set(get_known_sender_addresses(self.filter_account.currentData()) if available is None else available)
         if self.firma_id:
-            for contact in get_contacts(self.firma_id):
+            for contact in get_contacts(self.firma_id) if contacts is None else contacts:
                 email = (contact.get("email") or "").strip().lower()
                 if "@" in email:
                     addresses.add(email)
         self.filter_sender.clear()
         self.filter_sender.addItems(sorted(addresses))
         self.filter_sender.setEditText(current)
+
+    def _load_mail_choices(self, *_):
+        from app.remote.view_reads import company_form_section
+        if not hasattr(self, '_mail_choice_reads'):
+            self._mail_choice_reads = TaskRunner(self)
+        account = self.filter_account.currentData()
+        self._mail_choice_reads.invalidate()
+        if account is None:
+            self._show_mail_choices({'senders': [], 'folders': []})
+        else:
+            self._reload_filter_folders([])
+            company_id, actor_id = self.firma_id, self.actor_id
+            self._mail_choice_reads.submit(
+                lambda: company_form_section(company_id, actor_id, 'mail_choices', account_id=account),
+                self._show_mail_choices,
+                lambda error: self._card_status.setText(f'Nie udało się wczytać folderów lub nadawców. {error}'))
+
+    def _show_mail_choices(self, value):
+        contacts = self._card_data.get('people', {}).get('contacts', [])
+        self._reload_filter_senders(value['senders'], contacts)
+        self._reload_filter_folders(value['folders'])
 
     def _ensure_company_saved(self) -> bool:
         """Nowa firma musi istnieć w bazie, zanim dodamy do niej wspólników, kontakty i filtry."""
@@ -1273,7 +1450,7 @@ class CompanyForm(QDialog):
             logger.exception("Błąd zapisu firmy")
             QMessageBox.critical(self, "Firma", f"Nie udało się zapisać firmy: {e}")
             return False
-        self._populate_pelnomocnictwa()
+        self._populate_pelnomocnictwa(self._employees)
         return True
 
     def _add_company_email_filter(self):
@@ -1315,9 +1492,9 @@ class CompanyForm(QDialog):
     # ============================================================
     # PEL / UPL
     # ============================================================
-    def _populate_pelnomocnictwa(self):
-        granted = get_pelnomocnictwa(self.firma_id) if self.firma_id else {}
-        employees = get_employees_list()
+    def _populate_pelnomocnictwa(self, employees, granted=None):
+        if granted is None:
+            granted = get_pelnomocnictwa(self.firma_id) if self.firma_id else {}
         self.pel_table.setRowCount(len(employees))
         for row, emp in enumerate(employees):
             name_item = QTableWidgetItem(f"{emp['imie']} {emp['nazwisko']}")
@@ -1389,8 +1566,8 @@ class CompanyForm(QDialog):
     # ============================================================
     # ŁADOWANIE DANYCH
     # ============================================================
-    def _load_company(self):
-        data = get_company(self.firma_id)
+    def _load_company(self, data=None):
+        data = get_company(self.firma_id) if data is None else data
         if not data:
             return
 
@@ -1399,7 +1576,8 @@ class CompanyForm(QDialog):
         # Bez mapowania ponowne otwarcie pokazuje puste adresy, a kolejny
         # zapis formularza może nadpisać istniejące adresy pustymi danymi.
         data = self._payload_to_form_keys(data)
-        self._load_declaration_checkboxes(data)
+        if not self._remote_card:
+            self._load_declaration_checkboxes(data)
 
         for key, widget in self.inputs.items():
             val = data.get(key)
@@ -1414,7 +1592,8 @@ class CompanyForm(QDialog):
             elif isinstance(widget, QComboBox):
                 self._set_combo_value(key, widget, val)
             elif isinstance(widget, QCheckBox):
-                widget.setChecked(bool(val) if val is not None else self._checkbox_default(key))
+                default = self._cash_default if key == 'metoda_kasowa' else self._checkbox_default(key)
+                widget.setChecked(bool(val) if val is not None else default)
         self._refresh_cennik_options()
         self._fill_prices_from_cennik(only_missing=True)
 
@@ -1452,6 +1631,9 @@ class CompanyForm(QDialog):
     # ŁADOWANIE DANYCH Z PAYLOADU (IMPORT WIZARD)
     # ============================================================
     def _load_company_from_payload(self, payload: Dict[str, Any]):
+        if not self.inputs:
+            self._pending_import_payload = dict(payload)
+            return
         """
         Ładuje dane z payloadu wygenerowanego przez importer.
         Payload zawiera tylko podstawowe pola — reszta zostaje pusta.
@@ -1489,13 +1671,16 @@ class CompanyForm(QDialog):
         self._fill_prices_from_cennik(only_missing=True)
 
     # ============================================================
-    def _load_contacts(self):
+    def _load_contacts(self, contacts=None, partners=None):
         if not self.firma_id:
             return
         # Kontakty i wspólnicy to jedna lista osób; wiersz wspólnika jest tylko do odczytu tutaj.
         from app.db.dao_companies import get_partners, partner_contacts
-        rows = get_contacts(self.firma_id) + partner_contacts(
-            self.firma_id, None, get_partners(self.firma_id))
+        contacts = get_contacts(self.firma_id) if contacts is None else contacts
+        partners = get_partners(self.firma_id) if partners is None else partners
+        if self._remote_card:
+            self._card_data['people'] = {'contacts': contacts, 'partners': partners}
+        rows = contacts + partner_contacts(self.firma_id, contacts, partners)
         self.contacts_table.setRowCount(0)
         for r in rows:
             row = self.contacts_table.rowCount()
@@ -1627,6 +1812,9 @@ class CompanyForm(QDialog):
             self.monthly_setup.saved = {}
             self.monthly_setup.edits = {}
             self.monthly_setup.show_month()
+            self._annual_edits.clear()
+            self._owner_annual_edits.clear()
+            self._annual_codes.clear()
             self._annual_year_changed(self.annual_year.value())
         except Exception:
             pass
@@ -1644,12 +1832,14 @@ class CompanyForm(QDialog):
         if index >= 0:
             self.section_tabs.setTabVisible(index, visible)
 
-    def _load_partners(self):
+    def _load_partners(self, rows=None):
         self._update_partners_visibility()
         if not self.firma_id:
             return
 
-        rows = get_partners(self.firma_id)
+        rows = get_partners(self.firma_id) if rows is None else rows
+        if self._remote_card and 'people' in self._card_data:
+            self._card_data['people']['partners'] = rows
         selected_owner = self.annual_owner.currentData()
         owner_ids = {owner["id"] for owner in rows}
         self._owner_annual_edits = {
@@ -1914,10 +2104,10 @@ class CompanyForm(QDialog):
     # ============================================================
     # NOTATKI
     # ============================================================
-    def _load_notes(self):
+    def _load_notes(self, rows=None):
         if not self.firma_id:
             return
-        rows = get_notes_for_company(self.firma_id)
+        rows = get_notes_for_company(self.firma_id) if rows is None else rows
         self.notes_table.setRowCount(0)
         for r in rows:
             row = self.notes_table.rowCount()

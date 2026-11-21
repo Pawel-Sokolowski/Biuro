@@ -7,6 +7,28 @@ from app.db.dao_conn import get_conn
 from tests.base import DbTestCase
 
 
+class AlembicDeploymentTests(unittest.TestCase):
+    def test_fresh_upgrade_provisions_bulk_history_before_first_campaign(self):
+        from app.config import get_schema
+        from app.db.schema import schema_is_current, upgrade_database
+        from app.services.bulk_mail_log import history
+        from tests.base import create_test_schema, drop_test_schema
+
+        previous = get_schema()
+        schema = create_test_schema()
+        try:
+            upgrade_database()
+            upgrade_database()
+            self.assertTrue(schema_is_current())
+            with get_conn() as conn:
+                tables = {row[0] for row in conn.execute(
+                    'SELECT tablename FROM pg_tables WHERE schemaname=%s', (schema,))}
+            self.assertTrue({'bulk_mail_runs', 'bulk_mail_batches'} <= tables)
+            self.assertEqual(history(), [])
+        finally:
+            drop_test_schema(schema, previous)
+
+
 class SchemaTests(DbTestCase):
     def tables(self):
         conn = get_conn()

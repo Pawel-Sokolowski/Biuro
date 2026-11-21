@@ -22,6 +22,8 @@ Biuro to aplikacja Windows dla biura rachunkowego. Łączy kartotekę firm, wido
 
 `python migrate_db.py` wykonuje oczekujące migracje Alembic w bazie wskazanej przez `DB_URL`. Można uruchomić go z dowolnego komputera z bezpośrednim dostępem do tej bazy i odpowiednimi uprawnieniami. Zainstalowany worker udostępnia `Biuro.exe --worker-migrate`, które korzysta z konfiguracji workera. Przy kolejnych aktualizacjach schematu kod migracji znajduje się w `app/db/migrations/versions`.
 
+Przed aktualizacją schematu zachowaj kopię PostgreSQL i klucz Biuro oraz sprawdź procedurę odzyskania. [Kopia zapasowa i odtworzenie](docs/database-recovery.md)
+
 ## Sprawdzanie i deklaracje
 
 - **Enova365.** Zmiana etapu na **Wysłane wyniki** zleca odczyt dokumentów dla danej firmy i miesiąca. Reguły licznika zależą od KPiR, ksiąg handlowych lub ryczałtu i statusu VAT. KPiR i ryczałt mają zestawienie **Sprzedaż | Zakup | DW | Razem**. Raporty kasowe podlegają ustawionemu dzielnikowi, a LT i OT są wyłączone z licznika środków trwałych. [Reguły i konfiguracja Enova](docs/enova/README.md)

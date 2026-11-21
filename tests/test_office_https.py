@@ -97,6 +97,135 @@ class OfficeHttpsTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM bank_transakcje').fetchone()[0], 12)
 
+    def test_company_form_initial_read_is_batched_off_the_gui_thread(self):
+        from app.companies.company_form import CompanyForm
+        from tests.test_review_optimizations import wait_until
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Karta HTTPS')
+        requests = []
+        request = self.client._request
+        gui_thread = threading.get_ident()
+
+        def trace(path, payload=None, **kwargs):
+            requests.append((path, payload, threading.get_ident()))
+            return request(path, payload, **kwargs)
+
+        with mock.patch('app.remote.state._client', self.client), \
+                mock.patch.object(self.client, '_request', side_effect=trace):
+            form = CompanyForm(company, actor_id=1)
+            self.addCleanup(form.close)
+            self.assertTrue(wait_until(lambda: 'nazwa' in form.inputs))
+            self.assertEqual(form.inputs['nazwa'].text(), 'Karta HTTPS')
+            self.assertEqual([p['operation'] for _, p, _ in requests],
+                             ['app.companies.form_data.company_form_snapshot'])
+            self.assertNotEqual(requests[0][2], gui_thread)
+            form.section_tabs.setCurrentWidget(form.section_pages['Notatki'])
+            self.assertTrue(wait_until(lambda: 'Notatki' in form._card_tabs))
+            self.assertEqual(len(requests), 2)
+            self.assertTrue(all(thread != gui_thread for _, _, thread in requests))
+
+    def test_finished_file_transfers_release_session_slots(self):
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        server_files = self.server.office_service.files
+        target = Path(self.temporary.name) / 'companies.xlsx'
+        from app.remote.auth import digest
+        for _ in range(102):
+            target.write_bytes(b'old content')
+            reference = self.client._file(target, 'output')
+            server_file = Path(server_files.path(digest(self.client.token), reference))
+            server_file.write_bytes(b'export')
+            self.client._request('download', reference)
+            self.client.release_files([reference])
+        self.assertFalse(server_files.items)
+        target = target.with_suffix('.csv')
+        self.client.call('app.db.dao_companies.export_companies_csv', (str(target),))
+        self.assertTrue(target.exists())
+        self.assertFalse(server_files.items)
+
+    def test_short_qt_jobs_share_existing_https_connections(self):
+        from PyQt6.QtCore import QObject
+        from app.utils.background import TaskRunner
+        from tests.test_review_optimizations import wait_until
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Połączenie wielokrotnego użycia')
+        owner = QObject()
+        runner = TaskRunner(owner)
+        results, errors = [], []
+
+        def submit():
+            runner.submit(lambda: self.client.call('app.db.dao_companies.get_company', (company,)),
+                          completed, errors.append)
+
+        def completed(row):
+            results.append(row)
+            if len(results) < 80:
+                submit()
+
+        with mock.patch.object(self.client, '_new_session', wraps=self.client._new_session) as connect:
+            submit()
+            self.assertTrue(wait_until(lambda: len(results) == 80 or errors))
+            self.assertFalse(errors)
+            self.assertLess(connect.call_count, 4)
+            self.assertTrue(all(row['id'] == company for row in results))
+
+    def test_saldeo_file_export_requires_permission_beyond_invoice_tab(self):
+        from app.db.dao_conn import get_conn
+        employee = self.make_employee('invoices@example.test', haslo='Haslo12345')
+        with get_conn() as conn:
+            role = conn.execute("INSERT INTO role(nazwa,zakladki,can_export_data) VALUES ('Eksport test','Faktury',0) RETURNING id").fetchone()[0]
+            conn.execute('UPDATE pracownicy SET rola_id=%s WHERE id=%s', (role, employee))
+        self.client.login('invoices@example.test', 'Haslo12345')
+        self.assertIn('Faktury', self.client._ui_authorization['tabs'])
+        target = Path(self.temporary.name) / 'forbidden.xlsx'
+        with self.assertRaises(PermissionError):
+            self.client.call('app.utils.saldeo_exporter.export_saldeo_xlsx', ([], str(target)))
+        self.assertFalse(target.exists())
+        self.assertFalse(self.server.office_service.files.items)
+
+    def test_bulk_campaign_history_and_idempotent_smtp_through_https(self):
+        from app.db.dao_conn import get_conn
+        from app.email.bulk_mail import BulkMailPlan, BulkMailSender
+        from app.services import bulk_mail_log
+        from tests.test_review_optimizations import wait_until
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Wysyłka HTTPS', adres_email='client@example.test')
+        with get_conn() as conn:
+            conn.execute("INSERT INTO konta_email(id,email) VALUES (10,'office@example.test')")
+            conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (1,10)')
+        notice = Path(self.temporary.name) / 'notice.txt'
+        notice.write_text('Treść załącznika', encoding='utf-8')
+        plan = BulkMailPlan(999, 10, 'office@example.test', 'Temat', 'Treść',
+                            ((company, ('client@example.test',)),), attachments=(str(notice),))
+        with mock.patch('app.remote.state._client', self.client), \
+                mock.patch('app.email.bulk_mail.send_email_smtp', return_value=(True, 'OK')) as smtp:
+            sender = BulkMailSender()
+            results = []
+            sender.finished.connect(results.append)
+            sender.start(plan)
+            self.assertTrue(wait_until(lambda: bool(results)))
+            self.assertFalse(results[0]['error'])
+            history = bulk_mail_log.history()
+            self.assertEqual(history[0]['actor_id'], 1)
+            self.assertEqual(history[0]['remaining'], 0)
+            self.assertEqual(history[0]['attachments'], ['notice.txt'])
+            self.assertEqual(history[0]['batches'][0]['status'], 'sent')
+            self.assertFalse(self.server.office_service.files.items)
+            # Resubmit a completed campaign batch while retaining the original attachment identity.
+            from dataclasses import replace
+            refs = self.client.upload_campaign_attachments(plan.attachments)
+            try:
+                result = bulk_mail_log.send_campaign_batch(
+                    history[0]['id'], replace(plan, attachments=refs), 0)
+                self.assertTrue(result['ok'])
+            finally:
+                self.client.release_files(refs)
+            smtp.assert_called_once()
+            self.assertEqual(Path(smtp.call_args.kwargs['attachments'][0]).name, 'notice.txt')
+            self.assertTrue(smtp.call_args.kwargs['require_attachments'])
+
     def test_selected_invoice_details_for_1000_records_use_one_https_request(self):
         from app.db.dao_conn import get_conn
         from app.remote.view_reads import invoice_selection

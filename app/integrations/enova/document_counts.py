@@ -72,6 +72,19 @@ def normalize_nip(value):
     return text
 
 
+def sources_by_nip(sources):
+    """Index mappings without collapsing duplicate matches."""
+    indexed = {}
+    for source in sources:
+        try:
+            nip = normalize_nip(source.get('nip'))
+        except ValueError:
+            # Configuration saves reject these; old data can contain isolated invalid mappings.
+            continue
+        indexed.setdefault(nip, []).append(source)
+    return indexed
+
+
 def whole_count(value):
     if value is None or isinstance(value, bool):
         raise ValueError('Brak liczby dokumentów; NULL nie oznacza zera.')
@@ -251,7 +264,10 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
     if not query.strip():
         raise ValueError('Plik zapytania jest pusty.')
     connection_string = sql_connection_string(config, source['database'], user, password)
+    from time import perf_counter
+    started = perf_counter()
     connection = pyodbc.connect(connection_string, timeout=15, attrs_before={101: 1})
+    connected = perf_counter()
     try:
         cursor = connection.cursor()
         from app.integrations.enova.discovery import query_timeout
@@ -290,6 +306,12 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
                              'mimo ustalonego powiązania firmy. Nie zapisano zer; sprawdź adapter i okres importu.')
         return [dict(zip(columns, row)) for row in rows]
     finally:
+        import logging
+        duration = perf_counter() - connected
+        logging.getLogger(__name__).log(
+            logging.INFO if duration + connected - started >= .25 else logging.DEBUG,
+            'enova_source_read kind=%s connect_s=%.3f query_s=%.3f',
+            result_kind, connected - started, duration)
         connection.close()
 
 

@@ -643,9 +643,11 @@ def _execute(
     )
     from app.integrations.enova.document_counts import (
         normalize_nip,
+        sources_by_nip,
     )
 
     config = load_connection()
+    indexed_sources = sources_by_nip(config['sources'])
     results = []
 
     for company in companies:
@@ -670,13 +672,7 @@ def _execute(
                 company['nip']
             )
 
-            sources = [
-                source
-                for source in config['sources']
-                if normalize_nip(
-                    source['nip']
-                ) == nip
-            ]
+            sources = indexed_sources.get(nip, [])
 
             if len(sources) != 1:
                 raise ValueError(

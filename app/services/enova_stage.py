@@ -23,7 +23,7 @@ def record_change(conn, company_id, month, before, payload):
 
 def run(stop=None):
     from app.integrations.enova.connection_settings import load_connection
-    from app.integrations.enova.document_counts import normalize_nip,run_import,month_batches
+    from app.integrations.enova.document_counts import normalize_nip,run_import,month_batches,sources_by_nip
     from app.integrations.enova.checking import run_checking_import
     config = load_connection()
     if not config['enabled']:
@@ -41,6 +41,7 @@ def run(stop=None):
         companies = {row['id']:dict(row) for row in conn.execute(
             'SELECT id,nip FROM firmy WHERE id=ANY(%s)',(list(groups),)).fetchall()}
     results,consumed = [],[]
+    indexed_sources = sources_by_nip(config['sources'])
     for company_id,events in groups.items():
         if stop is not None and stop.is_set():
             break
@@ -49,8 +50,7 @@ def run(stop=None):
             continue
         months = sorted({value['month'] for row,value in events})
         try:
-            sources = [source for source in config['sources']
-                       if normalize_nip(source['nip'])==normalize_nip(companies[company_id]['nip'])]
+            sources = indexed_sources.get(normalize_nip(companies[company_id]['nip']), [])
             if len(sources)!=1:
                 raise ValueError('Brak jednoznacznego mapowania bazy Enovy.')
             selected = {**config,'sources':sources,'months_back':1}

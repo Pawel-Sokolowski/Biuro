@@ -12,7 +12,7 @@ def worker_env_path():
     return base / 'worker.env'
 
 
-def database_url(host, port, database, username, password, sslmode='prefer'):
+def database_url(host, port, database, username, password, sslmode='prefer', sslrootcert=''):
     host = host.strip()
     if not host or any(c in host for c in '/@?#\\\r\n'):
         raise ValueError('Podaj adres PostgreSQL, bez protokołu i nazwy bazy.')
@@ -23,8 +23,9 @@ def database_url(host, port, database, username, password, sslmode='prefer'):
     host = host.strip('[]')
     if ':' in host:
         host = '[' + host + ']'
-    return (f'postgresql://{quote(username.strip(), safe="")}:{quote(password, safe="")}@'
-            f'{host}:{int(port)}/{quote(database.strip(), safe="")}?sslmode={sslmode}')
+    url = (f'postgresql://{quote(username.strip(), safe="")}:{quote(password, safe="")}@'
+           f'{host}:{int(port)}/{quote(database.strip(), safe="")}?sslmode={sslmode}')
+    return url + (f'&sslrootcert={quote(sslrootcert.strip(), safe="")}' if sslrootcert.strip() else '')
 
 
 def probe_database(dsn, key):

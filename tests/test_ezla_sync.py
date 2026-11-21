@@ -146,6 +146,14 @@ class EzlaSyncTests(DbTestCase):
             with self.assertRaises(RuntimeError):
                 run_job('ezla')
 
+    def test_worker_catches_up_after_monday_and_finishes_only_once_per_week(self):
+        from app.worker import ezla_job
+        tuesday = MONDAY_AFTER_IMPORT_TIME + timedelta(days=1)
+        with patch('app.integrations.ezla.sync.run_sync', return_value={'companies': 2, 'failed': 0}) as run:
+            self.assertEqual(ezla_job(now=tuesday)['mode'], 'completed')
+            self.assertEqual(ezla_job(now=tuesday + timedelta(days=2))['mode'], 'checked_this_week')
+        run.assert_called_once_with(stop=None)
+
     @patch('app.worker.datetime', wraps=datetime)
     def test_unattended_worker_downloads_commits_and_exposes_live_company_log(self, worker_datetime):
         from app.worker import JOBS, serve

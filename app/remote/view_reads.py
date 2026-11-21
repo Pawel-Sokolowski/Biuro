@@ -61,3 +61,9 @@ def invoice_selection(invoice_ids, actor_id, *, details=False):
     return [invoice for invoice_id in invoice_ids
             if (invoice := get_invoice_by_id(invoice_id)) is not None
             and can_access_invoice(actor_id, invoice.get('firma_id'))]
+
+
+def company_form_section(company_id, actor_id, section, **options):
+    from app.companies.form_data import company_form_snapshot, read_section
+    read = company_form_snapshot if _batched('company_form_snapshot') else read_section
+    return read(company_id, actor_id, section, **options)

@@ -673,7 +673,7 @@ class AccountingPage(QWidget):
                 issue.setForeground(QColor('#92400e'))
 
     def _render_hr(self, rows, today, days):
-        records, missing = [], 0
+        records, missing, failed = [], 0, 0
         selected = self.report_selectors['payroll'].currentData() or ''
         kind = selected[3:] if selected.startswith('hr:') else None
         for row in rows:
@@ -681,8 +681,12 @@ class AccountingPage(QWidget):
             report = decoded(row.get('hr'))
             if report.get('events') is None:
                 missing += 1
+            if report.get('last_attempt_failed'):
+                failed += 1
             for event in report.get('events') or []:
                 if kind and event['event_type'] != kind:
+                    continue
+                if kind is None and event['event_type'] == 'employee':
                     continue
                 status = hr_status(event, today, days or 90)
                 if status is None:
@@ -691,7 +695,7 @@ class AccountingPage(QWidget):
                     continue
                 employee = event['employee_name'] + ' (' + event['employee_id'] + ')'
                 records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', employee,
-                                event.get('document_number') or '—', HR_LABELS[event['event_type']],
+                                event.get('document_number') or '—', event.get('detail') or HR_LABELS[event['event_type']],
                                 event.get('due_date') or '—', status, _date(report.get('imported_at'))])
             if len(records) == before:
                 state = 'Brak odczytu' if report.get('events') is None else 'Brak terminów w wybranym zakresie'
@@ -713,7 +717,8 @@ class AccountingPage(QWidget):
             if record[7] in ('Po terminie', 'Brak terminu'):
                 paint_state(self.hr_table.item(index, 7), 'error')
         self.hr_note.setText(f'Stan terminów na {today.isoformat()}. Brak odczytu dla {missing} firm. '
-                             'Umowy bezterminowe są widoczne w „Wszystkie pobrane”. Dane wymagają źródła terminów kadrowych z Enova.')
+                             f'Nieudana ostatnia próba dla {failed} firm. '
+                             'Umowy bezterminowe są widoczne w „Wszystkie pobrane”.')
 
     @staticmethod
     def _fill(table, headers, records):

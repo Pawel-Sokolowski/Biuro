@@ -1,7 +1,7 @@
 """Resolve shipped adapters separately from user-owned SQL overrides."""
 from pathlib import Path
 
-ADAPTER_REVISION = 6
+ADAPTER_REVISION = 7
 DOCUMENTS_QUERY = 'monthly-documents.sql'
 
 
@@ -30,7 +30,7 @@ def with_query_defaults(config):
             elif shared:
                 source[name] = shared
                 defaults[name] = shared
-            elif name in ('payroll_query', 'declarations_query', 'jpk_query'):
+            else:
                 source[name] = str(bundled / (name.removesuffix('_query') + '.sql'))
                 defaults[name] = source[name]
         if defaults:

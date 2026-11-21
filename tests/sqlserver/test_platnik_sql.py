@@ -6,6 +6,7 @@ import uuid
 
 from app.integrations.platnik.declarations import normalize, source_query
 from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, requirements
+from app.integrations.platnik.insurance import QUERY as INSURANCE_QUERY, REQUIRED as REGISTRY_TABLES, normalize_periods
 
 DSN = os.environ.get('BIURO_SQLSERVER_TEST_DSN')
 NIP = '1112223344'
@@ -16,7 +17,7 @@ ALIASES = {
     ('ZUSRZA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
     ('ZUSRPA', 'I_1_1IDRAPS'): 'I_1_11DRAPS',
 }
-TABLES = requirements(FORMS) | {'PLATN_IDENT': {'ID_PLATNIK', 'NIP'}}
+TABLES = requirements(FORMS) | REGISTRY_TABLES
 
 
 @unittest.skipUnless(DSN, 'Requires the isolated GitHub SQL Server service')
@@ -44,7 +45,8 @@ class PlatnikSqlTests(unittest.TestCase):
                 names.update(prefix + field for field in ('1KODTYTUB', '2PRDOEM', '3STNIEP'))
             columns = []
             for name in sorted(names):
-                kind = 'int' if name.startswith('ID_') else 'datetime' if name.endswith('DATAWYPEL') else 'nvarchar(64)'
+                kind = ('int' if name == 'ID' or name.startswith('ID_') else
+                        'datetime' if name.endswith('DATAWYPEL') or name in ('DATAOD','DATADO') else 'nvarchar(64)')
                 columns.append('[' + name + '] ' + kind)
             cls.writer.execute('CREATE TABLE dbo.' + table + '(' + ','.join(columns) + ')')
         cls.writer.execute('CREATE USER import_reader WITHOUT LOGIN; GRANT SELECT ON SCHEMA::dbo TO import_reader;')
@@ -136,7 +138,7 @@ class PlatnikSqlTests(unittest.TestCase):
         self.document(4, parent=42, payer=8)
         self.child('RPA', 4, 42)
         self.writer.execute('UPDATE UBEZP_ZUSRPA SET ID_PLATNIK=8 WHERE ID_DOKUMENT=4')
-        self.writer.execute("INSERT INTO PLATN_IDENT VALUES (8,'9998887766')")
+        self.writer.execute("INSERT INTO PLATN_IDENT(ID_PLATNIK,NIP) VALUES (8,'9998887766')")
         rows = self.query(selected=[NIP] + [f'{number:010}' for number in range(1000)])
         entries = normalize(rows, ['2026-11'], [NIP])[NIP]['2026-11']
         self.assertEqual(len(entries), 2)
@@ -155,6 +157,23 @@ class PlatnikSqlTests(unittest.TestCase):
         row, = self.query(selected=[NIP])
         self.assertEqual(row['nip'], NIP)
         self.assertEqual(row['form'], 'ZUS ZIPA')
+
+    def test_owner_insurance_periods_match_payer_and_person_without_exporting_pesel(self):
+        self.writer.execute("""
+            INSERT INTO PLATN_IDENT(ID_PLATNIK,NIP,PESEL) VALUES (7,'PL 111-222-33-44','12345678901');
+            INSERT INTO UBEZPIECZONY(ID,ID_PLATNIK) VALUES (20,7),(21,7),(22,8);
+            INSERT INTO UBEZP_IDENT(ID_UBEZPIECZONY,NIP,PESEL) VALUES
+                (20,NULL,'12345678901'),(21,'1112223344','12345678902'),(22,NULL,'12345678901');
+            INSERT INTO UBEZP_PODLEGANIE(ID_UBEZPIECZONY,KODTYTUB,PRDOEM,STNIEP,DATAOD,DATADO) VALUES
+                (20,'0590','0','0','2026-01-01',NULL),(21,'0570','0','0','2026-01-01',NULL),
+                (22,'0510','0','0','2026-01-01',NULL);
+        """)
+        cursor = self.reader.cursor()
+        cursor.execute(INSURANCE_QUERY, '<p><n>1112223344</n></p>')
+        self.assertNotIn('PESEL', {column[0].upper() for column in cursor.description})
+        self.assertEqual(normalize_periods(cursor.fetchall(), {NIP: 1}), {
+            1: [{'nip': NIP, 'code': '059000', 'from': '2026-01-01', 'until': None}],
+        })
 
     def test_registration_and_deregistration_use_their_document_insurance_codes(self):
         for identity, (code, prefix) in enumerate((('ZUA','V_1_'), ('ZZA','V_1_'), ('ZWUA','IV_1_')), 1):

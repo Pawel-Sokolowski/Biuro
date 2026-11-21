@@ -79,15 +79,9 @@ widok `DokEwidencja`. VAT nie jest przełącznikiem dostępu do dokumentów.
 Brak wierszy miesięcy nie oznacza zerowej liczby dokumentów. Pusty wynik zapytania
 wbudowanego jest dodatkowo sprawdzany pod kątem NIP-u właściciela w Enovie.
 
-Pola **Deklaracje i UPO**, **Dokumenty kadrowe**, **Umowy/BHP** i **JPK** to opcjonalne
-adaptery w plikach **`.sql`**, z zapytaniami zgodnymi z kontraktem opisanym w
-[instrukcji Enovy](enova/README.md). Nie są to pliki `.ps1`/`.cmd` instalatora.
-Instalacja zawiera gotowe zapytania do dokumentów księgowych, list płac i wypłat.
-Worker wybiera je automatycznie, również po aktualizacji istniejących ustawień.
-Nie trzeba kopiować ani wskazywać plików SQL. Puste pole **Dokumenty kadrowe**
-oznacza adapter wbudowany; opcjonalna ścieżka zastępuje go własnym zapytaniem.
-Trzy pozostałe puste pola oznaczają brak danego adaptera. Deklaracje/UPO i terminy
-nadal wymagają potwierdzonego mapowania; pomaga `docs/enova/profile-declarations.sql`.
+Pola **Deklaracje i UPO**, **Dokumenty kadrowe**, **Umowy/BHP** i **JPK** pozwalają
+wskazać własne zapytania SQL. Przy pustych polach worker korzysta z zapytań
+dołączonych przez instalator. Kontrakty zapytań opisuje [instrukcja Enovy](enova/README.md).
 Plik wskazany własną ścieżką musi znajdować się na serwerze workera, najlepiej
 poza katalogiem instalacyjnym (aby aktualizacja go nie nadpisała).
 Eksport struktury Enovy daje metadane do

@@ -261,10 +261,16 @@ def sync_checking(conn, config, source, company, day, *, divisor, apply, months=
     if source.get('declarations_query'):
         query = {**source, 'count_query': source['declarations_query']}
         declarations = validate_declarations(_counts(config, query, months, 'declarations', force=force), source, months)
-    events = None
+    events, hr_error = None, False
     if source.get('hr_events_query'):
         from app.integrations.enova.hr_events import fetch_events
-        events = fetch_events(config, source, day)
+        try:
+            events = fetch_events(config, source, day)
+        except Exception as exc:
+            hr_error = True
+            if apply:
+                log_import(conn, 'enova_hr', source=source['database'], status='failed',
+                           details={'company_id': company_id, 'error_type': type(exc).__name__})
     if force and source.get('jpk_query'):
         from app.integrations.enova.jpk import import_jpk
         import_jpk(conn, config, source, company_id, months, day, apply=apply, force=True)
@@ -276,13 +282,18 @@ def sync_checking(conn, config, source, company, day, *, divisor, apply, months=
                      'imported_at': stamp, 'database': source['database']}
             _store_accounting_breakdown(value, count)
             save_snapshot(conn, 'enova_checking', company_id, count.month, value)
-        hr_snapshot = {'events': events, 'imported_at': stamp, 'as_of': day.isoformat(), 'database': source['database']}
-        save_snapshot(conn, 'enova_hr', company_id, '', hr_snapshot)
+        if hr_error:
+            previous = read_snapshot(conn, 'enova_hr', company_id) or {}
+            save_snapshot(conn, 'enova_hr', company_id, '', {**previous, 'last_attempt_failed': True})
+        else:
+            hr_snapshot = {'events': events, 'imported_at': stamp, 'as_of': day.isoformat(), 'database': source['database']}
+            save_snapshot(conn, 'enova_hr', company_id, '', hr_snapshot)
         if not force:
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
     return {'mode': 'applied' if apply else 'preview', 'months': len(months),
-            'payroll_configured': payroll is not None, 'declarations_configured': declarations is not None, 'hr_configured': events is not None}
+            'payroll_configured': payroll is not None, 'declarations_configured': declarations is not None,
+            'hr_configured': bool(source.get('hr_events_query')), 'hr_failed': hr_error}
 
 
 @office_endpoint('app.integrations.enova.checking.run_checking_import')

@@ -87,6 +87,27 @@ ani litery statusu. Potwierdzenie w Płatniku jest osobnym obiektem; opisuje je
 rozdziały 5.6.8–5.6.9. Pełny odczyt statusu wysyłki i potwierdzenia pozostaje
 do uzupełnienia po potwierdzeniu mapowania pól i kodów.
 
+## Kody i terminy ulg
+
+Miesięczny odczyt uzupełnia kody z dokumentów okresami właścicieli z rejestru
+`UBEZP_PODLEGANIE`. Płatnik i ubezpieczony są łączeni wewnątrz SQL Server
+po swojej kartotece i identyfikatorze. PESEL służy do dopasowania w Płatniku.
+Do Biuro trafia zaszyfrowany zestaw NIP-ów, kodów i dat obowiązywania.
+Źródłowa data wyrejestrowania jest pierwszym dniem poza okresem.
+
+W widoku miesięcznym **Kadry** kolumna **Ulga ZUS do** pokazuje źródłową datę
+lub prognozę, z oznaczeniem jej pochodzenia. Dla ulgi na start i składek
+preferencyjnych można wykorzystać zapisaną datę z kartoteki. Prognoza obejmuje
+6 lub 24 pełne miesiące według zapisanych okresów. Przy możliwych przerwach
+w tych tytułach potrzebna jest data z kartoteki. [Składki preferencyjne – ZUS](https://www.zus.pl/pl/firmy/rozliczenia-z-zus/skladki-preferencyjne)
+
+Mały ZUS Plus 0590/0592 od 2026 r. ma prognozę w standardowym limicie 36
+miesięcy w okresie 60 miesięcy prowadzenia działalności. Biuro wyznacza ją
+na podstawie zapisanych okresów ubezpieczenia, licząc miesiąc z choć jednym
+dniem i pomijając wykorzystanie sprzed 2026 r. Uprawnienie wymaga osobnej
+weryfikacji warunków rocznych, kompletności historii i ewentualnego dodatkowego
+limitu 12 miesięcy. [Mały ZUS Plus od 2026 r. – ZUS](https://www.zus.pl/pl/-/%E2%80%9Ema%C5%82y-zus-plus-nowe-zasady-od-2026-r.)
+
 ## Własny zamiennik
 
 Opcjonalne pola zamiennika SQL dla rozliczeń/zgłoszeń oraz IWA/ZSWA przyjmują pełną ścieżkę pliku na

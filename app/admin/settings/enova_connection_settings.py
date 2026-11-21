@@ -50,7 +50,7 @@ class EnovaConnectionSettings(QWidget):
         self.payroll_query = QLineEdit(config.get('payroll_query', ''))
         self.payroll_query.setPlaceholderText('Automatycznie: wbudowane listy płac i wypłaty. Opcjonalnie własny plik .sql')
         self.hr_events_query = QLineEdit(config.get('hr_events_query', ''))
-        self.hr_events_query.setPlaceholderText('Brak adaptera — opcjonalny plik .sql umów, badań i BHP')
+        self.hr_events_query.setPlaceholderText('Automatycznie — opcjonalny zamiennik SQL pracowników, umów, badań i BHP')
         self.jpk_query = QLineEdit(config.get('jpk_query', ''))
         self.jpk_query.setPlaceholderText('Automatycznie — opcjonalny zamiennik SQL JPK VAT')
         self.enabled = QCheckBox('Włącz odczyt po zmianie etapu firmy')
@@ -188,12 +188,9 @@ class EnovaConnectionSettings(QWidget):
         self.update_mapping_status()
 
     def update_adapter_status(self,*_):
-        missing = [label for label,field in (('umowy/BHP',self.hr_events_query),)
-                   if not field.text().strip()]
-        self.adapter_status.setText('Dokumenty księgowe, listy płac, wypłaty, deklaracje podatkowe i JPK VAT: zapytania wbudowane, bez wskazywania pliku. '+
-            ('Bez adaptera SQL: '+', '.join(missing)+'. ' if missing else 'Podano ścieżki adapterów; pliki muszą istnieć na serwerze workera. ')+
+        self.adapter_status.setText('Dokumenty księgowe, płace, deklaracje, JPK i terminy kadrowe mają wbudowane zapytania. '
             'Pola powyżej przyjmują pliki .sql, nie skrypty instalacji .ps1/.cmd. '
-            'Puste pola deklaracji, JPK i dokumentów kadrowych przywracają zapytania wbudowane; własny plik zastępuje odpowiedni odczyt. '
+            'Zapisana ścieżka zastępuje odpowiednie zapytanie. Własny plik musi istnieć na serwerze workera. '
             'Eksport struktury Enovy służy przygotowaniu adapterów; sam nie jest zapytaniem importującym.')
 
     def review_mappings(self):

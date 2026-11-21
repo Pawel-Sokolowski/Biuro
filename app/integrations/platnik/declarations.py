@@ -7,6 +7,7 @@ import logging
 from app.db.checking_storage import save_snapshots
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from psycopg import Error as DatabaseError
 
 from app.db.dao_conn import get_conn, get_coordination_conn
 from app.integrations.enova.document_counts import normalize_nip
@@ -242,6 +243,14 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
                         if not annual:
                             add_imported_periods(conn, fid, periods, 'platnik')
                     save_snapshots(conn, 'platnik_declarations', snapshots)
+            registry = None
+            if not annual and config.get('server'):
+                from app.integrations.platnik.insurance import refresh
+                try:
+                    registry = refresh(config, mapped)
+                except (ValueError, RuntimeError, DatabaseError) as error:
+                    registry = 'failed'
+                    logging.getLogger(__name__).warning('Odczyt tytułów ZUS właścicieli: %s', type(error).__name__)
         documents = sum(len(entries) for by_month in records.values() for entries in by_month.values())
         # Jeden wpis w historii importów na cały odczyt Płatnika (miesiące albo rok).
         from app.db.import_audit import log_import_safely
@@ -251,8 +260,10 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
                           details={'companies': len(nips_by_company), 'months': months,
                                    'documents': documents, 'annual': annual},
                           user_id=actor_id)
-        return {'mode': 'applied', 'companies': len(nips_by_company), 'months': months,
-                'documents': documents}
+        result = {'mode': 'applied', 'companies': len(nips_by_company), 'months': months, 'documents': documents}
+        if registry is not None:
+            result['insurance_registry'] = registry
+        return result
 
 
 def decoded_snapshot(value):

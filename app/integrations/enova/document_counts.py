@@ -274,14 +274,15 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         from app.integrations.enova.discovery import query_timeout
         connection.timeout = query_timeout(config)
         bundled = query_path.resolve().parent == bundled_directory().resolve() and query_path.name in (
-            DOCUMENTS_QUERY, 'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql')
+            DOCUMENTS_QUERY, 'kpir.sql','kh.sql','ryczalt.sql','checking.sql','jpk.sql','declarations.sql','payroll.sql','hr_events.sql')
         if bundled:
             _bind_company_identity(cursor,source)
         if bundled and query_path.name == DOCUMENTS_QUERY:
             cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_accounting_type', @value=?", source['accounting_type'])
             cursor.execute("EXEC sys.sp_set_session_context @key=N'biuro_vat_czynny', @value=?", source.get('vat_czynny'))
         # Exactly two positional date parameters: inclusive start, exclusive end.
-        cursor.execute(query, date.fromisoformat(month_bounds(months[0])[0]),
+        start = source['hr_as_of'] if bundled and query_path.name == 'hr_events.sql' else date.fromisoformat(month_bounds(months[0])[0])
+        cursor.execute(query, start,
                        date.fromisoformat(month_bounds(months[-1])[1]))
         columns = [column[0].lower() for column in cursor.description or []]
         contracts = {
@@ -294,7 +295,7 @@ def fetch_counts(config, source, months, *, result_kind="counts"):
         required = contracts[result_kind]
         optional = ({'rodzaje', 'pozycje_kasowe', 'sprzedaz', 'zakup'} if result_kind == 'counts' else
                     {'employee_id', 'employee_name', 'source_system', 'raw_status', 'form_variant', 'created_at'} if result_kind == 'declarations' else
-                    {'document_number'} if result_kind == 'hr_events' else
+                    {'document_number', 'detail'} if result_kind == 'hr_events' else
                     {'raw_status', 'form_variant', 'sent_at', 'upo_at'} if result_kind == 'jpk' else set())
         if not required <= set(columns) or set(columns) - required - optional or len(columns) != len(set(columns)):
             raise ValueError('Nieprawidłowe kolumny zapytania: ' + ', '.join(sorted(required)))

@@ -425,8 +425,8 @@ SQL można podać globalnie lub dla źródła; zastępuje odpowiedni odczyt wbud
 Dla firm ze zmienionymi symbolami, niestandardowym XML UPO lub inną kolejnością
 korekt służy `profile-declarations.sql` i opcjonalny zamiennik SQL. Schematy JSON
 pozostają poza repozytorium. Zapytania nie były uruchamiane na bazach klientów.
-Terminy umów/badań/BHP i indywidualne deklaracje podatkowe pracowników nadal
-wymagają osobnego adaptera; nie są zastępowane dokumentami księgowymi.
+Indywidualne deklaracje pracowników mają osobny kontrakt odczytu. Wbudowane
+zapytanie terminów kadrowych korzysta z rejestrów modułu Kadry Płace.
 
 Kontrakty opcjonalnych zamienników SQL:
 
@@ -478,31 +478,35 @@ liczbę przyjętych i liczbę UPO; nie nadaje wszystkim statusu jednego pracowni
 `source_system` to pochodzenie danych z zapytania, **nie gotowy osobny konektor
 Płatnika**. Mapowanie tabel i statusów Płatnika nadal wymaga weryfikacji.
 
-### Umowy, badania i BHP
+### Pracownicy, umowy, badania i BHP
 
-Pole „Umowy, badania i BHP” (`hr_events_query`) wskazuje zweryfikowane zapytanie
-SQL w tym samym mechanizmie odczytu. Wymagane kolumny:
+W **Kadry → Sprawdzanie** odczyt Enovy udostępnia listę pracowników z aktywną
+umową o pracę lub umową cywilnoprawną, końce umów, ważność ostatnich badań danego
+rodzaju i terminy szkoleń BHP wyznaczone w Enovie. Adapter czyta aktualną historię
+etatów z `PracHistorie`, umowy z `Umowy` i pozycje z `BadaniaLekarskie`
+oraz `SzkoleniaBHP`. Widok BHP korzysta z terminu zaplanowanego szkolenia.
+[Moduł Kadry Płace enova365](https://enova.pl/moduly-systemu/moduly/kadry-place/)
+
+Puste pole **Umowy, badania i BHP** uruchamia wbudowane zapytanie `hr_events.sql`.
+Pole `hr_events_query` przyjmuje własny plik SQL. Wymagane kolumny:
 `nip`, `event_id`, `employee_id`, `employee_name`, `event_type`, `due_date`, `status`.
-Opcjonalnie `document_number`. Rodzaje: `contract_end`, `medical_exam`,
-`ohs_training`. Statusy: `active`, `completed`, `cancelled`. Identyfikator jest
+Opcjonalne kolumny to `document_number` i `detail`. Obsługiwane rodzaje to
+`employee`, `contract_end`, `medical_exam` i `ohs_training`.
+Statusy to `active`, `completed` i `cancelled`. Identyfikator jest
 unikatowy w ramach firmy i rodzaju; jeden pracownik może mieć wiele umów.
 Daty: ISO YYYY-MM-DD albo SQL DATE; NULL dla umowy bezterminowej. Brak terminu
 badań/BHP jest sygnałem do sprawdzenia, nie umową bezterminową.
 
-Zapytanie otrzymuje dwa parametry: początek bieżącego miesiąca i koniec okna
-obejmującego najbliższe 91 dni (zaokrąglony do końca miesiąca). Musi zwrócić
+Własne zapytanie otrzymuje początek miesiąca oraz koniec okna obejmującego
+najbliższe 91 dni, zaokrąglony do końca miesiąca. Wbudowany adapter otrzymuje
+dzień odczytu jako pierwszy parametr. Zapytanie ma zwracać
 również nadal aktywne zaległe terminy i umowy bezterminowe — dolna granica
 **nie służy do odfiltrowania zaległości**. Zamknięte/anulowane zdarzenia są
 pomijane w widoku. Pusta poprawna lista oznacza brak zdarzeń, brak konfiguracji
 pozostaje „brak odczytu”. Terminy odnoszą się do dzisiaj w Europe/Warsaw,
 nie do wybranego miesiąca dokumentów. Dostępne okna 7/30/60/90 dni i wszystkie
-pobrane. Worker zapisuje aktualny odczyt atomowo z pozostałymi danymi firmy;
-błąd walidacji zachowuje poprzednie dane. Nowa konfiguracja adapterów unieważnia
-dzienny znacznik ukończenia i pozwala odczytać je bez czekania na następny dzień.
-
-Nie ma jeszcze zweryfikowanego zapytania do terminów kadrowych konkretnej
-instalacji Enovy. Należy przygotować je na podstawie eksportu struktury i
-potwierdzonych znaczeń pól, tak samo jak zapytanie deklaracji/UPO.
+pobrane. Błąd odczytu kadrowego zachowuje ostatni wynik i pojawia się w informacji
+nad raportem. Odczyt deklaracji i liczników może zakończyć się niezależnie.
 
 ### Wybór raportu i wszystkie firmy
 

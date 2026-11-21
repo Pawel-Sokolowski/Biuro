@@ -1,7 +1,6 @@
-"""Standard fields from ZUS Struktury danych osobowych, section 4.3.
+"""Standard form fields from ZUS Struktury danych osobowych, section 4.3."""
+from app.integrations.platnik.contributions import amounts_sql
 
-Only identities and source periods; no PESEL, amounts or family member data.
-"""
 MONTHLY = {
     'DRA': {'table': 'ZUSDRA', 'period': 'I_2_2OKRESDEKLAR', 'report': 'I_2_1IDDEKLS',
             'header_insurance': 'XI_1_'},
@@ -71,13 +70,14 @@ def records_sql(specs, document_key, has_status, columns=None):
     """Identifiers come only from this shipped catalogue and a two-name key allowlist."""
     if document_key not in ('ID', 'ID_DOKUMENT'):
         raise ValueError('Nieprawidłowy klucz dokumentu Płatnika.')
+    columns = columns or {}
     status = 'CONVERT(nvarchar(32),d.STATUSPT)' if has_status else 'CAST(NULL AS nvarchar(32))'
-    payer_identity_visible = {'ID_PLATNIK', 'NIP'} <= (columns or {}).get('PLATN_IDENT', set())
+    payer_identity_visible = {'ID_PLATNIK', 'NIP'} <= columns.get('PLATN_IDENT', set())
     def insurance(table, alias, prefix):
         if not prefix:
             return 'CAST(NULL AS nvarchar(6))'
         names = [prefix+suffix for suffix in ('1KODTYTUB','2PRDOEM','3STNIEP')]
-        available = (columns or {}).get(table,set())
+        available = columns.get(table,set())
         if names[0] not in available:
             return 'CAST(NULL AS nvarchar(6))'
         base = f'NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(6),{alias}.{names[0]}))),N\'\')'
@@ -97,15 +97,17 @@ def records_sql(specs, document_key, has_status, columns=None):
         name = (f"LTRIM(RTRIM(COALESCE(a.{spec['first']},N'') + N' ' + COALESCE(a.{spec['last']},N'')))"
                 if spec.get('employee') else 'CAST(NULL AS nvarchar(256))')
         code_expr = insurance(spec['table'], 'a', spec.get('header_insurance'))
+        amounts = amounts_sql(spec['table'], 'a', columns.get(spec['table'], set()))
         result.append(f"""SELECT N'ZUS {code}' AS form, a.ID_DOKUMENT AS source_id,
             a.ID_PLATNIK AS payer_id, {nip} AS nip, {period} AS source_period,
             {report} AS report_id, {employee_id} AS employee_id, {name} AS employee_name,
             {status} AS raw_status,
             CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK THEN 1 ELSE 0 END AS valid_link,
-            N'{spec.get('kind', 'month')}' AS period_kind, {code_expr} AS insurance_code
+            N'{spec.get('kind', 'month')}' AS period_kind, {code_expr} AS insurance_code, {amounts}
             FROM dbo.{spec['table']} a LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT""")
         if spec.get('child'):
             child_code = insurance(spec['child'], 'u', spec.get('insurance_prefix', 'III_B_1_'))
+            amounts = amounts_sql(spec['child'], 'u', columns.get(spec['child'], set()))
             child_status = 'CONVERT(nvarchar(32),child_d.STATUSPT)' if has_status else 'CAST(NULL AS nvarchar(32))'
             child_nip, orphan_join = nip, ''
             if payer_identity_visible:
@@ -120,7 +122,7 @@ def records_sql(specs, document_key, has_status, columns=None):
                 {child_status}, CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK
                     AND u.ID_PLATNIK=a.ID_PLATNIK AND child_d.{document_key} IS NOT NULL
                     AND child_d.ID_PLATNIK=a.ID_PLATNIK AND child_d.ID_DOK_NAD=a.ID_DOKUMENT THEN 1 ELSE 0 END,
-                N'{spec.get('kind', 'month')}', {child_code}
+                N'{spec.get('kind', 'month')}', {child_code}, {amounts}
                 FROM dbo.{spec['child']} u LEFT JOIN dbo.{spec['table']} a ON a.ID_DOKUMENT=u.ID_DOK_NAD
                 LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT
                 LEFT JOIN dbo.DOKUMENT child_d ON child_d.{document_key} = u.ID_DOKUMENT{orphan_join}""")

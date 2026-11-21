@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from calendar import monthrange
 
 
@@ -33,20 +33,16 @@ def default_month_for_monthly_view(today: date | None = None) -> str:
     """Use the previous month until the last calendar day of the current month."""
     today = today or date.today()
     current = f"{today.year:04d}-{today.month:02d}"
-    if today.day < _last_day_of_month(today.year, today.month):
+    if today.day < monthrange(today.year, today.month)[1]:
         return previous_month(current)
     return current
-
-
-def _last_day_of_month(year: int, month: int) -> int:
-    return monthrange(year, month)[1]
 
 
 def month_bounds(month: str) -> tuple[str, str]:
     """Return an inclusive start and exclusive end ISO date for YYYY-MM."""
     start = datetime.strptime(month, "%Y-%m")
-    if start.month == 12:
-        end = start.replace(year=start.year + 1, month=1)
-    else:
-        end = start.replace(month=start.month + 1)
+    try:
+        end = start + timedelta(days=monthrange(start.year, start.month)[1])
+    except OverflowError as exc:
+        raise ValueError("Następny miesiąc wykracza poza zakres kalendarza.") from exc
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")

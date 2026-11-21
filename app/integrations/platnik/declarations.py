@@ -13,14 +13,16 @@ from app.db.dao_conn import get_conn, get_coordination_conn
 from app.integrations.enova.document_counts import normalize_nip
 from app.integrations.enova.jpk import filing_timestamp
 from app.integrations.platnik.holidays import load, connect, sql_operation
+from app.integrations.platnik.contributions import AMOUNT_FIELDS, COUNT_FIELD, capture_amounts, summarize
 from app.utils.crypto import encrypt_password, decrypt_password
 from app.utils.months import month_bounds, previous_month
 from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, records_sql, requirements, resolve_fields
+from app.integrations.platnik.insurance import scope_xml
 
 REQUIRED = requirements({**MONTHLY, **ANNUAL})
 FIELDS = {'form', 'source_id', 'payer_id', 'nip', 'report_id', 'miesiac',
           'employee_id', 'employee_name', 'raw_status', 'valid_link'}
-OPTIONAL_FIELDS = {'insurance_code', 'filing_status', 'sent_at', 'upo', 'upo_at'}
+OPTIONAL_FIELDS = {'insurance_code', 'filing_status', 'sent_at', 'upo', 'upo_at'} | AMOUNT_FIELDS
 
 
 def source_query(cursor, config, *, annual=False, scoped=False):
@@ -103,7 +105,7 @@ def fetch(config, months, *, annual=False, selected_nips=None, expected_source=N
                           (month_bounds(months[0])[0], month_bounds(months[-1])[1]))
             parameters = [start, end]
             if nips is not None:
-                parameters.append('<p>' + ''.join(f'<n>{nip}</n>' for nip in nips) + '</p>')
+                parameters.append(scope_xml(nips))
             cursor.execute(query, *parameters)
             columns = [column[0].lower() for column in cursor.description or []]
             expected = FIELDS - {'miesiac'} | {'rok'} if annual else FIELDS
@@ -122,7 +124,7 @@ def fetch(config, months, *, annual=False, selected_nips=None, expected_source=N
             connection.close()
 
 
-def normalize(rows, months, selected_nips, *, annual=False):
+def normalize(rows, months, selected_nips, *, annual=False, owner_ids=None):
     result = {nip: {month: [] for month in months} for nip in selected_nips}
     forms = ANNUAL if annual else MONTHLY | ADDITIONAL_MONTHLY
     supported_forms = {'ZUS ' + code for code in forms}
@@ -172,6 +174,8 @@ def normalize(rows, months, selected_nips, *, annual=False):
                          upo_at=filing_timestamp(row.get('upo_at')))
         if annual:
             entry['reporting_year'] = month
+        elif owner_ids is not None:
+            capture_amounts(entry, row, owner_ids.get(nip))
         result[nip][month].append(entry)
     return result
 
@@ -194,7 +198,9 @@ def normalize_for_import(rows, months, mapped, links, errors, *, annual=False):
             continue
         filtered.append((company_id, row))
     ready = {nip: company_id for nip, company_id in mapped.items() if company_id not in errors}
-    records = normalize((row for company_id, row in filtered if company_id not in errors), months, ready, annual=annual)
+    owners = {nip: link.get('contribution_owner_id') for nip, link in links.items()}
+    records = normalize((row for company_id, row in filtered if company_id not in errors),
+                        months, ready, annual=annual, owner_ids=owners)
     return records, ready, errors
 
 
@@ -282,7 +288,13 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
                         for fid, nips in companies_batch:
                             periods = {month: [entry for nip in nips for entry in records[nip][month]] for month in months}
                             for month, entries in periods.items():
-                                snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
+                                payload = {'imported_at': stamp, 'declarations': entries}
+                                if not annual:
+                                    payload['contributions'] = {nip: summarize(records[nip][month]) for nip in nips}
+                                    for entry in entries:
+                                        entry.pop('contribution_amounts', None)
+                                        entry.pop(COUNT_FIELD, None)
+                                snapshot = json.dumps(payload, ensure_ascii=False)
                                 snapshots.append((fid, str(month), encrypt_password(snapshot)))
                             if not annual:
                                 add_imported_periods(conn, fid, periods, 'platnik')

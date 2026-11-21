@@ -182,6 +182,25 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
             stored = read_snapshot(conn, 'platnik_declarations', self.company, '2026-11')
         self.assertEqual({entry['form'] for entry in decoded_snapshot(stored)['declarations']},{'ZUS DRA','ZUS RCA'})
 
+    def test_monthly_snapshot_exposes_only_company_and_matched_owner_amounts(self):
+        rca = {**ROW, 'form': 'ZUS RCA', 'employee_name': 'Test Person', 'employee_id': 12,
+               'source_id': 2, 'contribution_health': '90.01'}
+        rows = [{**ROW, 'contribution_health': '100.00'}, rca,
+                {**rca, 'source_id': 3, 'employee_id': 13, 'contribution_health': '999.00'}]
+        with patch('app.integrations.platnik.declarations.load', return_value={'enabled': True, 'server': 'fixture'}), \
+             patch('app.integrations.platnik.links.catalogue',
+                   return_value=('fixture', {NIP: [7]}, {(NIP, 7): [{'person_id': 12}]}, True)), \
+             patch('app.integrations.platnik.declarations.fetch', return_value=rows), \
+             patch('app.integrations.platnik.insurance.refresh', return_value=('applied', {})):
+            result = import_months(['2026-11'], company_ids=[self.company])
+        self.assertEqual(result['documents'], 3)
+        with patch('app.integrations.enova.accounting.assigned_company_ids', return_value={self.company}):
+            snapshot = list_accounting(self.admin, '2026-11')[0]['platnik_declarations']
+        reports = snapshot['contributions'][NIP]
+        self.assertEqual(reports['company']['amounts'], {'health': '100.00'})
+        self.assertEqual(reports['owner']['amounts'], {'health': '90.01'})
+        self.assertTrue(all('contribution_amounts' not in entry for entry in snapshot['declarations']))
+
     def test_failed_read_and_duplicate_nip_preserve_previous_snapshot(self):
         self.import_rows([ROW])
         with get_conn() as conn:

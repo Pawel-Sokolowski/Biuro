@@ -2,6 +2,7 @@
 from collections import defaultdict
 from hashlib import sha256
 import json
+import logging
 import uuid
 
 from app.companies.identities import is_civil, payer_nips
@@ -111,7 +112,13 @@ def import_links(config, mapped, *, annual=False):
         return {}, errors, None
     if not checked:
         return {}, errors, None
-    source, payers, _, _ = catalogue(config, checked)
+    try:
+        source, payers, owners, _ = catalogue(config, checked, include_owners=not annual)
+    except (ValueError, RuntimeError):
+        if annual:
+            raise
+        logging.getLogger(__name__).warning('Ponawiam odczyt kartotek Płatnika w zakresie płatników.')
+        source, payers, owners, _ = catalogue(config, checked)
     links = {}
     for nip in checked:
         ids = payers.get(nip, ())
@@ -127,6 +134,14 @@ def import_links(config, mapped, *, annual=False):
             links[nip] = {'payer_id': ids[0], 'person_id': None}
         else:
             errors[company_id] = 'PlatnikPayerAmbiguous' if ids else 'PlatnikPayerMissing'
+        if nip in links and not annual:
+            link = links[nip]
+            candidates = {row['person_id'] for row in owners.get((nip, link['payer_id']), ())}
+            selected = link['person_id']
+            if selected in candidates:
+                links[nip] = {**link, 'contribution_owner_id': selected}
+            elif selected is None and len(candidates) == 1:
+                links[nip] = {**link, 'contribution_owner_id': candidates.pop()}
     return links, errors, source
 
 

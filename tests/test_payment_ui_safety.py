@@ -301,6 +301,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
 
     def setUp(self):
         super().setUp()
+        self._pages = []
         self.company_id = self.make_company("Klient UI")
         positions = [{"nazwa": "Księgowość", "ilosc": 1, "netto": 100, "brutto": 123, "vat": 23}]
         self.invoice_id = create_or_update_invoice(self.company_id, "2026-09", positions, 100, 123)
@@ -311,6 +312,19 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
         finally:
             conn.close()
         mark_exported([self.invoice_id], 1)
+
+    def tearDown(self):
+        from tests.test_review_optimizations import wait_until
+
+        try:
+            for page in self._pages:
+                page.close()
+                page._invoice_reads.invalidate()
+                page._settlement_reads.invalidate()
+                self.assertTrue(wait_until(lambda: not (page._invoice_reads._jobs or page._settlement_reads._jobs
+                                                        or page._invoice_commands._jobs)))
+        finally:
+            super().tearDown()
 
     def test_manual_payment_dialog_defaults_amount_and_accepts_date_before_issuance(self):
         from PyQt6.QtWidgets import QDateEdit
@@ -398,7 +412,7 @@ class InvoicePaymentActionSafetyTests(DbTestCase):
     def page(self):
         from app.invoices.faktury_ui import FakturyPage
         page = FakturyPage(1)
-        self.addCleanup(page.close)
+        self._pages.append(page)
         page.month_button.setCurrentText("2026-09")
         page.refresh()
         page.issued_table.selectRow(0)

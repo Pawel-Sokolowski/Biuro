@@ -11,6 +11,7 @@ from app.chat.chat_notifications import ChatNotifier
 class ChatAccessTests(DbTestCase):
     def setUp(self):
         super().setUp()
+        self._pages = []
         self.owner = self.make_employee("o@x.pl", "Olga", "Owner")
         self.a = self.make_employee("a@x.pl", "Adam", "Alfa")
         self.b = self.make_employee("b@x.pl", "Beata", "Beta")
@@ -21,6 +22,23 @@ class ChatAccessTests(DbTestCase):
         conn.commit()
         conn.close()
         self.admin = cm_admin_id()
+
+    def tearDown(self):
+        from tests.test_review_optimizations import wait_until
+
+        for page in self._pages:
+            self.assertTrue(wait_until(
+                lambda: not (page._reads._jobs or page._conversation_reads._jobs or page._writes._jobs)))
+            page.close()
+        super().tearDown()
+
+    def _new_chat_page(self, user):
+        from app.chat.chat_ui import ChatPage
+
+        page = ChatPage(user)
+        page._poll_timer.stop()
+        self._pages.append(page)
+        return page
 
     def test_creator_auto_added_and_visibility(self):
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
@@ -99,7 +117,6 @@ class ChatAccessTests(DbTestCase):
     def test_ui_smoke(self):
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import Qt
-        from app.chat.chat_ui import ChatPage
         _app = QApplication.instance() or QApplication(["biuro-tests"])
         cid = cm.create_conversation("Kanał", self.owner, [self.a])
 
@@ -116,13 +133,13 @@ class ChatAccessTests(DbTestCase):
             return [lst.item(i).data(Qt.ItemDataRole.UserRole) for i in range(lst.count())
                     if lst.item(i).data(Qt.ItemDataRole.UserRole) is not None]
 
-        page = ChatPage(self.a)
+        page = self._new_chat_page(self.a)
         select(page, cid)
         self.assertFalse(page.btn_manage.isEnabled())
-        page_owner = ChatPage(self.owner)
+        page_owner = self._new_chat_page(self.owner)
         select(page_owner, cid)
         self.assertTrue(page_owner.btn_manage.isEnabled())
-        page_b = ChatPage(self.b)
+        page_b = self._new_chat_page(self.b)
         self.assertNotIn(cid, ids(page_b))
 
     def test_direct_conversations_created_automatically(self):
@@ -143,15 +160,12 @@ class ChatAccessTests(DbTestCase):
     def _chat_page(self, cid, user):
         from unittest import mock
         from PyQt6.QtWidgets import QApplication, QMessageBox
-        from app.chat.chat_ui import ChatPage
         _app = QApplication.instance() or QApplication(["biuro-tests"])
         for name in ("warning", "critical", "information"):
             patcher = mock.patch.object(QMessageBox, name)
             patcher.start()
             self.addCleanup(patcher.stop)
-        page = ChatPage(user)
-        self._pages = getattr(self, "_pages", []) + [page]
-        self.addCleanup(page._poll_timer.stop)
+        page = self._new_chat_page(user)
         page.current_konwersacja = cid
         return page
 

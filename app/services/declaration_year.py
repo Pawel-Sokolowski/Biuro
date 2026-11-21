@@ -51,6 +51,7 @@ def run(value, stop):
     from app.services.checking_refresh import scope,_save
     from app.integrations.platnik.declarations import import_months,import_year
     from app.integrations.platnik.insurance import company_registry_error
+    from app.integrations.platnik.links import company_declaration_error
     from app.integrations.platnik.holidays import PlatnikSqlError
     from app.integrations.enova.connection_settings import load_connection
     companies = scope(value['actor_id'],value['company_ids'])
@@ -70,7 +71,7 @@ def run(value, stop):
                 return None
             if result.get('mode')=='disabled':
                 raise ValueError('Odczyt formularzy ZUS jest wyłączony.')
-            monthly_applied = result.get('mode')=='applied'
+            monthly_applied = result.get('mode') in ('applied', 'partial')
             if stop is not None and stop.is_set():
                 return None
             yearly = import_year(value['period'],company_ids=value['company_ids'])
@@ -84,14 +85,17 @@ def run(value, stop):
                 entry = {'company_id':company['id'],'source':'platnik','ok':True,'months':months,
                          'batch_documents':result.get('documents',0),'batch_annual_documents':yearly.get('documents',0),
                          'batch_companies':len(companies)}
-                if error := company_registry_error(result, company['id']):
-                    entry.update(ok=False, monthly_imported=monthly_applied, error=error)
+                monthly_error = company_declaration_error(result, company['id'])
+                error = (monthly_error or company_declaration_error(yearly, company['id'])
+                         or company_registry_error(result, company['id']))
+                if error:
+                    entry.update(ok=False, monthly_imported=monthly_applied and not monthly_error, error=error)
                 results.append(entry)
         except Exception as error:
             for company in companies:
                 record('platnik','failed',company_id=company['id'],error_type=type(error).__name__)
                 results.append({'company_id':company['id'],'source':'platnik','ok':False,
-                                'monthly_imported':monthly_applied,
+                                'monthly_imported':monthly_applied and not company_declaration_error(result, company['id']),
                                 'batch_documents':result.get('documents',0) if monthly_applied else 0,
                                 'batch_annual_documents':0,
                                 'error':str(error) if isinstance(error,(ValueError,PlatnikSqlError)) else type(error).__name__})

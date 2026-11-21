@@ -15,6 +15,7 @@ TABLES = [
     "checking_requests",
     "enova_stage_requests",
     "company_checking_snapshots",
+    "platnik_approved_links",
     "kadry_umowy_miesieczne",
     "statusy_miesieczne",
     "czasomierze",

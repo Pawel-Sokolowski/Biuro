@@ -15,7 +15,7 @@ from app.remote.state import service_scope
 MAX_BODY = 48*1024*1024
 UI_FEATURES = ('mail_sidebar_snapshot', 'calendar_view_snapshot', 'checking_run_now',
                'invoice_selection', 'bulk_mail_history', 'file_release', 'company_form_snapshot',
-               'bank_invoice_paging')
+               'bank_invoice_paging', 'platnik_link_review')
 logger = logging.getLogger(__name__)
 
 

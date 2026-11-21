@@ -237,7 +237,8 @@ class WorkerMonitor(QWidget):
         from app.services.worker_activity import STAGES
         from app.services.enova_stage import ERROR_MESSAGES as ENOVA_ERRORS
         from app.integrations.platnik.insurance import ERROR_MESSAGES as PLATNIK_ERRORS
-        errors = {'enova': ENOVA_ERRORS, 'platnik': PLATNIK_ERRORS}
+        from app.integrations.platnik.links import ERROR_MESSAGES as LINK_ERRORS
+        errors = {'enova': ENOVA_ERRORS, 'platnik': PLATNIK_ERRORS | LINK_ERRORS}
         data = self._log_data
         names = {row['id']: row['nazwa'] for row in data['companies']}
         selected = self.log_filter.currentData()

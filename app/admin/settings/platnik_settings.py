@@ -100,12 +100,22 @@ class PlatnikSettings(QWidget):
         from app.accounting.declaration_year_ui import open_declaration_year
         annual.clicked.connect(lambda:open_declaration_year(self.actor_id,self,sources=['platnik']))
         layout.addWidget(annual)
+        from app.remote.state import client
+        connection = client()
+        if connection is None or 'platnik_link_review' in (getattr(connection, 'server_features', ()) or ()):
+            links = QPushButton('Powiązania z Płatnikiem…')
+            links.clicked.connect(self._review_links)
+            layout.addWidget(links)
         self.error_button = QPushButton('Pokaż szczegóły błędu SQL…')
         self.error_button.clicked.connect(self.show_error_details)
         self.error_button.hide()
         layout.addWidget(self.error_button)
         layout.addStretch()
         self._saved_state = self.form_state()
+
+    def _review_links(self):
+        from app.admin.settings.platnik_links import PlatnikLinksDialog
+        PlatnikLinksDialog(self.actor_id, self).open()
 
     def config(self):
         value = dict(load())

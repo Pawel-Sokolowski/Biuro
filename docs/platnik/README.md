@@ -87,6 +87,30 @@ ani litery statusu. Potwierdzenie w Płatniku jest osobnym obiektem; opisuje je
 rozdziały 5.6.8–5.6.9. Pełny odczyt statusu wysyłki i potwierdzenia pozostaje
 do uzupełnienia po potwierdzeniu mapowania pól i kodów.
 
+## Powiązania z Płatnikiem
+
+Po zapisaniu połączenia otwórz **Płatnik → Powiązania z Płatnikiem** jako
+administrator. Lista pokazuje przypadki wymagające sprawdzenia i zapisane
+zatwierdzenia. Możesz też wyświetlić dopasowania automatyczne i wyszukać firmę
+po nazwie lub NIP-ie.
+
+1. Wybierz firmę i NIP płatnika. Dla spółki cywilnej osobne pozycje obejmują
+   również NIP-y wspólników.
+2. Wybierz kartotekę płatnika. Biuro użyje jej przy pobieraniu deklaracji
+   miesięcznych, zgłoszeń oraz IWA i ZSWA.
+3. Gdy u wybranego płatnika są dwie kartoteki właściciela lub wspólnika,
+   wybierz właściwą według identyfikatora i dat zgłoszeń. Ta decyzja dotyczy
+   rejestru kodów i okresów ubezpieczenia.
+4. Zatwierdź powiązanie. Decyzja obowiązuje przy kolejnym odczycie. Możesz ją
+   zmienić albo cofnąć w tym oknie.
+
+Kandydaci pochodzą z zapisanej bazy Płatnika i odpowiadają NIP-owi wybranej
+firmy albo wspólnika. Jeśli ten NIP figuruje przy kilku firmach w Biuro, sprawdź
+ich kartoteki przed zatwierdzeniem. Gdy baza lub wybrana kartoteka się zmieni,
+Biuro zgłosi powiązanie do ponownej weryfikacji i zachowa poprzednie dane tej
+firmy. Historia decyzji jest zapisywana w Biuro. Wybór kartoteki jest operacją
+odczytową po stronie Płatnika.
+
 ## Kody i terminy ulg
 
 Miesięczny odczyt uzupełnia kody z dokumentów okresami właścicieli z rejestru

@@ -28,6 +28,7 @@ class AlembicDeploymentTests(unittest.TestCase):
                 indexes = {row[0] for row in conn.execute(
                     'SELECT indexname FROM pg_indexes WHERE schemaname=%s', (schema,))}
             self.assertTrue({'bulk_mail_runs', 'bulk_mail_batches'} <= tables)
+            self.assertIn('platnik_approved_links', tables)
             self.assertTrue({'idx_bank_transakcje_account', 'idx_bank_transakcje_order', 'idx_bank_transakcje_receipts',
                              'idx_faktury_miesiac_id', 'idx_firmy_normalized_nip'} <= indexes)
             self.assertTrue({'idx_company_contacts_firma_id', 'idx_udzialowcy_firma_id',

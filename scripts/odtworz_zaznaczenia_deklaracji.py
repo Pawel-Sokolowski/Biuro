@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 def read_platnik(companies, company_ids, months, year):
     from app.db.dao_conn import advisory_lock
     from app.integrations.platnik import declarations
+    from app.integrations.platnik.links import import_links
 
     mapped = declarations.payer_mapping(companies, company_ids)
     monthly = {company_id: {month: set() for month in months} for company_id in set(mapped.values())}
@@ -32,15 +33,29 @@ def read_platnik(companies, company_ids, months, year):
     with advisory_lock(748220) as acquired:
         if not acquired:
             raise ValueError('Trwa inny odczyt Płatnika. Ponów po jego zakończeniu.')
+        links, errors, source = import_links(config, mapped)
+        source_option = {'expected_source': source} if source is not None else {}
         # Read each month in bulk for the selected companies, within the adapter row limit.
         for month in months:
-            rows = declarations.fetch(config, [month], selected_nips=mapped)
-            for nip, entries in declarations.normalize(rows, [month], mapped).items():
+            ready = {nip: company_id for nip, company_id in mapped.items() if company_id not in errors}
+            if not ready:
+                break
+            rows = declarations.fetch(config, [month], selected_nips=ready, **source_option)
+            records, _, errors = declarations.normalize_for_import(rows, [month], mapped, links, errors)
+            for nip, entries in records.items():
                 monthly[mapped[nip]][month].update(entry['form'] for entry in entries[month])
         period = str(year)
-        rows = declarations.fetch(config, [period], annual=True, selected_nips=mapped)
-        for nip, entries in declarations.normalize(rows, [period], mapped, annual=True).items():
-            yearly[mapped[nip]].update(entry['form'] for entry in entries[period])
+        annual_links, annual_errors, annual_source = import_links(config, mapped, annual=True)
+        errors.update(annual_errors)
+        ready = {nip: company_id for nip, company_id in mapped.items() if company_id not in errors}
+        if ready:
+            source_option = {'expected_source': annual_source} if annual_source is not None else {}
+            rows = declarations.fetch(config, [period], annual=True, selected_nips=ready, **source_option)
+            records, _, errors = declarations.normalize_for_import(rows, [period], mapped, annual_links, errors, annual=True)
+            for nip, entries in records.items():
+                yearly[mapped[nip]].update(entry['form'] for entry in entries[period])
+        for company_id in errors:
+            monthly.pop(company_id, None)
     return monthly, yearly
 
 

@@ -81,7 +81,7 @@ def source_query(cursor, config, *, annual=False, scoped=False):
             .replace('__SCOPE_FILTER__', scope_filter))
 
 
-def fetch(config, months, *, annual=False, selected_nips=None):
+def fetch(config, months, *, annual=False, selected_nips=None, expected_source=None):
     custom = str(config.get('annual_declarations_query' if annual else 'declarations_query') or '').strip()
     nips = None if selected_nips is None or custom else sorted({normalize_nip(nip) for nip in selected_nips})
     if nips == []:
@@ -90,6 +90,10 @@ def fetch(config, months, *, annual=False, selected_nips=None):
     with sql_operation(config, 'Odczyt dokumentów formularzy ZUS'):
         try:
             cursor = connection.cursor()
+            if expected_source is not None:
+                from app.integrations.platnik.links import source_key
+                if source_key(config, cursor) != expected_source:
+                    raise ValueError('Źródło Płatnika zmieniło się podczas odczytu.')
             query = source_query(cursor, config, annual=annual, scoped=nips is not None)
             if not query.strip():
                 raise ValueError('Plik zapytania formularzy ZUS jest pusty.')
@@ -161,6 +165,28 @@ def normalize(rows, months, selected_nips, *, annual=False):
     return result
 
 
+def normalize_for_import(rows, months, mapped, links, errors, *, annual=False):
+    filtered, payer_ids = [], {}
+    errors = dict(errors)
+    for row in rows:
+        nip = normalize_nip(row['nip'])
+        company_id = mapped.get(nip)
+        if company_id is None or company_id in errors:
+            continue
+        payer_id = str(row['payer_id'] or '')
+        if payer_id and (link := links.get(nip)) and str(link['payer_id']) != payer_id:
+            if not link.get('revision'):
+                errors[company_id] = 'PlatnikPayerAmbiguous'
+            continue
+        if payer_id and payer_ids.setdefault(nip, payer_id) != payer_id:
+            errors[company_id] = 'PlatnikPayerAmbiguous'
+            continue
+        filtered.append((company_id, row))
+    ready = {nip: company_id for nip, company_id in mapped.items() if company_id not in errors}
+    records = normalize((row for company_id, row in filtered if company_id not in errors), months, ready, annual=annual)
+    return records, ready, errors
+
+
 def payer_mapping(companies, company_ids=None):
     from app.companies.identities import payer_nips, is_civil
     from app.db.dao_companies import get_partners_for_companies
@@ -222,32 +248,43 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
             companies = conn.execute('SELECT id,nip,forma_dzialalnosci FROM firmy').fetchall()
         mapped = payer_mapping(companies, company_ids)
         if not mapped:
-            return {'mode': 'empty', 'companies': 0}
-        nips_by_company = {}
-        for nip, company_id in mapped.items():
-            nips_by_company.setdefault(company_id, []).append(nip)
+            return {'mode': 'empty', 'companies': 0, 'months': months, 'documents': 0}
+        from app.integrations.platnik.links import import_links
+        links, declaration_errors, source = import_links(config, mapped, annual=annual)
         from app.services.worker_activity import batch, record
         from app.companies.checking_obligations import add_imported_periods
-        with batch('platnik', sorted(nips_by_company)):
-            rows = fetch(config, months, annual=annual, selected_nips=mapped)
-            records = normalize(rows, months, mapped, annual=annual)
-            stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
-            with get_conn() as conn:
-                for companies_batch in batched(sorted(nips_by_company.items()), 100):
-                    snapshots = []
-                    for fid, nips in companies_batch:
-                        periods = {month: [entry for nip in nips for entry in records[nip][month]] for month in months}
-                        for month, entries in periods.items():
-                            snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
-                            snapshots.append((fid, str(month), encrypt_password(snapshot)))
-                        if not annual:
-                            add_imported_periods(conn, fid, periods, 'platnik')
-                    save_snapshots(conn, 'platnik_declarations', snapshots)
+        candidates = {nip: fid for nip, fid in mapped.items() if fid not in declaration_errors}
+        if candidates:
+            with batch('platnik', sorted(set(candidates.values()))):
+                rows = fetch(config, months, annual=annual, selected_nips=candidates,
+                             **({'expected_source': source} if source is not None else {}))
+                records, ready, declaration_errors = normalize_for_import(
+                    rows, months, mapped, links, declaration_errors, annual=annual,
+                )
+                nips_by_company = {}
+                for nip, company_id in ready.items():
+                    nips_by_company.setdefault(company_id, []).append(nip)
+                stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+                with get_conn() as conn:
+                    for companies_batch in batched(sorted(nips_by_company.items()), 100):
+                        snapshots = []
+                        for fid, nips in companies_batch:
+                            periods = {month: [entry for nip in nips for entry in records[nip][month]] for month in months}
+                            for month, entries in periods.items():
+                                snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
+                                snapshots.append((fid, str(month), encrypt_password(snapshot)))
+                            if not annual:
+                                add_imported_periods(conn, fid, periods, 'platnik')
+                        save_snapshots(conn, 'platnik_declarations', snapshots)
+        else:
+            records, ready, nips_by_company = {}, {}, {}
+        for company_id, reason in declaration_errors.items():
+            record('platnik', 'failed', company_id=company_id, error_type=reason)
         registry, registry_errors = None, {}
-        if not annual and config.get('server'):
+        if not annual and ready and config.get('server'):
             from app.integrations.platnik.insurance import refresh
             try:
-                registry, registry_errors = refresh(config, mapped)
+                registry, registry_errors = refresh(config, ready, links, expected_source=source)
             except (ValueError, RuntimeError, DatabaseError) as error:
                 registry = 'failed'
                 registry_errors = dict.fromkeys(nips_by_company, 'InsuranceRegistryReadFailed')
@@ -257,13 +294,17 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         documents = sum(len(entries) for by_month in records.values() for entries in by_month.values())
         # Jeden wpis w historii importów na cały odczyt Płatnika (miesiące albo rok).
         from app.db.import_audit import log_import_safely
+        mode = ('partial' if ready else 'failed') if declaration_errors else 'applied'
         log_import_safely('platnik_declarations_annual' if annual else 'platnik_declarations',
                           source=config.get('database') or 'Płatnik',
                           updated=documents,
+                          status={'applied': 'partial' if registry_errors else 'completed'}.get(mode, mode),
                           details={'companies': len(nips_by_company), 'months': months,
                                    'documents': documents, 'annual': annual},
                           user_id=actor_id)
-        result = {'mode': 'applied', 'companies': len(nips_by_company), 'months': months, 'documents': documents}
+        result = {'mode': mode, 'companies': len(nips_by_company), 'months': months, 'documents': documents}
+        if declaration_errors:
+            result['declaration_link_errors'] = declaration_errors
         if registry is not None:
             result['insurance_registry'] = registry
             result['insurance_registry_errors'] = registry_errors

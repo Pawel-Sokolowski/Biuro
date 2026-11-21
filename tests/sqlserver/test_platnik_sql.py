@@ -6,7 +6,8 @@ import uuid
 
 from app.integrations.platnik.declarations import normalize, source_query
 from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, requirements
-from app.integrations.platnik.insurance import QUERY as INSURANCE_QUERY, REQUIRED as REGISTRY_TABLES, normalize_periods
+from app.integrations.platnik.insurance import OWNER_CANDIDATES, QUERY as INSURANCE_QUERY, REQUIRED as REGISTRY_TABLES, normalize_periods
+from app.integrations.platnik.links import PAYER_CANDIDATES, source_key
 
 DSN = os.environ.get('BIURO_SQLSERVER_TEST_DSN')
 NIP = '1112223344'
@@ -176,6 +177,28 @@ class PlatnikSqlTests(unittest.TestCase):
             1: [{'nip': NIP, 'code': '059000', 'from': '2026-01-01', 'until': None}],
         })
         self.assertEqual(errors, {})
+
+    def test_readonly_catalogue_lists_payer_and_owner_choices_without_identity_fields(self):
+        self.writer.execute("""
+            INSERT INTO PLATN_IDENT(ID_PLATNIK,NIP,PESEL) VALUES
+                (7,N'PL'+NCHAR(160)+N'111-222-33-44','12345678901'),
+                (8,'1112223344','12345678901'), (9,'9998887766','12345678901');
+            INSERT INTO UBEZPIECZONY(ID,ID_PLATNIK) VALUES (20,7),(21,7),(80,8),(90,9);
+            INSERT INTO UBEZP_IDENT(ID_UBEZPIECZONY,NIP,PESEL) VALUES
+                (20,NULL,'12345678901'),(21,NULL,'12345678901'),(80,NULL,'12345678901'),(90,NULL,'12345678901');
+            INSERT INTO UBEZP_PODLEGANIE(ID_UBEZPIECZONY,KODTYTUB,PRDOEM,STNIEP,DATAOD) VALUES
+                (20,'0590','0','0','2026-01-01'),(21,'0570','0','0','2026-02-01'),
+                (80,'0510','0','0','2026-03-01'),(90,'0510','0','0','2026-03-01');
+        """)
+        cursor = self.reader.cursor()
+        key = source_key({'server': 'ci', 'database': self.database}, cursor)
+        self.assertRegex(key, r'^[a-f0-9]{64}$')
+        scope = '<p><n>1112223344</n></p>'
+        cursor.execute(PAYER_CANDIDATES, scope)
+        self.assertEqual([tuple(row) for row in cursor.fetchall()], [(NIP, 7), (NIP, 8)])
+        cursor.execute(OWNER_CANDIDATES, scope)
+        self.assertNotIn('PESEL', {column[0].upper() for column in cursor.description})
+        self.assertEqual([tuple(row[:3]) for row in cursor.fetchall()], [(NIP, 7, 20), (NIP, 7, 21), (NIP, 8, 80)])
 
     def test_registration_and_deregistration_use_their_document_insurance_codes(self):
         for identity, (code, prefix) in enumerate((('ZUA','V_1_'), ('ZZA','V_1_'), ('ZWUA','IV_1_')), 1):

@@ -82,6 +82,36 @@ class OfficeHttpsTests(DbTestCase):
         with self.assertRaises(PermissionError):
             self.client.resume(token)
 
+    def test_platnik_approval_checks_admin_permissions_over_https(self):
+        from app.db.dao_app_settings import set_setting
+        from app.integrations.platnik.holidays import KEY
+
+        nip = '1112223344'
+        company = self.make_company('Wyjątek HTTPS', nip=nip)
+        self.make_employee('platnik-reader@example.test', haslo='Haslo12345')
+        set_setting(KEY, json.dumps({'server': 'fixture', 'database': 'platnik'}))
+        show = 'app.integrations.platnik.links.review'
+        save = 'app.integrations.platnik.links.save'
+        args = (1, company, nip, 7, 21, 'source-db', None)
+        catalogue = ('source-db', {nip: [7, 8]}, {(nip, 7): [
+            {'person_id': 21, 'first': '2026-01-01', 'last': '2026-01-01', 'count': 1},
+        ]}, True)
+        with mock.patch('app.integrations.platnik.links.catalogue', return_value=catalogue):
+            self.client.login('platnik-reader@example.test', 'Haslo12345')
+            with self.assertRaises(PermissionError):
+                self.client.call(show, (1,))
+            with self.assertRaises(PermissionError):
+                self.client.call(save, args)
+            self.client.logout()
+            self.client.login('admin@biuro.pl', 'Admin12345')
+            self.assertIn('platnik_link_review', self.client.server_features)
+            result = next(row for row in self.client.call(show, (1,))['rows'] if row['company_id'] == company)
+            self.assertEqual(result['status'], 'Wybierz kartotekę płatnika')
+            self.client.call(save, args)
+            result = next(row for row in self.client.call(show, (1,))['rows'] if row['company_id'] == company)
+            self.assertEqual(result['status'], 'Zatwierdzono')
+            self.assertEqual(result['approval']['person_id'], 21)
+
     def test_mt940_upload_imports_12_transactions_into_the_shared_database(self):
         from app.db.dao_conn import get_conn
         from tests.test_payment_safety import statement

@@ -142,8 +142,8 @@ def platnik_job():
             failed.append(name + ': ' + (str(error) if isinstance(error, (PlatnikSqlError, ValueError)) else 'Odczyt nie powiódł się'))
     if failed:
         raise RuntimeError('Nieukończone odczyty Płatnika: ' + ', '.join(failed))
-    monthly = results.get('declarations', {}).get('monthly', {})
-    if monthly.get('insurance_registry_errors'):
+    if any(run.get('insurance_registry_errors') or run.get('declaration_link_errors')
+           for run in results.get('declarations', {}).values()):
         results['mode'] = 'partial'
     return results
 

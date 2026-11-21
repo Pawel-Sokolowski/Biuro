@@ -133,6 +133,8 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
         with get_conn() as conn:
             save_snapshot(conn, SOURCE, self.company, '', 'previous registry')
         with patch('app.integrations.platnik.declarations.load', return_value={'enabled': True, 'server': 'fixture'}), \
+             patch('app.integrations.platnik.links.catalogue',
+                   return_value=('fixture', {NIP: [7], '9999999999': [8]}, {}, False)), \
              patch('app.integrations.platnik.declarations.fetch', return_value=[ROW]), \
              patch('app.integrations.platnik.insurance.fetch_periods',
                    return_value=[first, (NIP, 7, 14, *first[3:]), second]):

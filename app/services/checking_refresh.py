@@ -396,6 +396,7 @@ def _execute(
         from app.integrations.platnik.declarations import (
             import_year,
         )
+        from app.integrations.platnik.links import company_declaration_error
 
         result = import_year(
             value['period'],
@@ -411,20 +412,21 @@ def _execute(
                 'wyłączony w ustawieniach Płatnika.'
             )
 
-        return [
-            {
-                'company_id': row['id'],
-                'ok': True,
-                'year': value['period'],
-            }
-            for row in companies
-        ]
+        results = []
+        for row in companies:
+            error = company_declaration_error(result, row['id'])
+            entry = {'company_id': row['id'], 'ok': not error, 'year': value['period']}
+            if error:
+                entry['error'] = error
+            results.append(entry)
+        return results
 
     if value['kind'] == 'platnik_declarations':
         from app.integrations.platnik.declarations import (
             import_months,
         )
         from app.integrations.platnik.insurance import company_registry_error
+        from app.integrations.platnik.links import company_declaration_error
 
         result = import_months(
             [
@@ -446,7 +448,9 @@ def _execute(
         results = []
         for row in companies:
             entry = {'company_id': row['id'], 'ok': True, 'months': result['months']}
-            if error := company_registry_error(result, row['id']):
+            if error := company_declaration_error(result, row['id']):
+                entry.update(ok=False, error=error)
+            elif error := company_registry_error(result, row['id']):
                 entry.update(ok=False, monthly_imported=True, error=error)
             results.append(entry)
         return results

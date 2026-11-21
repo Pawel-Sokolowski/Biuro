@@ -30,11 +30,13 @@ Migracja `20261121_03` dodaje indeksy dla kolejki MT940, rozpoznawania rachunkó
 
 Migracja `20261121_05` dodaje indeks wyszukiwania faktur po numerze w MT940 oraz zapisuje terminy ponowień odczytów Enovy.
 
+Migracja `20261121_06` zapisuje zatwierdzone przez administratora powiązania kartotek Płatnika.
+
 ## Sprawdzanie i deklaracje
 
 - **Enova365.** Zmiana etapu na **Wysłane wyniki** zleca odczyt dokumentów dla danej firmy i miesiąca. Reguły licznika zależą od KPiR, ksiąg handlowych lub ryczałtu i statusu VAT. KPiR i ryczałt mają zestawienie **Sprzedaż | Zakup | DW | Razem**. Raporty kasowe podlegają ustawionemu dzielnikowi, a LT i OT są wyłączone z licznika środków trwałych. [Reguły i konfiguracja Enova](docs/enova/README.md)
 - **JPK.** Sprawdzanie pokazuje status, datę wysłania i odrębną datę UPO w zakresie danych zwracanych przez Enovę. Pobranie statusu służy kontroli deklaracji. [Kontrakt odczytu Enova](docs/enova/README.md)
-- **Płatnik.** Odczyt obejmuje m.in. DRA, RCA, zgłoszenia ZUS oraz roczne IWA i ZSWA. W Sprawdzaniu można uruchomić miesięczny albo roczny odczyt dla wybranych firm. [Import deklaracji](docs/monthly-declaration-import.md)
+- **Płatnik.** Odczyt obejmuje m.in. DRA, RCA, zgłoszenia ZUS oraz roczne IWA i ZSWA. W Sprawdzaniu można uruchomić miesięczny albo roczny odczyt dla wybranych firm. Administrator rozstrzyga niejednoznaczne kartoteki w **Płatnik → Powiązania z Płatnikiem**. [Zatwierdzanie powiązań](docs/platnik/README.md#powiązania-z-płatnikiem)
 - **Ustawienia deklaracji.** Karta firmy pozwala ustawić zakres miesięczny i kwartalny od wybranego okresu oraz deklaracje roczne osobno dla firmy i wspólników. [Zakres miesięczny i kwartalny](docs/monthly-obligations.md) · [Deklaracje roczne](docs/annual-declarations.md)
 
 ### Jednorazowe odtworzenie zaznaczeń

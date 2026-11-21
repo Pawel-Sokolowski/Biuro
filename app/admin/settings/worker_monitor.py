@@ -11,11 +11,13 @@ from app.utils.background import TaskRunner
 
 JOB_LABELS = {'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — ZUS i wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
               'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
-STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania'}
+STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'partial': 'Częściowo wykonano',
+          'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania'}
 
 MODES = {'waiting': 'Oczekiwanie na godzinę odczytu', 'checked_today': 'Sprawdzono już dzisiaj',
          'disabled': 'Wyłączono w ustawieniach usługi', 'not_configured': 'Brak konfiguracji usługi',
-         'busy': 'Odczyt już trwa', 'idle': 'Kolejka pusta', 'empty': 'Brak firm do odczytu', 'cancelled': 'Przerwano'}
+         'busy': 'Odczyt już trwa', 'idle': 'Kolejka pusta', 'retry_waiting': 'Oczekiwanie na ponowienie',
+         'empty': 'Brak firm do odczytu', 'cancelled': 'Przerwano'}
 
 
 def state_label(value):
@@ -113,6 +115,11 @@ class WorkerMonitor(QWidget):
             page_layout.addWidget(note)
             table = self._table(['Zadanie', 'Stan', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
             page_layout.addWidget(table)
+            if 'enova' in keys:
+                page_layout.addWidget(QLabel('Odczyty Enovy oczekujące na ponowienie'))
+                self.enova_retries = self._table(['Firma', 'Miesiąc', 'Liczba prób', 'Ponowienie od', 'Powód'])
+                self._retry_rows = []
+                page_layout.addWidget(self.enova_retries)
             self.job_views[keys] = table
             self.tabs.addTab(page, title)
         from app.admin.settings.saldeo_web_settings import SaldeoHistory
@@ -188,6 +195,13 @@ class WorkerMonitor(QWidget):
         self.render_logs()
         progress = data['progress']
         names = {row['id']: row['nazwa'] for row in data['companies']}
+        from app.services.enova_stage import ERROR_MESSAGES
+        retries = [[names.get(row['company_id'], row['company_id']), row['period'], row['attempts'],
+                    row['next_attempt_at'], ERROR_MESSAGES.get(row['last_error'], row['last_error'])]
+                   for row in data.get('enova_retries', ())]
+        if retries != self._retry_rows:
+            self._fill(self.enova_retries, retries)
+            self._retry_rows = retries
         message = 'e-ZLA: ' + str(progress.get('stage') or 'Oczekiwanie na pobieranie')
         if progress.get('company_id'):
             message += ' — ' + str(names.get(progress['company_id'], progress['company_id']))
@@ -221,6 +235,10 @@ class WorkerMonitor(QWidget):
         if self._log_data is None:
             return
         from app.services.worker_activity import STAGES
+        from app.services.enova_stage import ERROR_MESSAGES as ENOVA_ERRORS
+        from app.integrations.platnik.insurance import ERROR_MESSAGES as PLATNIK_ERRORS
+        from app.integrations.platnik.links import ERROR_MESSAGES as LINK_ERRORS
+        errors = {'enova': ENOVA_ERRORS, 'platnik': PLATNIK_ERRORS | LINK_ERRORS}
         data = self._log_data
         names = {row['id']: row['nazwa'] for row in data['companies']}
         selected = self.log_filter.currentData()
@@ -233,7 +251,8 @@ class WorkerMonitor(QWidget):
             if event.get('count') is not None:
                 message += f"; raporty/dokumenty: {event['count']}"
             rows.append([event.get('at'), JOB_LABELS.get(event.get('job'), event.get('job')),
-                         names.get(event.get('company_id'), event.get('company_id')), message, event.get('error_type')])
+                         names.get(event.get('company_id'), event.get('company_id')), message,
+                         errors.get(event.get('job'), {}).get(event.get('error_type'), event.get('error_type'))])
         self._fill(self.logs, rows)
         if self.follow_logs.isChecked():
             self.logs.scrollToBottom()

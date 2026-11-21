@@ -103,7 +103,7 @@ class HolidayMailingDataTests(DbTestCase):
         self.assertEqual(row['holiday_people'][1]['status'],'eligible')
         plan = BulkMailPlan(1,10,'office@example.com','Wakacje ZUS','Treść',
                             ((company,('second@example.com',)),),holiday_month=MONTH)
-        with patch('app.email.bulk_mail.get_email_accounts_for_employee',return_value=[{'id':10,'email':plan.sender}]), \
+        with patch('app.email.email_storage.get_email_accounts_for_employee',return_value=[{'id':10,'email':plan.sender}]), \
              patch('app.email.bulk_mail.send_email_smtp',return_value=(True,'OK')) as smtp:
             self.assertTrue(send_bulk_batch(plan,plan.recipients)['ok'])
         self.assertEqual(smtp.call_args.kwargs['bcc'],['second@example.com'])
@@ -124,7 +124,7 @@ class HolidayMailingDataTests(DbTestCase):
                             ((self.company,('client@example.com',)),),holiday_month=MONTH)
         raw = [{'nip':NIP,'source_id':1,'status_zrodlowy':'A','rok':2026,'miesiac':'12'}]
         set_setting('platnik_holidays_2026',json.dumps({'rows_enc':encrypt_password(json.dumps(raw))}))
-        with patch('app.email.bulk_mail.get_email_accounts_for_employee',return_value=[{'id':10,'email':plan.sender}]), \
+        with patch('app.email.email_storage.get_email_accounts_for_employee',return_value=[{'id':10,'email':plan.sender}]), \
              patch('app.email.bulk_mail.send_email_smtp') as smtp:
             result = send_bulk_batch(plan,plan.recipients)
         self.assertTrue(result['blocked'])

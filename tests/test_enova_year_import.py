@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import date
 from pathlib import Path
@@ -6,6 +5,7 @@ from unittest.mock import Mock, patch
 from cryptography.fernet import Fernet
 
 from tests.base import DbTestCase
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
 from app.integrations.enova.checking import import_document_year
 from app.integrations.enova.document_counts import run_import
@@ -30,9 +30,7 @@ class EnovaYearImportTests(DbTestCase):
 
     def snapshot(self, month='2026-11'):
         with get_conn() as conn:
-            row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s',
-                               (f'enova_checking_{self.company}_{month}',)).fetchone()
-            return json.loads(row[0]) if row else None
+            return read_snapshot(conn, 'enova_checking', self.company, month)
 
     def test_full_year_without_stages_or_schedule_preserves_monthly_data_and_other_sections(self):
         previous = {'documents': {'accounting': {'OLD': 8}, 'payroll': {'Lista płac': 3}},
@@ -42,8 +40,7 @@ class EnovaYearImportTests(DbTestCase):
             for month in range(1, 13):
                 conn.execute("INSERT INTO statusy_miesieczne(firma_id,miesiac,ilosc_dok,etap,dokumenty_dostarczone) "
                              "VALUES (%s,%s,%s,'Brak',1)", (self.company, f'2026-{month:02d}', 70 + month))
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)',
-                         (f'enova_checking_{self.company}_2026-11', json.dumps(previous)))
+            save_snapshot(conn, 'enova_checking', self.company, '2026-11', previous)
             before = [dict(row) for row in conn.execute('SELECT * FROM statusy_miesieczne WHERE firma_id=%s ORDER BY miesiac', (self.company,))]
         progress = Mock()
         with patch('app.integrations.enova.checking.fetch_counts', side_effect=fetched) as remote:
@@ -66,16 +63,16 @@ class EnovaYearImportTests(DbTestCase):
             after = [dict(row) for row in conn.execute('SELECT * FROM statusy_miesieczne WHERE firma_id=%s ORDER BY miesiac', (self.company,))]
             self.assertEqual(before, after)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM monthly_document_imports').fetchone()[0], 0)
+            self.assertIsNone(read_snapshot(conn, 'enova_snapshot', self.company, '2026-11'))
             keys = [row[0] for row in conn.execute('SELECT klucz FROM app_settings')]
-            self.assertFalse(any(key.startswith(('enova_snapshot_', 'enova_document_count_checked_', 'enova_checking_checked_')) for key in keys))
+            self.assertFalse(any(key.startswith(('enova_document_count_checked_', 'enova_checking_checked_')) for key in keys))
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_history WHERE import_type='enova_document_year' AND status='completed'").fetchone()[0], 2)
 
     def test_wrong_nip_and_missing_month_do_not_create_false_zeros_or_stop_other_company(self):
         self.make_company(nip='9999999999', forma_opodatkowania='KPiR')
         previous = {'documents': {'accounting': {'SP': 9}}}
         with get_conn() as conn:
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s)',
-                         (f'enova_checking_{self.company}_2026-11', json.dumps(previous)))
+            save_snapshot(conn, 'enova_checking', self.company, '2026-11', previous)
         config = {**self.config, 'sources': [SOURCE, {'nip': '9999999999', 'database': 'ClientB'}]}
         for failure in ('nip', 'missing_month'):
             def fetch(config, source, months, *, result_kind):

@@ -3,7 +3,8 @@ from datetime import date, timedelta
 from app.integrations.enova.accounting import accounting_breakdown, decoded, documents, declaration_entries
 from app.integrations.enova.checking import history_months
 
-HR_LABELS = {'contract_end': 'Koniec umowy', 'medical_exam': 'Badania lekarskie', 'ohs_training': 'Szkolenie BHP'}
+HR_LABELS = {'employee': 'Pracownicy z Enovy', 'contract_end': 'Koniec umowy',
+             'medical_exam': 'Badania lekarskie', 'ohs_training': 'Szkolenie BHP'}
 
 
 def _count(row, report, department, kind=None):
@@ -51,6 +52,8 @@ def hr_status(event, today=None, days=30):
     today = today or date.today()
     if event.get('status') != 'active':
         return None
+    if event['event_type'] == 'employee':
+        return 'Aktywny'
     if not event.get('due_date'):
         return 'Bezterminowa' if event['event_type'] == 'contract_end' else 'Brak terminu'
     due = date.fromisoformat(event['due_date'])

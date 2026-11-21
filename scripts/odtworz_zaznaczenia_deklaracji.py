@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 def read_platnik(companies, company_ids, months, year):
     from app.db.dao_conn import advisory_lock
     from app.integrations.platnik import declarations
+    from app.integrations.platnik.links import import_links
 
     mapped = declarations.payer_mapping(companies, company_ids)
     monthly = {company_id: {month: set() for month in months} for company_id in set(mapped.values())}
@@ -32,15 +33,29 @@ def read_platnik(companies, company_ids, months, year):
     with advisory_lock(748220) as acquired:
         if not acquired:
             raise ValueError('Trwa inny odczyt Płatnika. Ponów po jego zakończeniu.')
+        links, errors, source = import_links(config, mapped)
+        source_option = {'expected_source': source} if source is not None else {}
         # Read each month in bulk for the selected companies, within the adapter row limit.
         for month in months:
-            rows = declarations.fetch(config, [month])
-            for nip, entries in declarations.normalize(rows, [month], mapped).items():
+            ready = {nip: company_id for nip, company_id in mapped.items() if company_id not in errors}
+            if not ready:
+                break
+            rows = declarations.fetch(config, [month], selected_nips=ready, **source_option)
+            records, _, errors = declarations.normalize_for_import(rows, [month], mapped, links, errors)
+            for nip, entries in records.items():
                 monthly[mapped[nip]][month].update(entry['form'] for entry in entries[month])
         period = str(year)
-        rows = declarations.fetch(config, [period], annual=True)
-        for nip, entries in declarations.normalize(rows, [period], mapped, annual=True).items():
-            yearly[mapped[nip]].update(entry['form'] for entry in entries[period])
+        annual_links, annual_errors, annual_source = import_links(config, mapped, annual=True)
+        errors.update(annual_errors)
+        ready = {nip: company_id for nip, company_id in mapped.items() if company_id not in errors}
+        if ready:
+            source_option = {'expected_source': annual_source} if annual_source is not None else {}
+            rows = declarations.fetch(config, [period], annual=True, selected_nips=ready, **source_option)
+            records, _, errors = declarations.normalize_for_import(rows, [period], mapped, annual_links, errors, annual=True)
+            for nip, entries in records.items():
+                yearly[mapped[nip]].update(entry['form'] for entry in entries[period])
+        for company_id in errors:
+            monthly.pop(company_id, None)
     return monthly, yearly
 
 
@@ -84,13 +99,13 @@ def monthly_selection(previous, monthly, declarations, jpk, stamp):
 def update_company(company_id, year, monthly, yearly, declarations, jpk, source, *, apply):
     from app.accounting.report_types import form_key
     from app.companies.annual_declarations import DECLARATION_DETAILS
+    from app.db.checking_storage import read_snapshot, save_snapshot
     from app.db.dao_conn import get_conn
     from app.db.dao_year_end import company_declarations, write_company_year_declarations
     from app.integrations.enova.document_counts import normalize_nip
     from app.integrations.enova.query_defaults import bundled_directory
     from app.integrations.platnik.form_catalog import ANNUAL
 
-    key = f'checking_obligations_{company_id}'
     stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
     with get_conn() as conn:
         if apply:
@@ -99,8 +114,7 @@ def update_company(company_id, year, monthly, yearly, declarations, jpk, source,
         company = conn.execute('SELECT * FROM firmy WHERE id=%s', (company_id,)).fetchone()
         if not company or normalize_nip(company['nip']) != normalize_nip(source['nip']):
             raise ValueError('Firma zmieniła się podczas odczytu.')
-        row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
-        previous = json.loads(row[0]) if row else {}
+        previous = read_snapshot(conn, 'checking_obligations', company_id, lock=apply) or {}
         value = monthly_selection(previous, monthly, declarations, jpk, stamp)
         annual = conn.execute('SELECT company_json FROM year_end_snapshots WHERE rok=%s AND firma_id=%s',
                               (year, company_id)).fetchone()
@@ -119,9 +133,7 @@ def update_company(company_id, year, monthly, yearly, declarations, jpk, source,
         codes = list(dict.fromkeys([code for code in current if form_key(code) not in covered]
                                    + sorted(names[code] for code in detected) + [row[0] for row in filed]))
         if apply:
-            conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                         'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                         (key, json.dumps(value)))
+            save_snapshot(conn, 'checking_obligations', company_id, '', value)
             write_company_year_declarations(conn, company, year, codes, None)
             conn.execute("INSERT INTO audit_log(tabela,rekord_id,akcja,szczegoly) "
                          "VALUES ('firmy',%s,'odtworzenie_deklaracji',%s)",

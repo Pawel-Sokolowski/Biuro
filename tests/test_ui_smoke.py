@@ -240,7 +240,10 @@ class UiSmokeTests(DbTestCase):
 
     def test_monthly_view_has_delivered_column(self):
         from app.monthly_view.monthly_view_ui import MonthlyViewPage
+        from tests.test_review_optimizations import wait_until
+
         page = MonthlyViewPage(self.emp)
+        self.assertTrue(wait_until(lambda: not page._monthly_reads._jobs))
         self.assertTrue(any("Komplet" in t for t in visible_headers(page)))
 
     def test_main_window_sidebar_is_polish(self):
@@ -257,15 +260,14 @@ class UiSmokeTests(DbTestCase):
     def test_monthly_tabs_split_by_role_and_activity_sum(self):
         from app.db.dao_companies import save_company
         from app.monthly_view.monthly_view_ui import MonthlyViewPage
+        from tests.test_review_optimizations import wait_until
+
         kadrowa = self.make_employee("kadry@example.com", "Ola", "Kadrowa")
         save_company({"nazwa": "Tylko Kadry", "kadrowa_id": kadrowa})
         save_company({"nazwa": "Tylko Ksiegowosc", "ksiegowa_id": kadrowa})
         page = MonthlyViewPage(kadrowa)
-        idx = page.employee_combo.findData(kadrowa)
-        page.employee_combo.setCurrentIndex(idx)
-        page._reload_rows()
-        from tests.test_review_optimizations import wait_until
-        self.assertTrue(wait_until(lambda: page.model_kadry.rowCount() == 1 and page.model_ks.rowCount() == 1))
+        self.assertTrue(wait_until(lambda: not page._monthly_reads._jobs))
+        self.assertEqual(page.employee_combo.currentData(), kadrowa)
         self.assertEqual([page.model_kadry.get_row(i)["nazwa"] for i in range(page.model_kadry.rowCount())],
                          ["Tylko Kadry"])
         self.assertEqual([page.model_ks.get_row(i)["nazwa"] for i in range(page.model_ks.rowCount())],

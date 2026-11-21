@@ -7,8 +7,8 @@ import unittest
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import create_or_update_invoice, mark_exported
 from app.db.dao_payments import (
-    confirm_bank_payment, import_mt940_file, invoice_choices_for_transaction,
-    list_unsettled_transfers, match_invoice_contractor, parse_ing_mt940,
+    InvoiceSuggestionIndex, confirm_bank_payment, import_mt940_file, invoice_choices_for_transaction,
+    list_unsettled_transfers, match_invoice_contractor, match_invoice_contractors, parse_ing_mt940,
 )
 from tests.base import DbTestCase
 
@@ -87,6 +87,28 @@ class IngContractorParserTests(unittest.TestCase):
 
 
 class ContractorMatchingTests(unittest.TestCase):
+    def test_index_preserves_exact_and_partial_name_ambiguity(self):
+        rows = [invoice(1, 10, 'FV/1/11/2026', 'Żółć Sprzedaż'),
+                invoice(2, 20, 'FV/2/11/2026', 'Żółć Sprzedaż Polska'),
+                invoice(3, 30, 'FV/3/11/2026', 'Sosiw Krystian'),
+                invoice(4, 40, 'FV/4/11/2026', 'ALFA')]
+        transfers = [dict(id=i, kontrahent=name) for i, name in enumerate(
+            ('Żółć Sprzedaż', 'Polska Żółć Sprzedaż', 'KRYSTIAN RYSZARD SOSIW', 'ALFA', 'Żółć', 'Nieznany'), 1)]
+        indexed = match_invoice_contractors(transfers, rows)
+        self.assertEqual(indexed, {row['id']: match_invoice_contractor(row, rows) for row in transfers})
+        self.assertFalse(indexed[1]['confident'])
+
+    def test_suggestions_index_respects_number_variants_nip_amount_and_scope(self):
+        rows = [invoice(1, 10, 'FV/12/2026', 'Alfa', nip='1234567890'),
+                invoice(2, 20, 'FV-12-2026', 'Beta'),
+                invoice(3, 30, '00001', 'Gamma', nip='1234567890'),
+                invoice(4, 40, '2026', 'Delta')]
+        index = InvoiceSuggestionIndex(rows)
+        transfer = {'tytul': 'Za FV/12/2026; NIP 123-456-78-90', 'remaining': Decimal('1279.20')}
+        self.assertEqual(index.rank(transfer), [1, 2, 3])
+        self.assertEqual(index.rank(transfer, {2, 3, 4}), [2, 3])
+        self.assertEqual(index.rank({'tytul': 'ID 00001', 'kwota': '10'}), [3])
+
     def test_bank_name_matches_short_or_full_name_by_fragments(self):
         rows = [invoice(1, 10, "FV/1/10/2026", "Jan Kowalski"), invoice(2, 20, "FV/2/10/2026", "INNA FIRMA")]
         rows[0]["buyer_full_name"] = "Usługi transportowo spedycyjne i inne Jan Kowalski"

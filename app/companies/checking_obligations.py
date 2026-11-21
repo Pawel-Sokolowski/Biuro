@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.accounting.report_types import form_key
-from app.db.dao_app_settings import get_setting
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
 
 from app.utils.months import month_bounds
@@ -54,7 +54,10 @@ def canonical_form(value):
 
 @office_endpoint('app.companies.checking_obligations.load')
 def load(company_id):
-    return json.loads(get_setting(f'checking_obligations_{company_id}') or '{}') if company_id else {}
+    if not company_id:
+        return {}
+    with get_conn() as conn:
+        return read_snapshot(conn, 'checking_obligations', company_id) or {}
 
 
 def profile(value, month):
@@ -126,18 +129,25 @@ def merge_source_scope(imported, scope, source, stamp):
 
 def add_imported(conn, company_id, month, entries, source):
     """Positive evidence only. Missing documents never disable an obligation."""
-    month_bounds(month)
-    scope = source_scope(entries)
-    if not scope['forms']:
+    add_imported_periods(conn, company_id, {month: entries}, source)
+
+
+def add_imported_periods(conn, company_id, periods, source):
+    scopes = {}
+    for month, entries in periods.items():
+        month_bounds(month)
+        scope = source_scope(entries)
+        if scope['forms']:
+            scopes[month] = scope
+    if not scopes:
         return
-    key = f'checking_obligations_{company_id}'
     conn.execute('SELECT pg_advisory_xact_lock(748221,%s)',(company_id,))
-    row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE',(key,)).fetchone()
-    value = json.loads(row[0]) if row else {}
-    imported = value.setdefault('imported',{}).setdefault(month,{})
-    merge_source_scope(imported, scope, source, datetime.now(ZoneInfo('Europe/Warsaw')).isoformat())
-    conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                 'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',(key,json.dumps(value)))
+    value = read_snapshot(conn, 'checking_obligations', company_id, lock=True) or {}
+    imported = value.setdefault('imported', {})
+    stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+    for month, scope in scopes.items():
+        merge_source_scope(imported.setdefault(month, {}), scope, source, stamp)
+    save_snapshot(conn, 'checking_obligations', company_id, '', value)
 
 
 @office_endpoint('app.companies.checking_obligations.save')
@@ -164,9 +174,7 @@ def save(company_id, edits, actor_id):
         if not conn.execute('SELECT id FROM firmy WHERE id=%s', (company_id,)).fetchone():
             raise ValueError('Nie znaleziono firmy.')
         conn.execute('SELECT pg_advisory_xact_lock(748221,%s)', (company_id,))
-        row = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s FOR UPDATE',
-                           (f'checking_obligations_{company_id}',)).fetchone()
-        value = json.loads(row[0]) if row else {}
+        value = read_snapshot(conn, 'checking_obligations', company_id, lock=True) or {}
         periods = value.setdefault('periods', {})
         # Zakres obowiązuje od wybranego miesiąca: miesiąc po zmianie nie może
         # dziedziczyć starej wartości, więc brak jawnego wpisu znaczy „bez zmian”
@@ -174,9 +182,7 @@ def save(company_id, edits, actor_id):
         previous = {month: periods.get(month) for month in edits}
         periods.update(edits)
         value['periods'] = periods
-        conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
-                     'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
-                     (f'checking_obligations_{company_id}', json.dumps(value)))
+        save_snapshot(conn, 'checking_obligations', company_id, '', value)
         conn.execute("INSERT INTO audit_log(tabela,rekord_id,akcja,uzytkownik_id,szczegoly) VALUES ('firmy',%s,'edycja',%s,%s)",
                      (company_id, actor_id, json.dumps({'monthly_obligations': edits,
                                                         'previous': previous}, ensure_ascii=False)))
@@ -195,25 +201,15 @@ def reset_obligations(actor_id=None):
     from app.security.authorization import can
     if actor_id is not None and not can(actor_id, 'can_edit_companies'):
         raise PermissionError('Brak uprawnień do wyzerowania deklaracji.')
-    cleared = 0
     with get_conn() as conn:
         conn.execute("INSERT INTO audit_log(tabela,akcja,uzytkownik_id,szczegoly) "
-                     "VALUES ('app_settings','zerowanie_deklaracji_miesiecznych',%s,%s)",
+                     "VALUES ('company_checking_snapshots','zerowanie_deklaracji_miesiecznych',%s,%s)",
                      (actor_id, json.dumps({'scope': 'checking_obligations'}, ensure_ascii=False)))
-        rows = conn.execute("SELECT klucz, wartosc FROM app_settings "
-                            "WHERE klucz LIKE 'checking_obligations_%'").fetchall()
-        for key, raw in rows:
-            try:
-                value = json.loads(raw) if isinstance(raw, str) else (raw or {})
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(value, dict) or not value.get('periods'):
-                continue
-            value['periods'] = {}
-            # Bez ręcznych ustawień zostają wyłącznie formularze wykryte w imporcie.
-            conn.execute('UPDATE app_settings SET wartosc=%s WHERE klucz=%s',
-                         (json.dumps(value, ensure_ascii=False), key))
-            cleared += 1
+        cleared = conn.execute("""
+            UPDATE company_checking_snapshots SET payload=jsonb_set(payload,'{periods}','{}'::jsonb)
+            WHERE source='checking_obligations' AND period=''
+              AND jsonb_typeof(payload->'periods')='object' AND payload->'periods'<>'{}'::jsonb
+        """).rowcount
     from app.utils.request_cache import clear_request_cache
     clear_request_cache()
     return cleared

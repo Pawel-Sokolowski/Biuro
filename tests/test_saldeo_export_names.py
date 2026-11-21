@@ -10,11 +10,15 @@ from app.utils import saldeo_exporter
 
 
 class FakeCursor:
-    def execute(self, sql, params):
-        pass
+    def __init__(self):
+        self.company_queries = []
 
-    def fetchone(self):
-        return {
+    def execute(self, sql, params):
+        self.company_queries.append(params)
+
+    def fetchall(self):
+        return [{
+            "id": 1,
             "nazwa": "Nazwa pełna kontrahenta",
             "nazwa_skrocona": "Nazwa wewnętrzna",
             "nazwa_saldeo": "Nazwa Saldeo",
@@ -29,12 +33,15 @@ class FakeCursor:
             "metoda_kasowa": None,
             "wysylac_do_ksef": 0,
             "wysylac_do_kontrahenta": 0,
-        }
+        }]
 
 
 class FakeConnection:
+    def __init__(self):
+        self.query = FakeCursor()
+
     def cursor(self):
-        return FakeCursor()
+        return self.query
 
     def close(self):
         pass
@@ -57,10 +64,13 @@ class SaldeoExportNameTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "faktury.xlsx"
-            with patch.object(saldeo_exporter, "_get_conn", return_value=FakeConnection()), \
+            connection = FakeConnection()
+            with patch.object(saldeo_exporter, "_get_conn", return_value=connection), \
                  patch.object(saldeo_exporter, "get_setting_bool", return_value=False), \
                  patch.object(saldeo_exporter, "get_setting_first", side_effect=setting):
-                saldeo_exporter.export_saldeo_xlsx([invoice], str(output))
+                saldeo_exporter.export_saldeo_xlsx([invoice, dict(invoice, firma_id='1'),
+                                                  dict(invoice, firma_id=2), dict(invoice, firma_id=None)], str(output))
+            self.assertEqual(connection.query.company_queries, [([1, 2],)])
 
             book = load_workbook(output, read_only=True, data_only=True)
             try:

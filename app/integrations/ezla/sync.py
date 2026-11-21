@@ -8,6 +8,7 @@ import threading
 from zoneinfo import ZoneInfo
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import set_setting
+from app.db.checking_storage import read_snapshot, save_snapshot
 from app.integrations.ezla.settings import load_settings, credentials
 from app.integrations.ezla.service import fetch_reports, ServiceError
 from app.integrations.ezla.report import parse_report
@@ -102,8 +103,7 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                     results.append({'company_id': fid, 'state': 'busy'})
                     record('ezla', 'busy', company_id=fid)
                     continue
-                old = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (f'ezla_sync_{fid}',)).fetchone()
-                previous = json.loads(old[0]) if old else {}
+                previous = read_snapshot(conn, 'ezla_sync', fid) or {}
                 identities = payer_nips(company, get_partners(fid))
                 payer_states = dict(previous.get('payers') or {})
                 added, report_count, failures = 0, 0, []
@@ -147,15 +147,17 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                     value['last_success'] = stamp
                     value.pop('error_code', None)
                     value.pop('http_status', None)
-                _write(conn, f'ezla_sync_{fid}', value)
+                save_snapshot(conn, 'ezla_sync', fid, '', value)
                 results.append({'company_id': fid, 'state': state, 'new_reports': added})
             record('ezla', 'failed' if failures else 'downloaded', company_id=fid, count=report_count)
         except Exception as error:
             # Keep the cursor and previous reports after any transport/decryption/validation failure.
             code = error.code if isinstance(error, ServiceError) else 'read_failed'
-            set_setting(f'ezla_sync_{fid}', json.dumps({**previous, 'state': 'failed',
-                        'checked_at': stamp, 'error_code': code,
-                        'http_status': error.http_status if isinstance(error,ServiceError) else None}))
+            with get_conn() as conn:
+                if conn.execute('SELECT id FROM firmy WHERE id=%s FOR KEY SHARE', (fid,)).fetchone():
+                    save_snapshot(conn, 'ezla_sync', fid, '', {**previous, 'state': 'failed',
+                                  'checked_at': stamp, 'error_code': code,
+                                  'http_status': error.http_status if isinstance(error,ServiceError) else None})
             results.append({'company_id': fid, 'state': 'failed', 'error_code': code})
             record('ezla', 'failed', company_id=fid, error_type=type(error).__name__)
         finally:

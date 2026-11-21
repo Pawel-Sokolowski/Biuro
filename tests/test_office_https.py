@@ -1,6 +1,7 @@
 """Actual TLS desktop-to-service round trips; only executed on CI."""
 from datetime import datetime,timedelta,timezone
 from ipaddress import ip_address
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -80,6 +81,307 @@ class OfficeHttpsTests(DbTestCase):
         self.client.logout()
         with self.assertRaises(PermissionError):
             self.client.resume(token)
+
+    def test_platnik_approval_checks_admin_permissions_over_https(self):
+        from app.db.dao_app_settings import set_setting
+        from app.integrations.platnik.holidays import KEY
+
+        nip = '1112223344'
+        company = self.make_company('Wyjątek HTTPS', nip=nip)
+        self.make_employee('platnik-reader@example.test', haslo='Haslo12345')
+        set_setting(KEY, json.dumps({'server': 'fixture', 'database': 'platnik'}))
+        show = 'app.integrations.platnik.links.review'
+        save = 'app.integrations.platnik.links.save'
+        args = (1, company, nip, 7, 21, 'source-db', None)
+        catalogue = ('source-db', {nip: [7, 8]}, {(nip, 7): [
+            {'person_id': 21, 'first': '2026-01-01', 'last': '2026-01-01', 'count': 1},
+        ]}, True)
+        with mock.patch('app.integrations.platnik.links.catalogue', return_value=catalogue):
+            self.client.login('platnik-reader@example.test', 'Haslo12345')
+            with self.assertRaises(PermissionError):
+                self.client.call(show, (1,))
+            with self.assertRaises(PermissionError):
+                self.client.call(save, args)
+            self.client.logout()
+            self.client.login('admin@biuro.pl', 'Admin12345')
+            self.assertIn('platnik_link_review', self.client.server_features)
+            result = next(row for row in self.client.call(show, (1,))['rows'] if row['company_id'] == company)
+            self.assertEqual(result['status'], 'Wybierz kartotekę płatnika')
+            self.client.call(save, args)
+            result = next(row for row in self.client.call(show, (1,))['rows'] if row['company_id'] == company)
+            self.assertEqual(result['status'], 'Zatwierdzono')
+            self.assertEqual(result['approval']['person_id'], 21)
+
+    def test_mt940_upload_imports_12_transactions_into_the_shared_database(self):
+        from app.db.dao_conn import get_conn
+        from tests.test_payment_safety import statement
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        source = Path(self.temporary.name) / 'statement.sta'
+        source.write_bytes(b''.join(statement(str(idx)) for idx in range(1, 13)))
+        operation = 'app.db.dao_payments.import_mt940_file'
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 12, 'new': 12, 'duplicates': 0, 'own': 0})
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 12, 'new': 0, 'duplicates': 12, 'own': 0})
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM bank_transakcje').fetchone()[0], 12)
+
+    def test_monthly_mt940_keeps_customer_receipts_and_outgoing_payments_separate(self):
+        from app.db.dao_conn import get_conn
+        from app.db.dao_payments import InvoiceSuggestionIndex, match_invoice_contractors
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        with get_conn() as conn:
+            conn.execute("""
+                INSERT INTO faktury(miesiac,numer,kwota_netto,kwota_brutto,pozycje_json,
+                                     rodzaj,eksportowana,data_wystawienia,nabywca_pelna)
+                SELECT '2026-11','FV/'||lpad(i::text,4,'0')||'/11/2026',i,i,'[]',
+                       'faktura',1,'2026-11-01','Nabywca '||i
+                FROM generate_series(1,1000) s(i)
+            """)
+            conn.execute("""
+                INSERT INTO bank_transakcje(hash,rachunek,data_operacji,kwota,waluta,kierunek)
+                VALUES ('historical-own-account',%s,'2026-10-31',-5,'PLN','D')
+            """, ('/pl22\u00a01050 0099-7603 1234 5678 9124',))
+        lines = [':20:MONTHLY', ':25:PL44105000997603123456789123', ':28C:301/1', ':60F:C261101PLN10000,00']
+        for i in range(1, 1501):
+            if i <= 1000:
+                entry = f':61:2611181118C{i},00NTRFREF{i:06}//BANK{i:06}'
+                details = f':86:~20FV/{i:04}/11/2026~32Nabywca {i}'
+            else:
+                account = '22105000997603123456789124' if i <= 1250 else '33105000997603123456789125'
+                entry = f':61:2611181118D5,00NTRFREF{i:06}//BANK{i:06}'
+                details = f':86:~20Płatność~38{account}'
+            lines.extend((entry, details))
+        lines.append(':62F:C261130PLN508000,00')
+        source = Path(self.temporary.name) / 'monthly.sta'
+        source.write_bytes(('\r\n'.join(lines) + '\r\n').encode('cp1250'))
+
+        operation = 'app.db.dao_payments.import_mt940_file'
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 1500, 'new': 1250, 'duplicates': 0, 'own': 250})
+        self.assertEqual(self.client.call(operation, (str(source), 1)),
+                         {'all': 1500, 'new': 0, 'duplicates': 1250, 'own': 250})
+        operation = 'app.db.dao_payments.list_unsettled_transfers'
+        receipts = self.client.call(operation, (1,), {'limit': 1000})
+        all_records = self.client.call(operation, (1,), {'include_all': True, 'limit': 1250})
+        self.assertEqual(len(receipts), 1000)
+        self.assertEqual(sum(row['kwota'] < 0 for row in all_records), 250)
+        invoices = self.client.call('app.db.dao_payments.list_invoice_choices', (1,))
+        self.assertEqual(len(invoices), 1000)
+        self.assertTrue(all(match['confident'] for match in match_invoice_contractors(receipts, invoices).values()))
+        index = InvoiceSuggestionIndex(invoices)
+        by_number = {invoice['numer']: invoice['id'] for invoice in invoices}
+        self.assertTrue(all(index.rank(row) == [by_number[row['tytul']]] for row in receipts))
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM faktury_platnosci').fetchone()[0], 0)
+
+    def test_mt940_review_suggests_older_invoice_beyond_the_first_page(self):
+        from app.db.dao_conn import get_conn
+        from app.db.dao_payments import INVOICE_CHOICE_PAGE_SIZE, InvoiceSuggestionIndex
+        from app.invoices.payments_ui import _read_bank_review
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Abonament')
+        with get_conn() as conn:
+            old_invoice = conn.execute("""
+                INSERT INTO faktury(firma_id,miesiac,numer,kwota_netto,kwota_brutto,pozycje_json,
+                                    rodzaj,eksportowana,data_wystawienia)
+                VALUES (%s,'2026-08','FV/1/08/2026',100,123,'[]','faktura',1,'2026-08-01') RETURNING id
+            """, (company,)).fetchone()[0]
+            conn.execute("""
+                INSERT INTO faktury(miesiac,numer,kwota_netto,kwota_brutto,pozycje_json,
+                                    rodzaj,eksportowana,data_wystawienia)
+                SELECT '2026-11','FV/'||i||'/11/2026',100,123,'[]','faktura',1,'2026-11-01'
+                FROM generate_series(1,%s) s(i)
+            """, (INVOICE_CHOICE_PAGE_SIZE,))
+            conn.execute("""
+                INSERT INTO bank_transakcje(hash,data_operacji,kwota,waluta,kierunek,tytul)
+                VALUES ('older-invoice-receipt','2026-11-15',123,'PLN','C','Zapłata FV/1/08/2026')
+            """)
+        operation = 'app.db.dao_payments.list_invoice_choices'
+        first = self.client.call(operation, (1,))
+        second = self.client.call(operation, (1,), {'offset': INVOICE_CHOICE_PAGE_SIZE})
+        self.assertEqual(len(first), INVOICE_CHOICE_PAGE_SIZE)
+        self.assertNotIn(old_invoice, {row['id'] for row in first})
+        self.assertEqual([row['id'] for row in second], [old_invoice])
+        lookup = self.client.call(operation, (1,), {'references': ['fv-1-08-2026']})
+        self.assertEqual([row['id'] for row in lookup], [old_invoice])
+        with mock.patch('app.remote.state._client', self.client):
+            invoices, transfers, _, _, matches, has_more, _ = _read_bank_review(1, False, 100)
+        self.assertTrue(has_more)
+        self.assertTrue(matches[transfers[0]['id']]['confident'])
+        self.assertEqual(InvoiceSuggestionIndex(invoices).rank(transfers[0]), [old_invoice])
+
+    def test_company_form_initial_read_is_batched_off_the_gui_thread(self):
+        from app.companies.company_form import CompanyForm
+        from tests.test_review_optimizations import wait_until
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Karta HTTPS')
+        requests = []
+        request = self.client._request
+        gui_thread = threading.get_ident()
+
+        def trace(path, payload=None, **kwargs):
+            requests.append((path, payload, threading.get_ident()))
+            return request(path, payload, **kwargs)
+
+        with mock.patch('app.remote.state._client', self.client), \
+                mock.patch.object(self.client, '_request', side_effect=trace):
+            form = CompanyForm(company, actor_id=1)
+            self.addCleanup(form.close)
+            self.assertTrue(wait_until(lambda: 'nazwa' in form.inputs))
+            self.assertEqual(form.inputs['nazwa'].text(), 'Karta HTTPS')
+            self.assertEqual([p['operation'] for _, p, _ in requests],
+                             ['app.companies.form_data.company_form_snapshot'])
+            self.assertNotEqual(requests[0][2], gui_thread)
+            form.section_tabs.setCurrentWidget(form.section_pages['Notatki'])
+            self.assertTrue(wait_until(lambda: 'Notatki' in form._card_tabs))
+            self.assertEqual(len(requests), 2)
+            self.assertTrue(all(thread != gui_thread for _, _, thread in requests))
+
+    def test_finished_file_transfers_release_session_slots(self):
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        server_files = self.server.office_service.files
+        target = Path(self.temporary.name) / 'companies.xlsx'
+        from app.remote.auth import digest
+        for _ in range(102):
+            target.write_bytes(b'old content')
+            reference = self.client._file(target, 'output')
+            server_file = Path(server_files.path(digest(self.client.token), reference))
+            server_file.write_bytes(b'export')
+            self.client._request('download', reference)
+            self.client.release_files([reference])
+        self.assertFalse(server_files.items)
+        target = target.with_suffix('.csv')
+        self.client.call('app.db.dao_companies.export_companies_csv', (str(target),))
+        self.assertTrue(target.exists())
+        self.assertFalse(server_files.items)
+
+    def test_short_qt_jobs_share_existing_https_connections(self):
+        from PyQt6.QtCore import QObject
+        from app.utils.background import TaskRunner
+        from tests.test_review_optimizations import wait_until
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Połączenie wielokrotnego użycia')
+        owner = QObject()
+        runner = TaskRunner(owner)
+        results, errors = [], []
+
+        def submit():
+            runner.submit(lambda: self.client.call('app.db.dao_companies.get_company', (company,)),
+                          completed, errors.append)
+
+        def completed(row):
+            results.append(row)
+            if len(results) < 80:
+                submit()
+
+        with mock.patch.object(self.client, '_new_session', wraps=self.client._new_session) as connect:
+            submit()
+            self.assertTrue(wait_until(lambda: len(results) == 80 or errors))
+            self.assertFalse(errors)
+            self.assertLess(connect.call_count, 4)
+            self.assertTrue(all(row['id'] == company for row in results))
+
+    def test_saldeo_file_export_requires_permission_beyond_invoice_tab(self):
+        from app.db.dao_conn import get_conn
+        employee = self.make_employee('invoices@example.test', haslo='Haslo12345')
+        with get_conn() as conn:
+            role = conn.execute("INSERT INTO role(nazwa,zakladki,can_export_data) VALUES ('Eksport test','Faktury',0) RETURNING id").fetchone()[0]
+            conn.execute('UPDATE pracownicy SET rola_id=%s WHERE id=%s', (role, employee))
+        self.client.login('invoices@example.test', 'Haslo12345')
+        self.assertIn('Faktury', self.client._ui_authorization['tabs'])
+        target = Path(self.temporary.name) / 'forbidden.xlsx'
+        with self.assertRaises(PermissionError):
+            self.client.call('app.utils.saldeo_exporter.export_saldeo_xlsx', ([], str(target)))
+        self.assertFalse(target.exists())
+        self.assertFalse(self.server.office_service.files.items)
+
+    def test_company_card_mail_section_preserves_mail_module_permissions(self):
+        from app.db.dao_conn import get_conn
+        employee = self.make_employee('companies@example.test', haslo='Haslo12345')
+        company = self.make_company('Kartoteka pracownika')
+        with get_conn() as conn:
+            role = conn.execute("INSERT INTO role(nazwa,zakladki) VALUES ('Kartoteka test','Klienci') RETURNING id").fetchone()[0]
+            conn.execute('UPDATE pracownicy SET rola_id=%s WHERE id=%s', (role, employee))
+            conn.execute("INSERT INTO konta_email(id,email) VALUES (10,'assigned@example.test')")
+            conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (%s,10)', (employee,))
+        self.client.login('companies@example.test', 'Haslo12345')
+        operation = 'app.companies.form_data.company_form_snapshot'
+        self.assertEqual(self.client.call(operation, (company, employee, 'mail')),
+                         {'accounts': [], 'filters': [], 'choices': {'senders': [], 'folders': []}})
+        with self.assertRaises(PermissionError):
+            self.client.call(operation, (company, employee, 'mail_choices'), {'account_id': 10})
+
+    def test_bulk_campaign_history_and_idempotent_smtp_through_https(self):
+        from app.db.dao_conn import get_conn
+        from app.email.bulk_mail import BulkMailPlan, BulkMailSender
+        from app.services import bulk_mail_log
+        from tests.test_review_optimizations import wait_until
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        company = self.make_company('Wysyłka HTTPS', adres_email='client@example.test')
+        with get_conn() as conn:
+            conn.execute("INSERT INTO konta_email(id,email) VALUES (10,'office@example.test')")
+            conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (1,10)')
+        notice = Path(self.temporary.name) / 'notice.txt'
+        notice.write_text('Treść załącznika', encoding='utf-8')
+        plan = BulkMailPlan(999, 10, 'office@example.test', 'Temat', 'Treść',
+                            ((company, ('client@example.test',)),), attachments=(str(notice),))
+        with mock.patch('app.remote.state._client', self.client), \
+                mock.patch('app.email.bulk_mail.send_email_smtp', return_value=(True, 'OK')) as smtp:
+            sender = BulkMailSender()
+            results = []
+            sender.finished.connect(results.append)
+            sender.start(plan)
+            self.assertTrue(wait_until(lambda: bool(results)))
+            self.assertFalse(results[0]['error'])
+            history = bulk_mail_log.history()
+            self.assertEqual(history[0]['actor_id'], 1)
+            self.assertEqual(history[0]['remaining'], 0, results[0]['entries'])
+            self.assertEqual(history[0]['attachments'], ['notice.txt'])
+            self.assertEqual(history[0]['batches'][0]['status'], 'sent')
+            self.assertFalse(self.server.office_service.files.items)
+            # Resubmit a completed campaign batch while retaining the original attachment identity.
+            from dataclasses import replace
+            refs = self.client.upload_campaign_attachments(plan.attachments)
+            try:
+                result = bulk_mail_log.send_campaign_batch(
+                    history[0]['id'], replace(plan, attachments=refs), 0)
+                self.assertTrue(result['ok'])
+            finally:
+                self.client.release_files(refs)
+            smtp.assert_called_once()
+            self.assertEqual(Path(smtp.call_args.kwargs['attachments'][0]).name, 'notice.txt')
+            self.assertTrue(smtp.call_args.kwargs['require_attachments'])
+
+    def test_selected_invoice_details_for_1000_records_use_one_https_operation(self):
+        from app.db.dao_conn import get_conn
+        from app.remote.view_reads import invoice_selection
+
+        self.client.login('admin@biuro.pl', 'Admin12345')
+        self.assertIn('invoice_selection', self.client.server_features)
+        with get_conn() as conn:
+            conn.execute("""
+                INSERT INTO faktury (miesiac, kwota_netto, kwota_brutto, numer, pozycje_json)
+                SELECT '2026-11', 100, 123, 'FV/' || n, '[{"nazwa":"Usługa"}]'
+                FROM generate_series(1, 1000) AS n
+            """)
+            ids = [row[0] for row in conn.execute("SELECT id FROM faktury ORDER BY id DESC")]
+        with mock.patch('app.remote.state._client', self.client), \
+                mock.patch.object(self.client, '_request', wraps=self.client._request) as request:
+            selected = invoice_selection([*ids, -1], 1, details=True)
+        calls = request.call_args_list
+        self.assertEqual(calls[0].args[0], 'operations')
+        self.assertEqual(calls[0].args[1]['operation'], 'app.db.dao_invoices.get_invoice_selection')
+        self.assertTrue(all(call.args[0] == 'jobs' for call in calls[1:]))
+        self.assertEqual([row['id'] for row in selected], ids)
+        self.assertEqual(selected[0]['numer'], 'FV/1000')
+        self.assertEqual(json.loads(selected[0]['pozycje_json']), [{'nazwa': 'Usługa'}])
 
     def test_enova_ezla_endpoint_authenticates_before_releasing_company_xml(self):
         import base64

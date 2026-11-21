@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 from app.db.dao_conn import get_conn, Row
 from app.utils.payment_terms import default_due_date
-from app.invoices.positions import normalize_position, reverse_positions, totals
+from app.invoices.positions import decode_positions, normalize_position, reverse_positions, totals
 from app.security.authorization import is_administrator, can_manage_invoices
 
 DATE_FMT = "%Y-%m-%d"
@@ -59,6 +59,18 @@ def get_invoice_by_id(invoice_id: int) -> Optional[Dict[str, Any]]:
         return _row_to_dict(row)
     finally:
         conn.close()
+
+
+@office_endpoint('app.db.dao_invoices.get_invoice_selection')
+def get_invoice_selection(invoice_ids: List[int], actor_id: int, *, details: bool = False) -> List[Dict[str, Any]]:
+    """Read selected invoices in caller order, omitting missing invoices."""
+    if not invoice_ids or not can_manage_invoices(actor_id):
+        return []
+    fields = "*" if details else "id, numer, ksef_numer"
+    with get_conn() as conn:
+        rows = conn.execute(f"SELECT {fields} FROM faktury WHERE id = ANY(%s)", (invoice_ids,)).fetchall()
+    by_id = {row["id"]: _row_to_dict(row) for row in rows}
+    return [by_id[invoice_id] for invoice_id in invoice_ids if invoice_id in by_id]
 
 
 @office_endpoint('app.db.dao_invoices.get_invoice_for_company_month')
@@ -1139,13 +1151,7 @@ def list_invoices(
 @office_endpoint('app.db.dao_invoices.get_invoice_positions')
 def get_invoice_positions(invoice_id: int) -> List[Dict[str, Any]]:
     invoice = get_invoice_by_id(invoice_id)
-    if not invoice:
-        return []
-    try:
-        positions = json.loads(invoice.get("pozycje_json") or "[]")
-    except (TypeError, ValueError):
-        return []
-    return positions if isinstance(positions, list) else []
+    return decode_positions(invoice.get("pozycje_json")) if invoice else []
 
 
 @office_endpoint('app.db.dao_invoices.update_invoice_draft')

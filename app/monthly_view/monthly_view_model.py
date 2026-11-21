@@ -102,7 +102,7 @@ class MonthlyViewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 14 if self._mode == "ksiegowosc" else 12
+        return 14 if self._mode == "ksiegowosc" else 13
 
     def _vat_cols(self):
         return (12, 13) if self._mode == "ksiegowosc" else ()
@@ -149,6 +149,11 @@ class MonthlyViewModel(QAbstractTableModel):
         if self._mode == "ksiegowosc" and col in (1, 2) and role == Qt.ItemDataRole.ToolTipRole:
             return row.get("faktura_platnosci_tooltip", "")
 
+        if self._mode == 'kadry' and col == 12 and role == Qt.ItemDataRole.ToolTipRole:
+            return ('Prognoza limitu przy dalszym korzystaniu wg historii Płatnika. '
+                    'Sprawdź warunki roczne i ewentualny limit dodatkowy Małego ZUS Plus.\n'
+                    + (row.get('insurance_details') or 'Brak danych o okresach ubezpieczenia.'))
+
         if self._mode == 'kadry' and col == 11 and role == Qt.ItemDataRole.ToolTipRole:
             return row.get('insurance_details') or 'Brak kodów z dokumentów Płatnika za ten miesiąc. Zleć pobranie formularzy ZUS.'
 
@@ -187,6 +192,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 9: "➕",
                 10: "✏️",
                 11: row.get('insurance_codes') or '—',
+                12: row.get('insurance_deadline') or '—',
             }
             return mapping.get(col, "")
 
@@ -237,7 +243,8 @@ class MonthlyViewModel(QAbstractTableModel):
             if self._mode == "ksiegowosc":
                 headers = ["Firma", "Nr faktury", "Zapłacona", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
-                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "Kody ubezpieczenia"]
+                headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj",
+                           "Kody ubezpieczenia", "Ulga ZUS do"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()

@@ -2,8 +2,8 @@
 -- The worker inserts only fixed catalogue identifiers after checking metadata.
 -- Two ODBC dates delimit reporting months, document-filled dates or reporting years.
 WITH Parameters AS (
-    SELECT CAST(? AS date) AS DateFrom, CAST(? AS date) AS DateTo
-), Records AS (
+    SELECT CAST(? AS date) AS DateFrom, CAST(? AS date) AS DateTo__SCOPE_PARAMETER__
+), __SCOPE_CTE__Records AS (
 __RECORDS__
 ), Periods AS (
     SELECT r.*, REPLACE(LTRIM(RTRIM(r.source_period)),N'/',N'') AS compact_period
@@ -21,5 +21,6 @@ __RECORDS__
 SELECT r.form,r.source_id,r.payer_id,r.nip,r.report_id,
        __PERIOD_RESULT__,r.employee_id,r.employee_name,r.raw_status,r.valid_link,r.insurance_code
 FROM Dated r CROSS JOIN Parameters p
-WHERE (r.reporting_date>=p.DateFrom AND r.reporting_date<p.DateTo) OR r.reporting_date IS NULL
+WHERE ((r.reporting_date>=p.DateFrom AND r.reporting_date<p.DateTo) OR r.reporting_date IS NULL)
+__SCOPE_FILTER__
 ORDER BY r.payer_id,r.reporting_date,r.form,r.source_id;

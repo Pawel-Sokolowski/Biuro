@@ -8,10 +8,10 @@ from app.integrations.enova.document_counts import DOCUMENT_TYPE_LABELS
 
 
 class MonthlySetup(QWidget):
-    def __init__(self, company_id, parent=None, company=None):
+    def __init__(self, company_id, parent=None, company=None, *, defer_load=False):
         super().__init__(parent)
         self.company = company or {}
-        self.saved = load(company_id)
+        self.saved = {} if defer_load else load(company_id)
         self.edits = {}
         self.loading = True
         box = QVBoxLayout(self)

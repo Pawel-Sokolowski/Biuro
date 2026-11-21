@@ -56,9 +56,9 @@ def mail_job(stop=None):
     return {'accounts': len(accounts)}
 
 
-def reminders_job():
+def reminders_job(stop=None):
     from app.services.email_reminders import run_reminders
-    return {'sent': run_reminders()}
+    return {'sent': run_reminders(stop=stop)}
 
 
 def invoices_job():
@@ -67,12 +67,17 @@ def invoices_job():
     # Queue entries record the user, sender and reviewed recipients. Never select
     # all drafts or all issued invoices, and never resubmit an invoice to KSeF.
     with get_conn() as conn:
-        rows = conn.execute("""SELECT id,invoice_email_actor_id FROM faktury
-            WHERE invoice_email_status IN ('queued','failed_before_send')
+        rows = conn.execute("""WITH due AS (
+            SELECT id FROM faktury WHERE invoice_email_status IN ('queued','failed_before_send')
               AND invoice_email_actor_id IS NOT NULL AND cancelled_at IS NULL
+              AND (invoice_email_next_attempt_at IS NULL OR invoice_email_next_attempt_at <= now())
               AND (ksef_numer IS NOT NULL OR ksef_status IN ('wysylanie','oczekuje','do_sprawdzenia','przyjeta'))
               AND NOT EXISTS (SELECT 1 FROM faktury_kosz t WHERE t.faktura_id=faktury.id AND t.restored_at IS NULL)
-            ORDER BY id LIMIT 50""").fetchall()
+            ORDER BY invoice_email_next_attempt_at NULLS FIRST, id LIMIT 50 FOR UPDATE SKIP LOCKED
+        )
+        UPDATE faktury f SET invoice_email_attempts=f.invoice_email_attempts+1,
+            invoice_email_next_attempt_at=now()+make_interval(mins => LEAST(f.invoice_email_attempts+1,30))
+        FROM due WHERE f.id=due.id RETURNING f.id,f.invoice_email_actor_id""").fetchall()
     sent, errors = 0, 0
     for row in rows:
         result = process_invoice_batch([row['id']], row['invoice_email_actor_id'], send=False)
@@ -84,9 +89,9 @@ def invoices_job():
     return {'queued': len(rows), 'sent': sent}
 
 
-def enova_job(stop=None):
+def enova_job(stop=None, *, now=None):
     from app.services.enova_stage import run
-    return run(stop)
+    return run(stop, now=now)
 
 
 def ksef_import_job():
@@ -104,9 +109,10 @@ def ezla_job(stop=None,now=None):
     from app.integrations.ezla.sync import run_sync
     now = now or datetime.now(ZoneInfo('Europe/Warsaw'))
     settings = load_settings()
-    if now.weekday()!=0 or now.time().replace(tzinfo=None)<time.fromisoformat(settings['ezla_time']):
+    monday = now.date() - timedelta(days=now.weekday())
+    if now < datetime.combine(monday, time.fromisoformat(settings['ezla_time']), tzinfo=now.tzinfo):
         return {'mode':'waiting','companies':0,'failed':0}
-    week = now.date().isoformat()
+    week = monday.isoformat()
     if get_setting('worker_ezla_completed_week')==week:
         return {'mode':'checked_this_week','companies':0,'failed':0}
     result = run_sync(stop=stop)
@@ -136,6 +142,9 @@ def platnik_job():
             failed.append(name + ': ' + (str(error) if isinstance(error, (PlatnikSqlError, ValueError)) else 'Odczyt nie powiódł się'))
     if failed:
         raise RuntimeError('Nieukończone odczyty Płatnika: ' + ', '.join(failed))
+    if any(run.get('insurance_registry_errors') or run.get('declaration_link_errors')
+           for run in results.get('declarations', {}).values()):
+        results['mode'] = 'partial'
     return results
 
 
@@ -154,7 +163,7 @@ def checking_refresh_job(stop=None):
 def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
-        return {'mail': lambda: mail_job(stop), 'reminders': reminders_job,
+        return {'mail': lambda: mail_job(stop), 'reminders': lambda: reminders_job(stop),
                 'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
                 'checking_refresh':lambda:checking_refresh_job(stop)}[name]()
 
@@ -223,8 +232,13 @@ def serve(*, once=False, stop=None):
                 started_at = statuses[name].get('started_at')
                 try:
                     outcome = future.result()
-                    statuses[name] = {'state': 'skipped' if isinstance(outcome, dict) and outcome.get('mode') in
-                                      ('waiting', 'checked_today', 'checked_this_week', 'disabled', 'not_configured', 'busy', 'idle', 'empty', 'cancelled') else 'ok', 'result': outcome, 'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                    mode = outcome.get('mode') if isinstance(outcome, dict) else None
+                    state = mode if mode in ('partial', 'failed') else 'ok'
+                    if mode in ('waiting', 'retry_waiting', 'checked_today', 'checked_this_week', 'disabled',
+                                'not_configured', 'busy', 'idle', 'empty', 'cancelled'):
+                        state = 'skipped'
+                    statuses[name] = {'state': state, 'result': outcome,
+                                      'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
                 except Exception as exc:
                     # Avoid logging arbitrary third-party exception strings/credentials.
                     logger.error('worker_job_failed job=%s error_type=%s', name, type(exc).__name__)
@@ -273,7 +287,7 @@ def serve(*, once=False, stop=None):
                     'enabled': settings['enabled'], 'jobs': statuses}))
                 last_heartbeat_write = now_monotonic
             if once and not running:
-                return int(any(value['state'] == 'failed' for value in statuses.values()))
+                return int(any(value['state'] in ('failed', 'partial') for value in statuses.values()))
             stop.wait(1 if once else 5)
     return 0
 

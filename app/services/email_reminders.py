@@ -6,6 +6,7 @@ import calendar
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from functools import lru_cache
 import json
 import logging
 from string import Formatter
@@ -13,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_conn import get_conn
+from app.invoices.invoice_delivery import parse_recipients
 from .reminder_recipients import select_recipient
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,7 @@ def save_settings(settings):
     set_setting(SETTINGS_KEY, json.dumps(settings, ensure_ascii=False))
 
 
+@lru_cache(maxsize=512)
 def polish_holiday(day):
     """Polish statutory holidays, including Christmas Eve from 2025."""
     y = day.year
@@ -101,13 +104,17 @@ def polish_holiday(day):
                                                                   easter + timedelta(days=49), easter + timedelta(days=60)}
 
 
+def _send_window_is_open(rule, now):
+    return (now.weekday() in rule['weekdays']
+            and (rule['holidays'] or not polish_holiday(now.date()))
+            and now.time().replace(tzinfo=None) >= time.fromisoformat(rule['time']))
+
+
 def scheduled_slot(due, rule, now):
     """Latest due slot, shifted forward over excluded days; one catch-up, no backlog burst."""
-    today = now.date()
-    if (today.weekday() not in rule['weekdays']
-            or (not rule['holidays'] and polish_holiday(today))
-            or now.time().replace(tzinfo=None) < time.fromisoformat(rule['time'])):
+    if not _send_window_is_open(rule, now):
         return None
+    today = now.date()
     offsets = sorted(set(rule['offsets']))
     age = (today - due).days
     slots = [due + timedelta(days=n) for n in offsets if n <= age]
@@ -145,26 +152,98 @@ def _civil_recipient(conn, row, company_id, email_field):
     return row
 
 
-def _candidates(conn, kind, now, rule, target_id=None):
+DOCUMENT_SCOPE = """
+    FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id=f.id AND s.miesiac=%s
+    WHERE COALESCE(s.dokumenty_dostarczone, 0) = 0 AND f.status='Aktywne'
+      AND f.ksiegowa_id IS NOT NULL
+      AND (NULLIF(f.data_rozpoczecia_obslugi, '') IS NULL OR f.data_rozpoczecia_obslugi <= %s)
+      AND (NULLIF(f.data_zakonczenia_obslugi, '') IS NULL OR f.data_zakonczenia_obslugi >= %s)
+"""
+PAYMENT_SCOPE = """
+    WHERE i.status='wystawiona' AND i.cancelled_at IS NULL
+      AND i.rodzaj IN ('faktura', 'zaliczkowa')
+      AND CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) > 0
+      AND NOT EXISTS (SELECT 1 FROM faktury_kosz t WHERE t.faktura_id=i.id AND t.restored_at IS NULL)
+"""
+PAYMENT_TOTALS = """
+    LEFT JOIN (SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id) p
+      ON p.faktura_id=i.id
+"""
+
+
+def _document_period(now, rule):
+    first = now.date().replace(day=1)
+    previous = first - timedelta(days=1)
+    due = first.replace(day=min(rule['day'], calendar.monthrange(first.year, first.month)[1]))
+    return due, (previous.strftime('%Y-%m'), previous.isoformat(), first.isoformat())
+
+
+def _invoice_due(value):
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _unclaimed_targets(conn, kind, now, rule):
     if kind == 'documents':
-        first = now.date().replace(day=1)
-        month = (first - timedelta(days=1)).strftime('%Y-%m')
-        due = first.replace(day=min(rule['day'], calendar.monthrange(first.year, first.month)[1]))
-        rows = conn.execute("""SELECT f.id, f.nazwa AS firma, f.adres_email AS email, f.forma_dzialalnosci,
+        due, period = _document_period(now, rule)
+        slot = scheduled_slot(due, rule, now)
+        if slot is None:
+            return []
+        slots = [(row['id'], f"{row['id']}:{period[0]}", slot)
+                 for row in conn.execute(f"SELECT f.id {DOCUMENT_SCOPE}", period)]
+    else:
+        rows = conn.execute(f"""
+            SELECT i.id,i.termin_platnosci
+            FROM faktury i {PAYMENT_TOTALS}
+            {PAYMENT_SCOPE} AND NULLIF(i.termin_platnosci, '') IS NOT NULL
+        """)
+        by_due = {}
+        slots = []
+        for row in rows:
+            raw_due = row['termin_platnosci']
+            if raw_due not in by_due:
+                due = _invoice_due(raw_due)
+                by_due[raw_due] = scheduled_slot(due, rule, now) if due else None
+            slot = by_due[raw_due]
+            if slot is not None:
+                slots.append((row['id'], str(row['id']), slot))
+    if not slots:
+        return []
+    ids, targets, dates = map(list, zip(*slots))
+    return [row[0] for row in conn.execute("""
+        SELECT pending.id
+        FROM unnest(%s::integer[], %s::text[], %s::date[]) AS pending(id, target, slot)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM email_reminder_log
+            WHERE kind=%s AND target=pending.target AND scheduled_date=pending.slot
+        ) AND NOT EXISTS (
+            SELECT 1 FROM email_reminder_log
+            WHERE kind=%s AND target=pending.target AND scheduled_date=%s
+        )
+    """, (ids, targets, dates, kind, 'manual_' + kind, now.date()))]
+
+
+def _candidates(conn, kind, now, rule, target_id=None):
+    target = (target_id,) if target_id is not None else ()
+    if kind == 'documents':
+        due, period = _document_period(now, rule)
+        month = period[0]
+        restriction = 'AND f.id=%s' if target else ''
+        rows = conn.execute(f"""SELECT f.id, f.nazwa AS firma, f.adres_email AS email, f.forma_dzialalnosci,
             ARRAY(SELECT c.email FROM company_contacts c WHERE c.firma_id=f.id ORDER BY c.id) AS contact_emails
-            FROM firmy f LEFT JOIN statusy_miesieczne s ON s.firma_id = f.id AND s.miesiac = %s
-            WHERE COALESCE(s.dokumenty_dostarczone, 0) = 0 AND f.status = 'Aktywne'
-              AND f.ksiegowa_id IS NOT NULL
-              AND (%s::integer IS NULL OR f.id = %s)
-              AND (NULLIF(f.data_rozpoczecia_obslugi, '') IS NULL OR f.data_rozpoczecia_obslugi <= %s)
-              AND (NULLIF(f.data_zakonczenia_obslugi, '') IS NULL OR f.data_zakonczenia_obslugi >= %s)""",
-            (month, target_id, target_id, (first - timedelta(days=1)).isoformat(), first.isoformat())).fetchall()
+            {DOCUMENT_SCOPE} {restriction}""", (*period, *target))
         for row in rows:
             row = _civil_recipient(conn, row, row['id'], 'email')
             yield {'target': f"{row['id']}:{month}", **select_recipient(company_email=row['email'],contact_emails=row['contact_emails']), 'due': due,
                    'firma': row['firma'], 'miesiac': month, 'numer': '', 'pozostalo': ''}
     else:
-        rows = conn.execute("""SELECT i.id, i.numer, i.miesiac, i.termin_platnosci, f.id AS firma_id, f.forma_dzialalnosci,
+        restriction = 'AND i.id=%s' if target else ''
+        totals = """LEFT JOIN LATERAL (
+            SELECT SUM(kwota) AS paid FROM faktury_platnosci WHERE faktura_id=i.id
+        ) p ON true""" if target else PAYMENT_TOTALS
+        rows = conn.execute(f"""SELECT i.id, i.numer, i.miesiac, i.termin_platnosci, f.id AS firma_id, f.forma_dzialalnosci,
             COALESCE(NULLIF(i.nabywca_pelna, ''), f.nazwa, k.nazwa, '') AS firma,
             i.nabywca_email AS invoice_email, f.email_faktury AS billing_email,
             f.adres_email AS company_email, k.email AS contractor_email,
@@ -172,20 +251,12 @@ def _candidates(conn, kind, now, rule, target_id=None):
             CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) AS balance
             FROM faktury i LEFT JOIN firmy f ON f.id = i.firma_id
             LEFT JOIN kontrahenci k ON k.id = i.kontrahent_id
-            LEFT JOIN (SELECT faktura_id, SUM(kwota) AS paid FROM faktury_platnosci GROUP BY faktura_id) p
-                ON p.faktura_id = i.id
-            WHERE i.status = 'wystawiona' AND i.cancelled_at IS NULL
-              AND (%s::integer IS NULL OR i.id = %s)
-              AND i.rodzaj IN ('faktura', 'zaliczkowa')
-              AND CAST(i.kwota_brutto AS NUMERIC(14,2)) - COALESCE(p.paid, 0) > 0
-              AND NOT EXISTS (SELECT 1 FROM faktury_kosz t WHERE t.faktura_id = i.id AND t.restored_at IS NULL)""",
-            (target_id, target_id)).fetchall()
+            {totals} {PAYMENT_SCOPE} {restriction}""", target)
         for row in rows:
-            row = _civil_recipient(conn, row, row['firma_id'], 'company_email')
-            try:
-                due = date.fromisoformat(str(row['termin_platnosci']))
-            except (ValueError, TypeError):
+            due = _invoice_due(row['termin_platnosci'])
+            if due is None:
                 continue
+            row = _civil_recipient(conn, row, row['firma_id'], 'company_email')
             yield {'target': str(row['id']), **select_recipient(payments=True,
                        company_email=row['company_email'],billing_email=row['billing_email'],
                        invoice_email=row['invoice_email'],contractor_email=row['contractor_email'],contact_emails=row['contact_emails']), 'due': due,
@@ -193,13 +264,18 @@ def _candidates(conn, kind, now, rule, target_id=None):
                    'pozostalo': f"{Decimal(str(row['balance'])):.2f}"}
 
 
-def run_reminders(now=None):
+def run_reminders(now=None, *, stop=None):
     """Run from GUI timer or an unattended process. Never send when rules are disabled."""
     from app.email.email_actions import send_email_smtp
+    from app.services.manual_reminders import lock_day, sent_manually_today
     from app.utils.system_mailbox import get_system_account
-    now = (now or datetime.now(ZoneInfo('Europe/Warsaw'))).astimezone(ZoneInfo('Europe/Warsaw'))
+    zone = ZoneInfo('Europe/Warsaw')
+    fixed_now = now.astimezone(zone) if now is not None else None
+    now = fixed_now or datetime.now(zone)
     settings = load_settings()
-    if not any(settings[k]['enabled'] for k in ('documents', 'payments')):
+    rules = {kind: settings[kind] for kind in ('documents', 'payments')
+             if settings[kind]['enabled'] and _send_window_is_open(settings[kind], now)}
+    if not rules or (stop is not None and stop.is_set()):
         return 0
     account = get_system_account()
     if not account or not account.get('aktywne'):
@@ -210,21 +286,29 @@ def run_reminders(now=None):
     try:
         # Unique claims span workstations and are committed before SMTP.
         # Uncertain attempts never retry automatically.
-        for kind in ('documents', 'payments'):
-            rule = settings[kind]
-            if not rule['enabled']:
+        for kind, rule in rules.items():
+            window = fixed_now or datetime.now(zone)
+            if not _send_window_is_open(rule, window):
                 continue
             template = next(t for t in settings['templates'] if t['name'] == rule['template'])
-            for candidate in _candidates(conn, kind, now, rule):
+            for target_id in _unclaimed_targets(conn, kind, window, rule):
+                if stop is not None and stop.is_set():
+                    return sent
+                now = fixed_now or datetime.now(zone)
+                # A new day can change the target period, slot and manual-send lock.
+                if now.date() != window.date() or not _send_window_is_open(rule, now):
+                    break
                 # Recheck status/balance after earlier SMTP operations in this batch.
-                candidate = next(_candidates(conn, kind, now, rule, int(candidate['target'].split(':')[0])), None)
+                candidate = next(_candidates(conn, kind, now, rule, target_id), None)
                 if candidate is None:
                     continue
                 slot = scheduled_slot(candidate['due'], rule, now)
                 recipient = (candidate['email'] or '').strip()
-                if slot is None or not recipient:
+                if slot is None:
                     continue
-                from app.invoices.invoice_delivery import parse_recipients
+                if not recipient:
+                    logger.debug('Przypomnienia: brak jednoznacznego adresu dla %s %s', kind, candidate['target'])
+                    continue
                 try:
                     recipients = parse_recipients(recipient)
                 except ValueError:
@@ -233,8 +317,11 @@ def run_reminders(now=None):
                 values = {key: str(candidate.get(key, '')) for key in FIELDS}
                 values['termin'] = candidate['due'].isoformat()
                 subject, body = (template[key].format(**values) for key in ('subject', 'body'))
-                from app.services.manual_reminders import sent_manually_today,lock_day
                 lock_day(conn,kind,candidate['target'],now.date())
+                sending_at = fixed_now or datetime.now(zone)
+                if sending_at.date() != now.date() or not _send_window_is_open(rule, sending_at):
+                    conn.rollback()
+                    break
                 if sent_manually_today(conn,kind,candidate['target'],now.date()):
                     conn.commit()
                     continue
@@ -245,6 +332,13 @@ def run_reminders(now=None):
                 conn.commit()
                 if claim is None:
                     continue
+                sending_at = fixed_now or datetime.now(zone)
+                if (sending_at.date() != now.date() or not _send_window_is_open(rule, sending_at)
+                        or (stop is not None and stop.is_set())):
+                    # The committed reservation belongs to this worker and SMTP has not started.
+                    conn.execute('DELETE FROM email_reminder_log WHERE id=%s', (claim[0],))
+                    conn.commit()
+                    break
                 try:
                     ok, error = send_email_smtp(account['id'], recipients, subject, body)
                 except Exception as exc:

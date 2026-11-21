@@ -1,9 +1,10 @@
 """Selected-company read requests, executed by the existing server worker."""
 
-import json
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from psycopg.types.json import Jsonb
 
 from app.db.dao_conn import advisory_lock, get_conn
 from app.integrations.enova.accounting import require_access
@@ -11,8 +12,6 @@ from app.remote.boundary import endpoint as office_endpoint
 from app.security.authorization import assigned_company_ids
 from app.utils.months import month_bounds, previous_month
 
-
-PREFIX = 'checking_refresh_'
 
 KINDS = (
     'enova',
@@ -80,23 +79,18 @@ def scope(
     ]
 
 
+def _write(conn, value):
+    conn.execute("""
+        INSERT INTO checking_requests(id,actor_id,kind,company_ids,period,state,created_at,finished_at,payload)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT(id) DO UPDATE SET state=EXCLUDED.state, finished_at=EXCLUDED.finished_at, payload=EXCLUDED.payload
+    """, (value['id'], value['actor_id'], value['kind'], value['company_ids'], str(value['period']),
+          value['state'], value['created_at'], value.get('finished_at'), Jsonb(value)))
+
+
 def _save(value):
     with get_conn() as conn:
-        conn.execute(
-            '''
-            INSERT INTO app_settings(klucz, wartosc)
-            VALUES (%s, %s)
-            ON CONFLICT(klucz)
-            DO UPDATE SET wartosc = EXCLUDED.wartosc
-            ''',
-            (
-                PREFIX + value['id'],
-                json.dumps(
-                    value,
-                    ensure_ascii=False,
-                ),
-            ),
-        )
+        _write(conn, value)
 
 
 def _request(
@@ -195,12 +189,12 @@ def retry_request(request_id, actor_id=None):
     require_access(actor_id)
     with get_conn() as conn:
         row = conn.execute(
-            'SELECT wartosc FROM app_settings WHERE klucz = %s FOR UPDATE',
-            (PREFIX + request_id,),
+            'SELECT payload FROM checking_requests WHERE id=%s FOR UPDATE',
+            (request_id,),
         ).fetchone()
         if not row:
             raise ValueError('Nie znaleziono żądania odczytu.')
-        value = json.loads(row[0])
+        value = row['payload']
         if actor_id is not None and value['actor_id'] != actor_id:
             raise PermissionError('Możesz ponowić tylko własne żądanie.')
         if not _needs_retry(value.get('state')):
@@ -211,33 +205,18 @@ def retry_request(request_id, actor_id=None):
             retried_at=stamp(),
         )
         value.pop('error', None)
-        conn.execute(
-            'UPDATE app_settings SET wartosc = %s WHERE klucz = %s',
-            (json.dumps(value, ensure_ascii=False), PREFIX + request_id),
-        )
+        _write(conn, value)
     return value
 
 
 def purge_finished(older_than_days=7):
-    """Sprząta zakończone żądania, żeby app_settings nie rosło w nieskończoność."""
+    """Usuń zakończone żądania starsze niż okres przechowywania."""
     from datetime import timedelta
-    limit = (
-        datetime.now(ZoneInfo('Europe/Warsaw'))
-        - timedelta(days=max(1, int(older_than_days)))
-    ).isoformat()
-    removed = 0
+    limit = datetime.now(ZoneInfo('Europe/Warsaw')) - timedelta(days=max(1, int(older_than_days)))
     with get_conn() as conn:
-        rows = conn.execute(
-            'SELECT klucz, wartosc FROM app_settings WHERE starts_with(klucz, %s)',
-            (PREFIX,),
-        ).fetchall()
-        for row in rows:
-            value = json.loads(row[1])
-            finished = value.get('finished_at') or ''
-            if value.get('state') in ('completed', 'partial', 'failed') and finished and finished < limit:
-                conn.execute('DELETE FROM app_settings WHERE klucz = %s', (row[0],))
-                removed += 1
-    return removed
+        return conn.execute("""
+            DELETE FROM checking_requests WHERE state IN ('completed','partial','failed') AND finished_at < %s
+        """, (limit,)).rowcount
 
 
 @office_endpoint(
@@ -349,57 +328,21 @@ def enqueue(
             'SELECT pg_advisory_xact_lock(748218)'
         )
 
-        rows = conn.execute(
-            '''
-            SELECT wartosc
-            FROM app_settings
-            WHERE starts_with(klucz, %s)
-            ''',
-            (PREFIX,),
-        ).fetchall()
+        existing = conn.execute("""
+            SELECT payload FROM checking_requests
+            WHERE actor_id=%s AND kind=%s AND company_ids=%s::integer[] AND period=%s AND state IN ('queued','running')
+            ORDER BY created_at,id LIMIT 1
+        """, (actor_id, kind, value['company_ids'], str(period))).fetchone()
+        if existing:
+            return existing['payload']
 
-        pending = [
-            json.loads(row[0])
-            for row in rows
-            if json.loads(row[0]).get('state')
-            in ('queued', 'running')
-        ]
-
-        for existing in pending:
-            if all(
-                existing.get(key) == value[key]
-                for key in (
-                    'actor_id',
-                    'kind',
-                    'company_ids',
-                    'period',
-                )
-            ):
-                return existing
-
-        if (
-            len(pending) >= 200
-            or sum(
-                row['actor_id'] == actor_id
-                for row in pending
-            ) >= 5
-        ):
-            raise ValueError(
-                'Kolejka odczytu jest pełna. '
-                'Poczekaj na zakończenie '
-                'poprzednich żądań.'
-            )
-
-        conn.execute(
-            '''
-            INSERT INTO app_settings(klucz, wartosc)
-            VALUES (%s, %s)
-            ''',
-            (
-                PREFIX + value['id'],
-                json.dumps(value),
-            ),
-        )
+        counts = conn.execute("""
+            SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE actor_id=%s) AS actor
+            FROM checking_requests WHERE state IN ('queued','running')
+        """, (actor_id,)).fetchone()
+        if counts['total'] >= 200 or counts['actor'] >= 5:
+            raise ValueError('Kolejka odczytu jest pełna. Poczekaj na zakończenie poprzednich żądań.')
+        _write(conn, value)
 
     return value
 
@@ -411,76 +354,25 @@ def latest(actor_id):
     require_access(actor_id)
 
     with get_conn() as conn:
-        rows = conn.execute(
-            '''
-            SELECT wartosc
-            FROM app_settings
-            WHERE starts_with(klucz, %s)
-            ''',
-            (PREFIX,),
-        ).fetchall()
-
-    values = sorted(
-        (
-            json.loads(row[0])
-            for row in rows
-        ),
-        key=lambda value: value['created_at'],
-        reverse=True,
-    )
-
-    for value in values:
-        if value['actor_id'] == actor_id:
-            scope(
-                actor_id,
-                value['company_ids'],
-            )
-
-            return value
-
-    return None
+        row = conn.execute("""
+            SELECT payload FROM checking_requests WHERE actor_id=%s ORDER BY created_at DESC,id DESC LIMIT 1
+        """, (actor_id,)).fetchone()
+    if not row:
+        return None
+    value = row['payload']
+    scope(actor_id, value['company_ids'])
+    return value
 
 
 def recover_interrupted():
-    # Called only after acquiring worker leadership.
-    # Reads/upserts are idempotent; no outbound messages
-    # or Enova writes exist in this queue.
-
+    # Worker leadership is held by the caller. Reads and upserts in this queue
+    # are idempotent, while direct requests have their own executor.
     with get_conn() as conn:
-        rows = conn.execute(
-            '''
-            SELECT klucz, wartosc
-            FROM app_settings
-            WHERE starts_with(klucz, %s)
-            ''',
-            (PREFIX,),
-        ).fetchall()
-
-        for row in rows:
-            value = json.loads(
-                row['wartosc']
-            )
-
-            if (
-                value.get('state') == 'running'
-                and value.get('execution') != 'direct'
-            ):
-                value.update(
-                    state='queued',
-                    resumed_at=stamp(),
-                )
-
-                conn.execute(
-                    '''
-                    UPDATE app_settings
-                    SET wartosc = %s
-                    WHERE klucz = %s
-                    ''',
-                    (
-                        json.dumps(value),
-                        row['klucz'],
-                    ),
-                )
+        conn.execute("""
+            UPDATE checking_requests SET state='queued',
+                payload=payload || jsonb_build_object('state','queued','resumed_at',%s::text)
+            WHERE state='running' AND payload->>'execution' IS DISTINCT FROM 'direct'
+        """, (stamp(),))
 
 
 def _execute(
@@ -504,6 +396,7 @@ def _execute(
         from app.integrations.platnik.declarations import (
             import_year,
         )
+        from app.integrations.platnik.links import company_declaration_error
 
         result = import_year(
             value['period'],
@@ -519,19 +412,21 @@ def _execute(
                 'wyłączony w ustawieniach Płatnika.'
             )
 
-        return [
-            {
-                'company_id': row['id'],
-                'ok': True,
-                'year': value['period'],
-            }
-            for row in companies
-        ]
+        results = []
+        for row in companies:
+            error = company_declaration_error(result, row['id'])
+            entry = {'company_id': row['id'], 'ok': not error, 'year': value['period']}
+            if error:
+                entry['error'] = error
+            results.append(entry)
+        return results
 
     if value['kind'] == 'platnik_declarations':
         from app.integrations.platnik.declarations import (
             import_months,
         )
+        from app.integrations.platnik.insurance import company_registry_error
+        from app.integrations.platnik.links import company_declaration_error
 
         result = import_months(
             [
@@ -550,14 +445,15 @@ def _execute(
                 'w ustawieniach Płatnika.'
             )
 
-        return [
-            {
-                'company_id': row['id'],
-                'ok': True,
-                'months': result['months'],
-            }
-            for row in companies
-        ]
+        results = []
+        for row in companies:
+            entry = {'company_id': row['id'], 'ok': True, 'months': result['months']}
+            if error := company_declaration_error(result, row['id']):
+                entry.update(ok=False, error=error)
+            elif error := company_registry_error(result, row['id']):
+                entry.update(ok=False, monthly_imported=True, error=error)
+            results.append(entry)
+        return results
 
     if value['kind'] == 'ezla':
         from app.integrations.ezla.settings import (
@@ -643,9 +539,11 @@ def _execute(
     )
     from app.integrations.enova.document_counts import (
         normalize_nip,
+        sources_by_nip,
     )
 
     config = load_connection()
+    indexed_sources = sources_by_nip(config['sources'])
     results = []
 
     for company in companies:
@@ -670,13 +568,7 @@ def _execute(
                 company['nip']
             )
 
-            sources = [
-                source
-                for source in config['sources']
-                if normalize_nip(
-                    source['nip']
-                ) == nip
-            ]
+            sources = indexed_sources.get(nip, [])
 
             if len(sources) != 1:
                 raise ValueError(
@@ -741,39 +633,15 @@ def process_next(stop=None):
             }
 
         with get_conn() as conn:
-            rows = conn.execute(
-                '''
-                SELECT wartosc
-                FROM app_settings
-                WHERE starts_with(klucz, %s)
-                ''',
-                (PREFIX,),
-            ).fetchall()
-
-        queued = sorted(
-            (
-                json.loads(row[0])
-                for row in rows
-                if json.loads(row[0]).get('state')
-                == 'queued'
-            ),
-            key=lambda row: row['created_at'],
-        )
-
-        if not queued:
-            return {
-                'mode': 'idle',
-            }
-
-        value = queued[0]
-
-        value.update(
-            state='running',
-            started_at=stamp(),
-            attempts=int(value.get('attempts') or 0),
-        )
-
-        _save(value)
+            row = conn.execute("""
+                SELECT payload FROM checking_requests WHERE state='queued'
+                ORDER BY created_at,id LIMIT 1 FOR UPDATE
+            """).fetchone()
+            if not row:
+                return {'mode': 'idle'}
+            value = row['payload']
+            value.update(state='running', started_at=stamp(), attempts=int(value.get('attempts') or 0))
+            _write(conn, value)
 
         try:
             results = _execute(

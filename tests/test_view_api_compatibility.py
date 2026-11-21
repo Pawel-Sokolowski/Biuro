@@ -43,6 +43,17 @@ class ViewApiCompatibilityTests(TestCase):
                 view_reads.calendar_view_snapshot(7,'2026-11-01','2026-12-01')
         legacy.assert_not_called()
 
+    def test_old_server_invoice_selection_preserves_order_and_access(self):
+        connection = SimpleNamespace(server_features=frozenset())
+        draft = {'id': 3, 'firma_id': 12, 'numer': None}
+        with mock.patch('app.remote.view_reads.client', return_value=connection), \
+                mock.patch('app.db.dao_invoices.get_invoice_selection', side_effect=AssertionError('unsupported batch')), \
+                mock.patch('app.db.dao_invoices.get_invoice_by_id',
+                           side_effect=[None, draft, {'id': 2, 'firma_id': 17}]), \
+                mock.patch('app.db.dao_invoices.can_access_invoice', side_effect=[True, False]) as access:
+            self.assertEqual(view_reads.invoice_selection([4, 3, 2], 7), [draft])
+        self.assertEqual(access.call_args_list, [mock.call(7, 12), mock.call(7, 17)])
+
     def test_login_and_resume_negotiate_features_without_extra_requests(self):
         connection = OfficeClient('https://localhost')
         with mock.patch.object(connection,'_request',side_effect=[

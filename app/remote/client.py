@@ -9,6 +9,14 @@ import requests
 from app.remote.codec import encode,decode
 
 
+class OfficeRequestRejected(ValueError):
+    """The office returned a definitive HTTP rejection."""
+
+
+class OfficePermissionDenied(PermissionError):
+    """The office refused a session or operation."""
+
+
 def normalize_server(value):
     value = str(value).strip().rstrip('/')
     if '://' not in value:
@@ -32,8 +40,8 @@ class OfficeClient:
         # Leave server capacity for foreground actions and other sessions.
         self._operation_slots = threading.BoundedSemaphore(3)
         self._background_slots = threading.BoundedSemaphore(2)
-        self._local = threading.local()
-        self._sessions = set()
+        self._idle_sessions = []
+        self._session_generation = 0
         self._sessions_lock = threading.Lock()
 
     def _request(self,path,payload=None,*,authenticated=True):
@@ -57,28 +65,49 @@ class OfficeClient:
                     'office_request_slow route=%s operation=%s duration=%.3f main_thread=%s',
                     route,operation,duration,threading.current_thread() is threading.main_thread())
 
-    def _perform_request(self,path,payload=None,*,authenticated=True):
-        session = getattr(self._local,'session',None)
+    def _new_session(self):
+        import ssl
+        context = ssl.create_default_context(cafile=self.verify if isinstance(self.verify,str) else None)
+
+        class OfficeTLS(requests.adapters.HTTPAdapter):
+            def build_connection_pool_key_attributes(adapter,request,verify,cert=None):
+                host,options = super().build_connection_pool_key_attributes(request,verify,cert)
+                options['ssl_context'] = context
+                return host,options
+
+        session = requests.Session()
+        session.mount('https://',OfficeTLS())
+        return session
+
+    def _post(self, path, payload, headers):
+        # QRunnable may use a fresh Python thread state on the same Qt thread.
+        # Reuse an exclusively borrowed session across jobs irrespective of that state.
+        with self._sessions_lock:
+            generation = self._session_generation
+            session = self._idle_sessions.pop() if self._idle_sessions else None
         if session is None:
-            session = self._local.session = requests.Session()
-            import ssl
-            context = ssl.create_default_context(cafile=self.verify if isinstance(self.verify,str) else None)
-            class OfficeTLS(requests.adapters.HTTPAdapter):
-                def build_connection_pool_key_attributes(adapter,request,verify,cert=None):
-                    host,options = super().build_connection_pool_key_attributes(request,verify,cert)
-                    options['ssl_context'] = context
-                    return host,options
-            session.mount('https://',OfficeTLS())
-            with self._sessions_lock:
-                self._sessions.add(session)
+            session = self._new_session()
+        try:
+            response = session.post(self.server+'/api/v1/'+path,json=payload or {},headers=headers,
+                                    verify=self.verify,timeout=(10,35),allow_redirects=False)
+        except BaseException:
+            session.close()
+            raise
+        with self._sessions_lock:
+            if generation == self._session_generation and len(self._idle_sessions) < 4:
+                self._idle_sessions.append(session)
+                return response
+        session.close()
+        return response
+
+    def _perform_request(self,path,payload=None,*,authenticated=True):
         headers = {'Accept':'application/json'}
         if authenticated:
             if not self.token:
                 raise PermissionError('Zaloguj się do serwera biura.')
             headers['Authorization'] = 'Bearer ' + self.token
         try:
-            response = session.post(self.server+'/api/v1/'+path,json=payload or {},headers=headers,
-                                    verify=self.verify,timeout=(10,35),allow_redirects=False)
+            response = self._post(path, payload, headers)
         except requests.exceptions.SSLError:
             raise ValueError('Nie można potwierdzić certyfikatu serwera biura. Sprawdź adres i zaufany certyfikat HTTPS.') from None
         except requests.RequestException:
@@ -92,17 +121,17 @@ class OfficeClient:
         if response.status_code==401:
             self.token = None
             self._ui_authorization = None
-            raise PermissionError(value.get('message','Sesja wygasła. Zaloguj się ponownie.'))
+            raise OfficePermissionDenied(value.get('message','Sesja wygasła. Zaloguj się ponownie.'))
         if response.status_code==403:
-            raise PermissionError(value.get('message','Brak uprawnień.'))
+            raise OfficePermissionDenied(value.get('message','Brak uprawnień.'))
         if response.status_code>=400:
-            raise ValueError(value.get('message','Operacja na serwerze nie powiodła się.'))
+            raise OfficeRequestRejected(value.get('message','Operacja na serwerze nie powiodła się.'))
         return value
 
     def close(self):
         with self._sessions_lock:
-            sessions = list(self._sessions)
-            self._sessions.clear()
+            sessions, self._idle_sessions = self._idle_sessions, []
+            self._session_generation += 1
         for session in sessions:
             session.close()
 
@@ -135,6 +164,23 @@ class OfficeClient:
         data = path.read_bytes() if mode=='input' else None
         import base64
         return self._request('files',{'name':path.name,'data':base64.b64encode(data).decode() if data is not None else None})
+
+    def release_files(self, references):
+        if references and 'file_release' in self.server_features:
+            try:
+                self._request('files', {'release': list(references)})
+            except (ValueError, PermissionError):
+                logging.getLogger(__name__).warning('office_file_release_failed')
+
+    def upload_campaign_attachments(self, paths):
+        uploaded = []
+        try:
+            for path in paths:
+                uploaded.append(self._file(path, 'input'))
+        except Exception:
+            self.release_files(uploaded)
+            raise
+        return tuple(uploaded)
 
     def _ui_permission(self,operation,args,kwargs):
         prefix = 'app.security.authorization.'
@@ -179,7 +225,12 @@ class OfficeClient:
         if len(args)>len(spec['arguments']) or set(values)&set(kwargs or {}):
             raise ValueError('Nieprawidłowe argumenty operacji.')
         values.update(kwargs or {})
-        callbacks,stops,outputs = {},[],[]
+        callbacks,stops,outputs,inputs = {},[],[],[]
+
+        def upload(path):
+            reference = self._file(path, 'input')
+            inputs.append(reference)
+            return reference
         for key,value in list(values.items()):
             if callable(value):
                 callbacks[key] = value
@@ -190,21 +241,22 @@ class OfficeClient:
         for key,mode in spec.get('files',{}).items():
             if values.get(key):
                 if mode=='inputs':
-                    values[key] = [self._file(v,'input') for v in values[key]]
+                    values[key] = [upload(v) for v in values[key]]
                 else:
                     local_path = values[key]
-                    values[key] = self._file(local_path,mode)
+                    values[key] = upload(local_path) if mode == 'input' else self._file(local_path,mode)
                     if mode=='output':
                         outputs.append((Path(local_path),values[key]))
         from app.email.bulk_mail import BulkMailPlan
         from dataclasses import replace
         if isinstance(values.get('plan'),BulkMailPlan):
-            values['plan'] = replace(values['plan'],attachments=tuple(self._file(path,'input') for path in values['plan'].attachments))
+            values['plan'] = replace(values['plan'],attachments=tuple(
+                path if isinstance(path, dict) else upload(path) for path in values['plan'].attachments))
         def query_upload(value):
             if isinstance(value,dict):
                 defaults = value.get('_query_defaults') or {}
                 return {key:(item if key=='_query_defaults' or defaults.get(key)==item else
-                             self._file(item,'input') if key.endswith('_query') and isinstance(item,str)
+                             upload(item) if key.endswith('_query') and isinstance(item,str)
                              and Path(item).is_file() else query_upload(item)) for key,item in value.items()}
             if isinstance(value,list):
                 return [query_upload(item) for item in value]
@@ -213,7 +265,11 @@ class OfficeClient:
             for key in ('config','value'):
                 if key in values:
                     values[key] = query_upload(values[key])
-        result = self._request('operations',{'operation':operation,'arguments':encode(values),'object':object_id})
+        try:
+            result = self._request('operations',{'operation':operation,'arguments':encode(values),'object':object_id})
+        except (OfficeRequestRejected, OfficePermissionDenied):
+            self.release_files(inputs + [file for _, file in outputs])
+            raise
         job,seen = result.get('job'),0
         if result.get('completed'):
             value = decode(result['result'])
@@ -231,6 +287,7 @@ class OfficeClient:
                 value = decode(result['result'])
                 break
             if result['state']=='failed':
+                self.release_files(inputs + [file for _, file in outputs])
                 if result.get('permission'):
                     raise PermissionError(result['message'])
                 raise ValueError(result['message'])
@@ -254,16 +311,25 @@ class OfficeClient:
                 return type(item)(materialize(v) for v in item)
             return item
         value = materialize(value)
-        for path,file in outputs:
-            import base64,os,tempfile
-            data = base64.b64decode(self._request('download',file)['data'],validate=True)
-            temporary = None
-            try:
-                with tempfile.NamedTemporaryFile(dir=path.parent,delete=False) as handle:
-                    temporary = Path(handle.name)
-                    handle.write(data)
-                os.replace(temporary,path)
-            finally:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
+        if operation != 'app.utils.importers.prepare_company_import':
+            # Preparation keeps its input available for the confirmed import.
+            completed_files = inputs
+        else:
+            completed_files = []
+        try:
+            for path,file in outputs:
+                import base64,os,tempfile
+                data = base64.b64decode(self._request('download',file)['data'],validate=True)
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(dir=path.parent,delete=False) as handle:
+                        temporary = Path(handle.name)
+                        handle.write(data)
+                    os.replace(temporary,path)
+                    completed_files.append(file)
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+        finally:
+            self.release_files(completed_files)
         return value

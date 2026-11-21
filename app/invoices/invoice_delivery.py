@@ -60,10 +60,11 @@ def queue_deliveries(plans, actor_id, account_id):
             encoded = json.dumps(plan['recipients'], ensure_ascii=False)
             if row[0] in ('queued', 'preparing') and row[1] == encoded and row[2] == account_id:
                 continue
-            if row[0] not in (None, '', 'failed_before_send'):
+            if row[0] not in (None, '', 'failed_before_send', 'blocked_before_send'):
                 raise ValueError(f"Faktura {plan['number']}: e-mail jest już w kolejce, został wysłany albo wymaga sprawdzenia. Nie wysyłam drugi raz.")
             conn.execute('''UPDATE faktury SET invoice_email_status='queued', invoice_email_recipients=%s,
-                            invoice_email_account_id=%s, invoice_email_actor_id=%s, invoice_email_error=NULL WHERE id=%s''',
+                            invoice_email_account_id=%s, invoice_email_actor_id=%s, invoice_email_error=NULL,
+                            invoice_email_attempts=0, invoice_email_next_attempt_at=NULL WHERE id=%s''',
                          (encoded,account_id,actor_id,plan['id']))
         conn.commit()
     except Exception:
@@ -138,7 +139,7 @@ def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
         conn.execute('''UPDATE faktury SET invoice_email_status=%s, invoice_email_error=%s,
                         invoice_email_pdf_path=COALESCE(%s,invoice_email_pdf_path),
                         invoice_email_sent_at=CASE WHEN %s='sent' THEN now() ELSE invoice_email_sent_at END
-                        WHERE id=%s AND (%s <> 'failed_before_send'
+                        WHERE id=%s AND (%s NOT IN ('failed_before_send','blocked_before_send')
                         OR COALESCE(invoice_email_status,'') IN ('queued','preparing','failed_before_send'))''' + predicate,
                      (status,error,pdf,status,invoice_id,status) + snapshot)
         conn.commit()
@@ -159,6 +160,8 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
         return {'status':'sent','recipients':invoice.get('invoice_email_recipients')}
     if status in ('sending','uncertain'):
         return {'status':'uncertain','error':'Wynik poprzedniej wysyłki SMTP jest niepewny. Sprawdź folder Wysłane przed ponowieniem.'}
+    if status == 'blocked_before_send':
+        return {'status':status,'error':invoice.get('invoice_email_error')}
     if invoice.get('ksef_status') != 'przyjeta' or not invoice.get('ksef_numer'):
         raise KsefError('PDF można wysłać dopiero po przyjęciu faktury w KSeF.')
     try:
@@ -174,6 +177,9 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
         if not config.get('host') or not config.get('user'):
             raise ValueError('Uzupełnij konfigurację SMTP wybranego nadawcy.')
         pdf = official_pdf(invoice,xml_path)
+    except (PermissionError, ValueError) as exc:
+        _delivery_state(invoice_id,'blocked_before_send',error=str(exc),expected=invoice)
+        raise
     except Exception as exc:
         _delivery_state(invoice_id,'failed_before_send',error=str(exc),expected=invoice)
         raise

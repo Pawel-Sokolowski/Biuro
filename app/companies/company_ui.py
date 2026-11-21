@@ -6,25 +6,25 @@ from time import monotonic
 from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QLineEdit,
     QPushButton,
     QComboBox,
-    QTableWidget,
-    QTableWidgetItem,
     QHeaderView,
     QMessageBox,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QBrush, QColor
 
 from app.companies.company_names import company_display_name
 from app.config import get_database, get_schema
 from app.utils.background import TaskRunner
+from app.utils.item_table import ItemTable
+from app.utils.table_records import TableRecord
 from app.db.dao_companies import (
-    list_companies,
     get_companies_filtered,
     delete_company,
     set_company_status,
@@ -110,8 +110,7 @@ class CompanyUI(QWidget):
 
         layout.addLayout(filter_layout)
 
-        self.table = QTableWidget(0, 14)
-        self.table.setHorizontalHeaderLabels([
+        self.table = ItemTable([
             "ID", "Nazwa", "NIP", "Miasto", "Status",
             "Forma opodatkowania", "VAT",
             "Księgowa", "Kadrowa",
@@ -119,8 +118,8 @@ class CompanyUI(QWidget):
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setColumnHidden(0, True)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         layout.addWidget(self.table)
 
@@ -165,10 +164,6 @@ class CompanyUI(QWidget):
     # ============================================================
     #  LOAD TABLE
     # ============================================================
-    def _refresh(self):
-        self._backup_metadata_cache.invalidate()
-        self._search()
-
     def _force_refresh(self):
         self._backup_metadata_cache.invalidate()
         self._reads.invalidate()
@@ -198,60 +193,43 @@ class CompanyUI(QWidget):
         data = (rows, backups, stored)
         if self._last_table_data == data and self.table.rowCount() == len(rows):
             return
+        records = [self._company_record(row, backups.get(row.get("nazwa")), stored.get(row.get("id")))
+                   for row in rows]
         with preserve_table_view(self.table):
-            self._populate_table(rows, backups, stored)
+            self.table.set_records(records)
         self._last_table_data = deepcopy(data)
 
-    def _populate_table(self, rows, backups, stored):
-        self.table.setRowCount(0)
-        backups = self._backup_by_company() if backups is None else backups
-        try:
-            from app.utils.backup_status import stored_backup_dates
-            stored = stored_backup_dates() if stored is None else stored
-        except Exception:
-            stored = {}
-        for r in rows:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-
-            self.table.setItem(row, 0, QTableWidgetItem(str(r.get("id", ""))))
-            name_item = QTableWidgetItem(company_display_name(r))
-            name_item.setToolTip(r.get("nazwa") or "")
-            self.table.setItem(row, 1, name_item)
-            self.table.setItem(row, 2, QTableWidgetItem(r.get("nip") or ""))
-            self.table.setItem(row, 3, QTableWidgetItem(r.get("miasto") or ""))
-            self.table.setItem(row, 4, QTableWidgetItem(r.get("status") or ""))
-            self.table.setItem(row, 5, QTableWidgetItem(r.get("forma_opodatkowania") or ""))
-            self.table.setItem(row, 6, QTableWidgetItem("czynny" if r.get("vat_czynny") else "—"))
-            self.table.setItem(row, 7, QTableWidgetItem(r.get("ksiegowa") or ""))
-            self.table.setItem(row, 8, QTableWidgetItem(r.get("kadrowa") or ""))
-            self.table.setItem(row, 9, QTableWidgetItem(r.get("glowny_cennik") or ""))
-            self.table.setItem(row, 10, QTableWidgetItem(str(r.get("limit_dokumentow") or "")))
-            self.table.setItem(row, 11, QTableWidgetItem(r.get("pel") or ""))
-            self.table.setItem(row, 12, QTableWidgetItem(r.get("upl") or ""))
-            self.table.setItem(row, 13, self._backup_item(backups.get(r.get("nazwa")), stored.get(r.get("id"))))
-            if r.get("uslugi_zawieszone"):
-                for col in range(self.table.columnCount()):
-                    item = self.table.item(row, col)
-                    if item is not None:
-                        item.setBackground(QColor("#f4a6a6"))
-                        item.setForeground(QColor("#000000"))
+    @staticmethod
+    def _company_record(row, backup, stored):
+        backup_date, backup_roles = CompanyUI._backup_cell(backup, stored)
+        company_id = str(row.get("id", ""))
+        values = (
+            company_id, company_display_name(row), row.get("nip") or "", row.get("miasto") or "",
+            row.get("status") or "", row.get("forma_opodatkowania") or "",
+            "czynny" if row.get("vat_czynny") else "—", row.get("ksiegowa") or "",
+            row.get("kadrowa") or "", row.get("glowny_cennik") or "",
+            str(row.get("limit_dokumentow") or ""), row.get("pel") or "", row.get("upl") or "", backup_date,
+        )
+        roles = {1: {Qt.ItemDataRole.ToolTipRole: row.get("nazwa") or ""}, 13: backup_roles}
+        if row.get("uslugi_zawieszone"):
+            suspended = {Qt.ItemDataRole.BackgroundRole: QBrush(QColor("#f4a6a6")),
+                         Qt.ItemDataRole.ForegroundRole: QBrush(QColor("#000000"))}
+            for column in range(len(values)):
+                roles.setdefault(column, {}).update(suspended)
+        return TableRecord(company_id, values, roles)
 
     @staticmethod
-    def _backup_item(info, stored=None):
+    def _backup_cell(info, stored):
         if stored:
-            item = QTableWidgetItem(stored[0])
-            item.setToolTip(f"Kopia zapisana: {stored[1] or '?'} (z ostatniego maila)")
-            return item
+            return stored[0], {Qt.ItemDataRole.ToolTipRole: f"Kopia zapisana: {stored[1] or '?'} (z ostatniego maila)"}
         if not info or not info.get('ostatnia_kopia'):
-            return QTableWidgetItem('—')
+            return '—', {}
         saved = info['ostatnia_kopia'].strftime('%Y-%m-%d %H:%M')
         file_date = info.get('data_bazy')
-        item = QTableWidgetItem(file_date.strftime('%Y-%m-%d') if file_date else saved)
-        item.setToolTip(f"Kopia zapisana: {saved}")
+        roles = {Qt.ItemDataRole.ToolTipRole: f"Kopia zapisana: {saved}"}
         if info.get('stan') != 'ok':
-            item.setForeground(QColor('#c0392b'))
-        return item
+            roles[Qt.ItemDataRole.ForegroundRole] = QBrush(QColor('#c0392b'))
+        return file_date.strftime('%Y-%m-%d') if file_date else saved, roles
 
     def _restore_company(self):
         row = self.table.currentRow()
@@ -265,13 +243,6 @@ class CompanyUI(QWidget):
     # ============================================================
     #  FILTERS
     # ============================================================
-    def _search(self):
-        self._reads.invalidate()
-        search = self.search_input.text().strip()
-        status = self.status_filter.currentText()
-        rows = get_companies_filtered(search, status, None, self.pracownik_id)
-        self._load_table(rows)
-
     def _queue_search(self):
         self._reads.invalidate()
         self._search_timer.start()
@@ -293,8 +264,10 @@ class CompanyUI(QWidget):
 
     def _clear_filters(self):
         self.search_input.clear()
-        self.status_filter.setCurrentIndex(0)
-        self.refresh_async()
+        if self.status_filter.currentIndex():
+            self.status_filter.setCurrentIndex(0)
+        else:
+            self.refresh_async()
 
     # ============================================================
     #  CRUD

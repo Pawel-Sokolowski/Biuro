@@ -9,6 +9,10 @@ def check(capability,actor_id):
         raise PermissionError('Konto nie jest aktywne.')
     if is_administrator(actor_id) or capability=='authenticated':
         return
+    if '&' in capability:
+        for requirement in capability.split('&'):
+            check(requirement, actor_id)
+        return
     if capability.startswith('permission:') and can(actor_id,capability.partition(':')[2]):
         return
     if capability.startswith('tab:') and set(capability.partition(':')[2].split('|')) & set(allowed_tabs(actor_id)):

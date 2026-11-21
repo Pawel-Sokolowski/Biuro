@@ -2,6 +2,7 @@
 from collections import defaultdict
 from datetime import date, timedelta
 
+from app.integrations.enova.document_counts import normalize_nip
 from app.utils.months import month_bounds
 
 TITLES = {
@@ -68,6 +69,10 @@ def summarize_periods(registry, month, company):
     as_of = min(next_month - timedelta(days=1), imported)
     if as_of < month_start:
         return set(), [], []
+    try:
+        company_nip = normalize_nip(company.get('nip'))
+    except ValueError:
+        company_nip = None
     owners = defaultdict(list)
     for row in registry['periods']:
         start = date.fromisoformat(row['from'])
@@ -87,17 +92,20 @@ def summarize_periods(registry, month, company):
         registered_end = None
         if all(end for _, _, end in active):
             registered_end = max(end for _, _, end in active) - timedelta(days=1)
-        confirmed = company.get(MANUAL_ENDS.get(title)) if len(owners) == 1 else None
+        confirmed = company.get(MANUAL_ENDS.get(title)) if nip == company_nip else None
         if confirmed:
-            deadlines.append(f'{confirmed} · kartoteka')
+            deadline = f'{confirmed} · kartoteka'
         else:
             estimate = estimate_end(title, [(start, end, TITLES.get(code[:4])) for code, start, end in rows], as_of)
             if registered_end and (not estimate or registered_end <= estimate):
-                deadlines.append(f'{registered_end.isoformat()} · rejestr')
+                deadline = f'{registered_end.isoformat()} · rejestr'
             elif estimate:
-                deadlines.append(f'{estimate.isoformat()} · prognoza')
+                deadline = f'{estimate.isoformat()} · prognoza'
             else:
                 notes.append(f'NIP {nip}: {title} · potrzebna pełna historia zgłoszeń')
+                continue
+        deadlines.append(deadline)
+        notes.append(f'NIP {nip}: {title} do {deadline}')
     if codes:
         notes.append(f'Rejestr Płatnika z {imported.isoformat()}, stan na {as_of.isoformat()}.')
     return codes, notes, deadlines

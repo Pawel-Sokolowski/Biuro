@@ -37,8 +37,10 @@ class InsuranceRuleTests(unittest.TestCase):
             {'nip': NIP, 'code': '057000', 'from': '2026-11-01', 'until': None},
         ]}
         self.assertEqual(summarize_periods(registry, '2026-11', {})[2], [])
-        self.assertEqual(summarize_periods(registry, '2026-11', {'data_koniec_zus_pref': '2027-04-30'})[2],
+        self.assertEqual(summarize_periods(registry, '2026-11', {'nip': NIP, 'data_koniec_zus_pref': '2027-04-30'})[2],
                          ['2027-04-30 · kartoteka'])
+        self.assertEqual(summarize_periods(registry, '2026-11', {'nip': '1234567890',
+                                                              'data_koniec_zus_pref': '2027-04-30'})[2], [])
 
     def test_source_rejects_two_different_owners_for_one_nip(self):
         row = (NIP, 1, 5, '0570', 0, 0, date(2026, 1, 1), None)

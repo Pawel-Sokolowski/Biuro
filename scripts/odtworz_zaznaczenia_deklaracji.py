@@ -34,11 +34,11 @@ def read_platnik(companies, company_ids, months, year):
             raise ValueError('Trwa inny odczyt Płatnika. Ponów po jego zakończeniu.')
         # Read each month in bulk for the selected companies, within the adapter row limit.
         for month in months:
-            rows = declarations.fetch(config, [month])
+            rows = declarations.fetch(config, [month], selected_nips=mapped)
             for nip, entries in declarations.normalize(rows, [month], mapped).items():
                 monthly[mapped[nip]][month].update(entry['form'] for entry in entries[month])
         period = str(year)
-        rows = declarations.fetch(config, [period], annual=True)
+        rows = declarations.fetch(config, [period], annual=True, selected_nips=mapped)
         for nip, entries in declarations.normalize(rows, [period], mapped, annual=True).items():
             yearly[mapped[nip]].update(entry['form'] for entry in entries[period])
     return monthly, yearly

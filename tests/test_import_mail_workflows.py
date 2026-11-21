@@ -131,7 +131,7 @@ class ImportAndMailTests(DbTestCase):
         sources = [{'nip': nip, 'declarations_query': str(bundled_directory() / 'declarations.sql'), 'jpk_query': 'jpk.sql'}
                    for nip in ('1112223344', '2223334455')]
 
-        def platnik(config, periods, *, annual=False):
+        def platnik(config, periods, *, annual=False, selected_nips=None):
             row = {**ROW, 'nip': '1112223344'}
             if annual:
                 return [{**row, 'form': 'ZUS IWA', 'rok': str(year)}]

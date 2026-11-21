@@ -4,8 +4,8 @@ from unittest.mock import Mock, patch
 
 from app.db.checking_storage import read_snapshot, save_snapshot
 from app.db.dao_conn import get_conn
-from app.integrations.platnik.declarations import REQUIRED, source_query, normalize, import_months, import_year, decoded_snapshot, read_year
-from app.integrations.platnik.form_catalog import MONTHLY, ANNUAL
+from app.integrations.platnik.declarations import REQUIRED, source_query, normalize, import_months, import_year, decoded_snapshot, read_year, fetch
+from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, requirements
 from app.integrations.enova.accounting import list_accounting, declaration_entries
 from tests.base import DbTestCase
 
@@ -15,6 +15,41 @@ ROW = {'form': 'ZUS DRA', 'source_id': 1, 'payer_id': 7, 'nip': NIP, 'report_id'
 
 
 class PlatnikDeclarationRulesTests(TestCase):
+    def test_catalog_accepts_columns_documented_in_zus_1_6(self):
+        cursor = Mock()
+        metadata = [(table, col) for table, cols in REQUIRED.items() for col in cols]
+        metadata += [(table, col) for table, cols in requirements(ADDITIONAL_MONTHLY).items()
+                     if table != 'DOKUMENT' for col in cols]
+        aliases = {('ZUSRCA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
+                   ('ZUSRSA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
+                   ('ZUSRZA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
+                   ('ZUSRPA', 'I_1_1IDRAPS'): 'I_1_11DRAPS'}
+        cursor.fetchmany.return_value = [(table, aliases.get((table, col), col)) for table, col in metadata] + [
+            ('DOKUMENT', 'ID_DOKUMENT'), ('UBEZP_ZUSRPA', 'III_A_5_1KODTYTUB')]
+        query = source_query(cursor, {})
+        self.assertIn('a.I_1_2OKKROZL', query)
+        self.assertIn('a.I_1_11DRAPS', query)
+        self.assertIn('u.III_A_5_1KODTYTUB', query)
+        self.assertIn('a.I_1_NIP', query)
+        for code in ADDITIONAL_MONTHLY:
+            self.assertIn("N'ZUS " + code + "'", query)
+
+    def test_builtin_queries_bind_all_payer_nips_as_one_parameter(self):
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchmany.side_effect = [
+            [(table, col) for table, cols in REQUIRED.items() for col in cols] + [('DOKUMENT', 'ID_DOKUMENT')], []]
+        cursor.description = [(name,) for name in ROW]
+        nips = [f'{number:010}' for number in range(1000)]
+        with patch('app.integrations.platnik.declarations.connect', return_value=connection):
+            self.assertEqual(fetch({}, ['2026-11'], selected_nips=nips), [])
+        sql, start, end, payers = cursor.execute.call_args.args
+        self.assertEqual((start, end), ('2026-11-01', '2026-12-01'))
+        self.assertEqual(sql.count('?'), 3)
+        self.assertEqual(payers.count('<n>'), 1000)
+        self.assertNotIn(nips[-1], sql)
+        connection.close.assert_called_once()
+
     def test_source_metadata_validation_and_optional_status_do_not_guess_columns(self):
         cursor = Mock()
         metadata = [(table, col) for table, cols in REQUIRED.items() for col in cols] + [('DOKUMENT', 'ID_DOKUMENT')]
@@ -59,7 +94,7 @@ class PlatnikDeclarationRulesTests(TestCase):
                 normalize([ROW, {**ROW, **changed}], ['2026-11'], [NIP])
 
     def test_every_standard_form_and_registration_identity_is_supported(self):
-        for index, code in enumerate(MONTHLY, 1):
+        for index, code in enumerate(MONTHLY | ADDITIONAL_MONTHLY, 1):
             row = {**ROW, 'form': 'ZUS ' + code, 'source_id': index,
                    'employee_id': 12, 'employee_name': 'Test Person'}
             entry = normalize([row], ['2026-11'], [NIP])[NIP]['2026-11'][0]
@@ -142,7 +177,7 @@ class PlatnikDeclarationSnapshotTests(DbTestCase):
         with patch('app.integrations.platnik.declarations.load', return_value={'enabled': False}), \
              patch('app.integrations.platnik.declarations.fetch', return_value=rows) as fetch:
             import_year(2025, company_ids=[self.company])
-        fetch.assert_called_once_with({'enabled': False}, ['2025'], annual=True)
+        fetch.assert_called_once_with({'enabled': False}, ['2025'], annual=True, selected_nips={NIP: self.company})
         with get_conn() as conn:
             self.assertIsNone(read_snapshot(conn, 'platnik_declarations', self.company, '2025-12'))
             stored = decoded_snapshot(read_snapshot(conn, 'platnik_declarations', self.company, '2025'))

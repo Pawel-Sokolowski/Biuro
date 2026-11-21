@@ -4,11 +4,19 @@ import os
 import unittest
 import uuid
 
-from app.integrations.platnik.declarations import REQUIRED, normalize, source_query
-from app.integrations.platnik.form_catalog import MONTHLY, ANNUAL
+from app.integrations.platnik.declarations import normalize, source_query
+from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, requirements
 
 DSN = os.environ.get('BIURO_SQLSERVER_TEST_DSN')
 NIP = '1112223344'
+FORMS = MONTHLY | ADDITIONAL_MONTHLY | ANNUAL
+ALIASES = {
+    ('ZUSRCA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
+    ('ZUSRSA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
+    ('ZUSRZA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
+    ('ZUSRPA', 'I_1_1IDRAPS'): 'I_1_11DRAPS',
+}
+TABLES = requirements(FORMS) | {'PLATN_IDENT': {'ID_PLATNIK', 'NIP'}}
 
 
 @unittest.skipUnless(DSN, 'Requires the isolated GitHub SQL Server service')
@@ -21,14 +29,16 @@ class PlatnikSqlTests(unittest.TestCase):
         cls.master = pyodbc.connect(DSN, autocommit=True, timeout=15)
         cls.master.execute(f'CREATE DATABASE [{cls.database}]')
         cls.writer = pyodbc.connect(DSN + ';DATABASE=' + cls.database, autocommit=True, timeout=15)
-        for table, names in REQUIRED.items():
-            names = set(names)
+        for table, names in TABLES.items():
+            names = {ALIASES.get((table, name), name) for name in names}
             if table == 'DOKUMENT':
                 names.update(('ID_DOKUMENT', 'STATUSPT'))
             if table == 'ZUSDRA':
                 names.update(('XI_1_1KODTYTUB','XI_1_2PRDOEM','XI_1_3STNIEP'))
             if table == 'UBEZP_ZUSRCA':
                 names.update(('III_B_1_1KODTYTUB','III_B_1_2PRDOEM','III_B_1_3STNIEP'))
+            if table == 'UBEZP_ZUSRPA':
+                names.update(('III_A_5_1KODTYTUB', 'III_A_5_2PRDOEM', 'III_A_5_3STNIEP'))
             columns = []
             for name in sorted(names):
                 kind = 'int' if name.startswith('ID_') else 'datetime' if name.endswith('DATAWYPEL') else 'nvarchar(64)'
@@ -46,14 +56,17 @@ class PlatnikSqlTests(unittest.TestCase):
         cls.master.close()
 
     def setUp(self):
-        for table in REQUIRED:
+        for table in TABLES:
             self.writer.execute('DELETE FROM dbo.' + table)
 
-    def query(self, annual=False):
+    def query(self, annual=False, selected=None):
         cursor = self.reader.cursor()
-        sql = source_query(cursor, {}, annual=annual)
-        cursor.execute(sql, date(2025, 1, 1) if annual else date(2026, 11, 1),
-                       date(2026, 1, 1) if annual else date(2026, 12, 1))
+        sql = source_query(cursor, {}, annual=annual, scoped=selected is not None)
+        parameters = [date(2025, 1, 1) if annual else date(2026, 11, 1),
+                      date(2026, 1, 1) if annual else date(2026, 12, 1)]
+        if selected is not None:
+            parameters.append('<p>' + ''.join(f'<n>{nip}</n>' for nip in selected) + '</p>')
+        cursor.execute(sql, *parameters)
         columns = [column[0] for column in cursor.description]
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
         cursor.close()
@@ -63,32 +76,35 @@ class PlatnikSqlTests(unittest.TestCase):
         self.writer.execute('INSERT INTO dbo.DOKUMENT (ID_DOKUMENT, ID_PLATNIK, ID_DOK_NAD, STATUSPT) VALUES (?, ?, ?, ?)',
                             identity, payer, parent, status)
 
-    def form(self, code, identity, period=None):
-        spec = (MONTHLY | ANNUAL)[code]
+    def form(self, code, identity, period=None, *, payer=7, nip=NIP):
+        spec = FORMS[code]
         period = period or ('2025' if code in ANNUAL else '2026-11-12' if spec.get('kind') == 'filled_date' else '11/2026')
-        values = {'ID_DOKUMENT': identity, 'ID_PLATNIK': 7, 'II_1_NIP': NIP, spec['period']: period}
+        values = {'ID_DOKUMENT': identity, 'ID_PLATNIK': payer, spec.get('nip', 'II_1_NIP'): nip,
+                  spec['period']: period}
         if spec.get('report'):
             values[spec['report']] = '01'
         if spec.get('employee'):
             values.update(ID_UBEZPIECZONY=20)
             values.update({spec['first']: 'Anna', spec['last']: 'Synthetic'})
+        values = {ALIASES.get((spec['table'], column), column): value for column, value in values.items()}
         self.writer.execute('INSERT INTO dbo.' + spec['table'] + '(' + ','.join(values) + ') VALUES (' +
                             ','.join('?' for _ in values) + ')', *values.values())
 
     def child(self, code, identity, parent):
-        spec = (MONTHLY | ANNUAL)[code]
+        spec = FORMS[code]
         values = {'ID_DOKUMENT': identity, 'ID_DOK_NAD': parent, 'ID_PLATNIK': 7, 'ID_UBEZPIECZONY': 20,
                   spec['first']: 'Anna', spec['last']: 'Synthetic'}
         self.writer.execute('INSERT INTO dbo.' + spec['child'] + '(' + ','.join(values) + ') VALUES (' +
                             ','.join('?' for _ in values) + ')', *values.values())
 
     def test_all_monthly_forms_and_registration_dates_use_actual_tsql(self):
-        for identity, code in enumerate(MONTHLY, 1):
+        forms = MONTHLY | ADDITIONAL_MONTHLY
+        for identity, code in enumerate(forms, 1):
             self.document(identity)
             self.form(code, identity)
         rows = self.query()
         entries = normalize(rows, ['2026-11'], [NIP])[NIP]['2026-11']
-        self.assertEqual({entry['form'] for entry in entries}, {'ZUS ' + code for code in MONTHLY})
+        self.assertEqual({entry['form'] for entry in entries}, {'ZUS ' + code for code in forms})
         self.assertTrue(all(entry['status'] == 'unknown' for entry in entries))
         self.writer.execute("UPDATE dbo.ZUSZUA SET XV_1_DATAWYPEL='2026-12-01'")
         self.assertNotIn('ZUS ZUA', {row['form'] for row in self.query()})
@@ -105,6 +121,37 @@ class PlatnikSqlTests(unittest.TestCase):
         self.assertEqual((parent['raw_status'], child['raw_status']), ('P', 'N'))
         self.assertEqual(child['valid_link'], 1)
         self.assertEqual(child['insurance_code'],'051000')
+
+    def test_scope_filters_on_sql_server_and_retains_invalid_links_for_selected_payers(self):
+        self.document(1)
+        self.form('RPA', 1, nip='PL 111-222-33-44')
+        self.document(2, parent=1)
+        self.child('RPA', 2, 1)
+        self.writer.execute("UPDATE UBEZP_ZUSRPA SET III_A_5_1KODTYTUB='0510',III_A_5_2PRDOEM='0',III_A_5_3STNIEP='0'")
+        self.document(3, payer=8)
+        self.form('DRA', 3, period='99/2026', payer=8, nip='9998887766')
+        self.document(4, parent=42, payer=8)
+        self.child('RPA', 4, 42)
+        self.writer.execute('UPDATE UBEZP_ZUSRPA SET ID_PLATNIK=8 WHERE ID_DOKUMENT=4')
+        self.writer.execute("INSERT INTO PLATN_IDENT VALUES (8,'9998887766')")
+        rows = self.query(selected=[NIP] + [f'{number:010}' for number in range(1000)])
+        entries = normalize(rows, ['2026-11'], [NIP])[NIP]['2026-11']
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[1]['insurance_code'], '051000')
+
+        selected = self.query(selected=['9998887766'])
+        self.assertEqual({row['source_id'] for row in selected}, {3, 4})
+        self.assertEqual(next(row['valid_link'] for row in selected if row['source_id'] == 4), 0)
+        with self.assertRaises(ValueError):
+            normalize(selected, ['2026-11'], ['9998887766'])
+
+    def test_zipa_is_matched_by_updated_nip(self):
+        self.document(1)
+        self.form('ZIPA', 1, nip='9998887766')
+        self.writer.execute('UPDATE ZUSZIPA SET III_1_NIP=?', NIP)
+        row, = self.query(selected=[NIP])
+        self.assertEqual(row['nip'], NIP)
+        self.assertEqual(row['form'], 'ZUS ZIPA')
 
     def test_orphan_cross_payer_and_wrong_parent_document_links_are_rejected(self):
         self.document(1)

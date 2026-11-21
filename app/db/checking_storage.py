@@ -18,3 +18,13 @@ def save_snapshot(conn, source, company_id, period, payload):
         VALUES (%s,%s,%s,%s) ON CONFLICT(source, company_id, period)
         DO UPDATE SET payload=EXCLUDED.payload
     """, (source, company_id, period, Jsonb(payload)))
+
+
+def save_snapshots(conn, source, snapshots):
+    company_ids, periods, payloads = zip(*snapshots)
+    conn.execute("""
+        INSERT INTO company_checking_snapshots(source, company_id, period, payload)
+        SELECT %s, company_id, period, payload
+        FROM unnest(%s::integer[], %s::text[], %s::jsonb[]) AS data(company_id, period, payload)
+        ON CONFLICT(source, company_id, period) DO UPDATE SET payload=EXCLUDED.payload
+    """, (source, list(company_ids), list(periods), [Jsonb(payload) for payload in payloads]))

@@ -1,8 +1,10 @@
 """Standard Płatnik forms, without guessing transmission status codes."""
 from app.remote.boundary import endpoint as office_endpoint
 from datetime import datetime
+from itertools import batched
 import json
-from app.db.checking_storage import save_snapshot
+import logging
+from app.db.checking_storage import save_snapshots
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -11,23 +13,22 @@ from app.integrations.enova.document_counts import normalize_nip
 from app.integrations.platnik.holidays import load, connect, sql_operation
 from app.utils.crypto import encrypt_password, decrypt_password
 from app.utils.months import month_bounds, previous_month
-from app.integrations.platnik.form_catalog import MONTHLY, ANNUAL, requirements, records_sql
+from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, records_sql, requirements, resolve_fields
 
 REQUIRED = requirements({**MONTHLY, **ANNUAL})
 FIELDS = {'form', 'source_id', 'payer_id', 'nip', 'report_id', 'miesiac',
           'employee_id', 'employee_name', 'raw_status', 'valid_link'}
 
 
-def source_query(cursor, config, *, annual=False):
+def source_query(cursor, config, *, annual=False, scoped=False):
     override = str(config.get('annual_declarations_query' if annual else 'declarations_query') or '').strip()
     if override:
         path = Path(override)
         if not path.is_absolute():
             raise ValueError('Zamiennik SQL Płatnika wymaga pełnej ścieżki na serwerze workera.')
         return path.read_text(encoding='utf-8-sig')
-    specs = ANNUAL if annual else MONTHLY
-    required = requirements(specs)
-    table_list = ','.join("'" + name + "'" for name in required)
+    specs = ANNUAL if annual else MONTHLY | ADDITIONAL_MONTHLY
+    table_list = ','.join("'" + name + "'" for name in (*requirements(specs), 'PLATN_IDENT'))
     cursor.execute("SELECT t.name,c.name FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id "
                    "JOIN sys.columns c ON c.object_id=t.object_id WHERE s.name='dbo' "
                    "AND t.name IN (" + table_list + ")")
@@ -37,6 +38,8 @@ def source_query(cursor, config, *, annual=False):
     columns = {}
     for table, column in metadata:
         columns.setdefault(table.upper(), set()).add(column.upper())
+    specs = resolve_fields(ANNUAL if annual else MONTHLY, columns)
+    required = requirements(specs)
     missing = [table + '.' + name for table, names in required.items()
                for name in sorted(names - columns.get(table, set()))]
     document_key = next((name for name in ('ID_DOKUMENT', 'ID') if name in columns.get('DOKUMENT', set())), None)
@@ -44,24 +47,57 @@ def source_query(cursor, config, *, annual=False):
         missing.append('DOKUMENT: ID_DOKUMENT lub ID')
     if missing:
         raise ValueError('Niekompletny standardowy schemat lub brak widoczności metadanych Płatnika: ' + ', '.join(missing))
+    if not annual:
+        for code, spec in resolve_fields(ADDITIONAL_MONTHLY, columns).items():
+            table = spec['table']
+            if table not in columns:
+                continue
+            missing_fields = requirements({code: spec})[table] - columns[table]
+            if missing_fields:
+                logging.getLogger(__name__).warning('Płatnik: pominięto %s, brak kolumn %s.',
+                                                    table, ', '.join(sorted(missing_fields)))
+            else:
+                specs[code] = spec
     path = Path(__file__).resolve().parents[3] / 'docs/platnik/queries/declarations.sql'
     query = path.read_text(encoding='utf-8-sig')
     records = records_sql(specs, document_key, 'STATUSPT' in columns['DOKUMENT'],columns)
     period = "CONVERT(char(4),r.reporting_date,112) AS rok" if annual else "CONVERT(char(7),r.reporting_date,120) AS miesiac"
-    return query.replace('__RECORDS__', records).replace('__PERIOD_RESULT__', period)
+    scope_parameter, scope_cte, scope_filter = '', '', ''
+    if scoped:
+        scope_parameter = ', CAST(? AS xml) AS Payers'
+        scope_cte = """SelectedNips AS (
+    SELECT refs.nip.value('(text())[1]', 'nvarchar(10)') AS nip
+    FROM Parameters p CROSS APPLY p.Payers.nodes('/p/n') AS refs(nip)
+), """
+        clean_nip = "UPPER(CONVERT(nvarchar(64),r.nip))"
+        for separator in ("N' '", "N'-'", 'NCHAR(9)', 'NCHAR(10)', 'NCHAR(13)', 'NCHAR(160)'):
+            clean_nip = f"REPLACE({clean_nip},{separator},N'')"
+        scope_filter = f"""AND (r.nip IS NULL OR EXISTS (SELECT 1 FROM SelectedNips s
+            CROSS APPLY (SELECT {clean_nip} AS nip) AS raw
+            WHERE s.nip = CASE WHEN LEFT(raw.nip,2)=N'PL' THEN SUBSTRING(raw.nip,3,64) ELSE raw.nip END))"""
+    return (query.replace('__RECORDS__', records).replace('__PERIOD_RESULT__', period)
+            .replace('__SCOPE_PARAMETER__', scope_parameter).replace('__SCOPE_CTE__', scope_cte)
+            .replace('__SCOPE_FILTER__', scope_filter))
 
 
-def fetch(config, months, *, annual=False):
+def fetch(config, months, *, annual=False, selected_nips=None):
+    custom = str(config.get('annual_declarations_query' if annual else 'declarations_query') or '').strip()
+    nips = None if selected_nips is None or custom else sorted({normalize_nip(nip) for nip in selected_nips})
+    if nips == []:
+        return []
     connection = connect(config)
     with sql_operation(config, 'Odczyt dokumentów formularzy ZUS'):
         try:
             cursor = connection.cursor()
-            query = source_query(cursor, config, annual=annual)
+            query = source_query(cursor, config, annual=annual, scoped=nips is not None)
             if not query.strip():
                 raise ValueError('Plik zapytania formularzy ZUS jest pusty.')
             start, end = ((f'{months[0]}-01-01', f'{int(months[-1])+1}-01-01') if annual else
                           (month_bounds(months[0])[0], month_bounds(months[-1])[1]))
-            cursor.execute(query, start, end)
+            parameters = [start, end]
+            if nips is not None:
+                parameters.append('<p>' + ''.join(f'<n>{nip}</n>' for nip in nips) + '</p>')
+            cursor.execute(query, *parameters)
             columns = [column[0].lower() for column in cursor.description or []]
             expected = FIELDS - {'miesiac'} | {'rok'} if annual else FIELDS
             if not expected<=set(columns) or set(columns)-expected-{'insurance_code'} or len(columns)!=len(set(columns)):
@@ -81,14 +117,15 @@ def fetch(config, months, *, annual=False):
 
 def normalize(rows, months, selected_nips, *, annual=False):
     result = {nip: {month: [] for month in months} for nip in selected_nips}
+    forms = ANNUAL if annual else MONTHLY | ADDITIONAL_MONTHLY
+    supported_forms = {'ZUS ' + code for code in forms}
     seen, payers = set(), {}
     for row in rows:
         nip = normalize_nip(row['nip'])
         if nip not in result:
             continue
         month = str(row['rok' if annual else 'miesiac'] or '')
-        forms = ANNUAL if annual else MONTHLY
-        if month not in months or row['valid_link'] != 1 or row['form'] not in {'ZUS ' + code for code in forms}:
+        if month not in months or row['valid_link'] != 1 or row['form'] not in supported_forms:
             raise ValueError('Nieprawidłowy okres lub powiązanie dokumentu formularzy ZUS. Poprzednie dane pozostawiono.')
         source_id, payer_id = str(row['source_id'] or ''), str(row['payer_id'] or '')
         if not source_id or not payer_id:
@@ -189,29 +226,32 @@ def _import_periods(months, *, company_ids=None, actor_id=None, annual=False):
         for nip, company_id in mapped.items():
             nips_by_company.setdefault(company_id, []).append(nip)
         from app.services.worker_activity import batch
+        from app.companies.checking_obligations import add_imported_periods
         with batch('platnik', sorted(nips_by_company)):
-            rows = fetch(config, months, annual=True) if annual else fetch(config, months)
+            rows = fetch(config, months, annual=annual, selected_nips=mapped)
             records = normalize(rows, months, mapped, annual=annual)
             stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
             with get_conn() as conn:
-                for fid, nips in nips_by_company.items():
-                    for month in months:
-                        entries = [entry for nip in nips for entry in records[nip][month]]
-                        snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
-                        save_snapshot(conn, 'platnik_declarations', fid, str(month), encrypt_password(snapshot))
+                for companies_batch in batched(sorted(nips_by_company.items()), 100):
+                    snapshots = []
+                    for fid, nips in companies_batch:
+                        periods = {month: [entry for nip in nips for entry in records[nip][month]] for month in months}
+                        for month, entries in periods.items():
+                            snapshot = json.dumps({'imported_at': stamp, 'declarations': entries}, ensure_ascii=False)
+                            snapshots.append((fid, str(month), encrypt_password(snapshot)))
                         if not annual:
-                            from app.companies.checking_obligations import add_imported
-                            add_imported(conn,fid,month,entries,'platnik')
+                            add_imported_periods(conn, fid, periods, 'platnik')
+                    save_snapshots(conn, 'platnik_declarations', snapshots)
         documents = sum(len(entries) for by_month in records.values() for entries in by_month.values())
         # Jeden wpis w historii importów na cały odczyt Płatnika (miesiące albo rok).
         from app.db.import_audit import log_import_safely
         log_import_safely('platnik_declarations_annual' if annual else 'platnik_declarations',
                           source=config.get('database') or 'Płatnik',
                           updated=documents,
-                          details={'companies': len(set(mapped.values())), 'months': months,
+                          details={'companies': len(nips_by_company), 'months': months,
                                    'documents': documents, 'annual': annual},
                           user_id=actor_id)
-        return {'mode': 'applied', 'companies': len(set(mapped.values())), 'months': months,
+        return {'mode': 'applied', 'companies': len(nips_by_company), 'months': months,
                 'documents': documents}
 
 
@@ -251,8 +291,9 @@ def read_year(actor_id, year):
     for row in rows:
         company = dict(row)
         yearly = json.loads(company['company_json']) if company.get('company_json') else company
-        codes = yearly.get('declaration_codes', company_declarations(yearly))
-        applicable = [code for code in ANNUAL if code in {form_key(value) for value in codes}]
+        codes = yearly['declaration_codes'] if 'declaration_codes' in yearly else company_declarations(yearly)
+        configured = {form_key(value) for value in codes}
+        applicable = [code for code in ANNUAL if code in configured]
         if not applicable:
             continue
         snapshot = decoded_snapshot(company.get('platnik_annual'))

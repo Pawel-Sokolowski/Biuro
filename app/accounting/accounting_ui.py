@@ -261,7 +261,7 @@ class AccountingPage(QWidget):
             for row in self.rows:
                 for entry in declaration_entries(row, department):
                     key = 'form:' + form_key(entry['form'])
-                    if selector.findData(key) < 0:
+                    if key not in self.report_indices[department]:
                         index = self.report_indices[department]['declarations']
                         self.report_indices[department][key] = index
                         selector.addItem(declaration_title(entry['form']), key)

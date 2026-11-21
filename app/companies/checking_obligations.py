@@ -129,14 +129,24 @@ def merge_source_scope(imported, scope, source, stamp):
 
 def add_imported(conn, company_id, month, entries, source):
     """Positive evidence only. Missing documents never disable an obligation."""
-    month_bounds(month)
-    scope = source_scope(entries)
-    if not scope['forms']:
+    add_imported_periods(conn, company_id, {month: entries}, source)
+
+
+def add_imported_periods(conn, company_id, periods, source):
+    scopes = {}
+    for month, entries in periods.items():
+        month_bounds(month)
+        scope = source_scope(entries)
+        if scope['forms']:
+            scopes[month] = scope
+    if not scopes:
         return
     conn.execute('SELECT pg_advisory_xact_lock(748221,%s)',(company_id,))
     value = read_snapshot(conn, 'checking_obligations', company_id, lock=True) or {}
-    imported = value.setdefault('imported',{}).setdefault(month,{})
-    merge_source_scope(imported, scope, source, datetime.now(ZoneInfo('Europe/Warsaw')).isoformat())
+    imported = value.setdefault('imported', {})
+    stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+    for month, scope in scopes.items():
+        merge_source_scope(imported.setdefault(month, {}), scope, source, stamp)
     save_snapshot(conn, 'checking_obligations', company_id, '', value)
 
 

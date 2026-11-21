@@ -178,7 +178,8 @@ def declaration_entries(row, department):
                 legacy.get('form_variant') or legacy.get('status') not in ('unknown', 'not_applicable', None))):
             result.append({'sent_at': None, 'upo_at': None, **legacy, 'form': 'JPK_VAT',
                            'employee_id': '', 'employee_name': '', 'source_system': 'enova'})
-    result = [entry for entry in result if report_applies(row, entry['form'], reported=True)]
+    applicable = {form for form in {entry['form'] for entry in result} if report_applies(row, form, reported=True)}
+    result = [entry for entry in result if entry['form'] in applicable]
     owner = row.get('kadrowa' if department == 'payroll' else 'ksiegowa') or ''
     original = (row.get('owner_original') or {}).get(department) or owner
     substitute = row.get(f'{department}_substitute')

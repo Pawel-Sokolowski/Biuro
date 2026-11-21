@@ -26,6 +26,15 @@ def _rws_state(row, imported_at):
     return ' · '.join(states) or ('Brak wpisu RWS' if imported_at else 'Nie odczytano roku')
 
 
+def _worksheet_state(row, imported_at):
+    rca = row.get('rca_holidays', [])
+    if not rca:
+        return _rws_state(row, imported_at)
+    sent = ', '.join(f"{item['code'][:2]} {item['code'][2:]}" for item in rca if item['sent'])
+    status = f'Wysłano RCA ({sent})' if sent else 'RCA z kodem wakacyjnym – sprawdź wysyłkę'
+    return f'{_rws_state(row, imported_at)} · {status}' if row.get('statuses') else status
+
+
 class ContributionHolidays(QWidget):
     def __init__(self,actor_id,parent=None):
         super().__init__(parent)
@@ -59,7 +68,7 @@ class ContributionHolidays(QWidget):
         details.clicked.connect(self.show_sources)
         bar.addWidget(details)
         layout.addLayout(bar)
-        self.note = QLabel('Dwuklik edytuje wpis biura. Stan pokazuje odpowiedź ZUS zapisaną przez biuro lub status RWS z Płatnika.')
+        self.note = QLabel('Dwuklik edytuje wpis biura. Stan pokazuje odpowiedź ZUS zapisaną przez biuro lub dane RWS i RCA.')
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
         self.status = QLabel()
@@ -111,7 +120,7 @@ class ContributionHolidays(QWidget):
         if field == 'miesiac':
             return display_months(value)
         if value is None and field == 'decyzja':
-            return _rws_state(row, self.payload.get('imported_at'))
+            return _worksheet_state(row, self.payload.get('imported_at'))
         if value is None and field == 'moze_skorzystac':
             return 'Do sprawdzenia'
         return value
@@ -128,6 +137,9 @@ class ContributionHolidays(QWidget):
         for index,row in enumerate(rows):
             values = [row.get('firma'), *[self._worksheet_value(row, field) for field, _ in WORKSHEET_COLUMNS]]
             info = f"NIP: {row.get('nip','—')}\n"
+            for item in row.get('rca_holidays', []):
+                confirmation = 'wysyłka potwierdzona w źródle' if item['sent'] else 'wysyłka do sprawdzenia'
+                info += f"RCA {item['code']}: {display_months(item['month'])}, {confirmation}.\n"
             for source in row.get('sources',[]):
                 amounts = ', '.join(key.removeprefix('skladka_').upper()+': '+str(source.get(key) or '—')
                                    for key in ('skladka_em','skladka_ren','skladka_wyp','skladka_chor','skladka_fpfs'))
@@ -203,7 +215,7 @@ class ContributionHolidays(QWidget):
         if field=='miesiac':
             source = display_months(source)
         if field=='decyzja':
-            source = _rws_state(row, self.payload.get('imported_at'))
+            source = _worksheet_state(row, self.payload.get('imported_at'))
         label = QLabel('Płatnik: '+str(source or 'Brak danych'))
         label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)

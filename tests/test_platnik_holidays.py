@@ -110,6 +110,53 @@ class ImportTests(DbTestCase):
         view.loaded(read_tracking_year(self.admin, 2026))
         self.assertEqual(view.table.item(index, 5).text(), 'Przyznano zwolnienie')
 
+    def test_holiday_rca_records_affect_month_and_state_only_with_transmission_evidence(self):
+        from app.accounting.holiday_ui import _worksheet_state
+        from app.db.checking_storage import save_snapshot
+        from app.utils.crypto import encrypt_password
+
+        def snapshot(period, code, **fields):
+            entry = {'form': 'ZUS RCA', 'employee_id': '12', 'insurance_code': code,
+                     'status': 'unknown', 'raw_status': 'P', **fields}
+            with get_conn() as conn:
+                save_snapshot(conn, 'platnik_declarations', self.company, period,
+                              encrypt_password(json.dumps({'declarations': [entry]})))
+
+        snapshot('2026-03', '05 14 00')
+        snapshot('2026-07', '05 94 00', status='rejected', sent_at='2026-08-05')
+        snapshot('2026-08', '05 74 00', employee_id='')
+        snapshot('2025-12', '0514', status='accepted', upo='OLDER')
+        row = self.company_row(read_tracking_year(self.admin, 2026))
+        self.assertIsNone(row['miesiac'])
+        self.assertIsNone(row['moze_skorzystac'])
+        self.assertIn('sprawdź wysyłkę', _worksheet_state(row, False))
+
+        snapshot('2026-11', '057401', status='sent', sent_at='2026-12-02')
+        snapshot('2026-12', '059400', status='accepted', upo='RECEIPT')
+        row = self.company_row(read_tracking_year(self.admin, 2026))
+        self.assertEqual(row['miesiac'], '11; 12')
+        self.assertEqual(row['moze_skorzystac'], 'Wykorzystano według RCA')
+        self.assertIn('Wysłano RCA (05 74, 05 94)', _worksheet_state(row, False))
+        self.assertIsNone(row['zlozone'])  # Filing an RCA does not attest to the RWS application.
+
+    def test_rca_adapter_requires_documented_transmission_fields(self):
+        from app.integrations.platnik.declarations import normalize as normalize_declarations
+
+        nip = '1112223344'
+        month = '2026-11'
+        row = {'form': 'ZUS RCA', 'nip': nip, 'miesiac': month, 'valid_link': 1,
+               'source_id': 21, 'payer_id': 23, 'employee_id': 42, 'employee_name': 'Test',
+               'report_id': '01', 'insurance_code': '05 94 00', 'raw_status': 'P'}
+
+        def read(**fields):
+            return normalize_declarations([{**row, **fields}], [month], [nip])[nip][month][0]
+
+        self.assertEqual(read()['status'], 'unknown')
+        self.assertEqual(read(filing_status='sent', sent_at='2026-12-02')['status'], 'sent')
+        self.assertEqual(read(filing_status='accepted', upo='RCA-RECEIPT')['status'], 'accepted')
+        with self.assertRaises(ValueError):
+            read(filing_status='sent')
+
     def test_import_keeps_n_records_encrypted_and_filters_by_company_access(self):
         self.assertEqual(self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N')])['rows'],2)
         snapshot = get_setting('platnik_holidays_2026')
@@ -142,8 +189,9 @@ class ImportTests(DbTestCase):
 
     def test_connection_query_timeout_is_saved_without_replacing_existing_password(self):
         from app.integrations.platnik.holidays import load,save
-        save({'server':'PLATNIK-SRV,1433','database':'platnik','username':'reader','query_timeout':300},
-             self.admin,password='secret')
+        save({'server':'worksheet-fixture.invalid,1433','database':'worksheet_fixture',
+              'username':'fixture_reader','query_timeout':300},
+             self.admin,password='fixture-only')
         stored = load()
         self.assertEqual(stored['query_timeout'],300)
         save({'query_timeout':360},self.admin)
@@ -248,10 +296,11 @@ class YearlyPanelTests(TestCase):
                                   {'firma_id':2,'firma':'Firma B','nip':'2223334455','sources':[],'statuses':[]}],
                           'imported_at':'2026-11-13T10:00:00+01:00','configured':True})
             self.assertEqual(panel.table.rowCount(),2)
-            self.assertEqual(panel.table.item(0,5).text(),'styczeń; październik')
-            self.assertEqual(panel.table.item(0,7).text(),'Brak danych')
-            self.assertEqual(panel.table.item(0,10).text(),'A, N')
-            self.assertEqual(panel.table.item(1,10).text(),'Brak wpisu RWS')
+            self.assertEqual(panel.table.columnCount(), 6)
+            self.assertEqual(panel.table.item(0,4).text(),'styczeń; październik')
+            self.assertEqual(panel.table.item(0,3).text(),'Brak danych')
+            self.assertEqual(panel.table.item(0,5).text(),'Aktualne zwolnienie (RWS) · Nieaktualny wpis RWS')
+            self.assertEqual(panel.table.item(1,5).text(),'Brak wpisu RWS')
             panel.active.setChecked(True)
             self.assertEqual(panel.table.rowCount(),1)
             panel.search.setText('październik')

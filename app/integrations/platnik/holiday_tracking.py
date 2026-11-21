@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from app.companies.holiday_eligibility import RELIEF_CODES, insurance_code
 from app.db.dao_conn import get_conn
 from app.db.dao_companies import employee_initials
 from app.integrations.enova.accounting import require_access
@@ -33,6 +34,34 @@ def decode_notes(raw):
     return json.loads(decrypt_password(json.loads(raw)['fields_enc']))
 
 
+def _rca_holidays(conn, company_ids, year):
+    if not company_ids:
+        return {}
+    from .declarations import decoded_snapshot
+
+    evidence = {}
+    for company_id, period, payload in conn.execute("""
+        SELECT company_id, period, payload FROM company_checking_snapshots
+        WHERE source='platnik_declarations' AND company_id=ANY(%s) AND period BETWEEN %s AND %s
+        ORDER BY company_id, period
+    """, (company_ids, max(f'{year}-01', '2024-12'), f'{year}-12')):
+        for entry in decoded_snapshot(payload).get('declarations', ()):
+            if entry.get('form') != 'ZUS RCA' or not entry.get('employee_id'):
+                continue
+            code = insurance_code(entry.get('insurance_code'))[:4]
+            status = entry.get('status')
+            if code not in RELIEF_CODES or status in ('draft', 'rejected'):
+                continue
+            sent = (status == 'sent' and bool(entry.get('sent_at'))) or (
+                status == 'accepted' and bool(entry.get('upo')))
+            key = (int(period[5:]), code)
+            company_evidence = evidence.setdefault(company_id, {})
+            company_evidence[key] = company_evidence.get(key, False) or sent
+    return {company: [{'month': month, 'code': code, 'sent': sent}
+                      for (month, code), sent in sorted(entries.items())]
+            for company, entries in evidence.items()}
+
+
 @office_endpoint('app.integrations.platnik.holiday_tracking.read_tracking_year')
 def read_tracking_year(actor_id, year):
     validate_year(year)
@@ -43,6 +72,7 @@ def read_tracking_year(actor_id, year):
         notes = {row['klucz']: decode_notes(row['wartosc']) for row in conn.execute(
             'SELECT klucz,wartosc FROM app_settings WHERE klucz=ANY(%s)', (keys,)).fetchall()}
         actor = conn.execute('SELECT imie,nazwisko FROM pracownicy WHERE id=%s', (actor_id,)).fetchone()
+        rca_by_company = _rca_holidays(conn, [company['id'] for company in companies], year)
     grouped = {}
     for row in payload['rows']:
         if row.get('firma_id') is not None:
@@ -50,6 +80,8 @@ def read_tracking_year(actor_id, year):
     rows = []
     for company in sorted(companies, key=lambda c: c['nazwa'].casefold()):
         sources = grouped.get(company['id'], [])
+        rca = rca_by_company.get(company['id'], [])
+        rca_months = {item['month'] for item in rca if item['sent']}
         # One office case per company and year. Multiple source persons/months
         # remain available in details; no arbitrary "latest" record is selected.
         source_values = {field: None for field in WORKSHEET_FIELDS}
@@ -60,12 +92,16 @@ def read_tracking_year(actor_id, year):
                 if value is not None and str(value).strip() and str(value).strip() not in values:
                     values.append(str(value).strip())
             source_values[field] = '; '.join(values) or None
+        if rca_months:
+            source_values['moze_skorzystac'] = 'Wykorzystano według RCA'
+            months = {int(month) for month in (source_values['miesiac'] or '').split('; ') if month.isdigit()}
+            source_values['miesiac'] = '; '.join(map(str, sorted(months | rca_months)))
         fields = notes.get(note_key(year, company['id']), {})
         values = {field: fields[field]['value'] if fields.get(field, {}).get('value') is not None
                   else source_values[field] for field in WORKSHEET_FIELDS}
         rows.append({**values, 'firma': company['nazwa'], 'firma_id': company['id'],
                      'nip': company['nip'], 'source_values': source_values,
-                     'sources': sources, 'notes': fields,
+                     'sources': sources, 'notes': fields, 'rca_holidays': rca,
                      'statuses': sorted({s.get('status_zrodlowy') or '?' for s in sources})})
     return {**payload, 'rows': rows, 'source_rows': payload['rows'],
             'unassigned': sum(row.get('firma_id') is None for row in payload['rows']),

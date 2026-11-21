@@ -11,6 +11,7 @@ from psycopg import Error as DatabaseError
 
 from app.db.dao_conn import get_conn, get_coordination_conn
 from app.integrations.enova.document_counts import normalize_nip
+from app.integrations.enova.jpk import filing_timestamp
 from app.integrations.platnik.holidays import load, connect, sql_operation
 from app.utils.crypto import encrypt_password, decrypt_password
 from app.utils.months import month_bounds, previous_month
@@ -19,6 +20,7 @@ from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MO
 REQUIRED = requirements({**MONTHLY, **ANNUAL})
 FIELDS = {'form', 'source_id', 'payer_id', 'nip', 'report_id', 'miesiac',
           'employee_id', 'employee_name', 'raw_status', 'valid_link'}
+OPTIONAL_FIELDS = {'insurance_code', 'filing_status', 'sent_at', 'upo', 'upo_at'}
 
 
 def source_query(cursor, config, *, annual=False, scoped=False):
@@ -105,7 +107,7 @@ def fetch(config, months, *, annual=False, selected_nips=None, expected_source=N
             cursor.execute(query, *parameters)
             columns = [column[0].lower() for column in cursor.description or []]
             expected = FIELDS - {'miesiac'} | {'rok'} if annual else FIELDS
-            if not expected<=set(columns) or set(columns)-expected-{'insurance_code'} or len(columns)!=len(set(columns)):
+            if not expected<=set(columns) or set(columns)-expected-OPTIONAL_FIELDS or len(columns)!=len(set(columns)):
                 raise ValueError('Nieprawidłowy kontrakt kolumn formularzy ZUS.')
             rows = []
             while True:
@@ -159,6 +161,15 @@ def normalize(rows, months, selected_nips, *, annual=False):
         if row.get('insurance_code'):
             from app.companies.holiday_eligibility import insurance_code
             entry['insurance_code'] = insurance_code(row['insurance_code'])
+        if status := str(row.get('filing_status') or '').strip().casefold():
+            sent, upo = filing_timestamp(row.get('sent_at')), str(row.get('upo') or '').strip()
+            labels = {'draft': 'Roboczy', 'sent': 'Wysłany', 'accepted': 'Potwierdzony',
+                      'rejected': 'Odrzucony', 'unknown': 'Nieustalony'}
+            if (status not in labels or (status == 'sent' and not sent) or
+                    (status == 'accepted' and not upo)):
+                raise ValueError('Status wysyłki Płatnika wymaga potwierdzonych danych źródłowych.')
+            entry.update(status=status, status_text=labels[status], sent_at=sent, upo=upo,
+                         upo_at=filing_timestamp(row.get('upo_at')))
         if annual:
             entry['reporting_year'] = month
         result[nip][month].append(entry)

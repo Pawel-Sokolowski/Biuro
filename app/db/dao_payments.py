@@ -142,7 +142,6 @@ def _description_details(raw_text: str) -> dict[str, str]:
     return {"title": title, "contractor": contractor, "contractor_account": account,
             "contractor_nip": re.sub(r"\D", "", nip_match[1]) if nip_match else ""}
 
-@office_endpoint('app.db.dao_payments.parse_ing_mt940')
 def bank_account_references(transfers):
     accounts = set()
     for row in transfers:
@@ -155,6 +154,7 @@ def bank_account_references(transfers):
     return sorted(accounts)
 
 
+@office_endpoint('app.db.dao_payments.parse_ing_mt940')
 def parse_ing_mt940(raw: bytes, encoding: str | None = None) -> list[dict[str, Any]]:
     """Parser biblioteki mt-940; import zachowuje walutę i rodzaj operacji.
 

@@ -3,7 +3,8 @@
 Only identities and source periods; no PESEL, amounts or family member data.
 """
 MONTHLY = {
-    'DRA': {'table': 'ZUSDRA', 'period': 'I_2_2OKRESDEKLAR', 'report': 'I_2_1IDDEKLS'},
+    'DRA': {'table': 'ZUSDRA', 'period': 'I_2_2OKRESDEKLAR', 'report': 'I_2_1IDDEKLS',
+            'header_insurance': 'XI_1_'},
     **{code: {'table': 'ZUS' + code, 'period': 'I_1_2OKRROZL', 'report': 'I_1_1IDRAPS',
               'aliases': ({'report': ('I_1_11DRAPS',)} if code == 'RPA' else
                           {'period': ('I_1_2OKKROZL',)}),
@@ -11,9 +12,12 @@ MONTHLY = {
               'insurance_prefix': 'III_A_5_' if code == 'RPA' else 'III_B_1_'}
        for code in ('RCA', 'RSA', 'RZA', 'RPA')},
     **{code: {'table': 'ZUS' + code, 'period': filled, 'kind': 'filled_date',
-              'first': 'III_6_IMIEPIERW', 'last': 'III_5_NAZWISKO', 'employee': True}
-       for code, filled in (('ZUA', 'XV_1_DATAWYPEL'), ('ZZA', 'XII_1_DATAWYPEL'),
-                           ('ZWUA', 'VI_1_DATAWYPEL'), ('ZIUA', 'V_1_DATAWYPEL'), ('ZCNA', 'VI_1_DATAWYPEL'))},
+              'first': 'III_6_IMIEPIERW', 'last': 'III_5_NAZWISKO', 'employee': True,
+              'header_insurance': insurance}
+       for code, filled, insurance in (
+           ('ZUA', 'XV_1_DATAWYPEL', 'V_1_'), ('ZZA', 'XII_1_DATAWYPEL', 'V_1_'),
+           ('ZWUA', 'VI_1_DATAWYPEL', 'IV_1_'), ('ZIUA', 'V_1_DATAWYPEL', None), ('ZCNA', 'VI_1_DATAWYPEL', None),
+       )},
 }
 ADDITIONAL_MONTHLY = {
     **{code: {'table': 'ZUS' + code, 'period': filled, 'kind': 'filled_date'}
@@ -70,6 +74,8 @@ def records_sql(specs, document_key, has_status, columns=None):
     status = 'CONVERT(nvarchar(32),d.STATUSPT)' if has_status else 'CAST(NULL AS nvarchar(32))'
     payer_identity_visible = {'ID_PLATNIK', 'NIP'} <= (columns or {}).get('PLATN_IDENT', set())
     def insurance(table, alias, prefix):
+        if not prefix:
+            return 'CAST(NULL AS nvarchar(6))'
         names = [prefix+suffix for suffix in ('1KODTYTUB','2PRDOEM','3STNIEP')]
         available = (columns or {}).get(table,set())
         if names[0] not in available:
@@ -90,7 +96,7 @@ def records_sql(specs, document_key, has_status, columns=None):
         employee_id = 'a.ID_UBEZPIECZONY' if spec.get('employee') else 'CAST(NULL AS int)'
         name = (f"LTRIM(RTRIM(COALESCE(a.{spec['first']},N'') + N' ' + COALESCE(a.{spec['last']},N'')))"
                 if spec.get('employee') else 'CAST(NULL AS nvarchar(256))')
-        code_expr = insurance(spec['table'],'a','XI_1_') if code=='DRA' else 'CAST(NULL AS nvarchar(6))'
+        code_expr = insurance(spec['table'], 'a', spec.get('header_insurance'))
         result.append(f"""SELECT N'ZUS {code}' AS form, a.ID_DOKUMENT AS source_id,
             a.ID_PLATNIK AS payer_id, {nip} AS nip, {period} AS source_period,
             {report} AS report_id, {employee_id} AS employee_id, {name} AS employee_name,

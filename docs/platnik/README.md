@@ -34,8 +34,8 @@ z użyciem bloku II przy pustym NIP. [Instrukcja formularza ZUS ZIPA](https://ww
 Dla ZCNA i ZCZA odczytywany jest nagłówek związany z ubezpieczonym. Nagłówki i pozycje ubezpieczonych
 pozostają osobnymi rekordami. Identyfikatory raportów i dokumentów pozostają
 widoczne, również dla korekt. W pozycjach RPA kod tytułu ubezpieczenia
-pochodzi z bloku III.A.5, w RCA, RSA i RZA z III.B.1, a w DRA z XI.1, o ile
-odpowiednie pola są widoczne.
+pochodzi z bloku III.A.5, w RCA, RSA i RZA z III.B.1, w DRA z XI.1,
+w ZUA i ZZA z V.1, a w ZWUA z IV.1, o ile odpowiednie pola są widoczne.
 
 Osobne obszary bez odczytu przez adapter deklaracji obejmują historyczne RGA
 i inne dawne raporty oraz wspólną tabelę DRA/RCA cz. II. Komplety pobrane z ZUS

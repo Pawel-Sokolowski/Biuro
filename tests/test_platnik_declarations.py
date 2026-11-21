@@ -25,11 +25,14 @@ class PlatnikDeclarationRulesTests(TestCase):
                    ('ZUSRZA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
                    ('ZUSRPA', 'I_1_1IDRAPS'): 'I_1_11DRAPS'}
         cursor.fetchmany.return_value = [(table, aliases.get((table, col), col)) for table, col in metadata] + [
-            ('DOKUMENT', 'ID_DOKUMENT'), ('UBEZP_ZUSRPA', 'III_A_5_1KODTYTUB')]
+            ('DOKUMENT', 'ID_DOKUMENT'), ('UBEZP_ZUSRPA', 'III_A_5_1KODTYTUB'),
+            ('ZUSZUA', 'V_1_1KODTYTUB'), ('ZUSZWUA', 'IV_1_1KODTYTUB')]
         query = source_query(cursor, {})
         self.assertIn('a.I_1_2OKKROZL', query)
         self.assertIn('a.I_1_11DRAPS', query)
         self.assertIn('u.III_A_5_1KODTYTUB', query)
+        self.assertIn('a.V_1_1KODTYTUB', query)
+        self.assertIn('a.IV_1_1KODTYTUB', query)
         self.assertIn('a.I_1_NIP', query)
         for code in ADDITIONAL_MONTHLY:
             self.assertIn("N'ZUS " + code + "'", query)

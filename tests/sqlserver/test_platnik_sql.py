@@ -39,6 +39,9 @@ class PlatnikSqlTests(unittest.TestCase):
                 names.update(('III_B_1_1KODTYTUB','III_B_1_2PRDOEM','III_B_1_3STNIEP'))
             if table == 'UBEZP_ZUSRPA':
                 names.update(('III_A_5_1KODTYTUB', 'III_A_5_2PRDOEM', 'III_A_5_3STNIEP'))
+            if table in ('ZUSZUA', 'ZUSZZA', 'ZUSZWUA'):
+                prefix = 'IV_1_' if table == 'ZUSZWUA' else 'V_1_'
+                names.update(prefix + field for field in ('1KODTYTUB', '2PRDOEM', '3STNIEP'))
             columns = []
             for name in sorted(names):
                 kind = 'int' if name.startswith('ID_') else 'datetime' if name.endswith('DATAWYPEL') else 'nvarchar(64)'
@@ -152,6 +155,16 @@ class PlatnikSqlTests(unittest.TestCase):
         row, = self.query(selected=[NIP])
         self.assertEqual(row['nip'], NIP)
         self.assertEqual(row['form'], 'ZUS ZIPA')
+
+    def test_registration_and_deregistration_use_their_document_insurance_codes(self):
+        for identity, (code, prefix) in enumerate((('ZUA','V_1_'), ('ZZA','V_1_'), ('ZWUA','IV_1_')), 1):
+            self.document(identity)
+            self.form(code, identity)
+            self.writer.execute(f"UPDATE ZUS{code} SET {prefix}1KODTYTUB='0510',"
+                                f"{prefix}2PRDOEM='0',{prefix}3STNIEP='0'")
+        entries = normalize(self.query(selected=[NIP]), ['2026-11'], [NIP])[NIP]['2026-11']
+        self.assertEqual({entry['form']: entry['insurance_code'] for entry in entries},
+                         {'ZUS ZUA': '051000', 'ZUS ZZA': '051000', 'ZUS ZWUA': '051000'})
 
     def test_orphan_cross_payer_and_wrong_parent_document_links_are_rejected(self):
         self.document(1)

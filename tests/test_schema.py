@@ -30,6 +30,8 @@ class AlembicDeploymentTests(unittest.TestCase):
             self.assertTrue({'bulk_mail_runs', 'bulk_mail_batches'} <= tables)
             self.assertTrue({'idx_bank_transakcje_account', 'idx_bank_transakcje_order', 'idx_bank_transakcje_receipts',
                              'idx_faktury_miesiac_id', 'idx_firmy_normalized_nip'} <= indexes)
+            self.assertTrue({'idx_company_contacts_firma_id', 'idx_udzialowcy_firma_id',
+                             'idx_faktury_kosz_active_invoice'} <= indexes)
             self.assertEqual(history(), [])
         finally:
             drop_test_schema(schema, previous)

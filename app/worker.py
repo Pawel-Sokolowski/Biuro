@@ -56,9 +56,9 @@ def mail_job(stop=None):
     return {'accounts': len(accounts)}
 
 
-def reminders_job():
+def reminders_job(stop=None):
     from app.services.email_reminders import run_reminders
-    return {'sent': run_reminders()}
+    return {'sent': run_reminders(stop=stop)}
 
 
 def invoices_job():
@@ -160,7 +160,7 @@ def checking_refresh_job(stop=None):
 def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
-        return {'mail': lambda: mail_job(stop), 'reminders': reminders_job,
+        return {'mail': lambda: mail_job(stop), 'reminders': lambda: reminders_job(stop),
                 'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
                 'checking_refresh':lambda:checking_refresh_job(stop)}[name]()
 

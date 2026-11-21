@@ -329,7 +329,7 @@ class OfficeHttpsTests(DbTestCase):
             self.assertEqual(Path(smtp.call_args.kwargs['attachments'][0]).name, 'notice.txt')
             self.assertTrue(smtp.call_args.kwargs['require_attachments'])
 
-    def test_selected_invoice_details_for_1000_records_use_one_https_request(self):
+    def test_selected_invoice_details_for_1000_records_use_one_https_operation(self):
         from app.db.dao_conn import get_conn
         from app.remote.view_reads import invoice_selection
 
@@ -345,7 +345,10 @@ class OfficeHttpsTests(DbTestCase):
         with mock.patch('app.remote.state._client', self.client), \
                 mock.patch.object(self.client, '_request', wraps=self.client._request) as request:
             selected = invoice_selection([*ids, -1], 1, details=True)
-        self.assertEqual(request.call_count, 1)
+        calls = request.call_args_list
+        self.assertEqual(calls[0].args[0], 'operations')
+        self.assertEqual(calls[0].args[1]['operation'], 'app.remote.view_reads.invoice_selection')
+        self.assertTrue(all(call.args[0] == 'jobs' for call in calls[1:]))
         self.assertEqual([row['id'] for row in selected], ids)
         self.assertEqual(selected[0]['numer'], 'FV/1000')
         self.assertEqual(json.loads(selected[0]['pozycje_json']), [{'nazwa': 'Usługa'}])

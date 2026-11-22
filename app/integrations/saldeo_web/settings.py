@@ -10,9 +10,14 @@ LOGIN_SELECTORS = {
     'password_selector': 'input[qa-id="password"]',
     'submit_selector': 'button[qa-id="login-button"]',
 }
-DEFAULTS = dict(enabled=False, login_url=SALDEO_ORIGIN + '/login/login.hta', history_url=SALDEO_ORIGIN + '/biuro/operacje/lista-operacji.hta',
-                username='', password_enc='', logged_in_selector='[qa-id="bo-counter"]', item_selector='div[qa-id^="row-bo-id-"]',
-                empty_selector='', open_selector='[qa-id="bo-counter"]', next_selector='', channel='auto',
+OPERATIONS_URL = SALDEO_ORIGIN + '/biuro/operacje/lista-operacji.hta'
+OPERATIONS_ROWS = 'bs-mat-table.background-operation-list-table .mat-row'
+OPERATIONS_NEXT = '.background-operation-list .paginator-wrapper-top button.mat-mdc-paginator-navigation-next'
+LEGACY_ITEM_SELECTOR = 'div[qa-id^="row-bo-id-"]'
+SESSION_SELECTOR = '[qa-id="bo-counter"]'
+DEFAULTS = dict(enabled=False, login_url=SALDEO_ORIGIN + '/login/login.hta', history_url=OPERATIONS_URL,
+                username='', password_enc='', logged_in_selector=SESSION_SELECTOR, item_selector=OPERATIONS_ROWS,
+                empty_selector='', open_selector='', next_selector=OPERATIONS_NEXT, channel='auto',
                 executable_path='', max_pages=20, pause_seconds=2, **LOGIN_SELECTORS)
 
 
@@ -27,10 +32,20 @@ def load():
         value['login_url'] = DEFAULTS['login_url']
     if value['login_url'] == DEFAULTS['login_url'] and value['submit_selector'] in ('', 'button:has-text("Zaloguj")'):
         value['submit_selector'] = LOGIN_SELECTORS['submit_selector']
-    if not saved.get('item_selector') and value['history_url']==DEFAULTS['history_url']:
-        for key in ('item_selector','logged_in_selector','open_selector'):
-            if not value[key]:
-                value[key] = DEFAULTS[key]
+    if value['history_url'] == OPERATIONS_URL:
+        if not value['logged_in_selector']:
+            value['logged_in_selector'] = SESSION_SELECTOR
+        old_preset = (saved.get('item_selector') in (None, '', LEGACY_ITEM_SELECTOR)
+                      and saved.get('open_selector') in (None, '', SESSION_SELECTOR)
+                      and not saved.get('next_selector') and not saved.get('empty_selector'))
+        if old_preset:
+            value.update(item_selector=OPERATIONS_ROWS, open_selector='', next_selector=OPERATIONS_NEXT)
+        elif value['item_selector'] != OPERATIONS_ROWS:
+            # A custom history needs its own paginator.
+            value['item_selector'] = value['item_selector'] or LEGACY_ITEM_SELECTOR
+            value['next_selector'] = saved.get('next_selector', '')
+    elif 'next_selector' not in saved:
+        value['next_selector'] = ''
     return value
 
 

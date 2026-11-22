@@ -10,6 +10,19 @@ from app.config import get_data_dir
 from .executable import resolve as resolve_browser
 
 
+OPERATIONS_EXTRACT = """nodes => nodes.slice(0, 1000).flatMap(row => {
+    const read = selector => (row.querySelector(selector)?.innerText || '').trim();
+    const cell = n => read(':scope > bs-mat-cell.col-order-' + n);
+    const type = cell(1);
+    const status = read(':scope > bs-mat-cell.col-order-3 .background-operation-list-table__status span');
+    if (type.toLowerCase() !== 'komplet dokumentów' || status.toLowerCase() !== 'zakończone') return [];
+    const company = cell(2).replace(/\\s+/g, ' ');
+    const period = cell(6);
+    const title = company + ' - Komplet dokumentów';
+    return company && period ? [{text: title + '\\n' + period, time: cell(5), title, period}] : [];
+})"""
+
+
 @contextmanager
 def browser_lock():
     with get_coordination_conn() as conn:
@@ -73,7 +86,7 @@ def open_authenticated_history(page, config):
 
 def read_history(config, stop=None):
     from playwright.sync_api import sync_playwright
-    from app.integrations.saldeo_web.settings import validate
+    from app.integrations.saldeo_web.settings import OPERATIONS_ROWS, validate
     validate(config)
     items = []
     with sync_playwright() as pw:
@@ -94,7 +107,11 @@ def read_history(config, stop=None):
                 page.wait_for_function('''s => Array.from(document.querySelectorAll(s.items)).some(e=>e.getClientRects().length)
                     || (s.empty && Array.from(document.querySelectorAll(s.empty)).some(e=>e.getClientRects().length))''',
                     arg={'items': config['item_selector'], 'empty': config['empty_selector']})
-                batch = page.locator(config['item_selector']).evaluate_all('''nodes => nodes.slice(0,1000).map(e => ({
+                rows = page.locator(config['item_selector']).filter(visible=True)
+                if config['item_selector'] == OPERATIONS_ROWS:
+                    batch = rows.evaluate_all(OPERATIONS_EXTRACT)
+                else:
+                    batch = rows.evaluate_all('''nodes => nodes.slice(0,1000).map(e => ({
                     id: e.getAttribute('data-notification-id') || e.getAttribute('data-id') || '',
                     text: e.innerText, time: e.querySelector('time')?.getAttribute('datetime') || '',
                     title: e.querySelector('.content-col .font-14')?.innerText || '',
@@ -106,7 +123,9 @@ def read_history(config, stop=None):
                     # Explicitly partial: absence of a configured paginator does not prove full history.
                     return {'state': 'partial', 'items': items}
                 next_page = page.locator(config['next_selector']).first
-                if not next_page.count() or not next_page.is_visible() or next_page.is_disabled() or next_page.get_attribute('aria-disabled') == 'true':
+                if not next_page.count() or not next_page.is_visible():
+                    return {'state': 'partial', 'items': items}
+                if next_page.is_disabled() or next_page.get_attribute('aria-disabled') == 'true':
                     return {'state': 'ok', 'items': items}
                 previous = page.locator(config['item_selector']).all_inner_texts()
                 next_page.click()

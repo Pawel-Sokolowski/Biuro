@@ -15,11 +15,10 @@ pobierana przez instalator. Jeżeli serwer jej nie ma, zainstaluj Edge/Chrome.
    zaloguj się jako administrator Biuro, następnie zaloguj do Saldeo. Wykonaj
    ewentualne 2FA i zamknij przeglądarkę. Używaj konta Windows workera na serwerze;
    logowanie na innym PC nie przekazuje sesji na serwer.
-2. Wskaż adres **pełnej historii**, obejmującej przeczytane i nieprzeczytane wpisy.
-   Potrzebne są selektory CSS rzeczywistego widoku Saldeo: znacznik zalogowania,
-   pojedynczy wpis, komunikat pustej listy, przycisk kolejnej strony. Nie znamy
-   prywatnego DOM Waszego konta, dlatego nie dostarczamy zgadywanych selektorów.
-   Wybierz je przez narzędzia deweloperskie Edge/Chrome lub zleć konfigurację.
+2. Zostaw domyślny adres tabeli **Lista operacji**. W tym widoku wbudowane są
+   znaczniki sesji, wierszy i górnego przycisku „Następna strona”. Pole
+   „Otwórz dzwonek/listę” pozostaw puste dla pełnej tabeli. Własny widok
+   historii wymaga odpowiadających mu selektorów.
 3. Aby włączyć automatyczne ponowne logowanie, zapisz login i hasło w panelu
    Saldeo workera. Dla standardowego formularza selektory są wbudowane.
    Po wygaśnięciu sesji worker przy następnym odczycie podejmuje jedną próbę
@@ -57,7 +56,8 @@ Każdy wpis ma trwały klucz. Duplikaty są pomijane; nieudana transakcja pozost
 zdarzenia do ponowienia. Status kompletu i potwierdzenie obsługi zapisują się
 atomowo. Nie są zmieniane ręczne liczniki ani etap „Wysłane wyniki”. Data dostarczenia
 jest datą wykrycia w Biuro (nie udajemy, że jest datą zgłoszenia klienta);
-oryginalny czas jest osobną kolumną, jeżeli strona udostępnia element time.
+oryginalny czas jest osobną kolumną, jeżeli strona podaje datę zakończenia
+lub udostępnia element time.
 
 Panel Saldeo zawiera historię ostatnich 500 zdarzeń (baza zachowuje wszystkie).
 Zwykli pracownicy widzą zdarzenia firm zgodnie z uprawnieniami; nierozpoznane
@@ -66,15 +66,12 @@ zgłoszenia, a przeczytanie komunikatu nie kasuje historii. To powiadomienia w
 aplikacji, nie wysyłka e-mail. Stary watcher Windows nie startuje przy włączonym
 monitoringu web; jego błędy zapisu nie oznaczają już zdarzenia jako obsłużonego.
 
-Testy integracyjne i instalator są weryfikowane przez GitHub CI. Faktyczny odczyt
-Saldeo i selektory wymagają sprawdzenia na zalogowanym koncie; bez tego konfiguracja
-pozostaje wyłączona i system nie deklaruje skutecznego monitorowania.
+Testy integracyjne i instalator są weryfikowane przez GitHub CI. Wbudowane selektory potwierdzono na zapisanej stronie. Pierwszy odczyt
+na koncie sprawdza działanie całego połączenia.
 
 Potwierdzony adres historii:
 https://saldeo.brainshare.pl/biuro/operacje/lista-operacji.hta
-Jest domyślnie wpisany w ustawieniach. Jeśli lista wymaga kliknięcia dzwonka,
-można podać opcjonalny selektor „otwórz dzwonek/listę”. Sama znajomość adresu
-nie potwierdza selektorów wpisów w prywatnym widoku.
+Jest domyślnie wpisany w ustawieniach. Wbudowany profil odczytuje tabelę z tego adresu.
 
 ## Wykrywanie przeglądarki i formularz logowania
 
@@ -94,40 +91,23 @@ Nie odczytujemy wartości wpisanych do formularza ani hasła. Pozostałe mapowan
 są zachowane; po zamknięciu procesu logowania panel wczytuje rozpoznane pola do
 pustych komórek, zachowując własne wpisy użytkownika.
 
-To rozpoznanie formularza logowania, nie automatyczne rozpoznanie struktury
-historii powiadomień. Do historii nadal trzeba dopasować znacznik sesji,
-wiersze, pustą listę i paginację. Pełnego znacznika HTML nie wkleja się do pola CSS:
-z przesłanego `<input ... qa-id="username" id="mat-input-0">` selektor to
-`input[qa-id="username"]`. Dynamicznego `mat-input-0` nie utrwalamy.
+## Pełna Lista operacji
 
+Zapis strony Saldeo potwierdził wiersze
+`bs-mat-table.background-operation-list-table .mat-row` oraz dwa przyciski
+„Następna strona”. Worker używa górnego przycisku, w obrębie listy operacji,
+także do potwierdzenia końca stronicowania po jego wyłączeniu. Zniknięcie
+przycisku po zmianie układu daje wynik niepełny.
 
-Zweryfikowane fragmenty formularza przesłane przez użytkownika:
-- pole loginu: `input[qa-id="username"]`;
-- pole hasła: `input[qa-id="password"]`;
-- przycisk logowania: `button[qa-id="login-button"]`;
-- ikona dzwonka: `[qa-id="bo-counter"]` (kliknięcie, jeśli potrzebne do otwarcia listy).
+Worker odczytuje tylko wiersze typu „Komplet dokumentów” ze statusem
+„Zakończone”. Nazwę firmy bierze z kolumny „Nazwa pliku / firma”, okres
+z „Uwagi”, a czas źródłowy z „Data zakończenia”. Inne ukończone operacje
+nie oznaczają dostarczenia dokumentów. Próbka zawierała wiersze historii.
+Selektor pustego widoku pozostaje opcjonalny i wymaga osobnego potwierdzenia.
 
-Elementy `bs-mat-cell` ze statusem `background-operation-list-table__status` /
-„Zakończone” opisują komórki operacji w tle. Nie są potwierdzeniem kompletu
-dokumentów. Selektor pojedynczego wpisu musi obejmować cały komunikat z nazwą
-firmy i okresem, np. „MERIT. informuje o dostarczeniu dokumentów za 10/2026”.
-Nie konfigurujemy automatycznie selektora historii na podstawie samych tych
-komórek ani nie zmieniamy reguły oznaczania kompletu na podstawie słowa „Zakończone”.
-
-## Potwierdzony format karty dzwonka
-
-Nowy fragment użytkownika to pełna karta:
-`div[qa-id^="row-bo-id-"]`, z tytułem `.content-col .font-14`
-„BWSERVIC - Komplet dokumentów” i okresem `.content-col .font-12-grey`
-„Październik 2026”. Używamy tych struktur, rozpoznajemy polskie nazwy miesięcy.
-Samo „done”/„Zakończone” nadal niczego nie potwierdza.
-
-Preset formularza i dzwonka jest teraz dostępny domyślnie (uzupełnia także puste
-stare ustawienia bez nadpisywania własnego selektora wpisów). Brak selektora pustej
-listy nie blokuje odczytu widocznych kart, ale pusta lista nie jest wtedy uznawana
-za potwierdzony brak zdarzeń. Brak paginacji nadal daje wynik **niepełny**:
-dzwonek może pokazywać tylko ostatnie wpisy, nie udajemy nadrobienia pełnej historii.
-Selektor stronicowania trzeba potwierdzić na pełnej liście po zalogowaniu.
+Starsze domyślne ustawienia dzwonka na standardowym adresie są aktualizowane
+przy odczycie ustawień. Własne selektory użytkownika są zachowane. Własny
+widok dzwonka może nadal używać `div[qa-id^="row-bo-id-"]` jako selektora karty.
 
 Numer row-bo-id-0 opisuje pozycję, a nie tożsamość zdarzenia. Etykieta godziny
 może zmienić się przy kolejnym odczycie, więc potwierdzenia kompletu deduplikujemy

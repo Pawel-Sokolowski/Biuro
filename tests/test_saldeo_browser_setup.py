@@ -76,6 +76,22 @@ class SavedLoginTests(TestCase):
                    return_value='{"submit_selector":"#custom"}'):
             self.assertEqual(load()['submit_selector'], '#custom')
 
+    def test_legacy_bell_preset_moves_to_the_full_operations_table(self):
+        from app.integrations.saldeo_web.settings import LEGACY_ITEM_SELECTOR, OPERATIONS_NEXT, OPERATIONS_ROWS, SESSION_SELECTOR, load
+        import json
+        saved = {'item_selector': LEGACY_ITEM_SELECTOR, 'open_selector': SESSION_SELECTOR,
+                 'next_selector': '', 'empty_selector': ''}
+        with patch('app.integrations.saldeo_web.settings.get_setting', return_value=json.dumps(saved)):
+            config = load()
+        self.assertEqual(config['item_selector'], OPERATIONS_ROWS)
+        self.assertEqual(config['next_selector'], OPERATIONS_NEXT)
+        self.assertEqual(config['open_selector'], '')
+        with patch('app.integrations.saldeo_web.settings.get_setting',
+                   return_value=json.dumps({**saved, 'next_selector': '#custom-next'})):
+            config = load()
+        self.assertEqual(config['item_selector'], LEGACY_ITEM_SELECTOR)
+        self.assertEqual(config['next_selector'], '#custom-next')
+
     def test_history_reauthenticates_once_and_reopens_the_history(self):
         from unittest.mock import call
         from app.integrations.saldeo_web.browser import open_authenticated_history

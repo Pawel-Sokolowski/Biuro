@@ -28,6 +28,17 @@ class PlatnikGuiQueueTests(DbTestCase):
         with patch('app.services.checking_refresh.assigned_company_ids', return_value={self.company}):
             return request_checks(self.admin, [self.company], MONTH)
 
+    def test_bulk_check_uses_the_database_and_respects_company_access(self):
+        self.make_company('Another company', nip='9999999999')
+        without_nip = self.make_company('Missing NIP')
+        with patch('app.services.platnik_gui.assigned_company_ids',
+                   return_value={self.company, without_nip}):
+            result = request_checks(self.admin, None, MONTH)
+        self.assertEqual(result, {'queued': 1, 'existing': 0, 'skipped': 1})
+        with get_conn() as conn:
+            queued = conn.execute("SELECT company_id,nip,period FROM platnik_gui_checks").fetchall()
+        self.assertEqual(queued, [(self.company, NIP, MONTH)])
+
     def test_queue_deduplicates_and_one_agent_finishes_a_lease(self):
         self.assertEqual(self.request(), {'queued': 1, 'existing': 0})
         self.assertEqual(self.request(), {'queued': 0, 'existing': 1})

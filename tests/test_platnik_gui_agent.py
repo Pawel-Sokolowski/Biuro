@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from app.integrations.platnik.gui_agent import load_config
-from app.integrations.platnik.gui_desktop import checked_columns
+from app.integrations.platnik.gui_desktop import checked_columns, payer_rows
 from app.integrations.platnik.gui_evidence import ReadError, collect, display_check
 from app.utils.nip import normalize_nip
 
@@ -17,6 +17,15 @@ LABELS = {'potwierdzony': 'accepted', 'przekazany': 'sent', 'odrzucony': 'reject
 
 
 class EvidenceTests(TestCase):
+    def test_agent_reads_details_only_for_the_requested_payer(self):
+        from unittest.mock import Mock, call
+        cells = {(0, 0): '9999999999', (1, 0): 'PL 123-456-78-90',
+                 (1, 1): 'Potwierdzony', (2, 0): ''}
+        read_cell = Mock(side_effect=lambda row, column: cells[row, column])
+        rows = payer_rows(read_cell, {'nip': 0, 'status': 1}, 3, NIP)
+        self.assertEqual(list(rows), [{'nip': 'PL 123-456-78-90', 'status': 'Potwierdzony'}])
+        self.assertEqual(read_cell.call_args_list, [call(0, 0), call(1, 0), call(1, 1), call(2, 0)])
+
     def test_exact_scope_and_duplicate_rows_in_one_set(self):
         excluded = [{**ROW, 'nip': '0000000000'}, {**ROW, 'period': '10/2026'},
                     {**ROW, 'form': 'RSA'}]

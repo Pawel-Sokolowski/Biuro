@@ -75,7 +75,8 @@ def load_config(path, *, full=True):
 
 def read_job(config, job):
     window = main_window(config)
-    findings = collect(grid_rows(window, config), job['nip'], job['period'], config['statuses'])
+    nip = job['nip']
+    findings = collect(grid_rows(window, config, nip=nip), nip, job['period'], config['statuses'])
     if not interactive_desktop():
         raise ReadError('DesktopUnavailable')
     return findings

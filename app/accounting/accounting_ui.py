@@ -216,7 +216,8 @@ class AccountingPage(QWidget):
                 self.contribution_scope.currentIndexChanged.connect(self.filter_rows)
                 filters.addWidget(self.contribution_scope)
                 self.platnik_gui_button = QPushButton('Sprawdź wysyłkę w Płatniku')
-                self.platnik_gui_button.setToolTip('Zleć odczyt statusu zestawów DRA/RCA dla zaznaczonych firm.')
+                self.platnik_gui_button.setToolTip(
+                    'Sprawdź zaznaczone firmy. Bez zaznaczenia sprawdzisz wszystkie dostępne firmy z bazy Biuro.')
                 self.platnik_gui_button.setVisible(self.platnik_gui_supported)
                 self.platnik_gui_button.clicked.connect(self._queue_platnik_gui_checks)
                 filters.addWidget(self.platnik_gui_button)
@@ -608,20 +609,18 @@ class AccountingPage(QWidget):
 
     def _queue_platnik_gui_checks(self):
         from app.services.platnik_gui import request_checks
-        company_ids = self.selected_company_ids()
+        company_ids = self.selected_company_ids() or None
         month = self.month.monthText()
-        if not company_ids:
-            self.platnik_gui_note.setText('Zaznacz firmy do sprawdzenia w tabeli.')
-            return
         self.platnik_gui_button.setEnabled(False)
         self.platnik_gui_note.setText('Zlecam sprawdzenie w Płatniku…')
 
         def queued(result):
             self.platnik_gui_button.setEnabled(True)
             if self.month.monthText() == month:
-                self.platnik_gui_note.setText(
-                    f"Zlecono: {result['queued']}. Już w kolejce: {result['existing']}."
-                )
+                message = f"Zlecono: {result['queued']}. Już w kolejce: {result['existing']}."
+                if result.get('skipped'):
+                    message += f" Pominięto firmy bez poprawnego NIP-u płatnika: {result['skipped']}."
+                self.platnik_gui_note.setText(message)
                 self._read_platnik_gui_checks()
 
         def failed(error):

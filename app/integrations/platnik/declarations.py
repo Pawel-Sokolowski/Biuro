@@ -201,7 +201,7 @@ def normalize_for_import(rows, months, mapped, links, errors, *, annual=False):
     return records, ready, errors
 
 
-def payer_mapping(companies, company_ids=None):
+def payer_mapping(companies, company_ids=None, *, skip_invalid=False):
     from app.companies.identities import payer_nips, is_civil
     from app.db.dao_companies import get_partners_for_companies
 
@@ -219,7 +219,7 @@ def payer_mapping(companies, company_ids=None):
         try:
             nips = identities(row)
         except ValueError:
-            if selected_ids is not None:
+            if selected_ids is not None and not skip_invalid:
                 raise
             continue
         for nip in nips:

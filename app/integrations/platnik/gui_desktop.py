@@ -6,6 +6,7 @@ from subprocess import list2cmdline
 import sys
 
 from app.integrations.platnik.gui_evidence import MAX_ROWS, ReadError, label
+from app.utils.nip import normalize_nip
 
 
 def interactive_desktop():
@@ -107,7 +108,19 @@ def checked_columns(profile, headers):
     return result
 
 
-def grid_rows(window, config):
+def payer_rows(read_cell, columns, row_count, nip):
+    for index in range(row_count):
+        raw_nip = read_cell(index, columns['nip'])
+        try:
+            row_nip = normalize_nip(raw_nip)
+        except ValueError:
+            continue
+        if row_nip == nip:
+            yield {'nip': raw_nip, **{name: read_cell(index, column)
+                                     for name, column in columns.items() if name != 'nip'}}
+
+
+def grid_rows(window, config, *, nip):
     try:
         # A locally chosen tab can navigate to a read-only register. The
         # profile has no generic button invocation, keys, coordinates or scripts.
@@ -127,8 +140,8 @@ def grid_rows(window, config):
         if row_count > MAX_ROWS:
             raise ReadError('ScanLimit')
         columns = checked_columns(config['columns'], [column['text'] for column in wrapper.columns()])
-        for index in range(row_count):
-            yield {name: wrapper.get_item(index, column).text() for name, column in columns.items()}
+        yield from payer_rows(lambda row, column: wrapper.get_item(row, column).text(),
+                              columns, row_count, nip)
         return
 
     # GridPattern indexes logical rows, including those outside the viewport.
@@ -157,8 +170,7 @@ def grid_rows(window, config):
         except NoPatternInterfaceError:
             return cell.window_text()
 
-    for index in range(row_count):
-        yield {name: cell_text(index, column) for name, column in columns.items()}
+    yield from payer_rows(cell_text, columns, row_count, nip)
 
 
 def describe(window):

@@ -88,8 +88,12 @@ zadanie i uruchamia je w bieżącej sesji.
 ```
 
 Wybierz w **Kadry → Sprawdzanie → Raport → Składki ZUS (miesięcznie)**
-okres z już zaimportowaną deklaracją, zaznacz firmę i kliknij
-**Sprawdź wysyłkę w Płatniku**. Porównaj zestaw i potwierdzenie z rejestrem
+okres z już zaimportowaną deklaracją i kliknij **Sprawdź wysyłkę w Płatniku**.
+Bez zaznaczenia Biuro zleca sprawdzenie wszystkich dostępnych dla użytkownika
+firm z prawidłowym NIP-em płatnika. Zaznaczenie wierszy ogranicza zlecenie do
+tych firm. Do kolejki trafiają wyłącznie płatnicy powiązani z firmami w Biuro.
+Agent porównuje NIP w rejestrze i pobiera szczegóły tylko pasujących wierszy.
+Porównaj zestaw i potwierdzenie z rejestrem
 Płatnika. Sprzeczne wpisy dla tej samej deklaracji kończą odczyt błędem.
 Status potwierdzenia wymaga identyfikatora potwierdzenia. Wynik bez
 wpisu oznacza, że agent w odczytanym widoku nie znalazł zgodnego zestawu.

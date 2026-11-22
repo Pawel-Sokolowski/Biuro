@@ -17,12 +17,19 @@ def _period(value):
 @office_endpoint('app.services.platnik_gui.request_checks')
 def request_checks(actor_id, company_ids, month):
     period = _period(month)
-    scope(actor_id, company_ids)
+    all_companies = company_ids is None
+    if all_companies:
+        require_access(actor_id)
+        allowed = assigned_company_ids(actor_id)
+    else:
+        scope(actor_id, company_ids)
     with get_conn() as conn:
         companies = conn.execute(
             'SELECT id,nip,forma_dzialalnosci FROM firmy ORDER BY id',
         ).fetchall()
-    mapped = payer_mapping(companies, company_ids)
+    if all_companies:
+        company_ids = [row['id'] for row in companies if row['id'] in allowed]
+    mapped = payer_mapping(companies, company_ids, skip_invalid=all_companies)
     if not mapped:
         raise ValueError('Nie znaleziono płatników dla wybranych firm.')
     with get_conn() as conn:
@@ -32,7 +39,10 @@ def request_checks(actor_id, company_ids, month):
             FROM unnest(%s::integer[], %s::text[]) AS payer(company_id, nip)
             ON CONFLICT (company_id, nip, period) WHERE state IN ('queued', 'running') DO NOTHING
         """, (actor_id, period, list(mapped.values()), list(mapped)))
-        return {'queued': cursor.rowcount, 'existing': len(mapped) - cursor.rowcount}
+        result = {'queued': cursor.rowcount, 'existing': len(mapped) - cursor.rowcount}
+    if all_companies:
+        result['skipped'] = len(company_ids) - len(set(mapped.values()))
+    return result
 
 
 @office_endpoint('app.services.platnik_gui.read_checks')

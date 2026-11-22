@@ -1,9 +1,11 @@
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import tempfile
 from unittest import TestCase
 from unittest.mock import patch, Mock
+from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet
 from app.services.worker_settings import DEFAULTS, save_settings, load_settings
 from tests.base import DbTestCase
@@ -39,6 +41,18 @@ class DeploymentKeyTests(TestCase):
                 del os.environ['BIO_ENCRYPTION_KEY']
                 load_environment()
                 self.assertEqual(os.environ['BIO_ENCRYPTION_KEY'], key)
+
+
+class PlatnikGuiScheduleTests(TestCase):
+    def test_daily_schedule_keeps_warsaw_hour_through_clock_change(self):
+        from app.worker import platnik_gui_schedule
+
+        warsaw = ZoneInfo('Europe/Warsaw')
+        now = datetime(2026, 10, 24, 15, 59, tzinfo=warsaw)
+        self.assertEqual(platnik_gui_schedule(now, '16:00', None).isoformat(),
+                         '2026-10-24T16:00:00+02:00')
+        self.assertEqual(platnik_gui_schedule(now, '16:00', {'date': '2026-10-24'}).isoformat(),
+                         '2026-10-25T16:00:00+01:00')
 
 
 class WorkerTests(DbTestCase):

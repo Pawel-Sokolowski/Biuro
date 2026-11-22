@@ -24,7 +24,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import load_settings
 
 logger = logging.getLogger(__name__)
-JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh')
+JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh')
 
 
 def _env_int(name, default, minimum, maximum):
@@ -35,7 +35,7 @@ def _env_int(name, default, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
-# Nine jobs do not need nine concurrent database clients. A smaller executor leaves
+# Jobs share a small executor to leave
 # pool capacity for UI/API requests and avoids a startup connection storm.
 WORKER_THREADS = _env_int('BIO_WORKER_THREADS', 4, 1, len(JOBS))
 HEARTBEAT_SECONDS = _env_int('BIO_WORKER_HEARTBEAT_SECONDS', 10, 5, 60)
@@ -151,6 +151,25 @@ def platnik_job():
     return results
 
 
+def platnik_gui_schedule(now, at, result):
+    day = now.date()
+    if (result or {}).get('date') == day.isoformat():
+        day += timedelta(days=1)
+    return datetime.combine(day, time.fromisoformat(at), now.tzinfo)
+
+
+def platnik_gui_job():
+    from app.services.platnik_gui import enqueue_daily
+
+    now = datetime.now(ZoneInfo('Europe/Warsaw'))
+    settings = load_settings()
+    if not settings['enabled'] or not settings['platnik_gui']:
+        return {'mode': 'disabled'}
+    if now < platnik_gui_schedule(now, settings['platnik_gui_time'], None):
+        return {'mode': 'waiting'}
+    return enqueue_daily(now.date())
+
+
 def checking_refresh_job(stop=None):
     from app.services.checking_refresh import process_next, purge_finished
     try:
@@ -168,7 +187,7 @@ def run_job(name, stop=None):
     with request_scope():
         return {'mail': lambda: mail_job(stop), 'reminders': lambda: reminders_job(stop),
                 'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
-                'checking_refresh':lambda:checking_refresh_job(stop)}[name]()
+                'platnik_gui': platnik_gui_job, 'checking_refresh': lambda: checking_refresh_job(stop)}[name]()
 
 
 @contextmanager
@@ -227,7 +246,8 @@ def serve(*, once=False, stop=None):
                 leader.execute('SELECT 1')  # Detect a lost leadership session before scheduling more work.
                 last_leader_check = now_monotonic
             settings = load_settings()
-            settings_checked_at = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+            settings_now = datetime.now(ZoneInfo('Europe/Warsaw'))
+            settings_checked_at = settings_now.isoformat()
             events_changed = False
             for name, future in list(running.items()):
                 if not future.done():
@@ -255,9 +275,15 @@ def serve(*, once=False, stop=None):
                                if isinstance(statuses[name].get('result'), dict) else None})
                 events_changed = True
                 del running[name]
+            gui_scheduled_at = None
+            if settings['enabled'] and settings['platnik_gui']:
+                gui_status = statuses.setdefault('platnik_gui', {'state': 'skipped', 'result': {'mode': 'waiting'}})
+                gui_scheduled_at = platnik_gui_schedule(settings_now, settings['platnik_gui_time'], gui_status.get('result'))
             for name in JOBS:
                 if settings['enabled'] and settings[name] and name not in running:
                     due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= (30 if name=='enova' else settings[name + '_interval']))
+                    if name == 'platnik_gui':
+                        due = due and settings_now >= gui_scheduled_at
                     if due:
                         last_started[name] = clock.monotonic()
                         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
@@ -270,9 +296,12 @@ def serve(*, once=False, stop=None):
                 set_setting('background_worker_events', json.dumps(events))
             for name, status in statuses.items():
                 if status['state'] != 'running' and settings['enabled'] and settings[name]:
-                    delay = max(0, (30 if name=='enova' else settings[name + '_interval']) - (clock.monotonic() - last_started[name]))
+                    delay = max(0, (30 if name=='enova' else settings[name + '_interval'])
+                                - (clock.monotonic() - last_started.get(name, 0)))
                     now = datetime.now(ZoneInfo('Europe/Warsaw'))
                     next_run = now+timedelta(seconds=delay)
+                    if name == 'platnik_gui' and gui_scheduled_at > now:
+                        next_run = gui_scheduled_at
                     if name=='ezla' and (status.get('result') or {}).get('mode') in ('waiting','checked_this_week'):
                         at = time.fromisoformat(settings['ezla_time'])
                         next_run = now.replace(hour=at.hour,minute=at.minute,second=0,microsecond=0)+timedelta(days=(-now.weekday())%7)

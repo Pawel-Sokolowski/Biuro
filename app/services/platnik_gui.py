@@ -6,6 +6,9 @@ from app.integrations.platnik.gui_evidence import clean_finding, month as canoni
 from app.remote.boundary import endpoint as office_endpoint
 from app.security.authorization import assigned_company_ids
 from app.services.checking_refresh import scope
+from app.utils.months import previous_month
+
+DAILY_KEY = 'worker_platnik_gui_enqueued_date'
 
 
 def _period(value):
@@ -33,16 +36,40 @@ def request_checks(actor_id, company_ids, month):
     if not mapped:
         raise ValueError('Nie znaleziono płatników dla wybranych firm.')
     with get_conn() as conn:
-        cursor = conn.execute("""
-            INSERT INTO platnik_gui_checks(company_id, actor_id, nip, period)
-            SELECT company_id, %s, nip, %s
-            FROM unnest(%s::integer[], %s::text[]) AS payer(company_id, nip)
-            ON CONFLICT (company_id, nip, period) WHERE state IN ('queued', 'running') DO NOTHING
-        """, (actor_id, period, list(mapped.values()), list(mapped)))
-        result = {'queued': cursor.rowcount, 'existing': len(mapped) - cursor.rowcount}
+        queued = _enqueue(conn, mapped, period, actor_id)
+    result = {'queued': queued, 'existing': len(mapped) - queued}
     if all_companies:
         result['skipped'] = len(company_ids) - len(set(mapped.values()))
     return result
+
+
+def _enqueue(conn, mapped, period, actor_id=None):
+    return conn.execute("""
+        INSERT INTO platnik_gui_checks(company_id, actor_id, nip, period)
+        SELECT company_id, %s, nip, %s
+        FROM unnest(%s::integer[], %s::text[]) AS payer(company_id, nip)
+        ON CONFLICT (company_id, nip, period) WHERE state IN ('queued', 'running') DO NOTHING
+    """, (actor_id, period, list(mapped.values()), list(mapped))).rowcount
+
+
+def enqueue_daily(day):
+    """Commit the date and its jobs together so a restart can safely retry."""
+    stamp = day.isoformat()
+    month = stamp[:7]
+    periods = (previous_month(month), month)
+    with get_conn() as conn:
+        marked = conn.execute("""
+            INSERT INTO app_settings(klucz, wartosc) VALUES (%s, %s)
+            ON CONFLICT (klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc
+            WHERE app_settings.wartosc < EXCLUDED.wartosc
+            RETURNING wartosc
+        """, (DAILY_KEY, stamp)).fetchone()
+        if marked is None:
+            return {'date': stamp, 'mode': 'checked_today'}
+        companies = conn.execute('SELECT id,nip,forma_dzialalnosci FROM firmy ORDER BY id').fetchall()
+        mapped = payer_mapping(companies, skip_invalid=True)
+        queued = sum(_enqueue(conn, mapped, period) for period in periods) if mapped else 0
+    return {'date': stamp, 'queued': queued, 'periods': list(periods)}
 
 
 @office_endpoint('app.services.platnik_gui.read_checks')

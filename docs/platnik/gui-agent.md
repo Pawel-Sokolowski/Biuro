@@ -111,6 +111,19 @@ a agent odczytuje zaktualizowany stan z Płatnika i przekazuje go do Biuro. Plik
 pozostaje zapisany przez Płatnika w jego bazie i katalogu przesyłek.
 [Instrukcja Płatnika, rozdział 5.6.7](https://pobierz.zus.pl/dystrybucja/a1_10_02_002/dokumentacja/Dok_Uzytk_A1_10.02.002_wersja_7.8.pdf)
 
+## Codzienne sprawdzanie wysyłki
+
+W ustawieniach workera Biuro włącz **Płatnik GUI — codzienne sprawdzanie
+wysyłki**. Domyślna godzina to **16:00 czasu polskiego**. Worker Biuro zleca
+jedną serię dziennie dla płatników z bazy Biuro i dwóch okresów, bieżącego
+oraz poprzedniego miesiąca. Ponowne uruchomienie workera tego samego dnia
+nie dodaje drugiej serii. Jeśli worker uruchomi się po ustawionej godzinie,
+zleci serię przy pierwszej okazji tego dnia.
+
+Agent Windows odbiera zlecenia, gdy jego pulpit jest aktywny. Przy
+zablokowanej sesji zlecenia czekają w kolejce. Aby agent pobierał potwierdzenia,
+uzupełnij również `confirmation_download` w jego lokalnym profilu.
+
 ## Rejestracja i próba
 
 Uruchom z katalogu repozytorium w PowerShell na koncie agenta. Pierwsze

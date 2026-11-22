@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -6,7 +7,7 @@ from psycopg.errors import InsufficientPrivilege
 from psycopg.types.json import Jsonb
 
 from app.db.dao_conn import get_conn
-from app.services.platnik_gui import read_checks, request_checks
+from app.services.platnik_gui import enqueue_daily, read_checks, request_checks
 from tests.base import DbTestCase
 
 NIP = '1234567890'
@@ -38,6 +39,26 @@ class PlatnikGuiQueueTests(DbTestCase):
         with get_conn() as conn:
             queued = conn.execute("SELECT company_id,nip,period FROM platnik_gui_checks").fetchall()
         self.assertEqual(queued, [(self.company, NIP, MONTH)])
+
+    def test_daily_run_records_both_periods_once_and_respects_open_jobs(self):
+        self.request()
+        day = date(2026, 11, 22)
+        self.assertEqual(enqueue_daily(day), {
+            'date': '2026-11-22', 'queued': 1, 'periods': ['2026-10', '2026-11'],
+        })
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT period, actor_id FROM platnik_gui_checks WHERE company_id=%s ORDER BY period
+            """, (self.company,)).fetchall()
+        self.assertEqual(rows, [('2026-10', None), ('2026-11', self.admin)])
+        self.assertEqual(enqueue_daily(day), {'date': '2026-11-22', 'mode': 'checked_today'})
+
+    def test_daily_run_can_retry_after_enqueue_failure(self):
+        day = date(2026, 11, 22)
+        with patch('app.services.platnik_gui._enqueue', side_effect=RuntimeError('failed')):
+            with self.assertRaisesRegex(RuntimeError, 'failed'):
+                enqueue_daily(day)
+        self.assertEqual(enqueue_daily(day)['queued'], 2)
 
     def test_queue_deduplicates_and_one_agent_finishes_a_lease(self):
         self.assertEqual(self.request(), {'queued': 1, 'existing': 0})

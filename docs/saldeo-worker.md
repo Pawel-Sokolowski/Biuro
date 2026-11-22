@@ -20,10 +20,13 @@ pobierana przez instalator. Jeżeli serwer jej nie ma, zainstaluj Edge/Chrome.
    pojedynczy wpis, komunikat pustej listy, przycisk kolejnej strony. Nie znamy
    prywatnego DOM Waszego konta, dlatego nie dostarczamy zgadywanych selektorów.
    Wybierz je przez narzędzia deweloperskie Edge/Chrome lub zleć konfigurację.
-3. Opcjonalnie podaj login, hasło i selektory formularza dla automatycznego
-   ponownego logowania. Hasło jest szyfrowane wspólnym kluczem Biuro. 2FA/CAPTCHA
-   wymagają ręcznego otwarcia przeglądarki; nie są obchodzone. Automatyczne
-   logowanie obsługuje formularz na tym samym origin HTTPS, nie zewnętrzne SSO.
+3. Aby włączyć automatyczne ponowne logowanie, zapisz login i hasło w panelu
+   Saldeo workera. Dla standardowego formularza selektory są wbudowane.
+   Po wygaśnięciu sesji worker przy następnym odczycie podejmuje jedną próbę
+   logowania, a po sukcesie ponownie otwiera historię. Hasło jest szyfrowane
+   wspólnym kluczem Biuro. Formularz logowania musi działać pod tym samym
+   origin HTTPS. Jeśli pojawi się dodatkowy etap logowania, panel zgłasza
+   „Wymagane logowanie / 2FA”.
 4. Włącz monitoring, zapisz i wybierz „Sprawdź i zapisz powiadomienia teraz”.
    Porównaj wynik z historią Saldeo, w tym drugą stronę, pustą listę i kilka firm.
 5. W Zadaniach workera włącz Saldeo. Domyślny odstęp to 300 s po zakończeniu
@@ -84,7 +87,9 @@ Playwright dostaje tę ścieżkę zamiast polegać wyłącznie na domyślnym kan
 Otwarcie ręcznego logowania nie wymaga selektorów monitorowania, także jeśli
 w konfiguracji włączono wcześniej monitoring. Gdy formularz zawiera po jednym
 widocznym polu `input[qa-id="username"]`, `input[qa-id="password"]` i przycisku
-`button:has-text("Zaloguj")`, zapamiętujemy te selektory w pustych ustawieniach.
+`button[qa-id="login-button"]`, domyślne selektory działają niezależnie od
+języka formularza. Starszy domyślny adres i selektor przycisku są aktualizowane
+przy odczycie konfiguracji standardowego formularza Saldeo.
 Nie odczytujemy wartości wpisanych do formularza ani hasła. Pozostałe mapowania
 są zachowane; po zamknięciu procesu logowania panel wczytuje rozpoznane pola do
 pustych komórek, zachowując własne wpisy użytkownika.
@@ -99,6 +104,7 @@ z przesłanego `<input ... qa-id="username" id="mat-input-0">` selektor to
 Zweryfikowane fragmenty formularza przesłane przez użytkownika:
 - pole loginu: `input[qa-id="username"]`;
 - pole hasła: `input[qa-id="password"]`;
+- przycisk logowania: `button[qa-id="login-button"]`;
 - ikona dzwonka: `[qa-id="bo-counter"]` (kliknięcie, jeśli potrzebne do otwarcia listy).
 
 Elementy `bs-mat-cell` ze statusem `background-operation-list-table__status` /
@@ -121,7 +127,7 @@ stare ustawienia bez nadpisywania własnego selektora wpisów). Brak selektora p
 listy nie blokuje odczytu widocznych kart, ale pusta lista nie jest wtedy uznawana
 za potwierdzony brak zdarzeń. Brak paginacji nadal daje wynik **niepełny**:
 dzwonek może pokazywać tylko ostatnie wpisy, nie udajemy nadrobienia pełnej historii.
-Potrzebne są jeszcze szczegóły pełnej listy/stronicowania oraz przycisku logowania.
+Selektor stronicowania trzeba potwierdzić na pełnej liście po zalogowaniu.
 
 Numer row-bo-id-0 opisuje pozycję, a nie tożsamość zdarzenia. Etykieta godziny
 może zmienić się przy kolejnym odczycie, więc potwierdzenia kompletu deduplikujemy

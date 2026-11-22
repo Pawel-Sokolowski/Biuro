@@ -4,10 +4,16 @@ from urllib.parse import urlsplit
 from app.db.dao_app_settings import get_setting, set_setting
 
 KEY = 'saldeo_web'
-DEFAULTS = dict(enabled=False, login_url='https://saldeo.brainshare.pl/', history_url='https://saldeo.brainshare.pl/biuro/operacje/lista-operacji.hta',
+SALDEO_ORIGIN = 'https://saldeo.brainshare.pl'
+LOGIN_SELECTORS = {
+    'username_selector': 'input[qa-id="username"]',
+    'password_selector': 'input[qa-id="password"]',
+    'submit_selector': 'button[qa-id="login-button"]',
+}
+DEFAULTS = dict(enabled=False, login_url=SALDEO_ORIGIN + '/login/login.hta', history_url=SALDEO_ORIGIN + '/biuro/operacje/lista-operacji.hta',
                 username='', password_enc='', logged_in_selector='[qa-id="bo-counter"]', item_selector='div[qa-id^="row-bo-id-"]',
-                empty_selector='', open_selector='[qa-id="bo-counter"]', next_selector='', username_selector='input[qa-id="username"]', password_selector='input[qa-id="password"]',
-                submit_selector='', channel='auto', executable_path='', max_pages=20, pause_seconds=2)
+                empty_selector='', open_selector='[qa-id="bo-counter"]', next_selector='', channel='auto',
+                executable_path='', max_pages=20, pause_seconds=2, **LOGIN_SELECTORS)
 
 
 @office_endpoint('app.integrations.saldeo_web.settings.load')
@@ -17,6 +23,10 @@ def load():
     for key in ('username_selector','password_selector'):
         if not value[key]:
             value[key] = DEFAULTS[key]
+    if value['login_url'].rstrip('/') == SALDEO_ORIGIN:
+        value['login_url'] = DEFAULTS['login_url']
+    if value['login_url'] == DEFAULTS['login_url'] and value['submit_selector'] in ('', 'button:has-text("Zaloguj")'):
+        value['submit_selector'] = LOGIN_SELECTORS['submit_selector']
     if not saved.get('item_selector') and value['history_url']==DEFAULTS['history_url']:
         for key in ('item_selector','logged_in_selector','open_selector'):
             if not value[key]:

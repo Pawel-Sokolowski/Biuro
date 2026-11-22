@@ -10,13 +10,38 @@ import subprocess
 import sys
 from time import sleep
 
-from app.integrations.platnik.gui_desktop import describe, grid_rows, interactive_desktop, main_window
+from app.integrations.platnik.gui_desktop import describe, download_confirmation, grid_rows, interactive_desktop, main_window
 from app.integrations.platnik.gui_evidence import ERRORS, OPTIONAL_COLUMNS, REQUIRED_COLUMNS, STATUSES, ReadError, collect, label
 
 MODULE = 'app.integrations.platnik.gui_agent'
 LOGGER = logging.getLogger(__name__)
 JOB_TIMEOUT = 75
 POLL_SECONDS = 5
+
+
+def load_view(config, backend, required, optional):
+    grid, columns = config['grid'], config['columns']
+    grid_keys = {'auto_id', 'control_type', 'class_name'} if backend == 'uia' else {'control_id', 'class_name'}
+    if not isinstance(grid, dict) or not grid or grid.keys() - grid_keys:
+        raise ValueError('Nieprawidłowe kryteria kontrolki rejestru.')
+    for key, value in grid.items():
+        if (key == 'control_id' and (type(value) is not int or value <= 0)
+                or key != 'control_id' and (not isinstance(value, str) or not value.strip())):
+            raise ValueError('Nieprawidłowe kryteria kontrolki rejestru.')
+    if (not isinstance(columns, dict) or not required <= columns.keys()
+            or columns.keys() - (required | optional)
+            or any(not isinstance(field, dict) or field.keys() != {'index', 'header'}
+                   or type(field['index']) is not int or not 0 <= field['index'] < 100
+                   or not isinstance(field['header'], str) or not label(field['header'])
+                   for field in columns.values())
+            or len({field['index'] for field in columns.values()}) != len(columns)):
+        raise ValueError('Profil wymaga odrębnych kolumn identyfikacji dokumentu, zestawu i potwierdzenia.')
+    tabs = config.get('tabs', [])
+    if (not isinstance(tabs, list) or len(tabs) > 6
+            or any(not isinstance(value, str) or not value.strip() for value in tabs)
+            or (tabs and backend != 'uia')):
+        raise ValueError('Profil obsługuje wyłącznie zakładki UIA wskazane przez AutomationId.')
+    return {'grid': grid, 'columns': columns, 'tabs': tabs}
 
 
 def load_config(path, *, full=True):
@@ -36,47 +61,53 @@ def load_config(path, *, full=True):
     result = {'executable': executable.resolve(), 'backend': backend, 'window': window}
     if not full:
         return result
-    grid, columns, statuses = config['grid'], config['columns'], config['status_labels']
-    grid_keys = {'auto_id', 'control_type', 'class_name'} if backend == 'uia' else {'control_id', 'class_name'}
-    if not isinstance(grid, dict) or not grid or grid.keys() - grid_keys:
-        raise ValueError('Nieprawidłowe kryteria kontrolki rejestru.')
-    for key, value in grid.items():
-        if (key == 'control_id' and (type(value) is not int or value <= 0)
-                or key != 'control_id' and (not isinstance(value, str) or not value.strip())):
-            raise ValueError('Nieprawidłowe kryteria kontrolki rejestru.')
-    if (not isinstance(columns, dict) or not REQUIRED_COLUMNS <= columns.keys()
-            or columns.keys() - (REQUIRED_COLUMNS | OPTIONAL_COLUMNS)
-            or any(not isinstance(field, dict) or field.keys() != {'index', 'header'}
-                   or type(field['index']) is not int or not 0 <= field['index'] < 100
-                   or not isinstance(field['header'], str) or not label(field['header'])
-                   for field in columns.values())
-            or len({field['index'] for field in columns.values()}) != len(columns)):
-        raise ValueError('Profil wymaga odrębnych kolumn identyfikacji dokumentu, zestawu i potwierdzenia.')
+    view = load_view(config, backend, REQUIRED_COLUMNS, OPTIONAL_COLUMNS)
+    statuses = config['status_labels']
     if (not isinstance(statuses, dict) or not statuses
             or any(not label(name) or not isinstance(status, str) or status not in STATUSES
                    for name, status in statuses.items())):
         raise ValueError('Skonfiguruj dokładne etykiety stanów w profilu.')
     statuses_normalized = {label(name): status for name, status in statuses.items()}
-    if len(statuses_normalized) != len(statuses) or ('sent' in statuses.values() and 'sent_at' not in columns):
+    if len(statuses_normalized) != len(statuses) or ('sent' in statuses.values() and 'sent_at' not in view['columns']):
         raise ValueError('Powtórzone etykiety stanów lub brak kolumny daty wysyłki.')
-    tabs = config.get('tabs', [])
-    if (not isinstance(tabs, list) or len(tabs) > 6
-            or any(not isinstance(value, str) or not value.strip() for value in tabs)
-            or (tabs and backend != 'uia')):
-        raise ValueError('Profil obsługuje wyłącznie zakładki UIA wskazane przez AutomationId.')
     service = config.get('database_service', 'biuro_platnik_agent')
     schema = config.get('database_schema', 'public')
     if any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', value)
            for value in (service, schema)):
         raise ValueError('Nieprawidłowa nazwa usługi lub schematu PostgreSQL.')
-    result.update(grid=grid, columns=columns, statuses=statuses_normalized, tabs=tabs, service=service, schema=schema)
+    result.update(view, statuses=statuses_normalized, service=service, schema=schema)
+    if 'confirmation_download' in config:
+        download = config['confirmation_download']
+        if ('sent' not in statuses_normalized.values()
+                or not {'accepted', 'rejected'} & set(statuses_normalized.values())
+                or not isinstance(download, dict)
+                or set(download) - {'tabs', 'grid', 'columns'}
+                or not {'grid', 'columns'} <= download.keys()
+                or (backend == 'uia' and bool(view['tabs']) != bool(download.get('tabs')))):
+            raise ValueError('Skonfiguruj widok Zestawy wysłane i powrót do rejestru deklaracji.')
+        result['confirmation_download'] = load_view(download, backend, {'set_id'}, {'receipt'})
     return result
 
 
 def read_job(config, job):
     window = main_window(config)
     nip = job['nip']
-    findings = collect(grid_rows(window, config, nip=nip), nip, job['period'], config['statuses'])
+    period = job['period']
+    statuses = config['statuses']
+    findings = collect(grid_rows(window, config, nip=nip), nip, period, statuses)
+    download = config.get('confirmation_download')
+    if download:
+        pending = dict.fromkeys((item['set_id'], item['receipt']) for item in findings
+                                if item['status'] == 'sent' and item['receipt'])
+        for set_id, receipt in pending:
+            if not any(item['set_id'] == set_id and item['receipt'] == receipt and item['status'] == 'sent'
+                       for item in findings):
+                continue
+            download_confirmation(window, {**download, 'backend': config['backend']}, set_id, receipt)
+            findings = collect(grid_rows(window, config, nip=nip), nip, period, statuses)
+            if not any(item['set_id'] == set_id and item['receipt'] == receipt
+                       and item['status'] in ('accepted', 'rejected') for item in findings):
+                raise ReadError('ReadFailed')
     if not interactive_desktop():
         raise ReadError('DesktopUnavailable')
     return findings

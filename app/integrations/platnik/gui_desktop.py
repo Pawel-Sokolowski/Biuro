@@ -1,7 +1,9 @@
-"""Read a profiled register from the local Płatnik process on Windows."""
+"""Read registers and retrieve receipts in the local Płatnik process on Windows."""
+from contextlib import suppress
 from ctypes import byref, create_unicode_buffer, sizeof
 from ctypes import wintypes
 from pathlib import Path
+import re
 from subprocess import list2cmdline
 import sys
 
@@ -120,10 +122,8 @@ def payer_rows(read_cell, columns, row_count, nip):
                                      for name, column in columns.items() if name != 'nip'}}
 
 
-def grid_rows(window, config, *, nip):
+def register(window, config):
     try:
-        # A locally chosen tab can navigate to a read-only register. The
-        # profile has no generic button invocation, keys, coordinates or scripts.
         for automation_id in config['tabs']:
             tab = window.child_window(auto_id=automation_id, control_type='TabItem')
             tab.wait('exists visible enabled', timeout=4)
@@ -140,16 +140,16 @@ def grid_rows(window, config, *, nip):
         if row_count > MAX_ROWS:
             raise ReadError('ScanLimit')
         columns = checked_columns(config['columns'], [column['text'] for column in wrapper.columns()])
-        yield from payer_rows(lambda row, column: wrapper.get_item(row, column).text(),
-                              columns, row_count, nip)
-        return
+
+        def cell_text(row, column):
+            return wrapper.get_item(row, column).text()
+
+        return wrapper, row_count, columns, cell_text
 
     # GridPattern indexes logical rows, including those outside the viewport.
     # Virtualized or custom controls without this contract require a different,
     # verified profile. Visible subsets must not be treated as the whole register.
-    from pywinauto.controls.uiawrapper import UIAWrapper
     from pywinauto.uia_defines import NoPatternInterfaceError
-    from pywinauto.uia_element_info import UIAElementInfo
 
     try:
         raw = wrapper.iface_grid
@@ -164,13 +164,162 @@ def grid_rows(window, config, *, nip):
     columns = checked_columns(config['columns'], [headers.GetElement(index).CurrentName for index in range(headers.Length)])
 
     def cell_text(row, column):
-        cell = UIAWrapper(UIAElementInfo(raw.GetItem(row, column)))
+        cell = uia_cell(wrapper, row, column)
         try:
             return cell.iface_value.CurrentValue
         except NoPatternInterfaceError:
             return cell.window_text()
 
+    return wrapper, row_count, columns, cell_text
+
+
+def uia_cell(grid, row, column):
+    from pywinauto.controls.uiawrapper import UIAWrapper
+    from pywinauto.uia_element_info import UIAElementInfo
+
+    return UIAWrapper(UIAElementInfo(grid.iface_grid.GetItem(row, column)))
+
+
+def grid_rows(window, config, *, nip):
+    _, row_count, columns, cell_text = register(window, config)
     yield from payer_rows(cell_text, columns, row_count, nip)
+
+
+def select_sent_set(window, view, set_id, receipt):
+    grid, row_count, columns, read = register(window, view)
+
+    def matches_set(index):
+        return (read(index, columns['set_id']).strip() == set_id
+                and ('receipt' not in columns or read(index, columns['receipt']).strip() == receipt))
+
+    matches = [index for index in range(row_count) if matches_set(index)]
+    if len(matches) != 1:
+        raise ReadError('ProfileMismatch')
+    index = matches[0]
+    if not interactive_desktop():
+        raise ReadError('DesktopUnavailable')
+
+    if view['backend'] == 'win32':
+        item = grid.get_item(index)
+        if grid.get_selected_count() > int(item.is_selected()):
+            for candidate in range(row_count):
+                if candidate != index:
+                    previous = grid.get_item(candidate)
+                    if previous.is_selected():
+                        previous.deselect()
+        item.select()
+        selected_count = grid.get_selected_count()
+    else:
+        from pywinauto.uia_defines import NoPatternInterfaceError
+        from pywinauto.uia_element_info import UIAElementInfo
+
+        item = uia_cell(grid, index, columns['set_id'])
+        while item is not None and item != grid:
+            try:
+                container = item.iface_selection_item.CurrentSelectionContainer
+                if container and UIAElementInfo(container) == grid.element_info:
+                    break
+            except NoPatternInterfaceError:
+                pass
+            item = item.parent()
+        if item is None or item == grid:
+            raise ReadError('ProfileMismatch')
+        item.select()
+        selected_count = grid.iface_selection.GetCurrentSelection().Length
+
+    if selected_count != 1 or not item.is_selected() or not matches_set(index):
+        raise ReadError('ProfileMismatch')
+
+
+def menu_label(text):
+    return label(text.split('\t', 1)[0].replace('&', '').rstrip('.…'))
+
+
+def post_menu(window, heading, action):
+    if not interactive_desktop():
+        raise ReadError('DesktopUnavailable')
+    menu = window.menu()
+    for title in (heading, action):
+        matches = [item for item in menu.items() if menu_label(item.text()) == label(title)]
+        if len(matches) != 1 or not matches[0].is_enabled():
+            raise ReadError('ProfileMismatch')
+        item = matches[0]
+        menu = item.sub_menu()
+    window.post_command(item.item_id())
+
+
+SET_WINDOW = r'Zestaw dokumentów nr ([0-9]+)$'
+WIZARD = r'Kreator potwierdzania zestawów\s*[-–—]\s*krok\s*{step}\s*/\s*5$'
+
+
+def advance_wizard(app, step, button, *, message=None):
+    if not interactive_desktop():
+        raise ReadError('DesktopUnavailable')
+    dialog = app.window(title_re=WIZARD.format(step=step))
+    dialog.wait('exists visible enabled', timeout=15)
+    wrapper = dialog.wrapper_object()
+    if message and not any(message in label(control.window_text())
+                           for control in wrapper.descendants(class_name='Static')):
+        raise ReadError('ReadFailed')
+    controls = [control for control in wrapper.descendants(class_name='Button')
+                if menu_label(control.window_text()) == label(button)
+                and control.is_visible() and control.is_enabled()]
+    if len(controls) != 1:
+        raise ReadError('ProfileMismatch')
+    from pywinauto.win32defines import BN_CLICKED, WM_COMMAND
+    control = controls[0]
+    wrapper.post_message(WM_COMMAND, control.control_id() | (BN_CLICKED << 16), control.handle)
+
+
+def download_confirmation(window, view, set_id, receipt):
+    from pywinauto import Application
+    from pywinauto.win32defines import WM_CLOSE
+
+    if not re.fullmatch(r'[0-9]+', set_id):
+        raise ReadError('ProfileMismatch')
+    opened_set = started_wizard = False
+    try:
+        main = window.wrapper_object()
+        app = Application(backend='win32').connect(process=main.process_id(), timeout=5)
+        # Use native menus even when the grids are read via UIA. A posted
+        # command lets the agent continue when Płatnik opens a modal wizard.
+        root = app.window(handle=main.handle)
+        details = app.window(title_re=SET_WINDOW)
+        wizard = app.window(title_re=WIZARD.format(step='[1-5]'))
+        if details.exists(timeout=0) or wizard.exists(timeout=0):
+            raise ReadError('ScreenUnavailable')
+        select_sent_set(window, view, set_id, receipt)
+        post_menu(root.wrapper_object(), 'Program', 'Otwórz')
+        opened_set = True
+        details.wait('exists visible enabled', timeout=5)
+        opened = details.wrapper_object()
+        title = re.fullmatch(SET_WINDOW, opened.window_text())
+        if not title or int(title[1]) != int(set_id):
+            raise ReadError('ProfileMismatch')
+        post_menu(opened, 'Narzędzia', 'Pobierz i rejestruj potwierdzenie')
+        started_wizard = True
+        advance_wizard(app, 1, 'Dalej >')
+        advance_wizard(app, 3, 'Dalej >', message='podpis złożony na potwierdzeniu został zweryfikowany poprawnie')
+        advance_wizard(app, 5, 'Zakończ', message='potwierdzenie zostało zarejestrowane')
+        wizard.wait_not('exists', timeout=5)
+        started_wizard = False
+        opened.post_message(WM_CLOSE)
+        details.wait_not('exists', timeout=5)
+        opened_set = False
+    except ReadError:
+        raise
+    except Exception:
+        raise ReadError('ReadFailed') from None
+    finally:
+        # Close only windows opened by this job. Leave unexpected prompts
+        # for the operator so the agent never confirms an unrelated dialog.
+        if opened_set and interactive_desktop():
+            with suppress(Exception):
+                if started_wizard and wizard.exists(timeout=0):
+                    wizard.wrapper_object().post_message(WM_CLOSE)
+                    wizard.wait_not('exists', timeout=3)
+                if details.exists(timeout=0):
+                    details.wrapper_object().post_message(WM_CLOSE)
 
 
 def describe(window):

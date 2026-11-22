@@ -1,7 +1,8 @@
 # Agent Płatnika w interaktywnej sesji Windows
 
 Agent odczytuje status już istniejących zestawów DRA i RCA oraz identyfikator
-elektronicznego potwierdzenia, jeśli jest widoczny w Płatniku. W Biuro wyniki są
+elektronicznego potwierdzenia widoczny w Płatniku. Po włączeniu pobierania
+agent może też pobrać i zarejestrować potwierdzenie z ZUS. W Biuro wyniki są
 w osobnej kolumnie **Agent Płatnika**. Dotyczą wysyłki zestawu. Status poszczególnego
 dokumentu, odczytany z dotychczasowego źródła, ma własną kolumnę.
 
@@ -76,6 +77,40 @@ kontrolki lub pokazywać część pól w osobnym oknie. Taki przypadek wymaga
 sprawdzenia na docelowej instalacji i dostosowania odczytu. Jeśli rejestr nie
 spełnia profilu, agent zwraca błąd zamiast przypisywać status.
 
+## Pobieranie potwierdzeń z ZUS
+
+Aby agent pobierał potwierdzenia automatycznie przy **Sprawdź wysyłkę w
+Płatniku**, dodaj do lokalnego profilu sekcję `confirmation_download`.
+Profil bez tej sekcji działa w trybie odczytu. Sekcja opisuje tabelę
+**Zestawy wysłane**. Numer zestawu musi odpowiadać numerowi w tytule okna
+**Zestaw dokumentów nr …**. Jeżeli tabela zawiera identyfikator
+potwierdzenia, dodaj też kolumnę `receipt`, aby agent porównał oba pola.
+
+```json
+"confirmation_download": {
+  "tabs": ["AutomationId zakładki Zestawy wysłane"],
+  "grid": {"auto_id": "AutomationId tabeli Zestawy wysłane"},
+  "columns": {
+    "set_id": {"index": 0, "header": "Numer zestawu"}
+  }
+}
+```
+
+Wartości w przykładzie wymagają dopasowania do instalacji Windows.
+Główne `tabs` w profilu UIA muszą wskazywać drogę powrotną do
+rejestru deklaracji, gdy widok Zestawy wysłane wymaga przełączenia
+zakładek. W profilu Win32 użyj `control_id` lub `class_name` dla
+widocznej tabeli i pomiń `tabs`. Pobieranie korzysta z natywnego menu
+Płatnika i polskiego kreatora potwierdzania.
+
+Agent wybiera zestawy DRA/RCA dla zleconego NIP-u i miesiąca. Pobiera
+potwierdzenie tylko dla zestawu o stanie `sent` i z zapisanym
+identyfikatorem potwierdzenia. Uruchamia polecenie **Pobierz i rejestruj
+potwierdzenie**. Płatnik weryfikuje podpis ZUS i rejestruje pobrany dokument,
+a agent odczytuje zaktualizowany stan z Płatnika i przekazuje go do Biuro. Plik potwierdzenia
+pozostaje zapisany przez Płatnika w jego bazie i katalogu przesyłek.
+[Instrukcja Płatnika, rozdział 5.6.7](https://pobierz.zus.pl/dystrybucja/a1_10_02_002/dokumentacja/Dok_Uzytk_A1_10.02.002_wersja_7.8.pdf)
+
 ## Rejestracja i próba
 
 Uruchom z katalogu repozytorium w PowerShell na koncie agenta. Pierwsze
@@ -103,4 +138,6 @@ Na czas próby można zatrzymać zadanie Harmonogramu i uruchomić
 `gui_agent once` z tym samym `--config`. Plik `agent.log` obok profilu
 zawiera identyfikator zadania i wynik techniczny. Test wdrożeniowy powinien
 objąć zestaw potwierdzony, wysłany i zweryfikowany przypadek bez wpisu, a
-następnie ponowny odczyt po odblokowaniu sesji.
+następnie ponowny odczyt po odblokowaniu sesji. Dla profilu z pobieraniem
+użyj zestawu wysłanego z ważnym identyfikatorem. Sprawdź, czy Płatnik
+zarejestrował pobrany dokument i Biuro wyświetliło nowy stan.

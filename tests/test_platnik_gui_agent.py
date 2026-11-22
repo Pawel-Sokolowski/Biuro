@@ -2,9 +2,10 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import Mock, call, patch
 
-from app.integrations.platnik.gui_agent import load_config
-from app.integrations.platnik.gui_desktop import checked_columns, payer_rows
+from app.integrations.platnik.gui_agent import load_config, read_job
+from app.integrations.platnik.gui_desktop import checked_columns, payer_rows, select_sent_set
 from app.integrations.platnik.gui_evidence import ReadError, collect, display_check
 from app.utils.nip import normalize_nip
 
@@ -18,7 +19,6 @@ LABELS = {'potwierdzony': 'accepted', 'przekazany': 'sent', 'odrzucony': 'reject
 
 class EvidenceTests(TestCase):
     def test_agent_reads_details_only_for_the_requested_payer(self):
-        from unittest.mock import Mock, call
         cells = {(0, 0): '9999999999', (1, 0): 'PL 123-456-78-90',
                  (1, 1): 'Potwierdzony', (2, 0): ''}
         read_cell = Mock(side_effect=lambda row, column: cells[row, column])
@@ -75,7 +75,55 @@ class EvidenceTests(TestCase):
             config = Path(directory) / 'profile.json'
             config.write_text(json.dumps(profile), encoding='utf-8')
             self.assertEqual(load_config(config)['schema'], 'public')
+            profile['confirmation_download'] = {
+                'grid': {'auto_id': 'sent-sets'},
+                'columns': {'set_id': {'index': 0, 'header': 'Numer zestawu'}},
+            }
+            config.write_text(json.dumps(profile), encoding='utf-8')
+            self.assertEqual(load_config(config)['confirmation_download']['tabs'], [])
+            profile['confirmation_download']['command'] = 'Wyślij'
+            config.write_text(json.dumps(profile), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'Zestawy wysłane'):
+                load_config(config)
+            del profile['confirmation_download']
             profile['tabs'] = [{'click': 'Wyślij'}]
             config.write_text(json.dumps(profile), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'zakładki UIA'):
                 load_config(config)
+
+
+class DownloadTests(TestCase):
+    @patch('app.integrations.platnik.gui_agent.interactive_desktop', return_value=True)
+    @patch('app.integrations.platnik.gui_agent.download_confirmation')
+    @patch('app.integrations.platnik.gui_agent.grid_rows')
+    @patch('app.integrations.platnik.gui_agent.main_window')
+    def test_download_uses_matched_sent_set_once_and_reads_registered_state(self, main, grid, download, active):
+        sent = {**ROW, 'set_id': '9', 'status': 'Przekazany'}
+        missing_id = {**sent, 'set_id': '10', 'report': '02', 'receipt': ''}
+        unrelated = {**sent, 'set_id': '11', 'period': '10/2026'}
+        grid.side_effect = [
+            [sent, {**sent, 'form': 'RCA'}, missing_id, unrelated, {**sent, 'nip': '9999999999'}],
+            [{**sent, 'status': 'Potwierdzony'}, {**sent, 'form': 'RCA', 'status': 'Potwierdzony'}, missing_id],
+        ]
+        view = {'tabs': ['sent']}
+        config = {'statuses': LABELS, 'backend': 'uia', 'confirmation_download': view}
+        result = read_job(config, {'nip': NIP, 'period': MONTH})
+        download.assert_called_once_with(main.return_value, {**view, 'backend': 'uia'}, '9', 'POTW-9')
+        self.assertEqual([row['status'] for row in result], ['accepted', 'accepted', 'sent'])
+
+    @patch('app.integrations.platnik.gui_agent.download_confirmation')
+    @patch('app.integrations.platnik.gui_agent.grid_rows')
+    @patch('app.integrations.platnik.gui_agent.main_window')
+    def test_unregistered_download_does_not_report_success(self, main, grid, download):
+        grid.return_value = [{**ROW, 'set_id': '9', 'status': 'Przekazany'}]
+        config = {'statuses': LABELS, 'backend': 'uia', 'confirmation_download': {'tabs': ['sent']}}
+        with self.assertRaisesRegex(ReadError, 'ReadFailed'):
+            read_job(config, {'nip': NIP, 'period': MONTH})
+
+    @patch('app.integrations.platnik.gui_desktop.register')
+    def test_duplicate_set_number_fails_before_selection(self, register):
+        grid = Mock()
+        register.return_value = (grid, 2, {'set_id': 0}, Mock(return_value='9'))
+        with self.assertRaisesRegex(ReadError, 'ProfileMismatch'):
+            select_sent_set(Mock(), {'backend': 'win32'}, '9', 'POTW-9')
+        grid.get_item.assert_not_called()

@@ -2,10 +2,11 @@
 # Microsoft ODBC Driver 18 for SQL Server must also be installed.
 pyodbc>=5.2,<6
 psycopg[binary]>=3.2,<4
-psycopg_pool==3.3.1
+psycopg_pool==3.3.3
 python-dotenv>=1,<2
 tzdata
 
 # Shared credentials use the same Fernet encryption as the desktop app.
 cryptography
 bcrypt
+python-stdnum==2.2

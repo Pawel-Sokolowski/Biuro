@@ -10,6 +10,19 @@ from app.config import get_data_dir
 from .executable import resolve as resolve_browser
 
 
+OPERATIONS_EXTRACT = """nodes => nodes.slice(0, 1000).flatMap(row => {
+    const read = selector => (row.querySelector(selector)?.innerText || '').trim();
+    const cell = n => read(':scope > bs-mat-cell.col-order-' + n);
+    const type = cell(1);
+    const status = read(':scope > bs-mat-cell.col-order-3 .background-operation-list-table__status span');
+    if (type.toLowerCase() !== 'komplet dokumentów' || status.toLowerCase() !== 'zakończone') return [];
+    const company = cell(2).replace(/\\s+/g, ' ');
+    const period = cell(6);
+    const title = company + ' - Komplet dokumentów';
+    return company && period ? [{text: title + '\\n' + period, time: cell(5), title, period}] : [];
+})"""
+
+
 @contextmanager
 def browser_lock():
     with get_coordination_conn() as conn:
@@ -31,9 +44,49 @@ def same_origin(page, config):
     return (actual.scheme, actual.hostname, actual.port or 443) == (expected.scheme, expected.hostname, expected.port or 443)
 
 
+def open_authenticated_history(page, config):
+    """Open the history, attempting one sign-in when the session has expired."""
+    from playwright.sync_api import TimeoutError
+
+    history = config['history_url']
+    page.goto(history, wait_until='domcontentloaded', timeout=45000)
+    if not same_origin(page, config):
+        return False
+    marker = page.locator(config['logged_in_selector']).filter(visible=True).first
+    login = page.locator(config['username_selector']).filter(visible=True).first
+    # The history shell and login form can both be rendered after DOMContentLoaded.
+    try:
+        marker.or_(login).first.wait_for(state='visible')
+    except TimeoutError:
+        if urlsplit(page.url).path != urlsplit(config['login_url']).path:
+            raise
+    if marker.is_visible() and not login.is_visible():
+        return same_origin(page, config)
+    if not config['username'] or not config['password_enc']:
+        return False
+
+    page.goto(config['login_url'], wait_until='domcontentloaded', timeout=45000)
+    if not same_origin(page, config):
+        return False
+    try:
+        login.wait_for(state='visible')
+        if not attempt_saved_login(page, config):
+            return False
+        marker.wait_for(state='visible')
+        if not same_origin(page, config):
+            return False
+        page.goto(history, wait_until='domcontentloaded', timeout=45000)
+        if not same_origin(page, config):
+            return False
+        marker.wait_for(state='visible')
+    except TimeoutError:
+        return False
+    return same_origin(page, config)
+
+
 def read_history(config, stop=None):
     from playwright.sync_api import sync_playwright
-    from app.integrations.saldeo_web.settings import validate
+    from app.integrations.saldeo_web.settings import OPERATIONS_ROWS, validate
     validate(config)
     items = []
     with sync_playwright() as pw:
@@ -42,24 +95,7 @@ def read_history(config, stop=None):
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(15000)
-            page.goto(config['history_url'], wait_until='domcontentloaded', timeout=45000)
-            if not page.locator(config['logged_in_selector']).first.is_visible():
-                selectors = ('username_selector', 'password_selector', 'submit_selector')
-                if not config['password_enc'] or not config['username'] or not all(config[k] for k in selectors):
-                    return {'state': 'login_required', 'items': []}
-                page.goto(config['login_url'], wait_until='domcontentloaded', timeout=45000)
-                if not same_origin(page, config):
-                    return {'state': 'login_required', 'items': []}
-                from app.utils.crypto import decrypt_password
-                page.locator(config['username_selector']).fill(config['username'])
-                page.locator(config['password_selector']).fill(decrypt_password(config['password_enc']))
-                page.locator(config['submit_selector']).click()
-                try:
-                    page.locator(config['logged_in_selector']).first.wait_for(state='visible')
-                except Exception:
-                    return {'state': 'login_required', 'items': []}  # Includes MFA/CAPTCHA; never bypass them.
-                page.goto(config['history_url'], wait_until='domcontentloaded', timeout=45000)
-            if not same_origin(page, config):
+            if not open_authenticated_history(page, config):
                 return {'state': 'login_required', 'items': []}
             if config.get('open_selector'):
                 page.locator(config['open_selector']).first.click()
@@ -71,7 +107,11 @@ def read_history(config, stop=None):
                 page.wait_for_function('''s => Array.from(document.querySelectorAll(s.items)).some(e=>e.getClientRects().length)
                     || (s.empty && Array.from(document.querySelectorAll(s.empty)).some(e=>e.getClientRects().length))''',
                     arg={'items': config['item_selector'], 'empty': config['empty_selector']})
-                batch = page.locator(config['item_selector']).evaluate_all('''nodes => nodes.slice(0,1000).map(e => ({
+                rows = page.locator(config['item_selector']).filter(visible=True)
+                if config['item_selector'] == OPERATIONS_ROWS:
+                    batch = rows.evaluate_all(OPERATIONS_EXTRACT)
+                else:
+                    batch = rows.evaluate_all('''nodes => nodes.slice(0,1000).map(e => ({
                     id: e.getAttribute('data-notification-id') || e.getAttribute('data-id') || '',
                     text: e.innerText, time: e.querySelector('time')?.getAttribute('datetime') || '',
                     title: e.querySelector('.content-col .font-14')?.innerText || '',
@@ -83,7 +123,9 @@ def read_history(config, stop=None):
                     # Explicitly partial: absence of a configured paginator does not prove full history.
                     return {'state': 'partial', 'items': items}
                 next_page = page.locator(config['next_selector']).first
-                if not next_page.count() or not next_page.is_visible() or next_page.is_disabled() or next_page.get_attribute('aria-disabled') == 'true':
+                if not next_page.count() or not next_page.is_visible():
+                    return {'state': 'partial', 'items': items}
+                if next_page.is_disabled() or next_page.get_attribute('aria-disabled') == 'true':
                     return {'state': 'ok', 'items': items}
                 previous = page.locator(config['item_selector']).all_inner_texts()
                 next_page.click()
@@ -109,7 +151,11 @@ def attempt_saved_login(page,config):
         return False
     from app.utils.crypto import decrypt_password
     controls[0].fill(config['username'])
+    if not same_origin(page, config):
+        return False
     controls[1].fill(decrypt_password(config['password_enc']))
+    if not same_origin(page, config):
+        return False
     controls[2].click()
     return True
 
@@ -167,11 +213,8 @@ def login_window(actor_id=None):
 
 def remember_login_fields(page, actor_id):
     """Learn verified, unique visible controls. Never read values entered by the user."""
-    candidates = {
-        'username_selector':'input[qa-id="username"]',
-        'password_selector':'input[qa-id="password"]',
-        'submit_selector':'button:has-text("Zaloguj")',
-    }
+    from app.integrations.saldeo_web.settings import load, KEY, LOGIN_SELECTORS
+    candidates = LOGIN_SELECTORS
     if not all(page.locator(selector + ':visible').count()==1 for selector in candidates.values()):
         return False
     from app.security.authorization import is_administrator
@@ -179,7 +222,6 @@ def remember_login_fields(page, actor_id):
         return False
     import json
     from app.db.dao_app_settings import set_setting
-    from app.integrations.saldeo_web.settings import load, KEY
     config = load()
     # Preserve existing user mappings and every setting, including enabled state.
     changed = False

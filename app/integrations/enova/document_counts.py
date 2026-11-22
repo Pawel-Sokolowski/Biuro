@@ -17,6 +17,7 @@ from app.db.dao_conn import get_conn
 from app.integrations.enova.counting_rules import load_rules, effective_divisor, validate_divisor
 from app.integrations.enova.query_defaults import ADAPTER_REVISION, DOCUMENTS_QUERY, bundled_directory
 from app.utils.months import month_bounds, previous_month
+from app.utils.nip import normalize_nip as normalize_nip
 
 
 @dataclass(frozen=True)
@@ -64,13 +65,6 @@ def counted_documents(by_type, included=None):
         if key in included or key not in {known for known, _ in DOCUMENT_TYPE_LABELS}:
             total += count
     return total
-
-
-def normalize_nip(value):
-    text = re.sub(r'[\s-]', '', str(value or '').upper()).removeprefix('PL')
-    if not re.fullmatch(r'[0-9]{10}', text):
-        raise ValueError('NIP musi zawierać 10 cyfr.')
-    return text
 
 
 def sources_by_nip(sources):

@@ -30,7 +30,7 @@ class BrowserSetupTests(TestCase):
     def test_only_unique_controls_are_learned_and_existing_fields_are_preserved(self):
         page = Mock()
         page.locator.return_value.count.return_value = 1
-        config = {**DEFAULTS,'username_selector':'#existing'}
+        config = {**DEFAULTS,'username_selector':'#existing','submit_selector':''}
         with patch('app.security.authorization.is_administrator',return_value=True), \
              patch('app.integrations.saldeo_web.settings.load',return_value=config), \
              patch('app.db.dao_app_settings.set_setting') as save:
@@ -39,6 +39,7 @@ class BrowserSetupTests(TestCase):
             value = json.loads(save.call_args.args[1])
             self.assertEqual(value['username_selector'],'#existing')
             self.assertEqual(value['password_selector'],'input[qa-id="password"]')
+            self.assertEqual(value['submit_selector'],'button[qa-id="login-button"]')
             self.assertFalse(value['enabled'])
             self.assertNotIn('input_value',repr(page.mock_calls))
         page.locator.return_value.count.return_value = 2
@@ -63,6 +64,58 @@ class SavedLoginTests(TestCase):
             controls[config[key]] = control
         page.locator.side_effect = controls.__getitem__
         return page,controls
+
+    def test_legacy_public_login_defaults_migrate_and_custom_selectors_survive(self):
+        from app.integrations.saldeo_web.settings import load
+        with patch('app.integrations.saldeo_web.settings.get_setting',
+                   return_value='{"login_url":"https://saldeo.brainshare.pl/","submit_selector":""}'):
+            config = load()
+        self.assertEqual(config['login_url'], 'https://saldeo.brainshare.pl/login/login.hta')
+        self.assertEqual(config['submit_selector'], 'button[qa-id="login-button"]')
+        with patch('app.integrations.saldeo_web.settings.get_setting',
+                   return_value='{"submit_selector":"#custom"}'):
+            self.assertEqual(load()['submit_selector'], '#custom')
+
+    def test_legacy_bell_preset_moves_to_the_full_operations_table(self):
+        from app.integrations.saldeo_web.settings import LEGACY_ITEM_SELECTOR, OPERATIONS_NEXT, OPERATIONS_ROWS, SESSION_SELECTOR, load
+        import json
+        saved = {'item_selector': LEGACY_ITEM_SELECTOR, 'open_selector': SESSION_SELECTOR,
+                 'next_selector': '', 'empty_selector': ''}
+        with patch('app.integrations.saldeo_web.settings.get_setting', return_value=json.dumps(saved)):
+            config = load()
+        self.assertEqual(config['item_selector'], OPERATIONS_ROWS)
+        self.assertEqual(config['next_selector'], OPERATIONS_NEXT)
+        self.assertEqual(config['open_selector'], '')
+        with patch('app.integrations.saldeo_web.settings.get_setting',
+                   return_value=json.dumps({**saved, 'next_selector': '#custom-next'})):
+            config = load()
+        self.assertEqual(config['item_selector'], LEGACY_ITEM_SELECTOR)
+        self.assertEqual(config['next_selector'], '#custom-next')
+
+    def test_history_reauthenticates_once_and_reopens_the_history(self):
+        from unittest.mock import call
+        from app.integrations.saldeo_web.browser import open_authenticated_history
+        config = self.config()
+        page = Mock(url=config['login_url'])
+        marker, login = Mock(), Mock()
+        marker.is_visible.return_value = False
+        page.locator.side_effect = lambda selector: (marker if selector == config['logged_in_selector'] else login)
+        marker.filter.return_value.first = marker
+        login.filter.return_value.first = login
+        with patch('app.integrations.saldeo_web.browser.attempt_saved_login', return_value=True) as submit:
+            self.assertTrue(open_authenticated_history(page, config))
+        submit.assert_called_once_with(page, config)
+        self.assertEqual(page.goto.call_args_list, [
+            call(url, wait_until='domcontentloaded', timeout=45000)
+            for url in (config['history_url'], config['login_url'], config['history_url'])
+        ])
+
+    def test_history_does_not_submit_credentials_for_a_foreign_redirect(self):
+        from app.integrations.saldeo_web.browser import open_authenticated_history
+        page = Mock(url='https://different.example.com/')
+        with patch('app.integrations.saldeo_web.browser.attempt_saved_login') as submit:
+            self.assertFalse(open_authenticated_history(page, self.config()))
+        submit.assert_not_called()
 
     def test_saved_credentials_are_submitted_only_to_the_configured_origin(self):
         from app.integrations.saldeo_web.browser import attempt_saved_login

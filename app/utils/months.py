@@ -13,7 +13,7 @@ def previous_month(month: str) -> str:
 
 def current_month(today: date | None = None) -> str:
     today = today or date.today()
-    return f"{today.year:04d}-{today.month:02d}"
+    return today.isoformat()[:7]
 
 
 def default_month_for_department(department: str, today: date | None = None) -> str:
@@ -32,7 +32,7 @@ def default_month_for_employee(employee_id: int, today: date | None = None) -> s
 def default_month_for_monthly_view(today: date | None = None) -> str:
     """Use the previous month until the last calendar day of the current month."""
     today = today or date.today()
-    current = f"{today.year:04d}-{today.month:02d}"
+    current = current_month(today)
     if today.day < monthrange(today.year, today.month)[1]:
         return previous_month(current)
     return current

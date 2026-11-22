@@ -35,8 +35,8 @@ na Pythonie 3.14. [Workflow testów](../.github/workflows/tests.yml)
 | Pakiet | Biuro | Upstream | Zakres testu przed aktualizacją |
 |---|---|---|---|
 | [pyodbc](https://pypi.org/project/pyodbc/) | 5.5.0 | 5.5.0 | Sterownik ODBC i odczyt SQL Server. |
-| [psycopg](https://pypi.org/project/psycopg/), [psycopg-binary](https://pypi.org/project/psycopg-binary/) | 3.3.8 | 3.3.9 | Razem w lockfile aplikacji i workera. Test migracji oraz transakcji. |
-| [psycopg-pool](https://pypi.org/project/psycopg-pool/) | 3.3.1 | 3.3.3 | Test zwracania połączeń po błędzie i zamykania puli. |
+| [psycopg](https://pypi.org/project/psycopg/), [psycopg-binary](https://pypi.org/project/psycopg-binary/) | 3.3.9 | 3.3.9 | Razem w lockfile aplikacji i workera. Test migracji oraz transakcji. |
+| [psycopg-pool](https://pypi.org/project/psycopg-pool/) | 3.3.3 | 3.3.3 | Test zwracania połączeń po błędzie i zamykania puli. |
 | [Alembic](https://pypi.org/project/alembic/) | 1.20.1 | 1.20.1 | Migracje pustej i istniejącej bazy. |
 | [PyQt6](https://pypi.org/project/PyQt6/), [Charts](https://pypi.org/project/PyQt6-Charts/), [WebEngine](https://pypi.org/project/PyQt6-WebEngine/) | 6.11.0 | 6.12.1, 6.12.1, 6.140.1 | Sprawdzić wymagane biblioteki Qt i SIP oraz uruchomić instalator Windows z WebEngine. |
 | [pypdf](https://pypi.org/project/pypdf/) | 6.21.4 | 7.1.1 | Zakres `<7` wymaga świadomej zmiany. Test generowania, łączenia i dołączania faktur PDF. |
@@ -44,7 +44,7 @@ na Pythonie 3.14. [Workflow testów](../.github/workflows/tests.yml)
 | [CalDAV](https://pypi.org/project/caldav/), [icalendar](https://pypi.org/project/icalendar/) | 2.1.2, 7.3.0 | 3.7.0, 7.3.2 | Test powtarzalności, stref czasowych i synchronizacji zmian w obie strony. |
 | [IMAPClient](https://pypi.org/project/IMAPClient/) | 3.0.1 | 4.3.0 | Test UID, folderów i ponownego łączenia. |
 | [python-dateutil](https://pypi.org/project/python-dateutil/) | 2.9.0.post0 | 4.0.0 | Sprawdzić zgodność z bibliotekami kalendarza i zachowanie zdarzeń cyklicznych. |
-| [openpyxl](https://pypi.org/project/openpyxl/), [XlsxWriter](https://pypi.org/project/XlsxWriter/) | 3.1.5, 3.3.1 | 3.1.5, 3.3.3 | Zachować kierunek odczytu i zapisu. Test arkusza z formułami i kwotami. |
+| [openpyxl](https://pypi.org/project/openpyxl/), [XlsxWriter](https://pypi.org/project/XlsxWriter/) | 3.1.5, 3.3.3 | 3.1.5, 3.3.3 | Zachować kierunek odczytu i zapisu. Test arkusza z formułami i kwotami. |
 | [mt-940](https://pypi.org/project/mt-940/) | 5.1.3 | 5.1.3 | Parser MT940 oraz test bankowych wariantów pola :86:. |
 | [lxml](https://pypi.org/project/lxml/), [cryptography](https://pypi.org/project/cryptography/), [bcrypt](https://pypi.org/project/bcrypt/) | 6.1.3, 50.0.2, 5.0.0 | 6.1.3, 50.0.2, 5.0.0 | Test podpisów XML, szyfrowania i logowania. |
 | [pyzipper](https://pypi.org/project/pyzipper/) | 0.4.0 | 0.4.0 | Zachować obsługę szyfrowanych archiwów AES z ZUS. |
@@ -63,8 +63,8 @@ W sprawdzonych wydaniach bez różnic były także
 [recurring-ical-events 3.8.2](https://pypi.org/project/recurring-ical-events/)
 i [tzdata 2026.6](https://pypi.org/project/tzdata/).
 
-Pierwszym kandydatem do aktualizacji jest razem para psycopg i psycopg-binary
-oraz pula. Oddzielny build Windows pozwoli zweryfikować Qt i PyInstaller.
+`psycopg` oraz `psycopg-binary` zaktualizowano razem do 3.3.9. Aktualizacja
+Qt i PyInstaller ma własne wymagania dotyczące budowania na Windows.
 Przegląd obejmuje pakiety bezpośrednie i wybrane pakiety binarne. Aktualizacje
 wymagają ponownego rozwiązania zależności i wygenerowania lockfile ze skrótami.
 
@@ -79,15 +79,19 @@ wymagają ponownego rozwiązania zależności i wygenerowania lockfile ze skrót
 - Składki DRA/RCA korzystają z `Decimal` i istniejącej funkcji
   `money()`. Zasady wyboru korekt, finansowania i rozdziału groszy
   pozostają regułami domenowymi. [Dokumentacja decimal](https://docs.python.org/pl/3.14/library/decimal.html)
-- `python-stdnum` warto wykorzystać do walidacji NIP i polskich rachunków
-  w miejscach wprowadzania danych. Dopasowywanie rekordów historycznych
-  zachowuje obecną normalizację, ponieważ wymuszenie sumy kontrolnej może
-  wykluczyć zaakceptowane wcześniej rekordy. [Dokumentacja python-stdnum](https://arthurdejong.org/python-stdnum/)
+- `python-stdnum` sprawdza identyfikatory w formularzach i normalizuje NIP do
+  dopasowania rekordów historycznych. Sprawdzenie sumy kontrolnej polskiego
+  rachunku w formularzach pozostaje osobnym punktem przeglądu. [Dokumentacja python-stdnum](https://arthurdejong.org/python-stdnum/)
 - Wstęp do C API dotyczy rozszerzeń i osadzania interpretera. Do raportu
   miesięcznego wystarczają moduły Pythona i dotychczasowe zależności.
   [Wprowadzenie do C API](https://docs.python.org/pl/3.14/c-api/intro.html)
 
 ## Zmiany z agentem Płatnika
+
+- `psycopg` i `psycopg-binary` 3.3.9 są przypięte razem w aplikacji, workerze
+  Enova i środowisku agenta. Lockfile korzysta ze skrótów wszystkich plików
+  dystrybucji opublikowanych w PyPI. [psycopg 3.3.9](https://pypi.org/project/psycopg/3.3.9/)
+  · [psycopg-binary 3.3.9](https://pypi.org/project/psycopg-binary/3.3.9/)
 
 - `psycopg-pool` 3.3.3 jest zapisany w zależnościach aplikacji i workera Enova.
   `XlsxWriter` 3.3.3 jest zapisany w lockfile aplikacji. Skróty archiwum i koła

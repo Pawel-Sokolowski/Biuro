@@ -1,5 +1,5 @@
 # Separate Windows virtual environment for the interactive Płatnik agent.
-psycopg[binary]==3.3.8
+psycopg[binary]==3.3.9
 python-stdnum==2.2
 pywin32==312
 pywinauto==0.6.9

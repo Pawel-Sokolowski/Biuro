@@ -1495,7 +1495,8 @@ def restore_trashed_invoice(trash_id: int, actor_id: int) -> int:
                 except ValueError as exc:
                     raise InvoiceLockedError('Nie można przywrócić: numer został już wykorzystany przez inny dokument.') from exc
                 conn.execute(
-                    "INSERT INTO faktury SELECT * FROM jsonb_populate_record(NULL::faktury, %s::jsonb)",
+                    """INSERT INTO faktury SELECT * FROM jsonb_populate_record(
+                        NULL::faktury, '{"invoice_email_attempts": 0}'::jsonb || %s::jsonb)""",
                     (json.dumps(entry["faktura_json"]),))
                 conn.execute(
                     "INSERT INTO faktury_pozycje SELECT * FROM jsonb_populate_recordset(NULL::faktury_pozycje, %s::jsonb)",

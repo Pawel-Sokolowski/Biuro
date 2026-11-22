@@ -31,6 +31,15 @@ class HistoryTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT data_dostarczenia FROM statusy_miesieczne WHERE firma_id=%s',(self.company,)).fetchone()[0],'2026-10-20')
         self.assertEqual(len(list_history(self.admin)),1)
+
+    def test_unmapped_backlog_does_not_block_new_deliveries(self):
+        source = 'https://example.test/history'
+        unknown = [{'text': f'Firma {i} informuje o dostarczeniu dokumentów za 10/2026'}
+                   for i in range(500)]
+        self.assertEqual(ingest(unknown, source), 500)
+        self.assertEqual(apply_pending(), 0)
+        self.assertEqual(ingest(self.items, source), 1)
+        self.assertEqual(apply_pending(), 1)
         self.assertEqual(len(notification_batches(self.admin)),1)
 
     def test_unknown_and_ambiguous_names_wait_for_mapping(self):

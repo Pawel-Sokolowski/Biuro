@@ -2,6 +2,7 @@
 from datetime import date, datetime
 from itertools import batched
 import json
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 from app.db.checking_storage import save_snapshots
@@ -72,7 +73,10 @@ ORDER BY o.nip, o.ID_PLATNIK, o.person_id
 
 
 def scope_xml(nips):
-    return '<p>' + ''.join(f'<n>{normalize_nip(nip)}</n>' for nip in sorted(nips)) + '</p>'
+    root = ElementTree.Element('p')
+    for nip in sorted(nips):
+        ElementTree.SubElement(root, 'n').text = normalize_nip(nip)
+    return ElementTree.tostring(root, encoding='unicode', short_empty_elements=False)
 
 
 def registry_available(cursor):

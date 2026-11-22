@@ -56,7 +56,7 @@ class HolidayConditionsDialog(QDialog):
                       '2 mln EUR spełniony w co najmniej jednym. Limit de minimis musi wystarczyć na składki. '
                       'Niewykorzystanie potwierdź dla osoby za rok ulgi; brak RWS w Płatniku sam tego nie dowodzi. '
                       'Ubezpieczenia E/R/W — choć jeden dzień w miesiącu odniesienia, także dobrowolne. '
-                      'Zawieszenie w miesiącu wniosku samo nie wyklucza ulgi; sprawdź zgłoszenie w miesiącu ulgi.')
+                      'Zawieszenie w miesiącu wniosku samo nie wyklucza ulgi. Potwierdź prowadzenie działalności w miesiącu zwolnienia.')
         note.setWordWrap(True)
         layout.addWidget(note)
         source = QLabel('<a href="https://www.zus.pl/-/zwolnienie-z-op%C5%82acania-sk%C5%82adek-zus-wakacje-sk%C5%82adkowe">Zasady wakacji składkowych — ZUS</a>')

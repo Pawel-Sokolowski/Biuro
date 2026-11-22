@@ -28,6 +28,8 @@ class InvoiceTrashTests(DbTestCase):
             conn.close()
 
     def test_issued_ksef_invoice_goes_to_trash_and_is_restored(self):
+        with get_conn() as conn:
+            conn.execute("UPDATE faktury SET invoice_email_attempts=3 WHERE id=%s", (self.invoice_id,))
         trash_invoice(self.invoice_id, 1)
         self.assertIsNone(get_invoice_by_id(self.invoice_id))
         trashed = list_trashed_invoices(1)
@@ -36,6 +38,23 @@ class InvoiceTrashTests(DbTestCase):
         restored = get_invoice_by_id(self.invoice_id)
         self.assertEqual((restored["numer"], restored["ksef_numer"], restored["eksportowana"]),
                          ("FV/1/10/2026", "KSEF-123", 1))
+        self.assertEqual(restored["invoice_email_attempts"], 3)
+        self.assertEqual(list_trashed_invoices(1), [])
+
+    def test_restore_invoice_trashed_before_delivery_scheduling_migration(self):
+        trash_invoice(self.invoice_id, 1)
+        trash_id = list_trashed_invoices(1)[0]["id"]
+        with get_conn() as conn:
+            conn.execute(
+                """UPDATE faktury_kosz
+                   SET faktura_json=faktura_json - 'invoice_email_attempts' - 'invoice_email_next_attempt_at'
+                   WHERE id=%s""",
+                (trash_id,),
+            )
+        self.assertEqual(restore_trashed_invoice(trash_id, 1), self.invoice_id)
+        restored = get_invoice_by_id(self.invoice_id)
+        self.assertEqual(restored["invoice_email_attempts"], 0)
+        self.assertIsNone(restored["invoice_email_next_attempt_at"])
         self.assertEqual(list_trashed_invoices(1), [])
 
     def test_only_administrator_can_trash(self):

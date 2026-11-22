@@ -7,7 +7,7 @@ from app.remote.boundary import endpoint as office_endpoint
 from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
-from app.db.platnik_links_schema import VERSION as SCHEMA_VERSION
+from app.db.company_bank_account_schema import VERSION as SCHEMA_VERSION
 
 
 def init_db():
@@ -47,6 +47,8 @@ def init_db():
         apply_review_fixes(conn)
         from app.db.platnik_links_schema import apply as apply_platnik_links
         apply_platnik_links(conn)
+        from app.db.company_bank_account_schema import apply as apply_company_bank_accounts
+        apply_company_bank_accounts(conn)
 
 
 @office_endpoint('app.db.schema.schema_is_current')

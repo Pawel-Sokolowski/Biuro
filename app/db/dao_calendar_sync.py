@@ -69,14 +69,17 @@ def queue_event(conn, actor, event):
         enqueue(conn, actor, provider, scope, rid, event["id"], "upsert", event)
 
 
-def queue_deletion(conn, actor, event):
+def queue_deletion(conn, actor, event, *, provider=None):
     # Bind legacy events before deleting them, so their remote object is retained.
-    if event.get("google_event_id") and event.get("google_calendar_id"):
+    if provider in (None, "google") and event.get("google_event_id") and event.get("google_calendar_id"):
         bind(conn, actor, "google", event["google_calendar_id"], event["id"], event["google_event_id"])
-    scope = event.get("caldav_calendar_id") or caldav_scope(conn)
-    if scope and event.get("caldav_uid"):
-        bind(conn, actor, "caldav", scope, event["id"], event["caldav_uid"])
-    for key in conn.execute("SELECT * FROM calendar_sync_keys WHERE event_id=%s", (event["id"],)).fetchall():
+    if provider in (None, "caldav") and event.get("caldav_uid"):
+        scope = event.get("caldav_calendar_id") or caldav_scope(conn)
+        if scope:
+            bind(conn, actor, "caldav", scope, event["id"], event["caldav_uid"])
+    keys = conn.execute("SELECT * FROM calendar_sync_keys WHERE event_id=%s AND (%s::text IS NULL OR provider=%s)",
+                        (event["id"], provider, provider)).fetchall()
+    for key in keys:
         enqueue(conn, actor, key["provider"], key["calendar_id"], key["remote_id"], event["id"], "delete", {})
 
 

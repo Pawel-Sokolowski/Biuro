@@ -39,9 +39,8 @@ w ZUA i ZZA z V.1, a w ZWUA z IV.1, o ile odpowiednie pola są widoczne.
 
 Osobne obszary bez odczytu przez adapter deklaracji obejmują historyczne RGA
 i inne dawne raporty oraz wspólną tabelę DRA/RCA cz. II. Komplety pobrane z ZUS
-z rozdziału 4.4 i archiwalne bazy Płatnika stanowią odrębne źródła. Adapter
-kontroluje dokumenty za miesiąc lub rok, a kartoteki, dane członków rodziny,
-rachunki bankowe i szczegółowe kwoty składek pozostają w Płatniku.
+z rozdziału 4.4 i archiwalne bazy Płatnika stanowią odrębne źródła.
+Kartoteki, dane członków rodziny i rachunki bankowe pozostają w Płatniku.
 
 ## Uruchamianie
 
@@ -72,6 +71,31 @@ Snapshoty pracowników są szyfrowane wspólnym kluczem aplikacji i workera.
 Nie zmieniają danych Enovy, miesięcznych liczników ani odczytów innych firm.
 Nieudany odczyt zachowuje wcześniejsze snapshoty.
 
+## Składki ZUS (miesięcznie)
+
+W **Kadry → Sprawdzanie → Raport → Składki ZUS (miesięcznie)** wybierz
+miesiąc i zakres. **Cała firma (DRA)** odczytuje deklarację pod NIP-em
+firmy. **Właściciel lub wspólnik** odczytuje RCA dopasowane do osoby w
+rejestrze Płatnika. Raport może użyć DRA z jednym ubezpieczonym i jego
+tytułem działalności, gdy płatnik rozlicza wyłącznie siebie.
+Wspólnicy spółek cywilnych są widoczni w osobnych wierszach według NIP-u.
+
+Raport pokazuje składki społeczne z podziałem na emerytalne, rentowe,
+chorobowe i wypadkowe, składkę zdrowotną obciążającą płatnika lub
+ubezpieczonego oraz FP/FS, FGŚP i FEP wykazane na DRA. Sumy społeczne
+obejmują wszystkie źródła finansowania, w tym budżet państwa podczas
+wakacji składkowych. „—” wskazuje brak kwoty w odczycie lub na formularzu.
+Raport korzysta z ostatniego identyfikatora w seriach 01–39 i 40–49 oraz
+rozpatruje korekty RCA według tytułu ubezpieczenia. Status wysyłki jest
+widoczny obok numeru formularza. Kwoty pochodzą z deklaracji.
+
+Starsze miesiące uzupełnij przez **Pobierz formularze ZUS z Płatnika**.
+Własne zapytanie miesięczne może zwracać opcjonalne kolumny
+`contribution_health`, `contribution_pension`, `contribution_disability`,
+`contribution_sickness`, `contribution_accident`, `contribution_labour_fund`,
+`contribution_guaranteed_benefits`, `contribution_bridging_pensions` i
+`contribution_insured_count` (liczba ubezpieczonych na DRA).
+
 ## Statusy i potwierdzenia
 
 Jeżeli baza udostępnia `DOKUMENT.STATUSPT`, kod źródłowy jest pokazywany przy
@@ -100,7 +124,7 @@ po nazwie lub NIP-ie.
    miesięcznych, zgłoszeń oraz IWA i ZSWA.
 3. Gdy u wybranego płatnika są dwie kartoteki właściciela lub wspólnika,
    wybierz właściwą według identyfikatora i dat zgłoszeń. Ta decyzja dotyczy
-   rejestru kodów i okresów ubezpieczenia.
+   rejestru kodów i okresów ubezpieczenia oraz kwot imiennych RCA.
 4. Zatwierdź powiązanie. Decyzja obowiązuje przy kolejnym odczycie. Możesz ją
    zmienić albo cofnąć w tym oknie.
 

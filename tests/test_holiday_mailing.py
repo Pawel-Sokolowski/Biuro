@@ -56,6 +56,8 @@ class EligibilityRulesTests(TestCase):
         self.assertEqual(self.decide(confirmed(payer_nip='9999999999'))[0],'review')
         self.assertEqual(self.decide(confirmed(month='2026-10'))[0],'review')
         self.assertEqual(self.decide(confirmed(verified_month='2026-10'))[0],'review')
+        self.assertEqual(rules.default_relief_month(2027, '2026-12'), '2027-01')
+        self.assertEqual(rules.default_relief_month(2026, '2026-12'), '2026-12')
 
 
 class HolidayMailingDataTests(DbTestCase):
@@ -72,6 +74,47 @@ class HolidayMailingDataTests(DbTestCase):
 
     def candidates(self):
         return rules.list_candidates(1,MONTH)['companies']
+
+    def test_worksheet_uses_verified_month_conditions_and_shares_access_with_payroll(self):
+        from app.integrations.platnik.holiday_tracking import read_tracking_year
+
+        def worksheet(month=MONTH):
+            return next(row for row in read_tracking_year(1, 2026, month)['rows']
+                        if row['firma_id'] == self.company)
+
+        self.assertEqual(worksheet()['moze_skorzystac'], 'Do sprawdzenia')
+        with patch.object(rules, 'allowed_tabs', return_value=['Sprawdzanie']):
+            self.save()
+            self.assertEqual(rules.read_conditions(1, self.company, MONTH)['people'][0]['status'], 'eligible')
+            with self.assertRaises(PermissionError):
+                rules.list_candidates(1, MONTH)
+        self.assertEqual(worksheet()['moze_skorzystac'], 'Tak')
+        self.assertEqual(worksheet('2026-11')['moze_skorzystac'], 'Nie')
+        self.assertIn('Termin', worksheet('2026-11')['eligibility'][0]['reasons'][0])
+        self.save(revision=1, active_in_relief_month=None)
+        self.assertEqual(worksheet()['moze_skorzystac'], 'Do sprawdzenia')
+        self.save(revision=2, active_in_relief_month=False)
+        self.assertEqual(worksheet()['moze_skorzystac'], 'Nie')
+
+    def test_worksheet_rolls_up_civil_partners_using_each_payers_rca(self):
+        from app.db.checking_storage import save_snapshot
+        from app.db.dao_companies import get_partners, save_partner
+        from app.db.dao_conn import get_conn
+        from app.integrations.platnik.holiday_tracking import read_tracking_year
+
+        company = self.make_company('Spółka testowa', nip='5555555555', forma_dzialalnosci='Spółka cywilna')
+        for name, nip in [('Pierwsza', '3333333333'), ('Drugi', '4444444444')]:
+            save_partner(company, {'imie_pierwsze': name, 'nazwisko': 'Test', 'nip': nip})
+        for person in get_partners(company):
+            self.save(company, str(person['id']))
+        report = {'form': 'ZUS RCA', 'payer_nip': '3333333333', 'employee_id': '12',
+                  'insurance_code': '05 14 00', 'status': 'accepted', 'upo': 'TEST-RECEIPT'}
+        with get_conn() as conn:
+            save_snapshot(conn, 'platnik_declarations', company, '2026-09',
+                          encrypt_password(json.dumps({'declarations': [report]})))
+        row = next(row for row in read_tracking_year(1, 2026, MONTH)['rows'] if row['firma_id'] == company)
+        self.assertEqual(row['moze_skorzystac'], 'Tak — 1 z 2 wspólników')
+        self.assertEqual([person['status'] for person in row['eligibility']], ['used', 'eligible'])
 
     def test_no_rws_does_not_mean_entitled_until_verified_and_changes_are_audited(self):
         company = next(c for c in self.candidates() if c['id']==self.company)

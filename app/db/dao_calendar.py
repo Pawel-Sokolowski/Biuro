@@ -216,6 +216,14 @@ def save_event(pracownik_id: int, data: Dict[str, Any], *, from_remote=False) ->
                 return int(event_id)
             if from_remote and outbox.pending(conn, event_id):
                 return int(event_id)
+            if not from_remote and values["google_calendar_id"] and not existing["google_calendar_id"]:
+                outbox.queue_deletion(conn, pracownik_id, dict(existing), provider="caldav")
+                values["caldav_uid"] = None
+                values["caldav_calendar_id"] = None
+                values["zrodlo"] = "lokalne"
+            elif not from_remote and existing["google_calendar_id"] and not values["google_calendar_id"]:
+                outbox.queue_deletion(conn, pracownik_id, dict(existing), provider="google")
+                values["zrodlo"] = "lokalne"
             if existing["google_calendar_id"] != values["google_calendar_id"]:
                 values["google_event_id"] = None
             sets = ", ".join(f"{k} = %s" for k in EVENT_FIELDS)

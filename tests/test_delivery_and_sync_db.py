@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import threading
 from unittest.mock import Mock, patch
+from pypdf import PdfWriter
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_employees import add_email_account_for_employee
@@ -29,6 +30,10 @@ class DeliveryAndSyncDbTests(DbTestCase):
             conn.execute('INSERT INTO pracownik_konto_email(pracownik_id,konto_id) VALUES (%s,%s)',(1,self.account))
             conn.commit()
         finally:conn.close()
+        self.pdf = Path(self._tmp) / 'invoice.pdf'
+        writer = PdfWriter()
+        writer.add_blank_page(width=210, height=297)
+        writer.write(self.pdf)
         self.positions=[{'nazwa':'Usługa','ilosc':1,'cena_netto':100,'vat':23}]
         self.invoice=create_manual_invoice('firma',self.company,self.positions,'2026-11-01','2026-11-01','2026-11-10')
         update_invoice_draft(self.invoice,self.positions,numer='FV/1',data_wystawienia='2026-11-01')
@@ -45,13 +50,18 @@ class DeliveryAndSyncDbTests(DbTestCase):
         queue_deliveries(plans,1,self.account)
         queue_deliveries(plans,1,self.account)  # idempotent queueing
         barrier=threading.Barrier(2)
-        def render(*args):barrier.wait(5);return '/test/invoice.pdf'
+        def render(*args):
+            barrier.wait(5)
+            return str(self.pdf)
         with patch('app.email.email_actions.get_smtp_config_for_account',return_value={'host':'smtp.invalid','user':'office@example.com'}), \
              patch('app.invoices.invoice_delivery.official_pdf',side_effect=render), \
-             patch('app.email.email_actions.send_email_smtp',return_value=(True,'OK')) as smtp:
+             patch('app.email.email_actions._send_smtp_message',return_value=(True,'OK')) as smtp:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 results=list(pool.map(lambda _:deliver_if_queued(self.invoice,1,'/test/invoice.xml'),range(2)))
         smtp.assert_called_once()
+        attachment, = smtp.call_args.args[2].iter_attachments()
+        self.assertEqual(attachment.get_content_type(), 'application/pdf')
+        self.assertEqual(attachment.get_payload(decode=True), self.pdf.read_bytes())
         self.assertEqual(get_invoice_by_id(self.invoice)['invoice_email_status'],'sent')
         self.assertTrue(any(result['status']=='sent' for result in results))
         with self.assertRaises(ValueError):queue_deliveries(plans,1,self.account)
@@ -84,8 +94,8 @@ class DeliveryAndSyncDbTests(DbTestCase):
                     finally:
                         conn.close()
                     queue_deliveries([{'id':self.invoice, 'number':'FV/1', 'recipients':[recipient]}], 1, replacement_account)
-                    return '/test/invoice.pdf'
-                with patch('app.email.email_actions.get_smtp_config_for_account', return_value={'host':'smtp.invalid','user':'office@example.com'}), patch.object(delivery, 'official_pdf', side_effect=replace_plan), patch('app.email.email_actions.send_email_smtp') as smtp:
+                    return str(self.pdf)
+                with patch('app.email.email_actions.get_smtp_config_for_account', return_value={'host':'smtp.invalid','user':'office@example.com'}), patch.object(delivery, 'official_pdf', side_effect=replace_plan), patch('app.email.email_actions._send_smtp_message') as smtp:
                     result = deliver_if_queued(self.invoice, 1, '/test/invoice.xml')
                 smtp.assert_not_called()
                 self.assertEqual(result['status'], 'uncertain')
@@ -120,8 +130,8 @@ class DeliveryAndSyncDbTests(DbTestCase):
     def test_uncertain_delivery_is_persisted_and_not_retried(self):
         queue_deliveries(delivery_plan([self.invoice],1),1,self.account)
         with patch('app.email.email_actions.get_smtp_config_for_account',return_value={'host':'smtp.invalid','user':'office@example.com'}), \
-             patch('app.invoices.invoice_delivery.official_pdf',return_value='/test/invoice.pdf'), \
-             patch('app.email.email_actions.send_email_smtp',return_value=(False,'timeout')) as smtp:
+             patch('app.invoices.invoice_delivery.official_pdf',return_value=str(self.pdf)), \
+             patch('app.email.email_actions._send_smtp_message',return_value=(False,'timeout')) as smtp:
             deliver_if_queued(self.invoice,1,'/test/invoice.xml')
             deliver_if_queued(self.invoice,1,'/test/invoice.xml')
         smtp.assert_called_once()

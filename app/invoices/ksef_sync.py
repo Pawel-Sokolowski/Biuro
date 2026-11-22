@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from app.db.dao_app_settings import get_setting, set_setting
 from app.db.dao_conn import get_conn
-from app.db.dao_invoices import list_issued_without_ksef, set_invoice_number, set_ksef_number
+from app.db.dao_invoices import _reserve_number, list_issued_without_ksef, set_invoice_number, set_ksef_number
 from app.invoices.ksef_client import ENVIRONMENTS, KsefClient, KsefError
 from app.utils.crypto import decrypt_password, encrypt_password
 
@@ -156,6 +156,7 @@ def _upsert_downloaded_invoice(
     ksef_date = data.get("ksef_date") or ksef_number_date(ksef_number)
     conn = get_conn()
     try:
+        conn.execute("SELECT pg_advisory_xact_lock(748202)")
         owner_column = "firma_id"
         if contractor_id is not None:
             companies = conn.execute("SELECT * FROM kontrahenci WHERE id = %s FOR UPDATE", (contractor_id,)).fetchall()
@@ -186,27 +187,27 @@ def _upsert_downloaded_invoice(
             "SELECT * FROM faktury WHERE ksef_numer = %s ORDER BY id LIMIT 1 FOR UPDATE",
             (ksef_number,),
         ).fetchall()
+        if existing and (existing[0][owner_column] != company["id"] or existing[0]["cancelled_at"]):
+            return "niejednoznaczna_faktura", 0
         if not existing:
             numbered = conn.execute(
                 f"SELECT * FROM faktury WHERE {owner_column} = %s AND rodzaj = %s "
                 "AND lower(trim(COALESCE(numer, ''))) = lower(trim(%s)) "
-                "ORDER BY (miesiac = %s) DESC, (COALESCE(ksef_numer, '') = '') DESC, id DESC FOR UPDATE",
-                (company["id"], local_kind, data["number"], data["month"]),
+                "AND cancelled_at IS NULL ORDER BY id FOR UPDATE",
+                (company["id"], local_kind, data["number"]),
             ).fetchall()
             if numbered:
-                preferred = [row for row in numbered if row["miesiac"] == data["month"] and not row["ksef_numer"]]
-                existing = preferred[:1] if preferred else numbered[:1]
+                existing = [row for row in numbered if row["miesiac"] == data["month"]] or numbered
         if not existing:
-            # Lokalna faktura może jeszcze nie mieć numeru z programu zewnętrznego.
-            # Używamy NIP-u (firma_id) i miesiąca tylko wtedy, gdy pozostał
-            # dokładnie jeden dokument, który nie był wcześniej zsynchronizowany.
+            # A numberless draft can only be matched by a unique payer, period and amount.
             existing = conn.execute(
                 f"SELECT * FROM faktury WHERE {owner_column} = %s AND miesiac = %s "
-                "AND rodzaj = %s AND COALESCE(ksef_numer, '') = '' ORDER BY id FOR UPDATE",
-                (company["id"], data["month"], local_kind),
+                "AND rodzaj = %s AND cancelled_at IS NULL AND COALESCE(eksportowana,0)=0 "
+                "AND NULLIF(BTRIM(numer),'') IS NULL AND COALESCE(ksef_numer,'')='' "
+                "AND kwota_brutto=%s ORDER BY id FOR UPDATE",
+                (company["id"], data["month"], local_kind, data["gross"]),
             ).fetchall()
-        if len(existing) > 1:
-            conn.rollback()
+        if len(existing) > 1 or (existing and existing[0]["ksef_numer"] not in (None, "", ksef_number)):
             return "niejednoznaczna_faktura", 0
         address = data["buyer_address"]
         postal = ""
@@ -236,6 +237,12 @@ def _upsert_downloaded_invoice(
         )
         if existing:
             invoice_id = existing[0]["id"]
+            if not (existing[0]["numer"] or "").strip() and not existing[0]["eksportowana"]:
+                try:
+                    _reserve_number(conn, invoice_id, data["number"])
+                except ValueError:
+                    return "niejednoznaczna_faktura", 0
+                conn.execute("UPDATE faktury SET numer=%s WHERE id=%s", (data["number"], invoice_id))
             # Faktura jest już w systemie: zostają jej własne dane (raporty, płatności),
             # a z KSeF dopisujemy wyłącznie dane identyfikujące dokument.
             conn.execute("""
@@ -410,7 +417,7 @@ def sync_issued_invoices(
         if number not in existing_numbers
     ]
     package_files: Optional[Dict[str, bytes]] = None
-    if len(candidates_for_xml) > BATCH_EXPORT_THRESHOLD:
+    if not (wanted_nip or wanted_number) and len(candidates_for_xml) > BATCH_EXPORT_THRESHOLD:
         exported = client.export_invoice_package(
             date_from, end, progress=(lambda text: progress(0, len(metadata), text)) if progress else None,
         )
@@ -467,7 +474,7 @@ def sync_issued_invoices(
             reason = {
                 "brak_firmy": "brak firmy o NIP-ie nabywcy",
                 "niejednoznaczna_firma": "kilka firm ma ten sam NIP",
-                "niejednoznaczna_faktura": "kilka lokalnych faktur ma ten sam numer",
+                "niejednoznaczna_faktura": "niejednoznaczna lub sprzeczna tożsamość lokalnej faktury",
             }.get(action, action)
             unmatched.append(f"{label} — {reason}")
             if action in ("brak_firmy", "niejednoznaczna_firma", "niejednoznaczna_faktura"):

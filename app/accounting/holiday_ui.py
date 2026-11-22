@@ -4,13 +4,37 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QSpinBox,QLineEdit,
+from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QSpinBox,QLineEdit,QComboBox,
     QCheckBox,QPushButton,QTableWidgetItem,QAbstractItemView,
     QDialog,QDialogButtonBox,QPlainTextEdit,QMessageBox)
-from app.integrations.platnik.holidays import FIELDS,LABELS
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
+from app.companies.holiday_eligibility import default_relief_month, ELIGIBILITY_LABELS
+from app.remote.state import client
 from app.utils.background import TaskRunner,CommandRunner
-from app.utils.month_names import display_months
+from app.utils.month_names import MONTHS_PL, display_months
+
+WORKSHEET_COLUMNS = (
+    ('moze_skorzystac', 'Może skorzystać ze zwolnienia'),
+    ('wyslane_powiadomienie', 'Wysłane powiadomienie'),
+    ('zlozone', 'Złożone'),
+    ('miesiac', 'Miesiąc zwolnienia'),
+    ('decyzja', 'Stan'),
+)
+
+
+def _rws_state(row, imported_at):
+    labels = {'A': 'Aktualne zwolnienie (RWS)', 'N': 'Nieaktualny wpis RWS'}
+    states = [labels.get(code, f'Do sprawdzenia (RWS {code})') for code in row.get('statuses', [])]
+    return ' · '.join(states) or ('Brak wpisu RWS' if imported_at else 'Nie odczytano roku')
+
+
+def _worksheet_state(row, imported_at):
+    rca = row.get('rca_holidays', [])
+    if not rca:
+        return _rws_state(row, imported_at)
+    sent = ', '.join(f"{item['code'][:2]} {item['code'][2:]}" for item in rca if item['sent'])
+    status = f'Wysłano RCA ({sent})' if sent else 'RCA z kodem wakacyjnym – sprawdź wysyłkę'
+    return f'{_rws_state(row, imported_at)} · {status}' if row.get('statuses') else status
 
 
 class ContributionHolidays(QWidget):
@@ -24,19 +48,33 @@ class ContributionHolidays(QWidget):
         self.payload = {}
         self.company_query = ''
         self.loaded_year = None
+        self.loaded_month = None
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         bar.addWidget(QLabel('Rok wakacji składkowych:'))
         self.year = QSpinBox()
         self.year.setRange(2024,2100)
         self.year.setValue(datetime.now(ZoneInfo('Europe/Warsaw')).year)
-        self.year.valueChanged.connect(self.refresh)
+        self.year.valueChanged.connect(self.change_year)
         bar.addWidget(self.year)
+        connection = client()
+        features = getattr(connection, 'server_features', ())
+        self.has_eligibility = connection is None or (
+            isinstance(features, (set, frozenset, list, tuple)) and 'holiday_worksheet_eligibility' in features)
+        month_label = QLabel('Miesiąc oceny:')
+        self.eligibility_month = QComboBox()
+        self.eligibility_month.addItems(MONTHS_PL)
+        self.eligibility_month.setCurrentIndex(int(default_relief_month(self.year.value())[-2:]) - 1)
+        self.eligibility_month.currentIndexChanged.connect(self.refresh)
+        month_label.setVisible(self.has_eligibility)
+        self.eligibility_month.setVisible(self.has_eligibility)
+        bar.addWidget(month_label)
+        bar.addWidget(self.eligibility_month)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Firma, NIP, imię, nazwisko lub kod ubezpieczenia')
+        self.search.setPlaceholderText('Szukaj firmy, NIP-u lub stanu')
         self.search.textChanged.connect(self.filter_rows)
         bar.addWidget(self.search)
-        self.active = QCheckBox('Tylko aktualne (A)')
+        self.active = QCheckBox('Tylko aktualne zwolnienia')
         self.active.toggled.connect(self.filter_rows)
         bar.addWidget(self.active)
         self.refresh_button = QPushButton('Odśwież zapisany odczyt')
@@ -46,17 +84,15 @@ class ContributionHolidays(QWidget):
         details.clicked.connect(self.show_sources)
         bar.addWidget(details)
         layout.addLayout(bar)
-        self.note = QLabel('Jeden wiersz sprawy klienta na rok. Dwuklik edytuje komórkę; wpisy biura nie są nadpisywane przez import. '
-                           '„Kto wysłał” to inicjały pracownika biura. Status RWS i szczegóły źródła są osobno. '
-                           'A — aktualne zwolnienie; N — nieaktualny wpis, nie odmowa.')
+        self.note = QLabel('Dwuklik w ocenie otwiera warunki dla wybranego miesiąca. Stan pokazuje odpowiedź ZUS zapisaną przez biuro lub dane RWS i RCA.')
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
-        self.table = FrozenFirstColumnTable(0,2+len(FIELDS))
-        self.table.setHorizontalHeaderLabels(['Firma',*LABELS,'Status RWS (Płatnik)'])
+        self.table = FrozenFirstColumnTable(0, 1 + len(WORKSHEET_COLUMNS))
+        self.table.setHorizontalHeaderLabels(['Firma', *[label for _, label in WORKSHEET_COLUMNS]])
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -72,19 +108,28 @@ class ContributionHolidays(QWidget):
         self.reader.invalidate()
         super().hideEvent(event)
 
+    def change_year(self, year):
+        self.eligibility_month.blockSignals(True)
+        self.eligibility_month.setCurrentIndex(int(default_relief_month(year)[-2:]) - 1)
+        self.eligibility_month.blockSignals(False)
+        self.refresh()
+
     def refresh(self,*_):
         if self.saving:
             return
         year = self.year.value()
-        if self.loaded_year!=year:
+        month = f'{year}-{self.eligibility_month.currentIndex() + 1:02d}' if self.has_eligibility else None
+        if self.loaded_year != year or self.loaded_month != month:
             self.payload = {}
             self.table.setRowCount(0)
         self.status.setText(f'Odczytywanie zapisu za rok {year}…')
-        self.reader.submit(lambda: read_tracking_year(self.actor_id,year),self.loaded,self.failed)
+        args = (year, month) if self.has_eligibility else (year,)
+        self.reader.submit(lambda: read_tracking_year(self.actor_id, *args), self.loaded, self.failed)
 
     def loaded(self,payload):
         self.payload = payload
         self.loaded_year = self.year.value()
+        self.loaded_month = payload.get('eligibility_month')
         self.filter_rows()
 
     def failed(self,_):
@@ -95,18 +140,31 @@ class ContributionHolidays(QWidget):
         self.company_query = query.casefold()
         self.filter_rows()
 
+    def _worksheet_value(self, row, field):
+        value = row.get(field)
+        if field == 'miesiac':
+            return display_months(value)
+        if value is None and field == 'decyzja':
+            return _worksheet_state(row, self.payload.get('imported_at'))
+        if value is None and field == 'moze_skorzystac':
+            return 'Do sprawdzenia'
+        return value
+
     def filter_rows(self,*_):
         rows = list(self.payload.get('rows',[]))
         query = self.search.text().strip().casefold()
-        rows = [row for row in rows if query in ' '.join(str(display_months(row.get(k)) if k=='miesiac' else row.get(k) or '') for k in ('firma','nip',*FIELDS)).casefold()
+        fields = ('firma', 'nip', *(field for field, _ in WORKSHEET_COLUMNS))
+        rows = [row for row in rows if query in ' '.join(str(self._worksheet_value(row, field) or '') for field in fields).casefold()
                 and self.company_query in (str(row.get('firma',''))+' '+str(row.get('nip',''))).casefold()
                 and (not self.active.isChecked() or 'A' in row.get('statuses',[]))]
         self.displayed_rows = rows
         self.table.setRowCount(len(rows))
         for index,row in enumerate(rows):
-            source_status = ', '.join(row.get('statuses',[])) or ('Brak wpisu RWS' if self.payload.get('imported_at') else 'Nie odczytano roku')
-            values = [row.get('firma'),*[display_months(row.get(key)) if key=='miesiac' else row.get(key) for key in FIELDS],source_status]
+            values = [row.get('firma'), *[self._worksheet_value(row, field) for field, _ in WORKSHEET_COLUMNS]]
             info = f"NIP: {row.get('nip','—')}\n"
+            for item in row.get('rca_holidays', []):
+                confirmation = 'wysyłka potwierdzona w źródle' if item['sent'] else 'wysyłka do sprawdzenia'
+                info += f"RCA {item['code']}: {display_months(item['month'])}, {confirmation}.\n"
             for source in row.get('sources',[]):
                 amounts = ', '.join(key.removeprefix('skladka_').upper()+': '+str(source.get(key) or '—')
                                    for key in ('skladka_em','skladka_ren','skladka_wyp','skladka_chor','skladka_fpfs'))
@@ -119,16 +177,23 @@ class ContributionHolidays(QWidget):
                 if column==0:
                     item.setData(Qt.ItemDataRole.UserRole,row.get('firma_id'))
                 detail = info
-                if 1<=column<=len(FIELDS):
-                    metadata = row.get('notes',{}).get(FIELDS[column-1],{})
-                    if metadata.get('value') is not None:
+                if column:
+                    field, _ = WORKSHEET_COLUMNS[column-1]
+                    metadata = row.get('notes',{}).get(field,{})
+                    if field == 'moze_skorzystac' and row.get('eligibility'):
+                        for person in row['eligibility']:
+                            detail += f"\n{person['name']} — {ELIGIBILITY_LABELS[person['status']]}\n"
+                            detail += '\n'.join(person['reasons'])
+                        if metadata.get('value') is not None:
+                            detail += f"\nWcześniejszy wpis biura: {metadata['value']}"
+                    elif metadata.get('value') is not None:
                         detail += f"\nWpis biura: {metadata.get('actor_name','—')}, {metadata.get('updated_at','—')}."
                         item.setBackground(QColor('#e8f3ff'))
                         item.setForeground(QColor('#172b4d'))
                     else:
                         detail += '\nDane źródłowe / brak wpisu biura.'
                 item.setToolTip(detail)
-                if column==len(values)-1 and row.get('statuses')==['N']:
+                if column==len(values)-1 and row.get('decyzja') is None and row.get('statuses')==['N']:
                     item.setForeground(QColor('#7c7c7c'))
                 self.table.setItem(index,column,item)
         self.table.resizeColumnsToContents()
@@ -169,17 +234,25 @@ class ContributionHolidays(QWidget):
         dialog.exec()
 
     def edit_cell(self,index,column):
-        if self.saving or not 1<=column<=len(FIELDS) or index>=len(self.displayed_rows):
+        if self.saving or not 1<=column<=len(WORKSHEET_COLUMNS) or not 0<=index<len(self.displayed_rows):
             return
         row = self.displayed_rows[index]
-        field = FIELDS[column-1]
+        field, label_text = WORKSHEET_COLUMNS[column-1]
         year = self.loaded_year
+        if field == 'moze_skorzystac' and self.loaded_month:
+            from app.email.holiday_conditions_dialog import HolidayConditionsDialog
+            dialog = HolidayConditionsDialog(self.actor_id, row['firma_id'], self.loaded_month, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.refresh()
+            return
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"{LABELS[column-1]} — {row['firma']} ({year})")
+        dialog.setWindowTitle(f"{label_text} — {row['firma']} ({year})")
         layout = QVBoxLayout(dialog)
         source = row.get('source_values',{}).get(field)
         if field=='miesiac':
             source = display_months(source)
+        if field=='decyzja':
+            source = _worksheet_state(row, self.payload.get('imported_at'))
         label = QLabel('Płatnik: '+str(source or 'Brak danych'))
         label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)
@@ -187,12 +260,6 @@ class ContributionHolidays(QWidget):
         value = display_months(row.get(field)) if field=='miesiac' else row.get(field)
         edit = QPlainTextEdit(str(value or ''))
         layout.addWidget(edit)
-        if field=='kto_wyslal':
-            initials = self.payload.get('current_initials','')
-            mine = QPushButton(f'Wstaw moje inicjały ({initials})')
-            mine.setEnabled(bool(initials))
-            mine.clicked.connect(lambda: edit.setPlainText(initials))
-            layout.addWidget(mine)
         reset = QCheckBox('Przywróć dane źródłowe / usuń wpis biura')
         reset.toggled.connect(lambda checked: edit.setEnabled(not checked))
         layout.addWidget(reset)
@@ -218,7 +285,7 @@ class ContributionHolidays(QWidget):
 
     def set_saving(self,saving):
         self.saving = saving
-        for widget in (self.table,self.year,self.refresh_button,self.search,self.active):
+        for widget in (self.table,self.year,self.eligibility_month,self.refresh_button,self.search,self.active):
             widget.setEnabled(not saving)
         if saving:
             self.status.setText('Zapisywanie wpisu biura…')

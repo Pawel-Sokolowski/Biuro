@@ -12,12 +12,25 @@ from app.integrations.enova.accounting import (list_accounting, decoded, documen
                                                 SIMPLE_DOCUMENT_TYPES)
 from app.integrations.enova.jpk import STATUSES
 from app.companies.cennik_keys import company_accounting_type
+from app.companies.identities import is_civil
+from app.integrations.enova.document_counts import normalize_nip
 from app.utils.background import TaskRunner
 from app.accounting.insights import comparison, declaration_issue, hr_status, needs_attention, previous_active_types, HR_LABELS
 from app.preferences.state_colors import paint as paint_state
 
 BASE_TYPES = (*SIMPLE_DOCUMENT_TYPES, 'AMO')
 TYPE_LABELS = {'SPU': 'Sprzedaż', 'ZR': 'Zakup'}
+CONTRIBUTION_COLUMNS = {
+    'health': 'Zdrowotna',
+    'social': 'Społeczne razem',
+    'pension': 'Emerytalna',
+    'disability': 'Rentowa',
+    'sickness': 'Chorobowa',
+    'accident': 'Wypadkowa',
+    'labour_fund': 'FP / FS',
+    'guaranteed_benefits': 'FGŚP',
+    'bridging_pensions': 'FEP',
+}
 DOCUMENT_NAMES = {
     'DR': 'Dokument rozliczeniowy', 'DW': 'Dokumenty wewnętrzne i pozostałe zapisy',
     'DWNNC': 'Dokument wewnętrzny – nabycie należny/naliczony',
@@ -184,6 +197,24 @@ class AccountingPage(QWidget):
             if department == 'payroll':
                 panel = QWidget()
                 panel_layout = QVBoxLayout(panel)
+                filters = QHBoxLayout()
+                filters.addWidget(QLabel('Zakres'))
+                self.contribution_scope = QComboBox()
+                self.contribution_scope.addItem('Cała firma (DRA)', 'company')
+                self.contribution_scope.addItem('Właściciel lub wspólnik', 'owner')
+                self.contribution_scope.currentIndexChanged.connect(self.filter_rows)
+                filters.addWidget(self.contribution_scope)
+                filters.addStretch()
+                panel_layout.addLayout(filters)
+                note = QLabel('Kwoty w PLN z deklaracji Płatnika. „—” oznacza brak kwoty w odczycie lub na formularzu. '
+                              'Aby uzupełnić starsze miesiące, pobierz formularze ZUS ponownie.')
+                note.setWordWrap(True)
+                panel_layout.addWidget(note)
+                self.contribution_table = self._new_table()
+                panel_layout.addWidget(self.contribution_table)
+                self._add_report(department, 'Składki ZUS (miesięcznie)', 'contributions', panel)
+                panel = QWidget()
+                panel_layout = QVBoxLayout(panel)
                 controls = QHBoxLayout()
                 controls.addWidget(QLabel('Terminy od dzisiaj (niezależnie od miesiąca dokumentów):'))
                 self.hr_range = QComboBox()
@@ -289,14 +320,20 @@ class AccountingPage(QWidget):
     def annual_zus_selected(self):
         return self.tabs.currentIndex() == 1 and str(self.report_selectors['payroll'].currentData()).startswith('annual:')
 
+    def contributions_selected(self):
+        return self.tabs.currentIndex() == 1 and self.report_selectors['payroll'].currentData() == 'contributions'
+
     def update_period_controls(self,*_):
         annual = self.yearly_selected() or self.annual_zus_selected()
-        for widget in (self.month,self.tax_filter,self.attention,self.message,self.source_note):
+        contributions = self.contributions_selected()
+        for widget in (self.month,self.tax_filter,self.source_note):
             widget.setVisible(not annual)
+        for widget in (self.attention, self.message):
+            widget.setVisible(not annual and not contributions)
         if hasattr(self,'refresh_controls'):
             payroll = self.tabs.currentIndex()==1
-            self.refresh_controls.buttons['enova'].setVisible(not annual)
-            self.refresh_controls.buttons['ezla'].setVisible(payroll and not annual)
+            self.refresh_controls.buttons['enova'].setVisible(not annual and not contributions)
+            self.refresh_controls.buttons['ezla'].setVisible(payroll and not annual and not contributions)
             self.refresh_controls.buttons['platnik'].setVisible(self.yearly_selected())
             self.refresh_controls.buttons['platnik_annual'].setVisible(self.annual_zus_selected())
             self.refresh_controls.buttons['platnik_declarations'].setVisible(payroll and not annual)
@@ -315,6 +352,7 @@ class AccountingPage(QWidget):
         key = self.report_selectors[department].currentData() or 'documents'
         table = (self.annual_zus_panel.table if key.startswith('annual:') else
                  self.holiday_panel.table if key=='holidays' else self.ezla_panel.table if key=='ezla'
+                 else self.contribution_table if key=='contributions'
                  else self.hr_table if key.startswith('hr') else self.comparison_tables['accounting'] if key=='comparison'
                  else self.declaration_tables[department] if key=='declarations' or key.startswith('form:')
                  else self.tables[department])
@@ -342,6 +380,8 @@ class AccountingPage(QWidget):
             self.annual_zus_panel.refresh()
             return
         month = self.month.monthText()
+        if self.contributions_selected() and month != self.period:
+            self.contribution_table.setRowCount(0)
         self.reader.submit(lambda: list_accounting(self.actor_id, month),
                            lambda rows: self.render(rows, month), self.failed, key=month)
         if self._ezla_selected():
@@ -422,9 +462,14 @@ class AccountingPage(QWidget):
                 continue
             if words:
                 haystack = _search_haystack(row)
+                if report == 'contributions' and self.contribution_scope.currentData() == 'owner':
+                    haystack += ' ' + ' '.join(decoded(row.get('platnik_declarations')).get('contributions', {}))
                 if not all(word in haystack for word in words):
                     continue
             rows.append(row)
+        if report == 'contributions':
+            self._render_contributions(rows if self.period == self.month.monthText() else [])
+            return
         today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
         horizon = self.hr_range.currentData()
         form = self._selected_form(department)
@@ -450,6 +495,44 @@ class AccountingPage(QWidget):
                                  f'brak odczytu kadr: {missing_payroll}; brak odczytu deklaracji: {missing_declarations}. '
                                  'Listy płac odczytuje Enova, formularze ZUS — Płatnik. Brak potwierdzenia nie oznacza przyjęcia. '
                                  'Liczba do faktury pochodzi z Widoku miesięcznego.')
+
+    def _render_contributions(self, companies):
+        scope = self.contribution_scope.currentData()
+        table = self.contribution_table
+        headers = ('Firma', 'NIP płatnika', *CONTRIBUTION_COLUMNS.values(), 'Formularz', 'Status wysyłki')
+        if not table.columnCount():
+            table.setColumnCount(len(headers))
+            table.setHorizontalHeaderLabels(headers)
+        rows = []
+        for company in companies:
+            snapshot = decoded(company.get('platnik_declarations'))
+            breakdown = snapshot.get('contributions', {})
+            try:
+                company_nip = normalize_nip(company.get('nip'))
+            except ValueError:
+                company_nip = ''
+            nips = [company_nip]
+            if scope == 'owner' and is_civil(company):
+                nips = [nip for nip in breakdown if nip != company_nip] or ['']
+            for nip in nips:
+                rows.append((company, nip, breakdown.get(nip, {}).get(scope) or {}))
+        table.setRowCount(len(rows))
+        for index, (company, nip, report) in enumerate(rows):
+            name = _item(company['nazwa'])
+            name.setData(Qt.ItemDataRole.UserRole, company['id'])
+            cells = [name, _item(nip or None)]
+            for key in CONTRIBUTION_COLUMNS:
+                value = report.get('amounts', {}).get(key)
+                cell = _item(value.replace('.', ',') if value is not None else None)
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                cells.append(cell)
+            source = report.get('source')
+            document = f"{source} {' / '.join(report['reports'])}" if source else None
+            cells.extend((_item(document), _item(report.get('problem') or report.get('status') or 'Brak danych')))
+            for column, cell in enumerate(cells):
+                table.setItem(index, column, cell)
+        table.resizeColumnsToContents()
+        self.source_note.setText('')
 
     @staticmethod
     def _owner_item(row, department):

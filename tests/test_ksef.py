@@ -256,6 +256,7 @@ class KsefTests(DbTestCase):
         conn.execute("UPDATE firmy SET nip = %s WHERE id = %s", ("525-252-52-52", firma_id))
         conn.commit()
         conn.close()
+        dao_invoices.set_invoice_number(invoice_id, "7/10/2026")
         dao_invoices.mark_exported([invoice_id], 1)
         record_cash_payment(invoice_id, "2026-10-20", "50.00", 1)
         session = FakeSession(der, [
@@ -384,6 +385,38 @@ class KsefTests(DbTestCase):
         self.assertFalse(any(path.startswith("/invoices/ksef/") for _method, path in session.calls))
         self.assertEqual(dao_invoices.list_invoices(1, True, "2026-10", firma_id)[0]["numer"], "7/10/2026")
 
+    def test_filtered_sync_downloads_only_selected_xml_over_bulk_threshold(self):
+        self.make_company("Filtered KSeF", nip="5252525252")
+        number = "1234567890-20261015-AAAAAA-BB"
+        client = mock.Mock()
+        client.query_invoices.return_value = [
+            {"ksefNumber": number, "buyer": {"identifier": {"value": "5252525252"}}},
+            {"ksefNumber": "1234567890-20261015-CCCCCC-DD", "buyer": {"identifier": {"value": "9999999999"}}},
+        ]
+        client.download_invoice_bytes.return_value = FA3_XML.encode()
+        with mock.patch.object(ksef_sync, "BATCH_EXPORT_THRESHOLD", 0):
+            result = ksef_sync.sync_month("2026-10", client=client, buyer_nip="5252525252")
+        self.assertEqual(result["utworzone"], [number])
+        client.download_invoice_bytes.assert_called_once_with(number)
+        client.export_invoice_package.assert_not_called()
+
+    def test_import_never_reuses_a_different_number_or_overwrites_ksef_identity(self):
+        company = self.make_company("KSeF identity", nip="5252525252")
+        existing = dao_invoices.create_or_update_invoice(
+            company, "2026-10", [{"nazwa": "Usługa", "ilosc": 1, "cena_netto": 100, "vat": 23}], 100, 123,
+        )
+        dao_invoices.set_invoice_number(existing, "FV/OTHER")
+        dao_invoices.mark_exported([existing], 1)
+        official = "1234567890-20261015-AAAAAA-BB"
+        data = ksef_sync.parse_fa3_invoice(FA3_XML)
+        action, imported = ksef_sync._upsert_downloaded_invoice(data, official)
+        self.assertEqual(action, "utworzone")
+        self.assertNotEqual(imported, existing)
+        self.assertIsNone(dao_invoices.get_invoice_by_id(existing)["ksef_numer"])
+        self.assertEqual(ksef_sync._upsert_downloaded_invoice(data, "1234567890-20261015-CCCCCC-DD"),
+                         ("niejednoznaczna_faktura", 0))
+        self.assertEqual(dao_invoices.get_invoice_by_id(imported)["ksef_numer"], official)
+
     def test_imports_correction_and_links_it_to_original_invoice(self):
         firma_id = self.make_company("Klient korekty", nip="5252525252")
         original_id = dao_invoices.create_or_update_invoice(
@@ -473,6 +506,18 @@ class KsefTests(DbTestCase):
         self.assertFalse(ksef_sync.is_configured())  # token nie zastępuje wymaganego certyfikatu
         self.assertNotIn("SEKRET", get_setting(ksef_sync.TOKEN_KEY))
         self.assertEqual(get_setting(ksef_sync.NIP_KEY), "1234567890")
+
+
+class KsefWorkerReportingTests(unittest.TestCase):
+    def test_unmatched_invoices_make_successful_downloads_partial(self):
+        from app.worker import ksef_import_job
+        with mock.patch.object(ksef_sync, 'is_configured', return_value=True), \
+             mock.patch.object(ksef_sync, 'sync_month', side_effect=[
+                 {'niedopasowane': ['Wymaga przypisania']}, {'niedopasowane': []},
+             ]):
+            result = ksef_import_job()
+        self.assertEqual(result['mode'], 'partial')
+        self.assertEqual(list(result['unmatched_by_month'].values()), [1, 0])
 
 
 if __name__ == "__main__":

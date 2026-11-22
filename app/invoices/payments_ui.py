@@ -20,7 +20,7 @@ from app.db.dao_payments import (
     bank_import_summary, PaymentError, confirm_bank_payment, import_mt940_file, list_company_choices, list_invoice_choices,
     list_unsettled_transfers, record_manual_payment, record_cash_payment, delete_bank_transaction,
     match_invoice_contractors, contractor_key, InvoiceSuggestionIndex, transfer_block_reason,
-    apply_invoice_correction, bank_invoice_references, INVOICE_CHOICE_PAGE_SIZE,
+    apply_invoice_correction, bank_account_references, bank_invoice_references, INVOICE_CHOICE_PAGE_SIZE,
 )
 from app.remote.state import client
 from app.utils.background import TaskRunner
@@ -51,6 +51,14 @@ def _invoice_paging_available():
     return isinstance(features, (frozenset, set, tuple, list)) and 'bank_invoice_paging' in features
 
 
+def _invoice_account_lookup_available():
+    connection = client()
+    if connection is None:
+        return True
+    features = getattr(connection, 'server_features', ())
+    return isinstance(features, (frozenset, set, tuple, list)) and 'bank_invoice_account_lookup' in features
+
+
 def _read_bank_review(actor_id, include_all, limit, pages=1, search=''):
     page = list_invoice_choices(actor_id)
     transfers = list_unsettled_transfers(actor_id, include_all=include_all, limit=limit)
@@ -66,6 +74,9 @@ def _read_bank_review(actor_id, include_all, limit, pages=1, search=''):
             references = (ref for ref in bank_invoice_references(transfers) if len(ref) <= 240)
             for batch in batched(references, 1000):
                 invoices.update((row['id'], row) for row in list_invoice_choices(actor_id, references=list(batch)))
+            if _invoice_account_lookup_available():
+                for batch in batched(bank_account_references(transfers), 1000):
+                    invoices.update((row['id'], row) for row in list_invoice_choices(actor_id, accounts=list(batch)))
     found = list_invoice_choices(actor_id, references=[search]) if paging and search else []
     invoices.update((row['id'], row) for row in found)
     invoices = list(invoices.values())

@@ -8,7 +8,7 @@ from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import get_setting,set_setting
 from app.integrations.platnik.holidays import normalize,_import_year,read_year,import_year
-from app.integrations.platnik.holiday_query import QUERY
+from app.integrations.platnik.holiday_query import QUERY, scoped_query
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
 
 
@@ -52,6 +52,9 @@ class ImportTests(DbTestCase):
         self.key = patch.dict(os.environ,{'BIO_ENCRYPTION_KEY':Fernet.generate_key().decode()})
         self.key.start()
         self.addCleanup(self.key.stop)
+        clock = patch('app.companies.holiday_eligibility.current_month', return_value='2026-11')
+        clock.start()
+        self.addCleanup(clock.stop)
         self.company = self.make_company(nip='1112223344')
         with get_conn() as conn:
             self.admin = conn.execute('SELECT id FROM pracownicy WHERE is_admin=1').fetchone()[0]
@@ -74,7 +77,10 @@ class ImportTests(DbTestCase):
              patch('app.integrations.platnik.holidays.connect',return_value=connection):
             result = _import_year(2026,self.admin,company_ids=company_ids)
         connection.close.assert_called_once()
-        cursor.execute.assert_called_once_with(QUERY,2026)
+        if company_ids is None:
+            cursor.execute.assert_called_once_with(QUERY, 2026)
+        else:
+            cursor.execute.assert_called_once_with(scoped_query(), '<p><n>1112223344</n></p>', 2026)
         return result
 
     def test_selected_company_refresh_preserves_other_payers(self):
@@ -85,6 +91,75 @@ class ImportTests(DbTestCase):
         rows = read_year(self.admin,2026)['rows']
         self.assertEqual({row['nip']:row['imiona_nazwiska'] for row in rows},
                          {'1112223344':'Updated selected','2223334455':'Old other'})
+
+    def test_six_column_worksheet_preserves_office_fields_and_distinguishes_rws_state(self):
+        from app.accounting.holiday_ui import ContributionHolidays
+        self.import_mock([source_row(status_zrodlowy='N')])
+        save_field(self.admin, 2026, self.company, 'moze_skorzystac', 'Tak', 0)
+        save_field(self.admin, 2026, self.company, 'zlozone', 'Tak, 09.11', 0)
+        view = ContributionHolidays(self.admin)
+        self.addCleanup(view.deleteLater)
+        view.loaded(read_tracking_year(self.admin, 2026))
+        self.assertEqual(
+            [view.table.horizontalHeaderItem(col).text() for col in range(view.table.columnCount())],
+            ['Firma', 'Może skorzystać ze zwolnienia', 'Wysłane powiadomienie',
+             'Złożone', 'Miesiąc zwolnienia', 'Stan'],
+        )
+        index = next(i for i, row in enumerate(view.displayed_rows) if row['firma_id'] == self.company)
+        self.assertEqual(view.table.item(index, 1).text(), 'Do sprawdzenia')
+        self.assertIn('Wcześniejszy wpis biura: Tak', view.table.item(index, 1).toolTip())
+        self.assertEqual(view.table.item(index, 3).text(), 'Tak, 09.11')
+        self.assertEqual(view.table.item(index, 5).text(), 'Nieaktualny wpis RWS')
+        save_field(self.admin, 2026, self.company, 'decyzja', 'Przyznano zwolnienie', 0)
+        view.loaded(read_tracking_year(self.admin, 2026))
+        self.assertEqual(view.table.item(index, 5).text(), 'Przyznano zwolnienie')
+
+    def test_holiday_rca_records_affect_month_and_state_only_with_transmission_evidence(self):
+        from app.accounting.holiday_ui import _worksheet_state
+        from app.db.checking_storage import save_snapshot
+        from app.utils.crypto import encrypt_password
+
+        def snapshot(period, code, **fields):
+            entry = {'form': 'ZUS RCA', 'employee_id': '12', 'insurance_code': code,
+                     'payer_nip': '1112223344', 'status': 'unknown', 'raw_status': 'P', **fields}
+            with get_conn() as conn:
+                save_snapshot(conn, 'platnik_declarations', self.company, period,
+                              encrypt_password(json.dumps({'declarations': [entry]})))
+
+        snapshot('2026-03', '05 14 00')
+        snapshot('2026-07', '05 94 00', status='rejected', sent_at='2026-08-05')
+        snapshot('2026-08', '05 74 00', employee_id='')
+        snapshot('2025-12', '0514', status='accepted', upo='OLDER')
+        row = self.company_row(read_tracking_year(self.admin, 2026))
+        self.assertIsNone(row['miesiac'])
+        self.assertEqual(row['moze_skorzystac'], 'Do sprawdzenia')
+        self.assertIn('sprawdź wysyłkę', _worksheet_state(row, False))
+
+        snapshot('2026-11', '057401', status='sent', sent_at='2026-12-02')
+        snapshot('2026-12', '059400', status='accepted', upo='RECEIPT')
+        row = self.company_row(read_tracking_year(self.admin, 2026))
+        self.assertEqual(row['miesiac'], '11; 12')
+        self.assertEqual(row['moze_skorzystac'], 'Wykorzystano według RCA')
+        self.assertIn('Wysłano RCA (05 74, 05 94)', _worksheet_state(row, False))
+        self.assertIsNone(row['zlozone'])  # Filing an RCA does not attest to the RWS application.
+
+    def test_rca_adapter_requires_documented_transmission_fields(self):
+        from app.integrations.platnik.declarations import normalize as normalize_declarations
+
+        nip = '1112223344'
+        month = '2026-11'
+        row = {'form': 'ZUS RCA', 'nip': nip, 'miesiac': month, 'valid_link': 1,
+               'source_id': 21, 'payer_id': 23, 'employee_id': 42, 'employee_name': 'Test',
+               'report_id': '01', 'insurance_code': '05 94 00', 'raw_status': 'P'}
+
+        def read(**fields):
+            return normalize_declarations([{**row, **fields}], [month], [nip])[nip][month][0]
+
+        self.assertEqual(read()['status'], 'unknown')
+        self.assertEqual(read(filing_status='sent', sent_at='2026-12-02')['status'], 'sent')
+        self.assertEqual(read(filing_status='accepted', upo='RCA-RECEIPT')['status'], 'accepted')
+        with self.assertRaises(ValueError):
+            read(filing_status='sent')
 
     def test_import_keeps_n_records_encrypted_and_filters_by_company_access(self):
         self.assertEqual(self.import_mock([source_row(),source_row(source_id=2,status_zrodlowy='N')])['rows'],2)
@@ -118,8 +193,9 @@ class ImportTests(DbTestCase):
 
     def test_connection_query_timeout_is_saved_without_replacing_existing_password(self):
         from app.integrations.platnik.holidays import load,save
-        save({'server':'PLATNIK-SRV,1433','database':'platnik','username':'reader','query_timeout':300},
-             self.admin,password='secret')
+        save({'server':'worksheet-fixture.invalid,1433','database':'worksheet_fixture',
+              'username':'fixture_reader','query_timeout':300},
+             self.admin,password='fixture-only')
         stored = load()
         self.assertEqual(stored['query_timeout'],300)
         save({'query_timeout':360},self.admin)
@@ -224,10 +300,11 @@ class YearlyPanelTests(TestCase):
                                   {'firma_id':2,'firma':'Firma B','nip':'2223334455','sources':[],'statuses':[]}],
                           'imported_at':'2026-11-13T10:00:00+01:00','configured':True})
             self.assertEqual(panel.table.rowCount(),2)
-            self.assertEqual(panel.table.item(0,5).text(),'styczeń; październik')
-            self.assertEqual(panel.table.item(0,7).text(),'Brak danych')
-            self.assertEqual(panel.table.item(0,10).text(),'A, N')
-            self.assertEqual(panel.table.item(1,10).text(),'Brak wpisu RWS')
+            self.assertEqual(panel.table.columnCount(), 6)
+            self.assertEqual(panel.table.item(0,4).text(),'styczeń; październik')
+            self.assertEqual(panel.table.item(0,3).text(),'Brak danych')
+            self.assertEqual(panel.table.item(0,5).text(),'Aktualne zwolnienie (RWS) · Nieaktualny wpis RWS')
+            self.assertEqual(panel.table.item(1,5).text(),'Brak wpisu RWS')
             panel.active.setChecked(True)
             self.assertEqual(panel.table.rowCount(),1)
             panel.search.setText('październik')

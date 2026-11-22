@@ -5,6 +5,7 @@ import unittest
 import uuid
 
 from app.integrations.platnik.declarations import normalize, source_query
+from app.integrations.platnik.contributions import RCA_COLUMNS, summarize
 from app.integrations.platnik.form_catalog import ADDITIONAL_MONTHLY, ANNUAL, MONTHLY, requirements
 from app.integrations.platnik.insurance import OWNER_CANDIDATES, QUERY as INSURANCE_QUERY, REQUIRED as REGISTRY_TABLES, normalize_periods
 from app.integrations.platnik.links import PAYER_CANDIDATES, source_key
@@ -36,9 +37,11 @@ class PlatnikSqlTests(unittest.TestCase):
             if table == 'DOKUMENT':
                 names.update(('ID_DOKUMENT', 'STATUSPT'))
             if table == 'ZUSDRA':
-                names.update(('XI_1_1KODTYTUB','XI_1_2PRDOEM','XI_1_3STNIEP'))
+                names.update(('XI_1_1KODTYTUB', 'XI_1_2PRDOEM', 'XI_1_3STNIEP', 'III_1_LUBEZP',
+                              'VII_1_KWSKDPRZPL', 'IV_1_SSKLUBEM'))
             if table == 'UBEZP_ZUSRCA':
-                names.update(('III_B_1_1KODTYTUB','III_B_1_2PRDOEM','III_B_1_3STNIEP'))
+                names.update(('III_B_1_1KODTYTUB', 'III_B_1_2PRDOEM', 'III_B_1_3STNIEP',
+                              *RCA_COLUMNS['health'], *RCA_COLUMNS['pension']))
             if table == 'UBEZP_ZUSRPA':
                 names.update(('III_A_5_1KODTYTUB', 'III_A_5_2PRDOEM', 'III_A_5_3STNIEP'))
             if table in ('ZUSZUA', 'ZUSZZA', 'ZUSZWUA'):
@@ -127,6 +130,22 @@ class PlatnikSqlTests(unittest.TestCase):
         self.assertEqual((parent['raw_status'], child['raw_status']), ('P', 'N'))
         self.assertEqual(child['valid_link'], 1)
         self.assertEqual(child['insurance_code'],'051000')
+
+    def test_amount_columns_keep_zero_and_include_rca_budget_funding(self):
+        self.document(1)
+        self.form('DRA', 1)
+        self.document(2)
+        self.form('RCA', 2)
+        self.document(3, parent=2)
+        self.child('RCA', 3, 2)
+        self.writer.execute("UPDATE ZUSDRA SET VII_1_KWSKDPRZPL='0.00',IV_1_SSKLUBEM='150.29'")
+        self.writer.execute("UPDATE UBEZP_ZUSRCA SET III_B_7_KWSKLEU_R_N='17.25',III_B_15_KWSKLEBP_R='9.19',"
+                            "III_C_4_KWSKLZU_R='142.01'")
+        rows = self.query(selected=[NIP])
+        entries = normalize(rows, ['2026-11'], [NIP], owner_ids={NIP: 20})[NIP]['2026-11']
+        report = summarize(entries)
+        self.assertEqual(report['company']['amounts'], {'health': '0.00', 'pension': '150.29'})
+        self.assertEqual(report['owner']['amounts'], {'health': '142.01', 'pension': '26.44'})
 
     def test_scope_filters_on_sql_server_and_retains_invalid_links_for_selected_payers(self):
         self.document(1)

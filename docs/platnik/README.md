@@ -73,6 +73,9 @@ Nieudany odczyt zachowuje wcześniejsze snapshoty.
 
 ## Składki ZUS (miesięcznie)
 
+Do sprawdzania statusów zestawów z interfejsu Płatnika jest dostępny
+[osobny agent Windows](gui-agent.md).
+
 W **Kadry → Sprawdzanie → Raport → Składki ZUS (miesięcznie)** wybierz
 miesiąc i zakres. **Cała firma (DRA)** odczytuje deklarację pod NIP-em
 firmy. **Właściciel lub wspólnik** odczytuje RCA dopasowane do osoby w

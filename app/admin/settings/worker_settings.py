@@ -51,6 +51,12 @@ class WorkerSettings(QWidget):
         self.ezla_time = QTimeEdit(QTime.fromString(settings['ezla_time'],'HH:mm'))
         self.ezla_time.setDisplayFormat('HH:mm')
         form.addRow('e-ZLA — poniedziałek od (Europe/Warsaw)',self.ezla_time)
+        self.platnik_gui = QCheckBox('Płatnik GUI — codzienne sprawdzanie wysyłki')
+        self.platnik_gui.setChecked(settings['platnik_gui'])
+        self.platnik_gui_time = QTimeEdit(QTime.fromString(settings['platnik_gui_time'], 'HH:mm'))
+        self.platnik_gui_time.setDisplayFormat('HH:mm')
+        self.platnik_gui_time.setToolTip('Godzina w strefie Europe/Warsaw. Agent odbiera zlecenia na aktywnym pulpicie.')
+        form.addRow(self.platnik_gui, self.platnik_gui_time)
         layout.addLayout(form)
         from app.admin.settings.worker_monitor import WorkerMonitor
         self.monitor = WorkerMonitor(actor_id, self)
@@ -70,6 +76,8 @@ class WorkerSettings(QWidget):
     def form_settings(self):
         settings = load_settings()
         settings['enabled'] = self.enabled.isChecked()
+        settings['platnik_gui'] = self.platnik_gui.isChecked()
+        settings['platnik_gui_time'] = self.platnik_gui_time.time().toString('HH:mm')
         settings['enova_time'] = self.enova_time.time().toString('HH:mm')
         settings['ezla_time'] = self.ezla_time.time().toString('HH:mm')
         for key, toggle in self.toggles.items():
@@ -89,6 +97,8 @@ class WorkerSettings(QWidget):
             return
         settings = load_settings()
         self.enabled.setChecked(settings['enabled'])
+        self.platnik_gui.setChecked(settings['platnik_gui'])
+        self.platnik_gui_time.setTime(QTime.fromString(settings['platnik_gui_time'], 'HH:mm'))
         self.enova_time.setTime(QTime.fromString(settings['enova_time'],'HH:mm'))
         self.ezla_time.setTime(QTime.fromString(settings['ezla_time'],'HH:mm'))
         for key,toggle in self.toggles.items():

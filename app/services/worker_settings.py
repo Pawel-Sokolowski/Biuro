@@ -9,6 +9,7 @@ DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
             'enova': True, 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
             'reminders_interval': 60, 'invoices_interval': 60, 'enova_interval': 30,
             'ezla_interval': 3600, 'ksef_import_interval': 3600, 'saldeo': False, 'saldeo_interval': 300, 'platnik': False, 'platnik_interval': 3600,
+            'platnik_gui': False, 'platnik_gui_time': '16:00', 'platnik_gui_interval': 60,
             'checking_refresh': True, 'checking_refresh_interval':30,'enova_time': '02:00','ezla_time':'02:00'}
 
 
@@ -24,10 +25,13 @@ def validate(value):
     from datetime import time
     time.fromisoformat(value['enova_time'])
     time.fromisoformat(value.get('ezla_time','02:00'))
-    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
+    at = time.fromisoformat(value['platnik_gui_time'])
+    if at.isoformat(timespec='minutes') != value['platnik_gui_time'] or at.tzinfo:
+        raise ValueError('Godzina agenta Płatnika musi mieć format GG:MM.')
+    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):
         if type(value[key]) is not bool:
             raise ValueError('Nieprawidłowy przełącznik workera.')
-    for key in ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
+    for key in ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):
         interval = value[key + '_interval']
         if type(interval) is not int or not 30 <= interval <= 86400:
             raise ValueError('Odstęp workera musi wynosić 30–86400 sekund.')

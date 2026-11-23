@@ -112,10 +112,7 @@ def fetch(config, months, *, annual=False, selected_nips=None, expected_source=N
             if not expected<=set(columns) or set(columns)-expected-OPTIONAL_FIELDS or len(columns)!=len(set(columns)):
                 raise ValueError('Nieprawidłowy kontrakt kolumn formularzy ZUS.')
             rows = []
-            while True:
-                batch = cursor.fetchmany(1000)
-                if not batch:
-                    break
+            for batch in iter(lambda: cursor.fetchmany(1000) or None, None):
                 rows.extend(dict(zip(columns, row)) for row in batch)
                 if len(rows) > 100000:
                     raise ValueError('Odczyt formularzy ZUS przekracza 100000 rekordów. Poprzednie dane pozostawiono.')
@@ -204,7 +201,7 @@ def normalize_for_import(rows, months, mapped, links, errors, *, annual=False):
     return records, ready, errors
 
 
-def payer_mapping(companies, company_ids=None):
+def payer_mapping(companies, company_ids=None, *, skip_invalid=False):
     from app.companies.identities import payer_nips, is_civil
     from app.db.dao_companies import get_partners_for_companies
 
@@ -222,7 +219,7 @@ def payer_mapping(companies, company_ids=None):
         try:
             nips = identities(row)
         except ValueError:
-            if selected_ids is not None:
+            if selected_ids is not None and not skip_invalid:
                 raise
             continue
         for nip in nips:

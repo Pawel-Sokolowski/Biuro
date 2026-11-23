@@ -1,7 +1,7 @@
 from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QComboBox, QTabWidget,  QTableWidgetItem,
@@ -14,7 +14,8 @@ from app.integrations.enova.jpk import STATUSES
 from app.companies.cennik_keys import company_accounting_type
 from app.companies.identities import is_civil
 from app.integrations.enova.document_counts import normalize_nip
-from app.utils.background import TaskRunner
+from app.utils.background import CommandRunner, TaskRunner
+from app.integrations.platnik.gui_evidence import display_check
 from app.accounting.insights import comparison, declaration_issue, hr_status, needs_attention, previous_active_types, HR_LABELS
 from app.preferences.state_colors import paint as paint_state
 
@@ -121,6 +122,16 @@ class AccountingPage(QWidget):
         self.actor_id = actor_id
         self.reader = TaskRunner(self)
         self.ezla_reader = TaskRunner(self)
+        self.platnik_gui_reader = TaskRunner(self)
+        self.platnik_gui_writer = CommandRunner(self)
+        self.platnik_gui_timer = QTimer(self)
+        self.platnik_gui_timer.setInterval(5000)
+        self.platnik_gui_timer.timeout.connect(self._read_platnik_gui_checks)
+        self.platnik_gui_checks = {}
+        self.platnik_gui_month = None
+        from app.remote.state import client
+        remote = client()
+        self.platnik_gui_supported = remote is None or 'platnik_gui_checks' in remote.server_features
         self._remote_ezla_month = None
         self.rows = []
         from app.utils.months import default_month_for_department
@@ -204,12 +215,21 @@ class AccountingPage(QWidget):
                 self.contribution_scope.addItem('Właściciel lub wspólnik', 'owner')
                 self.contribution_scope.currentIndexChanged.connect(self.filter_rows)
                 filters.addWidget(self.contribution_scope)
+                self.platnik_gui_button = QPushButton('Sprawdź wysyłkę w Płatniku')
+                self.platnik_gui_button.setToolTip(
+                    'Sprawdź zaznaczone firmy. Bez zaznaczenia sprawdzisz wszystkie dostępne firmy z bazy Biuro.')
+                self.platnik_gui_button.setVisible(self.platnik_gui_supported)
+                self.platnik_gui_button.clicked.connect(self._queue_platnik_gui_checks)
+                filters.addWidget(self.platnik_gui_button)
                 filters.addStretch()
                 panel_layout.addLayout(filters)
                 note = QLabel('Kwoty w PLN z deklaracji Płatnika. „—” oznacza brak kwoty w odczycie lub na formularzu. '
                               'Aby uzupełnić starsze miesiące, pobierz formularze ZUS ponownie.')
                 note.setWordWrap(True)
                 panel_layout.addWidget(note)
+                self.platnik_gui_note = QLabel()
+                self.platnik_gui_note.setWordWrap(True)
+                panel_layout.addWidget(self.platnik_gui_note)
                 self.contribution_table = self._new_table()
                 panel_layout.addWidget(self.contribution_table)
                 self._add_report(department, 'Składki ZUS (miesięcznie)', 'contributions', panel)
@@ -382,6 +402,8 @@ class AccountingPage(QWidget):
         month = self.month.monthText()
         if self.contributions_selected() and month != self.period:
             self.contribution_table.setRowCount(0)
+        if self.contributions_selected():
+            self._read_platnik_gui_checks()
         self.reader.submit(lambda: list_accounting(self.actor_id, month),
                            lambda rows: self.render(rows, month), self.failed, key=month)
         if self._ezla_selected():
@@ -392,6 +414,10 @@ class AccountingPage(QWidget):
 
     def _report_changed(self, *_):
         self.filter_rows()
+        if self.contributions_selected():
+            self._read_platnik_gui_checks()
+        else:
+            self.platnik_gui_timer.stop()
         if self.isVisible() and self._ezla_selected():
             self._refresh_ezla(self.month.monthText())
 
@@ -499,10 +525,12 @@ class AccountingPage(QWidget):
     def _render_contributions(self, companies):
         scope = self.contribution_scope.currentData()
         table = self.contribution_table
-        headers = ('Firma', 'NIP płatnika', *CONTRIBUTION_COLUMNS.values(), 'Formularz', 'Status wysyłki')
+        headers = ('Firma', 'NIP płatnika', *CONTRIBUTION_COLUMNS.values(), 'Formularz', 'Status wysyłki',
+                   'Agent Płatnika')
         if not table.columnCount():
             table.setColumnCount(len(headers))
             table.setHorizontalHeaderLabels(headers)
+            table.setColumnHidden(len(headers) - 1, not self.platnik_gui_supported)
         rows = []
         for company in companies:
             snapshot = decoded(company.get('platnik_declarations'))
@@ -528,11 +556,82 @@ class AccountingPage(QWidget):
                 cells.append(cell)
             source = report.get('source')
             document = f"{source} {' / '.join(report['reports'])}" if source else None
-            cells.extend((_item(document), _item(report.get('problem') or report.get('status') or 'Brak danych')))
+            document_item = _item(document)
+            document_item.setData(Qt.ItemDataRole.UserRole, report)
+            cells.extend((document_item, _item(report.get('problem') or report.get('status') or 'Brak danych')))
             for column, cell in enumerate(cells):
                 table.setItem(index, column, cell)
+        self._paint_platnik_gui_checks()
         table.resizeColumnsToContents()
+        if self.platnik_gui_supported:
+            table.setColumnWidth(table.columnCount() - 1, 200)
         self.source_note.setText('')
+
+    def _paint_platnik_gui_checks(self):
+        if not self.platnik_gui_supported:
+            return
+        table = self.contribution_table
+        checks = self.platnik_gui_checks if self.platnik_gui_month == self.month.monthText() else {}
+        column = table.columnCount() - 1
+        for row in range(table.rowCount()):
+            company_id = table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            nip = table.item(row, 1).text()
+            report = table.item(row, column - 2).data(Qt.ItemDataRole.UserRole)
+            text, details = display_check(checks.get((company_id, nip), {}), report or {})
+            table.setItem(row, column, _item(text, details))
+
+    def _read_platnik_gui_checks(self):
+        if not self.platnik_gui_supported or not self.contributions_selected() or not self.isVisible():
+            self.platnik_gui_timer.stop()
+            return
+        from app.services.platnik_gui import read_checks
+        month = self.month.monthText()
+        if self.platnik_gui_month != month:
+            self.platnik_gui_note.clear()
+
+        def loaded(rows):
+            if self.month.monthText() != month or not self.contributions_selected():
+                return
+            self.platnik_gui_month = month
+            self.platnik_gui_checks = {(row['company_id'], row['nip']): row for row in rows}
+            self._paint_platnik_gui_checks()
+            if any(row['state'] in ('queued', 'running') for row in rows):
+                if not self.platnik_gui_timer.isActive():
+                    self.platnik_gui_timer.start()
+            else:
+                self.platnik_gui_timer.stop()
+
+        def failed(_error):
+            if self.month.monthText() == month and self.contributions_selected():
+                self.platnik_gui_note.setText('Nie udało się pobrać stanu zadań agenta Płatnika.')
+
+        self.platnik_gui_reader.submit(lambda: read_checks(self.actor_id, month), loaded, failed, key=month)
+
+    def _queue_platnik_gui_checks(self):
+        from app.services.platnik_gui import request_checks
+        company_ids = self.selected_company_ids() or None
+        month = self.month.monthText()
+        self.platnik_gui_button.setEnabled(False)
+        self.platnik_gui_note.setText('Zlecam sprawdzenie w Płatniku…')
+
+        def queued(result):
+            self.platnik_gui_button.setEnabled(True)
+            if self.month.monthText() == month:
+                message = f"Zlecono: {result['queued']}. Już w kolejce: {result['existing']}."
+                if result.get('skipped'):
+                    message += f" Pominięto firmy bez poprawnego NIP-u płatnika: {result['skipped']}."
+                self.platnik_gui_note.setText(message)
+                self._read_platnik_gui_checks()
+
+        def failed(error):
+            self.platnik_gui_button.setEnabled(True)
+            if self.month.monthText() == month:
+                self.platnik_gui_note.setText(
+                    str(error) if isinstance(error, (ValueError, PermissionError))
+                    else 'Nie udało się zlecić odczytu agentowi Płatnika.'
+                )
+
+        self.platnik_gui_writer.submit(lambda: request_checks(self.actor_id, company_ids, month), queued, failed)
 
     @staticmethod
     def _owner_item(row, department):

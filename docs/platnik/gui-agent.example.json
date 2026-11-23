@@ -1,0 +1,28 @@
+{
+  "executable": "C:\\ścieżka\\do\\zainstalowanego\\Płatnika.exe",
+  "backend": "uia",
+  "window": {
+    "title": "Dokładny tytuł głównego okna"
+  },
+  "tabs": [],
+  "grid": {
+    "auto_id": "AutomationId tabeli z danej instalacji"
+  },
+  "columns": {
+    "nip":     {"index": 0, "header": "NIP"},
+    "period":  {"index": 1, "header": "Okres"},
+    "form":    {"index": 2, "header": "Formularz"},
+    "report":  {"index": 3, "header": "Identyfikator deklaracji"},
+    "set_id":  {"index": 4, "header": "Identyfikator zestawu"},
+    "status":  {"index": 5, "header": "Stan zestawu"},
+    "receipt": {"index": 6, "header": "Identyfikator potwierdzenia"},
+    "sent_at": {"index": 7, "header": "Data wysyłki"}
+  },
+  "status_labels": {
+    "Dokładna etykieta statusu przekazania": "sent",
+    "Dokładna etykieta statusu potwierdzenia": "accepted",
+    "Dokładna etykieta statusu odrzucenia": "rejected"
+  },
+  "database_service": "biuro_platnik_agent",
+  "database_schema": "public"
+}

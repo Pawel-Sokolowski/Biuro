@@ -9,7 +9,7 @@ from app.services.worker_monitor import snapshot
 from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
-JOB_LABELS = {'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — ZUS i wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
+JOB_LABELS = {'platnik_gui': 'Płatnik GUI — sprawdzanie wysyłki', 'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — ZUS i wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
               'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'partial': 'Częściowo wykonano',
           'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania'}

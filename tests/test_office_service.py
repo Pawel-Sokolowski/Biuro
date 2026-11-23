@@ -227,6 +227,21 @@ class OfficeServiceTests(DbTestCase):
             'postgresql://biuro:[redacted]@localhost/biuro',
         )
 
+    def test_long_database_secret_does_not_redact_identifier_fragments(self):
+        from app.diagnostics import PrivacyFilter
+        with mock.patch.dict(
+            'os.environ',
+            {'DB_URL': 'postgresql://biuro:redacted@localhost/biuro'},
+            clear=False,
+        ):
+            privacy = PrivacyFilter()
+        self.assertEqual(privacy.redact('NIP 85redacted23'), 'NIP 85redacted23')
+        self.assertEqual(
+            privacy.redact('postgresql://biuro:redacted@localhost/biuro'),
+            'postgresql://biuro:[redacted]@localhost/biuro',
+        )
+        self.assertEqual(privacy.redact('password=redacted'), 'password=[redacted]')
+
     def test_timer_employee_filter_cannot_be_used_to_read_someone_elses_time(self):
         with self.assertRaises(PermissionError):
             self.call('app.db.dao_timers.list_employee_timers',{'employee_id':self.other,'actor_id':1})

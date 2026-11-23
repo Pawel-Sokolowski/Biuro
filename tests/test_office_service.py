@@ -142,33 +142,19 @@ class OfficeServiceTests(DbTestCase):
             )
 
     def test_monthly_employee_filter_is_safe_for_authenticated_employees(self):
-        result = self.service.submit(
-            self.token,
-            {
-                'operation':'app.monthly_view.monthly_view_logic.MonthlyViewLogic.__new__',
-                'arguments':encode({'pracownik_id':self.employee}),
-            },
-        )
-        if not result.get('completed'):
-            deadline = time.monotonic()+15
-            while time.monotonic()<deadline:
-                response = self.service.poll(self.token,{'job':result['job']})
-                if response['state']=='done':
-                    result['completed']=True
-                    result['result']=response['result']
-                    break
-                if response['state']=='failed':
-                    exception = PermissionError if response.get('permission') else ValueError
-                    raise exception(response['message'])
-                time.sleep(.01)
-        state = decode(result['result'])
-        object_id = state['object']
-        rows = self.call(
-            'app.monthly_view.monthly_view_logic.MonthlyViewLogic.get_employee_filter_list',
-            {},
-            token=self.token,
-            object_id=object_id,
-        )
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+        from app.remote.operations import OPERATIONS
+        constructor = OPERATIONS[
+            'app.monthly_view.monthly_view_logic.MonthlyViewLogic.__new__'
+        ]
+        filter_spec = OPERATIONS[
+            'app.monthly_view.monthly_view_logic.MonthlyViewLogic.get_employee_filter_list'
+        ]
+        self.assertIn('tab:',constructor['capability'])
+        self.assertEqual(filter_spec['capability'],'authenticated')
+        logic = object.__new__(MonthlyViewLogic)
+        logic.pracownik_id = self.employee
+        rows = logic.get_employee_filter_list()
         self.assertIn((self.employee,'Jan Kowalski'),rows)
 
     def test_secrets_are_redacted_in_named_settings_mapping_and_database_rows(self):

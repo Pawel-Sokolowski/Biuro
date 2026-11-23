@@ -2919,7 +2919,7 @@ OPERATIONS = {
                                                'module': 'app.kalendarz.google_sync'},
  'app.monthly_view.monthly_view_logic.MonthlyViewLogic.__new__': {'actors': ['pracownik_id'],
                                                                   'arguments': ['pracownik_id'],
-                                                                  'capability': 'authenticated',
+                                                                  'capability': 'tab:Widok miesięczny|Klienci|Raporty',
                                                                   'class': 'MonthlyViewLogic',
                                                                   'method': '__new__',
                                                                   'module': 'app.monthly_view.monthly_view_logic'},

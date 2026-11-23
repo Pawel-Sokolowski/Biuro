@@ -100,6 +100,26 @@ class OfficeServiceTests(DbTestCase):
         with self.assertRaises(PermissionError):
             self.call('app.db.dao_employees.change_employee_password',{'pracownik_id':1,'new_password':'Injected12345'})
 
+    def test_role_id_4_is_administrator_even_if_role_name_or_flag_is_missing(self):
+        employee = self.make_employee('role4@example.com',haslo='Employee12345')
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE pracownicy SET rola_id=4,is_admin=0 WHERE id=%s",
+                (employee,),
+            )
+            conn.execute(
+                "UPDATE role SET nazwa='Konto administracyjne' WHERE id=4",
+            )
+            conn.commit()
+        from app.security.authorization import get_permissions,is_administrator,allowed_tabs
+        self.assertTrue(is_administrator(employee))
+        permissions = get_permissions(employee)
+        self.assertTrue(all(permissions.values()))
+        self.assertEqual(set(allowed_tabs(employee)),set([
+            'Pulpit','Widok miesięczny','Klienci','E-mail','Czat','Faktury',
+            'Raporty','Zadania','Kalendarz','Ustawienia','Sprawdzanie',
+        ]))
+
     def test_secrets_are_redacted_in_named_settings_mapping_and_database_rows(self):
         from app.db.dao_app_settings import set_setting
         from app.remote.secrets import PRESENT,public
@@ -119,8 +139,30 @@ class OfficeServiceTests(DbTestCase):
             '2026-11-23T09:00',
             'KH_N0120.248.7',
             'Z importu faktur',
+            '192.168.1.50',
+            'ul. Kościuszki 12',
+            '1234.56 PLN',
         ]
         self.assertEqual([public(value) for value in values], values)
+        mapping = {
+            'data_rozliczenia': '2026-11-23',
+            'cena_netto': '1234.56',
+            'adres_ip_serwera': '192.168.1.50',
+            'haslo_enc': 'ciphertext',
+            'server_token_label': 'Numer podsystemu',
+        }
+        result = public(mapping)
+        self.assertEqual(result['data_rozliczenia'], '2026-11-23')
+        self.assertEqual(result['cena_netto'], '1234.56')
+        self.assertEqual(result['adres_ip_serwera'], '192.168.1.50')
+        self.assertEqual(result['haslo_enc'], '[zapisane na serwerze]')
+        self.assertEqual(result['server_token_label'], 'Numer podsystemu')
+
+    def test_short_database_secret_does_not_redact_dates_in_diagnostics(self):
+        from app.diagnostics import PrivacyFilter
+        with mock.patch.dict('os.environ', {'DB_URL': 'postgresql://biuro:2026@localhost/biuro'}, clear=False):
+            privacy = PrivacyFilter()
+        self.assertEqual(privacy.redact('Data: 2026-11-23 09:00'), 'Data: 2026-11-23 09:00')
 
     def test_timer_employee_filter_cannot_be_used_to_read_someone_elses_time(self):
         with self.assertRaises(PermissionError):

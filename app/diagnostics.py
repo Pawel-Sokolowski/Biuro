@@ -25,9 +25,12 @@ class PrivacyFilter(logging.Filter):
             pass
 
     def redact(self, message):
-        for secret in self.secrets:
-            if secret:
-                message = message.replace(secret, '[redacted]')
+        # Never replace short fragments: a DB password such as "2026" would
+        # otherwise redact ordinary dates and invoice numbers in every log.
+        for secret in sorted(set(filter(None, self.secrets)), key=len, reverse=True):
+            if len(secret) < 8:
+                continue
+            message = message.replace(secret, '[redacted]')
         return message
 
     def filter(self, record):

@@ -9,8 +9,25 @@ SECRET_KEYS = frozenset({'bio_encryption_key', 'db_url', 'haslo', 'password', 'p
 
 
 def secret_name(key):
-    value = str(key).casefold()
-    return value in SECRET_KEYS or value.endswith('_enc') or any(part in value for part in ('password','haslo','secret','private_key','encryption_key','token'))
+    value = str(key).strip().casefold().replace('-', '_')
+    if not value:
+        return False
+    if value in SECRET_KEYS:
+        return True
+    if value.endswith('_enc') or value.endswith('_encrypted'):
+        return True
+    parts = value.split('_')
+    if 'password' in parts or 'haslo' in parts:
+        return True
+    if 'secret' in parts:
+        return True
+    if value == 'token' or value.endswith('_token') or value.startswith('token_'):
+        return True
+    if 'private' in parts and 'key' in parts:
+        return True
+    if 'encryption' in parts and 'key' in parts:
+        return True
+    return False
 
 
 def public(value):

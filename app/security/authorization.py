@@ -64,6 +64,11 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
                   COALESCE(p.is_admin, 0) = 1
                   OR COALESCE(p.rola_id, 0) = 4
                   OR LOWER(TRIM(COALESCE(r.nazwa, ''))) IN ('admin', 'administrator')
+                  OR LOWER(TRIM(COALESCE(r.nazwa, ''))) IN ('administracja', 'superadmin', 'super administrator')
+                  OR (
+                      COALESCE(r.can_manage_users, 0) = 1
+                      AND COALESCE(r.can_access_admin_settings, 0) = 1
+                  )
               )
             """,
             (pracownik_id,),

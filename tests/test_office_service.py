@@ -120,6 +120,27 @@ class OfficeServiceTests(DbTestCase):
             'Raporty','Zadania','Kalendarz','Ustawienia','Sprawdzanie',
         ]))
 
+    def test_employee_cannot_manage_alternate_administrator_role(self):
+        employee = self.make_employee('staff@example.com',haslo='Employee12345')
+        administrator = self.make_employee('alt-admin@example.com',haslo='Admin12345')
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE pracownicy SET rola_id=4,is_admin=0 WHERE id=%s",
+                (administrator,),
+            )
+            conn.execute(
+                "UPDATE role SET nazwa='Administracja' WHERE id=4",
+            )
+            conn.commit()
+        from app.security.authorization import is_administrator
+        self.assertTrue(is_administrator(administrator))
+        with self.assertRaises(PermissionError):
+            self.call(
+                'app.db.dao_employees.change_employee_password',
+                {'pracownik_id':administrator,'new_password':'NewPassword123'},
+                token=self.token,
+            )
+
     def test_secrets_are_redacted_in_named_settings_mapping_and_database_rows(self):
         from app.db.dao_app_settings import set_setting
         from app.remote.secrets import PRESENT,public
@@ -163,6 +184,10 @@ class OfficeServiceTests(DbTestCase):
         with mock.patch.dict('os.environ', {'DB_URL': 'postgresql://biuro:2026@localhost/biuro'}, clear=False):
             privacy = PrivacyFilter()
         self.assertEqual(privacy.redact('Data: 2026-11-23 09:00'), 'Data: 2026-11-23 09:00')
+        self.assertEqual(
+            privacy.redact('postgresql://biuro:2026@localhost/biuro'),
+            'postgresql://biuro:[redacted]@localhost/biuro',
+        )
 
     def test_timer_employee_filter_cannot_be_used_to_read_someone_elses_time(self):
         with self.assertRaises(PermissionError):

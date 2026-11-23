@@ -252,14 +252,14 @@ def notify_company_event(
                 (firma_id,),
             ).fetchall()
         if not rows and not everyone:
-            rows = conn.execute(
-                """
-                SELECT p.id FROM pracownicy p
-                LEFT JOIN role r ON r.id = p.rola_id
-                WHERE COALESCE(p.aktywny, 1) = 1
-                  AND (COALESCE(p.is_admin, 0) = 1 OR LOWER(COALESCE(r.nazwa, '')) = 'admin')
-                """
+            from app.security.authorization import is_administrator
+            employee_rows = conn.execute(
+                "SELECT id FROM pracownicy WHERE COALESCE(aktywny, 1) = 1"
             ).fetchall()
+            rows = [
+                row for row in employee_rows
+                if is_administrator(row["id"])
+            ]
         today = datetime.date.today().isoformat()
         created: List[int] = []
         for row in rows:

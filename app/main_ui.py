@@ -685,7 +685,6 @@ class OfficeManagerApp(QMainWindow):
         try:
             from app.accounting.department_ui import navigation_tabs
             allowed = navigation_tabs(allowed_tabs(self.pracownik_id))
-            allowed.add("Ustawienia")
         except Exception:
             logger.warning("Nie udało się odczytać uprawnień do zakładek", exc_info=True)
             return

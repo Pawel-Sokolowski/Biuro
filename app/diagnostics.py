@@ -3,6 +3,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import re
 import sys
 from urllib.parse import urlparse, unquote
 
@@ -25,10 +26,17 @@ class PrivacyFilter(logging.Filter):
             pass
 
     def redact(self, message):
-        # Never replace short fragments: a DB password such as "2026" would
-        # otherwise redact ordinary dates and invoice numbers in every log.
+        # Long secrets are safe to replace globally. Short secrets must only
+        # be replaced in credential-bearing contexts, not in ordinary dates.
         for secret in sorted(set(filter(None, self.secrets)), key=len, reverse=True):
             if len(secret) < 8:
+                escaped = re.escape(secret)
+                patterns = (
+                    rf'(?i)(?:password|haslo|secret|passwd|pwd)\s*[=:]\s*{escaped}(?![0-9A-Za-z])',
+                    rf'(?i)://[^/\s:@]+:{escaped}@',
+                )
+                for pattern in patterns:
+                    message = re.sub(pattern, lambda match: match.group(0).replace(secret, '[redacted]'), message)
                 continue
             message = message.replace(secret, '[redacted]')
         return message

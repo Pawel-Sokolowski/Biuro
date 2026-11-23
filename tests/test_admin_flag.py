@@ -1,6 +1,6 @@
 import unittest
 from app.security.authorization import is_administrator
-from app.security.bootstrap import create_initial_admin
+from app.security.bootstrap import create_initial_admin, needs_initial_admin
 from app.companies.company_logic import CompanyLogic
 from tests.base import DbTestCase
 
@@ -47,6 +47,7 @@ class AdminSurvivesTests(DbTestCase):
         conn.commit()
         conn.close()
         self.assertTrue(is_administrator(emp))
+        self.assertFalse(needs_initial_admin())
 
 
 if __name__ == "__main__":

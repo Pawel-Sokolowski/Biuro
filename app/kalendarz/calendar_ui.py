@@ -730,8 +730,11 @@ class CalendarPage(QWidget):
         else:
             rows = dao_calendar.list_events(self.pracownik_id,first.isoformat(),nxt.isoformat())
         for ev in rows:
-            d = max(first,date.fromisoformat(ev["start"][:10]))
-            end = date.fromisoformat(ev["koniec"][:10])
+            try:
+                d = max(first,date.fromisoformat(ev["start"][:10]))
+                end = date.fromisoformat(ev["koniec"][:10])
+            except (TypeError, ValueError):
+                continue
             while d <= end and d < nxt:
                 if d >= first:
                     self.calendar.setDateTextFormat(QDate(d.year, d.month, d.day), fmt)

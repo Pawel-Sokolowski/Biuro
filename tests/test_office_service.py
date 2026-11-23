@@ -112,6 +112,16 @@ class OfficeServiceTests(DbTestCase):
         row = public(Row(['klucz','wartosc'],['google_client_secret','secret-on-server']))
         self.assertEqual((row['klucz'],row['wartosc']),('google_client_secret',PRESENT))
 
+    def test_public_response_preserves_normal_strings_and_pricing_keys(self):
+        from app.remote.secrets import public
+        values = [
+            'UZ_30',
+            '2026-11-23T09:00',
+            'KH_N0120.248.7',
+            'Z importu faktur',
+        ]
+        self.assertEqual([public(value) for value in values], values)
+
     def test_timer_employee_filter_cannot_be_used_to_read_someone_elses_time(self):
         with self.assertRaises(PermissionError):
             self.call('app.db.dao_timers.list_employee_timers',{'employee_id':self.other,'actor_id':1})

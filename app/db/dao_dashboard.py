@@ -138,7 +138,11 @@ def format_duration(seconds: int) -> str:
 
 def format_event_time(event: Dict[str, Any]) -> str:
     start = event["start"]
-    day = datetime.fromisoformat(start[:10]).strftime("%d.%m")
+    try:
+        day = datetime.fromisoformat(str(start)[:10]).strftime("%d.%m")
+        time_text = str(start)[11:16]
+    except (TypeError, ValueError):
+        return "Niepoprawna data"
     if event.get("caly_dzien"):
         return f"{day}  cały dzień"
-    return f"{day}  {start[11:16]}"
+    return f"{day}  {time_text}"

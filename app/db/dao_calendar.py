@@ -2,6 +2,7 @@ from __future__ import annotations
 from app.remote.boundary import endpoint as office_endpoint
 
 from typing import Any, Dict, List, Optional
+from datetime import date, datetime
 
 from app.db.dao_conn import get_conn
 from app.db import dao_calendar_sync as outbox
@@ -10,6 +11,21 @@ EVENT_FIELDS = (
     "tytul", "opis", "lokalizacja", "start", "koniec",
     "caly_dzien", "firma_id", "google_event_id", "google_calendar_id", "caldav_uid", "zrodlo", "caldav_calendar_id",
 )
+
+
+def _valid_event_timestamp(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    if len(value) < 10:
+        return False
+    try:
+        date.fromisoformat(value[:10])
+        if len(value) > 10:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 @office_endpoint('app.db.dao_calendar.list_events')
@@ -35,7 +51,10 @@ def list_events(pracownik_id: int, start: str, end: str) -> List[Dict[str, Any]]
             """,
             (pracownik_id, pracownik_id, pracownik_id, end, start),
         )
-        return [dict(r) for r in cur.fetchall()]
+        return [
+            dict(r) for r in cur.fetchall()
+            if _valid_event_timestamp(r["start"]) and _valid_event_timestamp(r["koniec"])
+        ]
     finally:
         conn.close()
 
@@ -203,6 +222,8 @@ def save_event(pracownik_id: int, data: Dict[str, Any], *, from_remote=False) ->
     values["zrodlo"] = values["zrodlo"] or "lokalne"
     if not values["tytul"] or not values["start"] or not values["koniec"]:
         raise ValueError("Tytuł, początek i koniec są wymagane.")
+    if not _valid_event_timestamp(values["start"]) or not _valid_event_timestamp(values["koniec"]):
+        raise ValueError("Niepoprawny format daty wydarzenia.")
     conn = get_conn()
     try:
         cur = conn.cursor()

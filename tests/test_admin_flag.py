@@ -26,6 +26,28 @@ class AdminSurvivesTests(DbTestCase):
         assign_role(emp, 1)
         self.assertFalse(is_administrator(emp))
 
+    def test_role_with_all_admin_permissions_is_administrator(self):
+        emp = self.make_employee("admin-role@x.pl", "Admin", "Rola")
+        from app.db.dao_conn import get_conn
+        from app.db.dao_global_settings import add_role
+        role_id = add_role(
+            "Konto administracyjne",
+            can_view_invoices=True,
+            can_edit_companies=True,
+            can_manage_users=True,
+            can_view_finances=True,
+            can_export_data=True,
+            can_access_admin_settings=True,
+        )
+        conn = get_conn()
+        conn.execute(
+            "UPDATE pracownicy SET rola_id=%s,is_admin=0 WHERE id=%s",
+            (role_id, emp),
+        )
+        conn.commit()
+        conn.close()
+        self.assertTrue(is_administrator(emp))
+
 
 if __name__ == "__main__":
     unittest.main()

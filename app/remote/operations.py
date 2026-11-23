@@ -2991,8 +2991,8 @@ OPERATIONS = {
                                                                                   'method': 'get_active_timer_labels',
                                                                                   'module': 'app.monthly_view.monthly_view_logic'},
  'app.monthly_view.monthly_view_logic.MonthlyViewLogic.get_employee_filter_list': {'arguments': [],
-                                                                                   'capability': 'tab:Widok '
-                                                                                                 'miesięczny|Klienci|Raporty',
+                                                                                   'actors': ['actor_id'],
+                                                                                   'capability': 'authenticated',
                                                                                    'class': 'MonthlyViewLogic',
                                                                                    'method': 'get_employee_filter_list',
                                                                                    'module': 'app.monthly_view.monthly_view_logic'},

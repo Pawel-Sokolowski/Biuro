@@ -141,6 +141,22 @@ class OfficeServiceTests(DbTestCase):
                 token=self.token,
             )
 
+    def test_monthly_employee_filter_is_safe_for_authenticated_employees(self):
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
+        from app.remote.operations import OPERATIONS
+        constructor = OPERATIONS[
+            'app.monthly_view.monthly_view_logic.MonthlyViewLogic.__new__'
+        ]
+        filter_spec = OPERATIONS[
+            'app.monthly_view.monthly_view_logic.MonthlyViewLogic.get_employee_filter_list'
+        ]
+        self.assertIn('tab:',constructor['capability'])
+        self.assertEqual(filter_spec['capability'],'authenticated')
+        logic = object.__new__(MonthlyViewLogic)
+        logic.pracownik_id = self.employee
+        rows = logic.get_employee_filter_list()
+        self.assertIn((self.employee,'Jan Kowalski'),rows)
+
     def test_secrets_are_redacted_in_named_settings_mapping_and_database_rows(self):
         from app.db.dao_app_settings import set_setting
         from app.remote.secrets import PRESENT,public

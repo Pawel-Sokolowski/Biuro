@@ -344,6 +344,12 @@ def main(argv=None):
             preflight()
             logger.info('worker_configuration_ready')
             return 0
+        from app.db.schema import schema_is_current
+        if not schema_is_current():
+            raise ValueError('Najpierw zaktualizuj bazę na serwerze biura.')
+        from app.security.bootstrap import needs_initial_admin
+        if needs_initial_admin():
+            raise ValueError('Utwórz pierwszego administratora lokalnie na serwerze (Biuro.exe --direct).')
         os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
         from PyQt6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(['biuro-worker'])

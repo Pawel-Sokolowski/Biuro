@@ -10,7 +10,7 @@ from app.security.authorization import assigned_company_ids, is_administrator
 
 def _check_company_access(conn, actor_id: int, firma_id: int) -> None:
     if not actor_id or not conn.execute(
-        "SELECT 1 FROM pracownicy WHERE id = %s AND aktywny = 1", (actor_id,)
+        "SELECT 1 FROM pracownicy WHERE id = %s AND COALESCE(aktywny,1)=1", (actor_id,)
     ).fetchone():
         raise PermissionError("Wymagany jest aktywny użytkownik.")
     if not is_administrator(actor_id) and firma_id not in assigned_company_ids(actor_id):
@@ -181,7 +181,7 @@ def list_extra_activities(
     conn = get_conn()
     try:
         if not viewer_id or not conn.execute(
-            "SELECT 1 FROM pracownicy WHERE id = %s AND aktywny = 1", (viewer_id,)
+            "SELECT 1 FROM pracownicy WHERE id = %s AND COALESCE(aktywny,1)=1", (viewer_id,)
         ).fetchone():
             raise PermissionError("Wymagany jest aktywny użytkownik.")
         filters, params = [], []

@@ -70,7 +70,7 @@ def reset_password(email: str) -> Tuple[bool, str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, imie FROM pracownicy WHERE LOWER(email) = LOWER(%s) AND aktywny = 1",
+            "SELECT id, imie FROM pracownicy WHERE LOWER(email) = LOWER(%s) AND COALESCE(aktywny,1)=1",
             (email,),
         ).fetchone()
     finally:
@@ -103,7 +103,7 @@ def redeem_password_reset(email: str, token: str, new_password: str) -> None:
     digest = hashlib.sha256(token.strip().encode()).hexdigest()
     new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
     with get_conn() as conn:
-        employee = conn.execute("SELECT id FROM pracownicy WHERE LOWER(email) = LOWER(%s) AND aktywny = 1 FOR UPDATE", (email.strip(),)).fetchone()
+        employee = conn.execute("SELECT id FROM pracownicy WHERE LOWER(email) = LOWER(%s) AND COALESCE(aktywny,1)=1 FOR UPDATE", (email.strip(),)).fetchone()
         if not employee:
             raise ValueError("Kod jest nieprawidłowy lub wygasł.")
         row = conn.execute("UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = %s AND employee_id = %s AND used_at IS NULL AND expires_at > now() RETURNING employee_id", (digest, employee[0])).fetchone()

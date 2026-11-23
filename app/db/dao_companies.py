@@ -301,7 +301,7 @@ def get_employees_list() -> List[Dict[str, Any]]:
     cur.execute("""
         SELECT id, imie, nazwisko
         FROM pracownicy
-        WHERE aktywny = 1
+        WHERE COALESCE(aktywny,1)=1
         ORDER BY imie, nazwisko
     """)
     rows = cur.fetchall()

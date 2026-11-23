@@ -69,7 +69,7 @@ def resolve_employee_ids(cursor, raw_value):
 
     from app.utils.request_cache import cached_value
     def load_employees():
-        cursor.execute("SELECT id, email, imie, nazwisko FROM pracownicy WHERE aktywny = 1")
+        cursor.execute("SELECT id, email, imie, nazwisko FROM pracownicy WHERE COALESCE(aktywny,1)=1")
         return cursor.fetchall()
     def build_lookup():
         employees = load_employees()

@@ -3069,8 +3069,7 @@ OPERATIONS = {
                                                                                   'method': 'save_status_for_company',
                                                                                   'module': 'app.monthly_view.monthly_view_logic'},
  'app.monthly_view.monthly_view_logic.MonthlyViewLogic.set_month': {'arguments': ['new_month'],
-                                                                    'capability': 'tab:Widok '
-                                                                                  'miesięczny|Klienci|Raporty',
+                                                                    'capability': 'authenticated',
                                                                     'class': 'MonthlyViewLogic',
                                                                     'method': 'set_month',
                                                                     'module': 'app.monthly_view.monthly_view_logic'},

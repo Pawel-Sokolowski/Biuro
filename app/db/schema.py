@@ -65,6 +65,12 @@ def schema_is_current():
 def upgrade_database():
     from alembic import command
     from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
-    command.upgrade(config, "head")
+    heads = set(ScriptDirectory.from_config(config).get_heads())
+    # Some local checkouts retain the old service-tables branch. The release
+    # branch already creates those tables in revisions 20261121_01 and _02.
+    target = "20261121_08" if heads == {"20261116_03", "20261121_08"} else "head"
+    command.upgrade(config, target)

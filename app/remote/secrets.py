@@ -1,4 +1,5 @@
 """Credential-bearing configuration is usable by the service, never downloadable."""
+from datetime import datetime
 import json
 import re
 
@@ -29,7 +30,16 @@ def public(value):
     if isinstance(value, str):
         from app.diagnostics import PrivacyFilter
         from app.utils.request_cache import cached_value
-        value = cached_value(('office_response_privacy',),PrivacyFilter).redact(value)
+        privacy = cached_value(('office_response_privacy',),PrivacyFilter)
+        # Short database passwords can occur inside otherwise valid timestamps.
+        if value not in privacy.secrets and re.match(r'^\d{4}-\d{2}-\d{2}(?:$|[T ])', value):
+            try:
+                datetime.fromisoformat(value)
+            except ValueError:
+                pass
+            else:
+                return value
+        value = privacy.redact(value)
         if value.startswith('gAAAAA') or '-----BEGIN PRIVATE KEY-----' in value or '-----BEGIN ENCRYPTED PRIVATE KEY-----' in value:
             return PRESENT
         if value.lstrip().startswith(('{', '[')):

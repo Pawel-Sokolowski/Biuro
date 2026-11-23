@@ -194,6 +194,21 @@ def delete_role(rola_id: int) -> None:
 
 @office_endpoint('app.db.dao_global_settings.get_user_permissions')
 def get_user_permissions(pracownik_id: int) -> Row:
+    from app.security.authorization import is_administrator
+    if is_administrator(pracownik_id):
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT 1 AS can_view_invoices,
+                       1 AS can_access_admin_settings,
+                       1 AS can_manage_users
+                """
+            )
+            return cur.fetchone()
+        finally:
+            conn.close()
     conn = get_conn()
     try:
         cur = conn.cursor()

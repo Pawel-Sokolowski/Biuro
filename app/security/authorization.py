@@ -13,6 +13,15 @@ from app.utils.request_cache import cached
 def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
     if not pracownik_id:
         return {}
+    if is_administrator(pracownik_id):
+        return {
+            'can_edit_companies': True,
+            'can_manage_users': True,
+            'can_view_invoices': True,
+            'can_view_finances': True,
+            'can_export_data': True,
+            'can_access_admin_settings': True,
+        }
     conn = get_conn()
     try:
         row = conn.execute(
@@ -51,7 +60,11 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
             SELECT 1 FROM pracownicy p
             LEFT JOIN role r ON r.id = p.rola_id
             WHERE p.id = %s AND COALESCE(p.aktywny, 1) = 1
-              AND (COALESCE(p.is_admin, 0) = 1 OR LOWER(COALESCE(r.nazwa, '')) = 'admin')
+              AND (
+                  COALESCE(p.is_admin, 0) = 1
+                  OR COALESCE(p.rola_id, 0) = 4
+                  OR LOWER(TRIM(COALESCE(r.nazwa, ''))) IN ('admin', 'administrator')
+              )
             """,
             (pracownik_id,),
         ).fetchone()

@@ -793,7 +793,15 @@ class MonthlyViewPage(QWidget):
                 header.moveSection(header.visualIndex(vat_cols[1]), 2)
 
     def _load_initial_data(self):
-        self._load_employee_filter()
+        try:
+            self._load_employee_filter()
+        except PermissionError as exc:
+            self.activity_label.setText('Widok miesięczny jest niedostępny dla tego konta.')
+            self.activity_label.setToolTip(str(exc))
+            self.employee_combo.clear()
+            self._rows = []
+            self._render_tables()
+            return
         self._reload_rows()
 
     def _setup_timer(self):

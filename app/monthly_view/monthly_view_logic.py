@@ -221,17 +221,32 @@ class MonthlyViewLogic:
     def set_month(self, new_month: str):
         self.aktualny_miesiac = new_month
 
-    def get_employee_filter_list(self) -> List:
+    def get_employee_filter_list(self, actor_id: Optional[int] = None) -> List:
+        actor_id = actor_id or self.pracownik_id
+        from app.security.authorization import allowed_tabs
+        can_select_all = is_administrator(actor_id) or bool(
+            {'Widok miesięczny', 'Klienci', 'Raporty'} & set(allowed_tabs(actor_id))
+        )
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, imie || ' ' || nazwisko AS label
-            FROM pracownicy
-            WHERE aktywny = 1
-            ORDER BY nazwisko, imie
-        """
-        )
+        if can_select_all:
+            cur.execute(
+                """
+                SELECT id, imie || ' ' || nazwisko AS label
+                FROM pracownicy
+                WHERE aktywny = 1
+                ORDER BY nazwisko, imie
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, imie || ' ' || nazwisko AS label
+                FROM pracownicy
+                WHERE id=%s AND aktywny = 1
+                """,
+                (actor_id,),
+            )
         rows = cur.fetchall()
         conn.close()
         result = [(0, "Wszyscy")]

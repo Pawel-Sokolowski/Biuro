@@ -394,7 +394,7 @@ def list_employee_rates() -> List[Dict[str, Any]]:
     try:
         rows = conn.execute(
             "SELECT id, imie, nazwisko, stawka_godzinowa FROM pracownicy "
-            "WHERE aktywny = 1 ORDER BY nazwisko, imie"
+            "WHERE COALESCE(aktywny,1)=1 ORDER BY nazwisko, imie"
         ).fetchall()
     finally:
         conn.close()

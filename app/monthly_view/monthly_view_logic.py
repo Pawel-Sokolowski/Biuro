@@ -234,7 +234,7 @@ class MonthlyViewLogic:
                 """
                 SELECT id, imie || ' ' || nazwisko AS label
                 FROM pracownicy
-                WHERE aktywny = 1
+                WHERE COALESCE(aktywny,1)=1
                 ORDER BY nazwisko, imie
                 """
             )
@@ -243,7 +243,7 @@ class MonthlyViewLogic:
                 """
                 SELECT id, imie || ' ' || nazwisko AS label
                 FROM pracownicy
-                WHERE id=%s AND aktywny = 1
+                WHERE id=%s AND COALESCE(aktywny,1)=1
                 """,
                 (actor_id,),
             )

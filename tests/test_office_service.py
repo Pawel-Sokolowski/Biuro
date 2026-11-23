@@ -150,8 +150,25 @@ class OfficeServiceTests(DbTestCase):
         filter_spec = OPERATIONS[
             'app.monthly_view.monthly_view_logic.MonthlyViewLogic.get_employee_filter_list'
         ]
+        set_month_spec = OPERATIONS[
+            'app.monthly_view.monthly_view_logic.MonthlyViewLogic.set_month'
+        ]
         self.assertIn('tab:',constructor['capability'])
         self.assertEqual(filter_spec['capability'],'authenticated')
+        self.assertEqual(set_month_spec['capability'],'authenticated')
+        logic = object.__new__(MonthlyViewLogic)
+        logic.pracownik_id = self.employee
+        rows = logic.get_employee_filter_list()
+        self.assertIn((self.employee,'Jan Kowalski'),rows)
+
+    def test_legacy_employee_with_null_active_flag_is_listed(self):
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE pracownicy SET aktywny=NULL WHERE id=%s",
+                (self.employee,),
+            )
+            conn.commit()
+        from app.monthly_view.monthly_view_logic import MonthlyViewLogic
         logic = object.__new__(MonthlyViewLogic)
         logic.pracownik_id = self.employee
         rows = logic.get_employee_filter_list()
@@ -179,12 +196,15 @@ class OfficeServiceTests(DbTestCase):
             '192.168.1.50',
             'ul. Kościuszki 12',
             '1234.56 PLN',
+            '5260001246',
         ]
         self.assertEqual([public(value) for value in values], values)
         mapping = {
             'data_rozliczenia': '2026-11-23',
             'cena_netto': '1234.56',
             'adres_ip_serwera': '192.168.1.50',
+            'nip': '5260001246',
+            'nabywca_nip': '5260001246',
             'haslo_enc': 'ciphertext',
             'server_token_label': 'Numer podsystemu',
         }
@@ -192,6 +212,8 @@ class OfficeServiceTests(DbTestCase):
         self.assertEqual(result['data_rozliczenia'], '2026-11-23')
         self.assertEqual(result['cena_netto'], '1234.56')
         self.assertEqual(result['adres_ip_serwera'], '192.168.1.50')
+        self.assertEqual(result['nip'], '5260001246')
+        self.assertEqual(result['nabywca_nip'], '5260001246')
         self.assertEqual(result['haslo_enc'], '[zapisane na serwerze]')
         self.assertEqual(result['server_token_label'], 'Numer podsystemu')
 
@@ -204,6 +226,21 @@ class OfficeServiceTests(DbTestCase):
             privacy.redact('postgresql://biuro:2026@localhost/biuro'),
             'postgresql://biuro:[redacted]@localhost/biuro',
         )
+
+    def test_long_database_secret_does_not_redact_identifier_fragments(self):
+        from app.diagnostics import PrivacyFilter
+        with mock.patch.dict(
+            'os.environ',
+            {'DB_URL': 'postgresql://biuro:redacted@localhost/biuro'},
+            clear=False,
+        ):
+            privacy = PrivacyFilter()
+        self.assertEqual(privacy.redact('NIP 85redacted23'), 'NIP 85redacted23')
+        self.assertEqual(
+            privacy.redact('postgresql://biuro:redacted@localhost/biuro'),
+            'postgresql://biuro:[redacted]@localhost/biuro',
+        )
+        self.assertEqual(privacy.redact('password=redacted'), 'password=[redacted]')
 
     def test_timer_employee_filter_cannot_be_used_to_read_someone_elses_time(self):
         with self.assertRaises(PermissionError):

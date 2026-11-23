@@ -26,19 +26,16 @@ class PrivacyFilter(logging.Filter):
             pass
 
     def redact(self, message):
-        # Long secrets are safe to replace globally. Short secrets must only
-        # be replaced in credential-bearing contexts, not in ordinary dates.
+        # Replace only complete secret tokens. A credential can be a substring
+        # of an ordinary identifier, so global replacement corrupts business
+        # data such as NIP numbers, dates and prices.
         for secret in sorted(set(filter(None, self.secrets)), key=len, reverse=True):
-            if len(secret) < 8:
-                escaped = re.escape(secret)
-                patterns = (
-                    rf'(?i)(?:password|haslo|secret|passwd|pwd)\s*[=:]\s*{escaped}(?![0-9A-Za-z])',
-                    rf'(?i)://[^/\s:@]+:{escaped}@',
-                )
-                for pattern in patterns:
-                    message = re.sub(pattern, lambda match: match.group(0).replace(secret, '[redacted]'), message)
-                continue
-            message = message.replace(secret, '[redacted]')
+            escaped = re.escape(secret)
+            message = re.sub(
+                rf'(?<![0-9A-Za-z]){escaped}(?![0-9A-Za-z])',
+                '[redacted]',
+                message,
+            )
         return message
 
     def filter(self, record):

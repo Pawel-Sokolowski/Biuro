@@ -32,6 +32,13 @@ def run():
             raise RuntimeError('Missing worker setup modules')
         result['checks'].append('worker_setup_modules')
         if sys.platform == 'win32':
+            from pywinauto import Application, Desktop
+            from pywinauto.controls.uiawrapper import UIAWrapper
+            from win32ts import WTSQuerySessionInformation
+
+            if not all((Application, Desktop, UIAWrapper, WTSQuerySessionInformation)):
+                raise RuntimeError('Missing Płatnik GUI automation modules')
+            result['checks'].append('platnik_gui_automation')
             from app.integrations.enova.odbc_support import load_odbc
             load_odbc()
             result['checks'].append('enova_odbc_module')

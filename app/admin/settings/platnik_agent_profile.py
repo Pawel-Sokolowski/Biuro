@@ -1,5 +1,6 @@
 """Profile editor for the interactive Płatnik agent, inside the installed application."""
 import json
+import logging
 from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, QPushButton,
                              QLabel, QPlainTextEdit, QMessageBox)
@@ -109,11 +110,18 @@ class PlatnikAgentProfile(QWidget):
             QMessageBox.warning(self, 'Agent Płatnika', 'Płatnik nie jest dostępny na tym pulpicie. '
                                 'Zaloguj się na pulpicie serwera, otwórz Płatnika i spróbuj ponownie.')
             return
+        except ImportError:
+            logging.getLogger(__name__).exception('Płatnik GUI automation import failed')
+            QMessageBox.warning(self, 'Agent Płatnika', 'Nie można załadować bibliotek automatyzacji Płatnika. '
+                                'Szczegóły zapisano w dzienniku Biuro.')
+            return
         except (ValueError, OSError) as error:
             QMessageBox.warning(self, 'Agent Płatnika', str(error))
             return
         except Exception:
-            QMessageBox.warning(self, 'Agent Płatnika', 'Nie udało się odczytać kontrolek Płatnika.')
+            logging.getLogger(__name__).exception('Płatnik control discovery failed')
+            QMessageBox.warning(self, 'Agent Płatnika', 'Nie udało się odczytać kontrolek Płatnika. '
+                                'Szczegóły zapisano w dzienniku Biuro.')
             return
         self.result.setPlainText('\n'.join(
             f"{item['control_type'] or '?'} | class={item['class_name'] or '-'} | "

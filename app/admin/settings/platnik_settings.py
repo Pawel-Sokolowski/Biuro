@@ -2,7 +2,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QFormLayout,QLineEdit,QCheckBox,
-    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar)
+    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar,QDialog,QScrollArea)
 from PyQt6.QtCore import Qt,pyqtSignal
 from app.integrations.platnik.agent_service import SERVICE_NAME as AGENT_SERVICE
 from app.integrations.platnik.holidays import load,save,check_connection,import_year,PlatnikSqlError
@@ -138,15 +138,14 @@ class PlatnikSettings(QWidget):
 
     def open_profile(self):
         from app.admin.settings.platnik_agent_profile import PlatnikAgentProfile
-        dialog = QMessageBox(self)
+        dialog = QDialog(self)
         dialog.setWindowTitle('Profil agenta Płatnika')
-        dialog.setText('Profil agenta edytujesz w nowym oknie. Zamknij je, aby wrócić do ustawień.')
-        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.resize(700, 760)
+        area = QScrollArea(dialog)
+        area.setWidgetResizable(True)
+        area.setWidget(PlatnikAgentProfile())
+        QVBoxLayout(dialog).addWidget(area)
         dialog.exec()
-        page = PlatnikAgentProfile(self)
-        page.setWindowTitle('Profil agenta Płatnika')
-        page.resize(700, 760)
-        page.show()
 
     def save_agent_files(self):
         """Write the agent's libpq service from the office DSN; never echo the password."""

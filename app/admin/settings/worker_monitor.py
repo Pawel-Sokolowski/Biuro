@@ -17,7 +17,8 @@ STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'partial': 'Częściowo w
 MODES = {'waiting': 'Oczekiwanie na godzinę odczytu', 'checked_today': 'Sprawdzono już dzisiaj',
          'disabled': 'Wyłączono w ustawieniach usługi', 'not_configured': 'Brak konfiguracji usługi',
          'busy': 'Odczyt już trwa', 'idle': 'Kolejka pusta', 'retry_waiting': 'Oczekiwanie na ponowienie',
-         'empty': 'Brak firm do odczytu', 'cancelled': 'Przerwano'}
+         'empty': 'Brak firm do odczytu', 'cancelled': 'Przerwano',
+         'incomplete_week': 'Tydzień rozpoczęty, brak potwierdzenia zakończenia'}
 
 
 def state_label(value):
@@ -203,6 +204,8 @@ class WorkerMonitor(QWidget):
             self._fill(self.enova_retries, retries)
             self._retry_rows = retries
         message = 'e-ZLA: ' + str(progress.get('stage') or 'Oczekiwanie na pobieranie')
+        if progress.get('stale'):
+            message += ' [zapis sprzed przerwanego przebiegu]'
         if progress.get('company_id'):
             message += ' — ' + str(names.get(progress['company_id'], progress['company_id']))
         if progress.get('total') is not None:

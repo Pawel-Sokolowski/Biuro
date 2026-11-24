@@ -61,11 +61,13 @@ def run(stop=None, *, now=None):
             selected = {**config,'sources':sources,'months_back':1}
             documents, checked = [], []
             for periods in month_batches(months):
+                if stop is not None and stop.is_set():
+                    raise ValueError('Przerwano odczyt z Enovy.')
                 reason = 'EnovaDocumentsFailed'
-                documents.extend(run_import(selected,apply=True,months=periods))
+                documents.extend(run_import(selected,apply=True,months=periods,stop=stop))
                 if config.get('checking_enabled',False):
                     reason = 'EnovaCheckingFailed'
-                    checked.extend(run_checking_import(selected,apply=True,months=periods,force=True))
+                    checked.extend(run_checking_import(selected,apply=True,months=periods,force=True,stop=stop))
             if (not documents and not checked) or any(not item['ok'] for item in documents):
                 reason = 'EnovaDocumentsFailed'
                 raise ValueError('Nie ukończono odczytu dokumentów lub JPK.')
@@ -79,7 +81,8 @@ def run(stop=None, *, now=None):
             for row in events:
                 delay = min(3600, 60 * 2 ** min(row['attempts'], 6))
                 retries.append((company_id, row['period'], row['revision'], failed_at + timedelta(seconds=delay), reason))
-            record('enova', 'failed', company_id=company_id, error_type=reason)
+            if not (stop is not None and stop.is_set()):
+                record('enova', 'failed', company_id=company_id, error_type=reason)
             results.append({'company_id': company_id, 'ok': False, 'months': months, 'error_type': reason})
     if consumed or retries:
         with get_conn() as conn:
@@ -101,4 +104,6 @@ def run(stop=None, *, now=None):
                 """, tuple(map(list, zip(*retries))))
     if retries:
         return {'mode': 'partial' if consumed else 'failed', 'results': results}
+    if stop is not None and stop.is_set() and not consumed:
+        return {'mode': 'cancelled', 'results': results}
     return {'mode': 'applied' if results else 'cancelled', 'results': results}

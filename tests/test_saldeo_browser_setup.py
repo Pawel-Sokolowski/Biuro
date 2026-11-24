@@ -92,6 +92,18 @@ class SavedLoginTests(TestCase):
         self.assertEqual(config['item_selector'], LEGACY_ITEM_SELECTOR)
         self.assertEqual(config['next_selector'], '#custom-next')
 
+    def test_saved_navigation_next_selector_moves_to_the_page_number_input(self):
+        from app.integrations.saldeo_web.settings import (OPERATIONS_NEXT, OPERATIONS_NEXT_LEGACY, OPERATIONS_ROWS,
+                                                          load)
+        import json
+        # An installation saved before the fix holds the removed next/prev selector; it
+        # matched nothing, so every run ended partial. It must be migrated, not kept.
+        saved = {'item_selector': OPERATIONS_ROWS, 'open_selector': '', 'next_selector': OPERATIONS_NEXT_LEGACY}
+        with patch('app.integrations.saldeo_web.settings.get_setting', return_value=json.dumps(saved)):
+            config = load()
+        self.assertEqual(config['next_selector'], OPERATIONS_NEXT)
+        self.assertEqual(config['item_selector'], OPERATIONS_ROWS)
+
     def test_history_reauthenticates_once_and_reopens_the_history(self):
         from unittest.mock import call
         from app.integrations.saldeo_web.browser import open_authenticated_history
@@ -164,7 +176,10 @@ class SavedLoginTests(TestCase):
              patch('app.integrations.saldeo_web.browser.resolve_browser',return_value='browser.exe'), \
              patch('app.integrations.saldeo_web.settings.load',return_value=config), \
              patch('app.integrations.saldeo_web.browser.remember_login_fields',return_value=True), \
+             patch('app.integrations.saldeo_web.browser._confirm_history',return_value=True) as confirm, \
              patch('app.utils.crypto.decrypt_password',return_value='synthetic-password'):
             self.assertTrue(login_window(actor_id=1))
+        # The header marker is confirmed by opening the operations list before reporting success.
+        self.assertEqual(confirm.call_count, 1)
         controls[config['submit_selector']].click.assert_called_once()
         context.close.assert_called_once()

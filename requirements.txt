@@ -44,3 +44,9 @@ pyzipper==0.4.0
 
 # Authenticated Saldeo history monitor; uses installed Microsoft Edge or Google Chrome.
 playwright==1.56.0
+
+# Interactive Płatnik agent runs inside the same EXE: pywinauto drives the Płatnik GUI
+# and pywin32 provides win32ts (desktop-session check). Without these the installed
+# worker cannot start the agent and needs a separate Python environment from the repo.
+pywinauto==0.6.9; sys_platform == "win32"
+pywin32==312; sys_platform == "win32"

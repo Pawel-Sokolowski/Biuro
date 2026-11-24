@@ -21,10 +21,16 @@ if __name__ == '__main__':
 
 from app.config import get_dsn, get_schema
 from app.db.dao_app_settings import get_setting, set_setting
-from app.services.worker_settings import load_settings
+from app.services.worker_settings import ENOVA_INTERVAL, load_settings
 
 logger = logging.getLogger(__name__)
 JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh')
+# Jobs that can wait for a remote system for hours. A wall-clock limit for these
+# would fail healthy runs; every other job is bounded so a hung call cannot hold
+# its executor slot (and the job itself) for ever.
+UNBOUNDED_JOBS = frozenset({'ezla', 'platnik_gui', 'checking_refresh'})
+# Upper bound for the heartbeat event log; the monitor shows the newest ones.
+EVENTS_LIMIT = 500
 
 
 def _env_int(name, default, minimum, maximum):
@@ -40,6 +46,19 @@ def _env_int(name, default, minimum, maximum):
 WORKER_THREADS = _env_int('BIO_WORKER_THREADS', 4, 1, len(JOBS))
 HEARTBEAT_SECONDS = _env_int('BIO_WORKER_HEARTBEAT_SECONDS', 10, 5, 60)
 LEADER_CHECK_SECONDS = _env_int('BIO_WORKER_LEADER_CHECK_SECONDS', 15, 5, 60)
+JOB_TIMEOUT_SECONDS = _env_int('BIO_WORKER_JOB_TIMEOUT_SECONDS', 1800, 60, 86400)
+
+
+def job_interval(name, settings):
+    """Seconds between runs; Enova polls its local queue on a fixed short cadence."""
+    return ENOVA_INTERVAL if name == 'enova' else settings[name + '_interval']
+
+
+def job_timeout(name, settings):
+    """Seconds a single run may last, or None when the job waits on a remote system."""
+    if name in UNBOUNDED_JOBS:
+        return None
+    return max(JOB_TIMEOUT_SECONDS, job_interval(name, settings))
 
 
 def mail_job(stop=None):
@@ -104,8 +123,10 @@ def ksef_import_job():
     for period in (previous_month(month), month):
         result = sync_month(period)
         unmatched_by_month[period] = len(result.get('niedopasowane', ()))
+    # Unmatched invoices are a normal outcome reported per month, not a job failure:
+    # the run itself completed and the counter is visible in the result.
     return {'months': len(unmatched_by_month), 'unmatched_by_month': unmatched_by_month,
-            'mode': 'partial' if any(unmatched_by_month.values()) else 'completed'}
+            'unmatched': sum(unmatched_by_month.values()), 'mode': 'completed'}
 
 
 def ezla_job(stop=None,now=None):
@@ -118,14 +139,26 @@ def ezla_job(stop=None,now=None):
     week = monday.isoformat()
     if get_setting('worker_ezla_completed_week')==week:
         return {'mode':'checked_this_week','companies':0,'failed':0}
+    if get_setting('worker_ezla_started_week')==week:
+        # A previous run for this week started but never recorded its completion. Running
+        # the download again would repeat the whole week for every company, so wait for an
+        # operator decision (clear the marker) instead of resubmitting blind.
+        return {'mode':'incomplete_week','companies':0,'failed':0}
+    set_setting('worker_ezla_started_week',week)
     result = run_sync(stop=stop)
     if result.get('mode') in ('disabled','busy','cancelled') or (stop is not None and stop.is_set()):
+        if result.get('mode')!='busy':
+            set_setting('worker_ezla_started_week','')
         return result
     if any(row.get('state')=='busy' for row in result.get('results',[])):
         return {**result,'mode':'busy'}
     if result['failed']:
+        # A partial failure is retried within the week by the next run: keeping the
+        # "started" marker would turn every later run into incomplete_week.
+        set_setting('worker_ezla_started_week','')
         raise RuntimeError('Nie pobrano e-ZLA dla części firm. Szczegóły w raporcie e-ZLA.')
     set_setting('worker_ezla_completed_week',week)
+    set_setting('worker_ezla_started_week','')
     return {**{key: result[key] for key in ('companies', 'failed')}, 'mode': result.get('mode', 'completed')}
 
 
@@ -225,13 +258,25 @@ def leadership():
         conn.close()
 
 
+def _parse_setting(raw, default):
+    try:
+        return json.loads(raw) if raw else default
+    except (TypeError, ValueError):
+        logger.warning('worker_setting_unreadable')
+        return default
+
+
 def serve(*, once=False, stop=None):
     stop = stop or threading.Event()
     running, last_started, statuses = {}, {}, {}
-    events = json.loads(get_setting('background_worker_events') or '[]')[-200:]
+    events = _parse_setting(get_setting('background_worker_events'), [])[-EVENTS_LIMIT:]
     with leadership() as leader, ThreadPoolExecutor(max_workers=WORKER_THREADS, thread_name_prefix='biuro-job') as pool:
-        from app.services.checking_refresh import recover_interrupted
-        recover_interrupted()
+        try:
+            from app.services.checking_refresh import recover_interrupted
+            recover_interrupted()
+        except Exception as error:
+            # One unrecoverable request must not keep every other job from starting.
+            logger.error('worker_recovery_failed error_type=%s', type(error).__name__)
         from app.version import __version__
         from app.services.worker_setup import worker_env_path
         instance = {'id':uuid.uuid4().hex,'host':socket.gethostname(),'pid':os.getpid(),
@@ -251,6 +296,22 @@ def serve(*, once=False, stop=None):
             events_changed = False
             for name, future in list(running.items()):
                 if not future.done():
+                    # A run that never returns would otherwise hold its slot and block the
+                    # job for ever. Bounded jobs are given up here; the worker thread itself
+                    # is left to the executor, and the job's own interval starts again.
+                    timeout = job_timeout(name, settings)
+                    started = last_started.get(name)
+                    if timeout is None or started is None or clock.monotonic() - started < timeout:
+                        continue
+                    logger.error('worker_job_timeout job=%s seconds=%s', name, timeout)
+                    statuses[name] = {'state': 'failed', 'error_type': 'Timeout',
+                                      'started_at': statuses[name].get('started_at'),
+                                      'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                    events.append({'at': statuses[name]['finished_at'], 'job': name, 'state': 'failed',
+                                   'error_type': 'Timeout'})
+                    events_changed = True
+                    del running[name]
+                    last_started[name] = clock.monotonic()
                     continue
                 started_at = statuses[name].get('started_at')
                 try:
@@ -258,7 +319,7 @@ def serve(*, once=False, stop=None):
                     mode = outcome.get('mode') if isinstance(outcome, dict) else None
                     state = mode if mode in ('partial', 'failed') else 'ok'
                     if mode in ('waiting', 'retry_waiting', 'checked_today', 'checked_this_week', 'disabled',
-                                'not_configured', 'busy', 'idle', 'empty', 'cancelled'):
+                                'not_configured', 'busy', 'idle', 'empty', 'cancelled', 'incomplete_week'):
                         state = 'skipped'
                     statuses[name] = {'state': state, 'result': outcome,
                                       'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
@@ -281,28 +342,40 @@ def serve(*, once=False, stop=None):
                 gui_scheduled_at = platnik_gui_schedule(settings_now, settings['platnik_gui_time'], gui_status.get('result'))
             for name in JOBS:
                 if settings['enabled'] and settings[name] and name not in running:
-                    due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= (30 if name=='enova' else settings[name + '_interval']))
+                    due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= job_interval(name, settings))
                     if name == 'platnik_gui':
                         due = due and settings_now >= gui_scheduled_at
                     if due:
-                        last_started[name] = clock.monotonic()
                         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+                        try:
+                            future = pool.submit(copy_context().run, run_job, name, stop)
+                        except Exception as error:
+                            # A refused submission must not leave a job "running" for ever
+                            # with no future to collect.
+                            logger.error('worker_job_submit_failed job=%s error_type=%s', name, type(error).__name__)
+                            last_started[name] = clock.monotonic()
+                            statuses[name] = {'state': 'failed', 'error_type': type(error).__name__,
+                                              'finished_at': stamp}
+                            events.append({'at': stamp, 'job': name, 'state': 'failed',
+                                           'error_type': type(error).__name__})
+                            events_changed = True
+                            continue
+                        last_started[name] = clock.monotonic()
                         statuses[name] = {'state': 'running', 'started_at': stamp}
                         events.append({'at': stamp, 'job': name, 'state': 'started'})
                         events_changed = True
-                        running[name] = pool.submit(copy_context().run, run_job, name, stop)
+                        running[name] = future
             if events_changed:
-                events = events[-200:]
+                events = events[-EVENTS_LIMIT:]
                 set_setting('background_worker_events', json.dumps(events))
             for name, status in statuses.items():
                 if status['state'] != 'running' and settings['enabled'] and settings[name]:
-                    delay = max(0, (30 if name=='enova' else settings[name + '_interval'])
-                                - (clock.monotonic() - last_started.get(name, 0)))
+                    delay = max(0, job_interval(name, settings) - (clock.monotonic() - last_started.get(name, 0)))
                     now = datetime.now(ZoneInfo('Europe/Warsaw'))
                     next_run = now+timedelta(seconds=delay)
                     if name == 'platnik_gui' and gui_scheduled_at > now:
                         next_run = gui_scheduled_at
-                    if name=='ezla' and (status.get('result') or {}).get('mode') in ('waiting','checked_this_week'):
+                    if name=='ezla' and (status.get('result') or {}).get('mode') in ('waiting','checked_this_week','incomplete_week'):
                         at = time.fromisoformat(settings['ezla_time'])
                         next_run = now.replace(hour=at.hour,minute=at.minute,second=0,microsecond=0)+timedelta(days=(-now.weekday())%7)
                         if next_run<=now:
@@ -357,8 +430,13 @@ def main(argv=None):
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda *_: stop.set())
         if not args.once:
+            # The office HTTPS API is optional next to the scheduled jobs: a broken
+            # certificate or a busy port must not stop every background job.
             from app.remote.http_server import start_configured
-            api_server = start_configured()
+            try:
+                api_server = start_configured()
+            except Exception as error:
+                logger.error('worker_api_server_unavailable error_type=%s', type(error).__name__)
         return serve(once=args.once, stop=stop)
     except Exception:
         logger.exception('worker_startup_or_runtime_failed')

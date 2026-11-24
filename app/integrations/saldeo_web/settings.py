@@ -12,7 +12,10 @@ LOGIN_SELECTORS = {
 }
 OPERATIONS_URL = SALDEO_ORIGIN + '/biuro/operacje/lista-operacji.hta'
 OPERATIONS_ROWS = 'bs-mat-table.background-operation-list-table .mat-row'
-OPERATIONS_NEXT = '.background-operation-list .paginator-wrapper-top button.mat-mdc-paginator-navigation-next'
+# Saldeo paginates with a page-number input (and a page-size select), not next/prev
+# buttons: the old navigation-next selector matched nothing and every run ended partial.
+OPERATIONS_NEXT = 'input[qa-id="paginatorPage"]'
+OPERATIONS_NEXT_LEGACY = '.background-operation-list .paginator-wrapper-top button.mat-mdc-paginator-navigation-next'
 LEGACY_ITEM_SELECTOR = 'div[qa-id^="row-bo-id-"]'
 SESSION_SELECTOR = '[qa-id="bo-counter"]'
 DEFAULTS = dict(enabled=False, login_url=SALDEO_ORIGIN + '/login/login.hta', history_url=OPERATIONS_URL,
@@ -38,6 +41,10 @@ def load():
         old_preset = (saved.get('item_selector') in (None, '', LEGACY_ITEM_SELECTOR)
                       and saved.get('open_selector') in (None, '', SESSION_SELECTOR)
                       and not saved.get('next_selector') and not saved.get('empty_selector'))
+        # Installations saved with the removed navigation-next selector are moved to the
+        # page-number input; without this the preset would keep returning partial forever.
+        if saved.get('next_selector') == OPERATIONS_NEXT_LEGACY:
+            old_preset = True
         if old_preset:
             value.update(item_selector=OPERATIONS_ROWS, open_selector='', next_selector=OPERATIONS_NEXT)
         elif value['item_selector'] != OPERATIONS_ROWS:

@@ -32,6 +32,29 @@ Opcjonalnie samą usługę uruchamia `Biuro.exe --api-server` lub
 `BIO_API_ENABLED=1` włącza usługę wewnątrz workera; samodzielne `--api-server`
 uruchamia ją bez zadań importu.
 
+### Próbne połączenie bez certyfikatu (tylko lokalnie)
+
+Do testów w sieci biura można na chwilę wyłączyć TLS. **Sesje i wszystkie dane
+lecą wtedy jawnym tekstem** — nie używaj tego w sieci, do której mają dostęp
+osoby postronne, i nie zostawiaj tego włączonego.
+
+1. Na serwerze, w `%LOCALAPPDATA%\Biuro\.env` (albo w środowisku usługi):
+
+   ```
+   BIO_API_ENABLED=1
+   BIO_API_ALLOW_PLAIN_HTTP=1
+   ```
+
+   `BIO_API_CERT` i `BIO_API_TLS_KEY` mogą zostać puste. Gdy certyfikat jest
+   ustawiony, TLS ma pierwszeństwo i flaga niczego nie wyłącza.
+2. Na stanowisku uruchom aplikację z parametrem `--allow-plain-http` (albo ustaw
+   `BIO_ALLOW_PLAIN_HTTP=1`) i wpisz adres z `http://`, np.
+   `http://192.168.1.116:8443`.
+
+Bez tej flagi klient odrzuca adres `http://`, a serwer bez certyfikatu nie
+wystartuje. Oba przypadki zgłaszają błąd konfiguracji zamiast połączyć się
+niezauważenie bez szyfrowania.
+
 Pierwszego administratora, aktualizację schematu i lokalną konfigurację klucza
 wykonuje się na serwerze. `--direct` jawnie uruchamia lokalny panel administracyjny
 z konfiguracją serwera; aplikacja pracownika nie wraca automatycznie do tego trybu

@@ -1,7 +1,7 @@
 from PyQt6.QtCore import QTime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLabel, QCheckBox,
     QSpinBox, QTimeEdit, QPushButton, QMessageBox)
-from app.services.worker_settings import load_settings, save_settings
+from app.services.worker_settings import ENOVA_INTERVAL, load_settings, save_settings
 
 
 class WorkerSettings(QWidget):
@@ -36,10 +36,9 @@ class WorkerSettings(QWidget):
             interval = QSpinBox()
             interval.setRange(30, 86400)
             interval.setSuffix(' s')
-            interval.setValue(settings[key + '_interval'])
+            interval.setValue(ENOVA_INTERVAL if key == 'enova' else settings[key + '_interval'])
             self.toggles[key], self.intervals[key] = toggle, interval
             if key=='enova':
-                interval.setValue(30)
                 interval.setEnabled(False)
                 interval.setToolTip('Sprawdza lokalną kolejkę zmian; bez zmiany etapu nie łączy się z Enovą.')
             if key=='ezla':
@@ -82,7 +81,8 @@ class WorkerSettings(QWidget):
         settings['ezla_time'] = self.ezla_time.time().toString('HH:mm')
         for key, toggle in self.toggles.items():
             settings[key] = toggle.isChecked()
-            settings[key + '_interval'] = self.intervals[key].value()
+            if key != 'enova':
+                settings[key + '_interval'] = self.intervals[key].value()
         return settings
 
     def is_dirty(self):
@@ -103,7 +103,7 @@ class WorkerSettings(QWidget):
         self.ezla_time.setTime(QTime.fromString(settings['ezla_time'],'HH:mm'))
         for key,toggle in self.toggles.items():
             toggle.setChecked(settings[key])
-            self.intervals[key].setValue(30 if key=='enova' else settings[key+'_interval'])
+            self.intervals[key].setValue(ENOVA_INTERVAL if key=='enova' else settings[key+'_interval'])
         self._saved_state = self.form_settings()
 
     def save(self):

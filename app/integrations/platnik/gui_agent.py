@@ -174,14 +174,27 @@ def run(config, path, *, once=False):
             connection.close()
 
 
-def main():
+def default_profile():
+    """Where the installed application keeps the agent profile.
+
+    Biuro.exe --platnik-agent runs without --config, so the profile sits beside the
+    worker's own data and is edited from the Płatnik settings page.
+    """
+    base = Path(os.getenv('LOCALAPPDATA') or Path.home()) / 'Biuro'
+    return base / 'platnik-agent.json'
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('run', 'once', 'probe', 'describe', 'read-job'))
-    parser.add_argument('--config', type=Path, required=True)
-    args = parser.parse_args()
+    parser.add_argument('mode', nargs='?', default='run', choices=('run', 'once', 'probe', 'describe', 'read-job'))
+    parser.add_argument('--config', type=Path, default=None,
+                        help='Profil agenta. Domyślnie katalog danych Biuro: platnik-agent.json')
+    args = parser.parse_args(argv)
     if sys.platform != 'win32':
         raise SystemExit('Agent Płatnika wymaga Windows.')
-    path = args.config.resolve()
+    path = (args.config or default_profile()).resolve()
+    if not path.is_file():
+        raise SystemExit('Brak profilu agenta Płatnika: ' + str(path) + '. Uzupełnij go w Ustawieniach → Płatnik.')
     try:
         config = load_config(path, full=args.mode != 'describe')
         if args.mode == 'describe':

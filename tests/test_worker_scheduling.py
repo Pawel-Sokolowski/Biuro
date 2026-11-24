@@ -118,6 +118,35 @@ class WorkerSchedulingTests(DbTestCase):
             ezla_job(now=datetime(2026,11,23,3,tzinfo=zone))
             self.assertEqual(remote.call_count,2)
 
+    def test_interrupted_week_is_not_downloaded_again_but_a_failure_is_retried(self):
+        zone = ZoneInfo('Europe/Warsaw')
+        monday = datetime(2026,11,16,3,tzinfo=zone)
+        from app.db.dao_app_settings import set_setting
+        set_setting('worker_ezla_started_week', '2026-11-16')
+        with patch('app.integrations.ezla.sync.run_sync') as remote:
+            self.assertEqual(ezla_job(now=monday)['mode'], 'incomplete_week')
+            remote.assert_not_called()
+        set_setting('worker_ezla_started_week', '')
+        with patch('app.integrations.ezla.sync.run_sync', return_value={'mode':'completed','companies':1,'failed':1}):
+            with self.assertRaises(RuntimeError):
+                ezla_job(now=monday)
+        # A partial failure keeps the week retryable instead of blocking it for good.
+        self.assertEqual(get_setting('worker_ezla_started_week'), '')
+        with patch('app.integrations.ezla.sync.run_sync', return_value={'mode':'completed','companies':1,'failed':0}):
+            self.assertEqual(ezla_job(now=monday)['mode'], 'completed')
+        self.assertEqual(get_setting('worker_ezla_completed_week'), '2026-11-16')
+        self.assertEqual(get_setting('worker_ezla_started_week'), '')
+
+    def test_ezla_marks_the_week_started_before_downloading(self):
+        monday = datetime(2026,11,16,3,tzinfo=ZoneInfo('Europe/Warsaw'))
+        seen = {}
+        def read(*args, **kwargs):
+            seen['started'] = get_setting('worker_ezla_started_week')
+            return {'mode':'completed','companies':1,'failed':0}
+        with patch('app.integrations.ezla.sync.run_sync', side_effect=read):
+            ezla_job(now=monday)
+        self.assertEqual(seen['started'], '2026-11-16')
+
     def test_failed_or_busy_week_is_not_marked_completed(self):
         monday = datetime(2026,11,16,3,tzinfo=ZoneInfo('Europe/Warsaw'))
         with patch('app.integrations.ezla.sync.run_sync',return_value={'mode':'busy','companies':0,'failed':0}):

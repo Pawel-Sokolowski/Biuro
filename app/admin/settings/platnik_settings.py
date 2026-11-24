@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QFormLayout,QLineEdit,QCheckBox,
     QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar)
 from PyQt6.QtCore import Qt,pyqtSignal
+from app.integrations.platnik.agent_service import SERVICE_NAME as AGENT_SERVICE
 from app.integrations.platnik.holidays import load,save,check_connection,import_year,PlatnikSqlError
 from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
 from app.utils.background import TaskRunner
@@ -110,8 +111,67 @@ class PlatnikSettings(QWidget):
         self.error_button.clicked.connect(self.show_error_details)
         self.error_button.hide()
         layout.addWidget(self.error_button)
+        # --- Agent Płatnika: kolejka w PostgreSQL i pliki libpq ---
+        agent_note = QLabel('Agent Płatnika działa w tej samej instalacji (Biuro.exe --platnik-agent) i odbiera zlecenia '
+                            'z kolejki PostgreSQL, gdy pulpit serwera jest odblokowany. Wpisz hasło loginu PostgreSQL '
+                            'agenta — Biuro zapisze pliki libpq w Twoim profilu Windows.')
+        agent_note.setWordWrap(True)
+        layout.addWidget(agent_note)
+        agent_form = QFormLayout()
+        self.agent_user = QLineEdit(AGENT_SERVICE)
+        self.agent_password = QLineEdit()
+        self.agent_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.agent_password.setPlaceholderText('Hasło loginu agenta w PostgreSQL')
+        agent_form.addRow('Login agenta PostgreSQL', self.agent_user)
+        agent_form.addRow('Hasło agenta', self.agent_password)
+        layout.addLayout(agent_form)
+        self.agent_button = QPushButton('Zapisz pliki połączenia agenta (pg_service.conf, pgpass)')
+        self.agent_button.clicked.connect(self.save_agent_files)
+        self.buttons.append(self.agent_button)
+        layout.addWidget(self.agent_button)
+        self.profile_button = QPushButton('Profil agenta — okno, tabela, kolumny…')
+        self.profile_button.clicked.connect(self.open_profile)
+        self.buttons.append(self.profile_button)
+        layout.addWidget(self.profile_button)
         layout.addStretch()
         self._saved_state = self.form_state()
+
+    def open_profile(self):
+        from app.admin.settings.platnik_agent_profile import PlatnikAgentProfile
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle('Profil agenta Płatnika')
+        dialog.setText('Profil agenta edytujesz w nowym oknie. Zamknij je, aby wrócić do ustawień.')
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.exec()
+        page = PlatnikAgentProfile(self)
+        page.setWindowTitle('Profil agenta Płatnika')
+        page.resize(700, 760)
+        page.show()
+
+    def save_agent_files(self):
+        """Write the agent's libpq service from the office DSN; never echo the password."""
+        try:
+            from app.security.authorization import is_administrator
+            if not is_administrator(self.actor_id):
+                raise PermissionError('Tylko administrator konfiguruje agenta Płatnika.')
+            from app.config import get_dsn
+            from app.integrations.platnik.agent_service import parse_dsn, write_files
+            user = self.agent_user.text().strip()
+            password = self.agent_password.text()
+            self.agent_password.clear()
+            if not user:
+                raise ValueError('Podaj login agenta w PostgreSQL.')
+            parts = parse_dsn(get_dsn())
+            service, pgpass = write_files(parts['host'], parts['port'], parts['dbname'], user, password)
+        except (ValueError, OSError) as error:
+            QMessageBox.warning(self, 'Agent Płatnika', str(error))
+            return
+        except Exception:
+            QMessageBox.warning(self, 'Agent Płatnika', 'Nie zapisano plików agenta. Sprawdź adres bazy w konfiguracji workera.')
+            return
+        QMessageBox.information(self, 'Agent Płatnika',
+                                'Zapisano pliki agenta:\n' + str(service) + '\n' + str(pgpass) +
+                                '\nNadaj loginowi agenta uprawnienia do kolejki (scripts/grant_platnik_gui_agent.sql).')
 
     def _review_links(self):
         from app.admin.settings.platnik_links import PlatnikLinksDialog

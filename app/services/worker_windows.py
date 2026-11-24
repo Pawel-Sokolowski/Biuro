@@ -16,6 +16,7 @@ def identity():
 TASK_COMMAND = r'''
 $ErrorActionPreference = 'Stop'
 $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$deadline = [DateTime]::UtcNow.AddSeconds(180)
 function Stop-BiuroTask {
     Stop-ScheduledTask -TaskName 'Biuro-Background-Worker'
     for ($attempt = 0; $attempt -lt 50; $attempt++) {
@@ -24,16 +25,28 @@ function Stop-BiuroTask {
     }
     throw 'still_running'
 }
+function Start-BiuroTask {
+    # A process that outlives the caller's own wait keeps this script from hanging.
+    $runner = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-Command', 'Start-ScheduledTask -TaskName Biuro-Background-Worker')
+    $left = ($deadline - [DateTime]::UtcNow).TotalSeconds
+    if ($left -lt 1) { $left = 1 }
+    if (-not $runner.WaitForExit([int][Math]::Ceiling($left) * 1000)) { throw 'start_timeout' }
+    if ($runner.ExitCode -ne 0) { throw 'start_failed' }
+}
 try {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     if ($id.User.Value -ne $p.sid) { throw 'identity' }
     $name = 'Biuro-Background-Worker'
+    # Both shapes this app registers: an installed EXE (--worker) and a source
+    # environment (-m app.worker). Anything else belongs to another installation.
+    $accepted = @('--worker', '-m app.worker')
     $old = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if ($old) {
         $sid = $old.Principal.UserId
         if ($sid -notmatch '^S-1-') { $sid = (New-Object Security.Principal.NTAccount($sid)).Translate([Security.Principal.SecurityIdentifier]).Value }
         if ($old.Actions.Count -ne 1 -or $old.Actions[0].Execute -ne $p.exe -or
-            $old.Actions[0].Arguments -ne '--worker' -or $sid -ne $id.User.Value) { throw 'foreign_task' }
+            $accepted -notcontains $old.Actions[0].Arguments -or $sid -ne $id.User.Value) { throw 'foreign_task' }
     }
     if ($p.mode -eq 'stop') {
         if (-not $old) { throw 'missing_task' }
@@ -41,17 +54,35 @@ try {
     } elseif ($p.mode -eq 'restart') {
         if (-not $old) { throw 'missing_task' }
         Stop-BiuroTask
-        Start-ScheduledTask -TaskName $name
+        Start-BiuroTask
     } elseif ($p.mode -eq 'install') {
         if ($old) {
             if ($old.State -eq 'Running') { Stop-BiuroTask }
-            Start-ScheduledTask -TaskName $name
+            Start-BiuroTask
         } else {
             $action = New-ScheduledTaskAction -Execute $p.exe -Argument '--worker' -WorkingDirectory ([IO.Path]::GetDirectoryName($p.exe))
             $trigger = New-ScheduledTaskTrigger -AtStartup
             $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
             Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -User $id.Name -Password $p.password | Out-Null
-            Start-ScheduledTask -TaskName $name
+            Start-BiuroTask
+        }
+        # Płatnik agent: a second task in the same click, but interactive. It drives the
+        # Płatnik window, so it needs an unlocked desktop and therefore runs at logon
+        # rather than at startup, and only for this account.
+        $agentName = 'Biuro-Platnik-Worker'
+        $agentOld = Get-ScheduledTask -TaskName $agentName -ErrorAction SilentlyContinue
+        if ($agentOld) {
+            $agentSid = $agentOld.Principal.UserId
+            if ($agentSid -notmatch '^S-1-') { $agentSid = (New-Object Security.Principal.NTAccount($agentSid)).Translate([Security.Principal.SecurityIdentifier]).Value }
+            if ($agentOld.Actions.Count -ne 1 -or $agentOld.Actions[0].Execute -ne $p.exe -or
+                $agentOld.Actions[0].Arguments -ne '--platnik-agent' -or $agentSid -ne $id.User.Value) { throw 'foreign_agent_task' }
+            Set-ScheduledTask -TaskName $agentName -User $id.Name -Password $p.password | Out-Null
+        } else {
+            $agentAction = New-ScheduledTaskAction -Execute $p.exe -Argument '--platnik-agent' -WorkingDirectory ([IO.Path]::GetDirectoryName($p.exe))
+            $agentTrigger = New-ScheduledTaskTrigger -AtLogOn -User $id.Name
+            $agentSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            $agentPrincipal = New-ScheduledTaskPrincipal -UserId $id.User.Value -LogonType Interactive -RunLevel Limited
+            Register-ScheduledTask -TaskName $agentName -Action $agentAction -Trigger $agentTrigger -Settings $agentSettings -Principal $agentPrincipal | Out-Null
         }
     } else { throw 'mode' }
     [Console]::Out.Write('ok')
@@ -79,7 +110,7 @@ def manage_task(mode, password='', *, expected_sid):
                           'password': password})
     try:
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', TASK_COMMAND],
-                                input=payload, text=True, capture_output=True, timeout=90,
+                                input=payload, text=True, capture_output=True, timeout=240,
                                 creationflags=subprocess.CREATE_NO_WINDOW)
     finally:
         payload = None

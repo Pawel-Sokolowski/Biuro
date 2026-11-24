@@ -5,7 +5,7 @@ import sys
 from PyQt6.QtCore import QSettings,QTimer
 from PyQt6.QtWidgets import (QCheckBox,QDialog,QFormLayout,QHBoxLayout,QLabel,QLineEdit,
                              QMessageBox,QPushButton,QVBoxLayout,QInputDialog)
-from app.remote.client import OfficeClient,normalize_server
+from app.remote.client import OfficeClient,allow_plain_http,normalize_server
 from app.remote import credential_store
 from app.remote.state import configure
 from app.utils.background import CommandRunner
@@ -43,8 +43,11 @@ class ServerLoginDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
         form = QFormLayout()
+        self.plain_http = allow_plain_http()
         self.server = QLineEdit(_initial_server_address(self.settings))
-        self.server.setPlaceholderText('https://serwer.biura:8443')
+        self.server.setPlaceholderText('http://127.0.0.1:8443' if self.plain_http else 'https://serwer.biura:8443')
+        if self.plain_http:
+            self.server.setToolTip('Tryb próbny: połączenie bez certyfikatu, dane nie są szyfrowane.')
         self.email = QLineEdit(str(self.settings.value('saved_email','') or ''))
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -90,7 +93,7 @@ class ServerLoginDialog(QDialog):
             return
         self.busy(True)
         self.status.setText('Łączenie z serwerem biura…')
-        connection = OfficeClient(server)
+        connection = OfficeClient(server, plain_http=self.plain_http)
         def work():
             connection.resume(token)
             return connection
@@ -107,7 +110,7 @@ class ServerLoginDialog(QDialog):
 
     def connect_office(self):
         try:
-            connection = OfficeClient(self.server.text())
+            connection = OfficeClient(self.server.text(), plain_http=self.plain_http)
             email,password,remember = self.email.text().strip(),self.password.text(),self.remember.isChecked()
             if not email or not password:
                 raise ValueError('Podaj e-mail i hasło pracownika.')
@@ -141,7 +144,7 @@ class ServerLoginDialog(QDialog):
 
     def reset_password(self):
         try:
-            connection = OfficeClient(self.server.text())
+            connection = OfficeClient(self.server.text(), plain_http=self.plain_http)
             email = self.email.text().strip()
             if not email:
                 raise ValueError('Najpierw wpisz adres e-mail pracownika.')

@@ -184,6 +184,8 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self,address,service):
         self.office_service = service
+        # Set by create_server(); None means plain HTTP for a local trial run.
+        self.tls_context = None
         self.keepalive_timeout = _limit('BIO_API_IDLE_TIMEOUT',30,5,120)
         self.slots = threading.BoundedSemaphore(_limit('BIO_API_CONNECTIONS',128,16,512))
         self.large_bodies = threading.BoundedSemaphore(4)
@@ -203,6 +205,8 @@ class Server(ThreadingHTTPServer):
         connection,address = super().get_request()
         connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
         connection.settimeout(10)
+        if self.tls_context is None:
+            return connection,address
         return self.tls_context.wrap_socket(connection,server_side=True,do_handshake_on_connect=False),address
 
     def process_request_thread(self,request,client_address):
@@ -212,12 +216,44 @@ class Server(ThreadingHTTPServer):
             self.slots.release()
 
 
-def create_server(host,port,certificate,private_key,directory):
-    if not certificate or not private_key:
+def _private_bind(host):
+    """True when the listening address is loopback or RFC1918, never a public interface.
+
+    Plain HTTP exposes every session and operation, so it is limited to the office LAN.
+    A wildcard bind is rejected because the machine may also have a public adapter.
+    """
+    import ipaddress
+    host = str(host or '').strip()
+    if not host or host in ('0.0.0.0', '::', '*'):
+        return False
+    if host.casefold() == 'localhost':
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private
+
+
+def create_server(host,port,certificate,private_key,directory,allow_plain_http=False):
+    """Build the office server; TLS is the default and plain HTTP must be asked for.
+
+    allow_plain_http is for a trial or local connection without a certificate: sessions
+    and every operation then travel unencrypted over the network, so it is off unless
+    BIO_API_ALLOW_PLAIN_HTTP=1 (server) or the client was started with --allow-plain-http.
+    Even then the bind address must be loopback or a private LAN address.
+    """
+    context = None
+    if certificate and private_key:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(certificate,private_key)
+    elif not allow_plain_http:
         raise ValueError('Skonfiguruj certyfikat HTTPS i jego klucz prywatny na serwerze biura.')
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(certificate,private_key)
+    elif not _private_bind(host):
+        # A public or wildcard address would publish the office over cleartext.
+        raise ValueError('Połączenie HTTP bez certyfikatu jest dozwolone tylko w sieci lokalnej. '
+                         'Ustaw adres nasłuchu na adres LAN serwera (np. 192.168.1.116), nie 0.0.0.0.')
     service = OfficeService(directory)
     try:
         server = Server((host,int(port)),service)
@@ -225,6 +261,8 @@ def create_server(host,port,certificate,private_key,directory):
         service.close()
         raise
     server.tls_context = context
+    if context is None:
+        logger.warning('office_http_plaintext_enabled address=%s port=%s',host,port)
     return server
 
 
@@ -232,7 +270,8 @@ def from_environment():
     import os
     from app.config import get_data_dir
     return create_server(os.getenv('BIO_API_BIND','0.0.0.0'),int(os.getenv('BIO_API_PORT','8443')),
-                         os.getenv('BIO_API_CERT',''),os.getenv('BIO_API_TLS_KEY',''),get_data_dir())
+                         os.getenv('BIO_API_CERT',''),os.getenv('BIO_API_TLS_KEY',''),get_data_dir(),
+                         allow_plain_http=os.getenv('BIO_API_ALLOW_PLAIN_HTTP')=='1')
 
 
 def start_configured():
@@ -260,7 +299,8 @@ def main():
     from PyQt6.QtWidgets import QApplication
     qt_application = QApplication.instance() or QApplication(['biuro-api'])
     server = from_environment()
-    logger.info('office_https_started address=%s port=%s',*server.server_address)
+    scheme = 'https' if server.tls_context is not None else 'http'
+    logger.info('office_%s_started address=%s port=%s',scheme,*server.server_address)
     try:
         server.serve_forever()
     finally:

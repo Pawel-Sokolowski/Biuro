@@ -437,7 +437,8 @@ def month_batches(months):
 
 
 @office_endpoint('app.integrations.enova.document_counts.run_import')
-def run_import(config, *, apply=False, today=None, fetch=None, months=None):
+def run_import(config, *, apply=False, today=None, fetch=None, months=None, stop=None):
+    """stop: optional Event; a set event abandons the remaining companies without writing."""
     if apply and not config.get('enabled', False):
         raise ValueError('Import wyłączony. Najpierw sprawdź podgląd, następnie ustaw enabled=true.')
     if not config.get('sources'):
@@ -460,6 +461,8 @@ def run_import(config, *, apply=False, today=None, fetch=None, months=None):
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748209)').fetchone()[0]:
             raise ValueError('Inny import Enova jest już uruchomiony.')
         for source in config['sources']:
+            if stop is not None and stop.is_set():
+                break
             company = None
             try:
                 with conn.transaction():
@@ -484,6 +487,8 @@ def run_import(config, *, apply=False, today=None, fetch=None, months=None):
                     counts = []
                     # Batch adjacent months, preserving the adapter's two date bounds.
                     for batch in month_batches(eligible):
+                        if stop is not None and stop.is_set():
+                            raise ValueError('Przerwano odczyt z Enovy.')
                         ready_months = [row[0] for row in conn.execute(
                             "SELECT miesiac FROM statusy_miesieczne WHERE firma_id=%s "
                             "AND miesiac=ANY(%s) AND etap='Wysłane wyniki' ORDER BY miesiac",

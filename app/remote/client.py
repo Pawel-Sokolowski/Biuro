@@ -22,14 +22,24 @@ def normalize_server(value):
     if '://' not in value:
         value = 'https://' + value
     parsed = urlsplit(value)
-    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('Podaj adres HTTPS serwera biura, bez loginu i hasła.')
+    if parsed.scheme not in ('https','http') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Podaj adres serwera biura, bez loginu i hasła.')
     return value
 
 
+def allow_plain_http():
+    """The desktop accepts an http:// office only when explicitly started that way."""
+    import os
+    import sys
+    return os.getenv('BIO_ALLOW_PLAIN_HTTP')=='1' or '--allow-plain-http' in sys.argv
+
+
 class OfficeClient:
-    def __init__(self,server,*,verify=True):
+    def __init__(self,server,*,verify=True,plain_http=None):
         self.server = normalize_server(server)
+        self.plain_http = allow_plain_http() if plain_http is None else plain_http
+        if self.server.startswith('http://') and not self.plain_http:
+            raise ValueError('Połączenie bez certyfikatu wymaga uruchomienia z parametrem --allow-plain-http.')
         if verify is False:
             raise ValueError('Weryfikacja certyfikatu serwera jest wymagana.')
         self.verify = verify
@@ -67,6 +77,11 @@ class OfficeClient:
 
     def _new_session(self):
         import ssl
+        if self.server.startswith('http://'):
+            # Plain HTTP trial connection: there is no certificate to verify.
+            session = requests.Session()
+            session.mount('http://',requests.adapters.HTTPAdapter(pool_maxsize=4))
+            return session
         context = ssl.create_default_context(cafile=self.verify if isinstance(self.verify,str) else None)
 
         class OfficeTLS(requests.adapters.HTTPAdapter):

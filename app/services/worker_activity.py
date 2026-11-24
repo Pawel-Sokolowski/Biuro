@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def record(job, stage, *, company_id=None, count=None, error_type=None):
+    """Append one progress event; returns how many events are stored (0 when unavailable)."""
     # Only structured, allowlisted information; never exception strings, SQL, NIP or report contents.
     if job not in ('ezla', 'enova', 'platnik', 'checking_refresh') or stage not in STAGES:
         raise ValueError('Nieprawidłowe zdarzenie postępu workera.')
@@ -43,9 +44,11 @@ def record(job, stage, *, company_id=None, count=None, error_type=None):
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc',
                          (KEY, json.dumps(events)))
+            return len(events)
     except Exception:
         # Monitoring failure must not turn a successful download into a failed import.
         logger.warning('worker_activity_unavailable')
+        return 0
 
 
 @contextmanager

@@ -101,7 +101,8 @@ if _binary_spec and _binary_spec.submodule_search_locations:
     _libs_dir = Path(list(_binary_spec.submodule_search_locations)[0]).parent / "psycopg_binary.libs"
     if _libs_dir.is_dir():
         binaries += [(str(p), "psycopg_binary.libs") for p in _libs_dir.glob("*.dll")]
-PSYCOPG_HIDDEN += ["psycopg_binary", "psycopg_binary._psycopg", "psycopg_binary.pq", "psycopg_binary.version", "psycopg_binary._uuid"]# Sekrety (.env) nie sa dolaczane do instalatora - patrz .env.example.
+PSYCOPG_HIDDEN += ["psycopg_binary", "psycopg_binary._psycopg", "psycopg_binary.pq", "psycopg_binary.version"]
+# Sekrety (.env) nie sa dolaczane do instalatora - patrz .env.example.
 
 a = Analysis(
     [str(ROOT / "main.py")],
@@ -123,6 +124,24 @@ a = Analysis(
         "app.integrations.platnik.holiday_tracking",
         "app.accounting.holiday_ui",
         "app.admin.settings.platnik_settings",
+        # The interactive Płatnik agent runs from this same EXE (Biuro.exe --platnik-agent),
+        # so its GUI-automation dependencies must be inside the frozen build.
+        "app.integrations.platnik.gui_agent",
+        "app.integrations.platnik.gui_desktop",
+        "app.integrations.platnik.gui_evidence",
+        "pywinauto",
+        "pywinauto.controls.hwndwrapper",
+        "pywinauto.controls.uiawrapper",
+        "pywinauto.controls.uia_controls",
+        "pywinauto.win32_hooks",
+        "comtypes",
+        "comtypes.client",
+        "comtypes.gen",
+        "win32ts",
+        "win32api",
+        "win32con",
+        "win32gui",
+        "win32process",
         "app.services.manual_reminders",
         "app.email.reminder_ui",
         "encodings.utf_8_sig",
@@ -169,7 +188,11 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # numpy jest opcjonalny dla openpyxl i psycopg, a w aplikacji nieuzywany. Polowicznie
+    # skopiowany (same rozszerzenia bez numpy/__init__.py albo kopia dla innej wersji
+    # Pythona) sprawia, ze `import numpy` sie udaje, ale nie ma atrybutow i openpyxl
+    # pada w compat/numbers.py na numpy.short. Wykluczenie zostawia czysty ImportError.
+    excludes=["numpy"],
     noarchive=False,
 )
 

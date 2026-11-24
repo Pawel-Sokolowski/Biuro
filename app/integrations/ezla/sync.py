@@ -63,6 +63,11 @@ def progress(stage, **details):
                 'checked_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}))
 
 
+def clear_progress():
+    """Forget the live cursor once a run finished, so the panel shows no stale stage."""
+    set_setting('ezla_progress', '{}')
+
+
 @office_endpoint('app.integrations.ezla.sync.run_sync')
 def run_sync(*, actor_id=None, today=None, stop=None, company_ids=None):
     if actor_id is not None:
@@ -167,6 +172,8 @@ def _run_sync(*, today=None, stop=None, company_ids=None):
                          resume_at=(datetime.now(ZoneInfo('Europe/Warsaw')) + timedelta(seconds=delay)).isoformat())
                 wait_between(delay, stop)
     progress('Przerwano' if stop.is_set() else 'Zakończono', processed=len(results), total=len(companies))
+    if not stop.is_set():
+        clear_progress()
     return {'mode': 'cancelled' if stop.is_set() else 'completed',
             'companies': len(results), 'failed': sum(row['state'] == 'failed' for row in results), 'results': results}
 

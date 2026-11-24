@@ -65,7 +65,8 @@ Source: "..\scripts\install_background_worker.cmd"; DestDir: "{app}\scripts"; Fl
 Source: "..\scripts\WORKER-SETUP.txt"; DestDir: "{app}\scripts"; Flags: ignoreversion; Components: worker
 ; Original signed Microsoft MSI, extracted only for the selected prerequisite.
 Source: "{#MyOdbcMsi}"; Flags: dontcopy
-Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Wyklucz .env: instalator nie moze przeniesc sekretow z katalogu budowania do {app}.
+Source: "{#MyBuildDir}\*"; DestDir: "{app}"; Excludes: ".env,.env.*,*.env"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Szablon konfiguracji w folderze uzytkownika (nie nadpisuje istniejacego, zostaje po odinstalowaniu)
 Source: "..\.env.example"; DestDir: "{localappdata}\Biuro"; DestName: ".env.example"; Flags: onlyifdoesntexist uninsneveruninstall
 

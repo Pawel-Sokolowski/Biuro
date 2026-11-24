@@ -94,7 +94,8 @@ def read_history(config, stop=None):
                                                        accept_downloads=False, service_workers='allow')
         try:
             page = context.pages[0] if context.pages else context.new_page()
-            page.set_default_timeout(15000)
+            # The operations table is an Angular view: give it time on a slow office link.
+            page.set_default_timeout(45000)
             if not open_authenticated_history(page, config):
                 return {'state': 'login_required', 'items': []}
             if config.get('open_selector'):
@@ -104,9 +105,9 @@ def read_history(config, stop=None):
                     return {'state': 'interrupted', 'items': items}
                 # Require a positive page marker, never treat a failed selector as an empty success.
                 page.locator(config['logged_in_selector']).first.wait_for(state='visible')
-                page.wait_for_function('''s => Array.from(document.querySelectorAll(s.items)).some(e=>e.getClientRects().length)
-                    || (s.empty && Array.from(document.querySelectorAll(s.empty)).some(e=>e.getClientRects().length))''',
-                    arg={'items': config['item_selector'], 'empty': config['empty_selector']})
+                # The list renders in place: wait for rows, or for the paginator that an
+                # account without operations still shows, instead of timing out on rows.
+                page.locator(config['item_selector']).or_(page.locator('input[qa-id="paginatorPage"]')).first.wait_for(state='visible')
                 rows = page.locator(config['item_selector']).filter(visible=True)
                 if config['item_selector'] == OPERATIONS_ROWS:
                     batch = rows.evaluate_all(OPERATIONS_EXTRACT)
@@ -122,15 +123,8 @@ def read_history(config, stop=None):
                 if not config['next_selector']:
                     # Explicitly partial: absence of a configured paginator does not prove full history.
                     return {'state': 'partial', 'items': items}
-                next_page = page.locator(config['next_selector']).first
-                if not next_page.count() or not next_page.is_visible():
-                    return {'state': 'partial', 'items': items}
-                if next_page.is_disabled() or next_page.get_attribute('aria-disabled') == 'true':
+                if not _next_page(page, config, items):
                     return {'state': 'ok', 'items': items}
-                previous = page.locator(config['item_selector']).all_inner_texts()
-                next_page.click()
-                page.wait_for_function('''s => JSON.stringify(Array.from(document.querySelectorAll(s.selector)).map(e=>e.innerText)) !== JSON.stringify(s.previous)''',
-                                       arg={'selector': config['item_selector'], 'previous': previous})
                 if stop:
                     if stop.wait(config['pause_seconds']):
                         return {'state': 'interrupted', 'items': items}
@@ -139,6 +133,41 @@ def read_history(config, stop=None):
             return {'state': 'partial', 'items': items}
         finally:
             context.close()
+
+
+def _next_page(page, config, items):
+    """Advance one page; False means the history is complete.
+
+    Saldeo has two paginators: a page-number input (qa-id=paginatorPage with a max) and,
+    for custom views, a next/prev button. Both are supported so an existing installation
+    keeps working after the default changed.
+    """
+    control = page.locator(config['next_selector']).first
+    if not control.count() or not control.is_visible():
+        # No paginator at all: a single page is the whole history.
+        return False
+    if control.evaluate('e => e.tagName.toLowerCase()') == 'input':
+        maximum = str(control.get_attribute('max') or '').strip()
+        current = str(control.input_value() or '1').strip()
+        if maximum.isdigit() and current.isdigit() and int(current) >= int(maximum):
+            return False
+        previous = page.locator(config['item_selector']).all_inner_texts()
+        control.fill(str(int(current) + 1 if current.isdigit() else 2))
+        control.press('Enter')
+        try:
+            page.wait_for_function('''s => JSON.stringify(Array.from(document.querySelectorAll(s.selector)).map(e=>e.innerText)) !== JSON.stringify(s.previous)''',
+                                   arg={'selector': config['item_selector'], 'previous': previous})
+        except Exception:
+            # The table did not change: the last page was already shown.
+            return False
+        return True
+    if control.is_disabled() or control.get_attribute('aria-disabled') == 'true':
+        return False
+    previous = page.locator(config['item_selector']).all_inner_texts()
+    control.click()
+    page.wait_for_function('''s => JSON.stringify(Array.from(document.querySelectorAll(s.selector)).map(e=>e.innerText)) !== JSON.stringify(s.previous)''',
+                           arg={'selector': config['item_selector'], 'previous': previous})
+    return True
 
 
 def attempt_saved_login(page,config):
@@ -160,6 +189,24 @@ def attempt_saved_login(page,config):
     return True
 
 
+def _confirm_history(context, page, config):
+    """Open the operations list in the same session and wait for its table."""
+    from playwright.sync_api import TimeoutError
+    try:
+        page.goto(config['history_url'], wait_until='domcontentloaded', timeout=60000)
+        if not same_origin(page, config):
+            return False
+        # Either rows or the paginator must appear; an account with no operations still
+        # renders the paginator, so this never waits for content that cannot exist.
+        page.locator(config['item_selector']).or_(page.locator('input[qa-id="paginatorPage"]')).first.wait_for(
+            state='visible', timeout=60000)
+    except TimeoutError:
+        return False
+    except Exception:
+        return False
+    return same_origin(page, config)
+
+
 def login_window(actor_id=None):
     """Interactive login under the same Windows account as the worker, max 15 minutes."""
     from playwright.sync_api import sync_playwright
@@ -179,14 +226,18 @@ def login_window(actor_id=None):
                 deadline = time.monotonic() + 900
                 learned = False
                 attempted = False
-                page.set_default_timeout(15000)
+                # The Saldeo header is an Angular app: after signing in it needs several
+                # seconds before the notification marker is rendered.
+                page.set_default_timeout(30000)
                 while context.pages and time.monotonic() < deadline:
                     try:
                         page = context.pages[0]
                         if same_origin(page,config):
                             marker = config.get('logged_in_selector')
                             if marker and page.locator(marker).first.is_visible():
-                                return True
+                                # The marker lives in the header, so it is also present on the
+                                # history page: confirm the list itself before reporting success.
+                                return _confirm_history(context, page, config)
                             if actor_id and not learned:
                                 learned = remember_login_fields(page,actor_id)
                                 if learned:

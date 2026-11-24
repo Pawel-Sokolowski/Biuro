@@ -5,8 +5,13 @@ import sys
 from app.utils.env_config import load_environment, ensure_encryption_key
 
 SERVER_FLAGS = ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task',
-                '--saldeo-login', '--worker-migrate', '--api-server', '--direct')
+                '--saldeo-login', '--worker-migrate', '--api-server', '--direct', '--platnik-agent')
+# Client-side switch for a trial connection to an office without a certificate.
+# It is accepted here and consumed by app.remote.client, not by the server.
+CLIENT_FLAGS = ('--allow-plain-http',)
 if __name__ == '__main__':
+    if any(flag in sys.argv for flag in CLIENT_FLAGS):
+        os.environ['BIO_ALLOW_PLAIN_HTTP'] = '1'
     if any(flag in sys.argv for flag in SERVER_FLAGS):
         os.environ['BIO_WORKER_MODE'] = '1'
         os.environ.pop('BIO_CLIENT_MODE', None)
@@ -24,6 +29,11 @@ if __name__ == '__main__' and '--api-server' in sys.argv:
 if __name__ == '__main__' and '--worker' in sys.argv:
     from app.worker import main as worker_main
     sys.exit(worker_main([arg for arg in sys.argv[1:] if arg != '--worker']))
+if __name__ == '__main__' and '--platnik-agent' in sys.argv:
+    # Interactive Płatnik agent inside the installed EXE: no repository and no
+    # separate Python environment. The profile defaults to %LOCALAPPDATA%\Biuro.
+    from app.integrations.platnik.gui_agent import main as platnik_agent_main
+    sys.exit(platnik_agent_main([arg for arg in sys.argv[1:] if arg != '--platnik-agent']))
 # Hardware rendering is the normal path. Drivers that need the software
 # fallback can opt in without rebuilding the installed application.
 if os.environ.get("BIO_SOFTWARE_RENDERING") == "1" or os.environ.get("QT_OPENGL") == "software":

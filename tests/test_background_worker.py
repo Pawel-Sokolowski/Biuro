@@ -55,6 +55,43 @@ class PlatnikGuiScheduleTests(TestCase):
                          '2026-10-25T16:00:00+01:00')
 
 
+class WorkerLoopTests(TestCase):
+    """Loop behaviour that needs no database: corrupt state, timeouts and cadence."""
+
+    def test_heartbeat_survives_a_corrupt_event_log_and_failed_recovery(self):
+        from app.worker import serve
+        settings = {'enabled': False}
+        with patch('app.worker.leadership') as leadership, \
+             patch('app.worker.get_setting', return_value='{not json'), \
+             patch('app.worker.load_settings', return_value=settings), \
+             patch('app.worker.set_setting') as written, \
+             patch('app.services.checking_refresh.recover_interrupted', side_effect=RuntimeError('broken')), \
+             patch('app.worker.WORKER_THREADS', 1):
+            leadership.return_value.__enter__.return_value.execute.return_value = [1]
+            self.assertEqual(serve(once=True), 0)
+        heartbeat = json.loads([call.args[1] for call in written.call_args_list
+                                if call.args[0] == 'background_worker_heartbeat'][-1])
+        self.assertIn('checked_at', heartbeat)
+
+    def test_unreadable_settings_are_logged_instead_of_stopping_the_worker(self):
+        from app.worker import _parse_setting
+        with self.assertLogs('app.worker', level='WARNING') as logs:
+            self.assertEqual(_parse_setting('{oops', []), [])
+        self.assertIn('worker_setting_unreadable', '\n'.join(logs.output))
+
+    def test_job_without_a_timeout_is_never_abandoned(self):
+        from app.worker import job_timeout
+        self.assertIsNone(job_timeout('ezla', {}))
+        self.assertIsNone(job_timeout('checking_refresh', {}))
+        self.assertEqual(job_timeout('mail', {'mail_interval': 120}), 1800)
+
+    def test_job_interval_uses_fixed_cadence_for_enova(self):
+        from app.worker import job_interval
+        from app.services.worker_settings import DEFAULTS, ENOVA_INTERVAL
+        self.assertEqual(job_interval('enova', DEFAULTS), ENOVA_INTERVAL)
+        self.assertEqual(job_interval('mail', DEFAULTS), DEFAULTS['mail_interval'])
+
+
 class WorkerTests(DbTestCase):
     def setUp(self):
         super().setUp()

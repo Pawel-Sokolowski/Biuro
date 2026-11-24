@@ -80,6 +80,24 @@ class WorkerMonitorTests(TestCase):
         finally:
             panel.close()
 
+    def test_corrupt_snapshot_values_do_not_blank_the_panel(self):
+        from app.services.worker_monitor import _setting
+        self.assertEqual(_setting('{broken', {}), {})
+        self.assertEqual(_setting('', []), [])
+
+    def test_leftover_ezla_progress_is_reported_as_stale(self):
+        now = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+        with patch('app.security.authorization.is_administrator', return_value=True):
+            panel = WorkerMonitor(1)
+        try:
+            panel.render({'heartbeat': {'checked_at': now, 'enabled': True,
+                                        'jobs': {'ezla': {'state': 'skipped'}}},
+                          'events': [], 'progress': {'stage': 'Przerwa między firmami', 'stale': True},
+                          'ezla_enabled': True, 'ezla_companies': [], 'companies': []})
+            self.assertIn('zapis sprzed przerwanego przebiegu', panel.progress.text())
+        finally:
+            panel.close()
+
     def test_monitor_requires_admin_and_shutdown_interrupts_a_pause(self):
         with patch('app.security.authorization.is_administrator', return_value=False), self.assertRaises(PermissionError):
             WorkerMonitor(1)

@@ -297,7 +297,8 @@ def sync_checking(conn, config, source, company, day, *, divisor, apply, months=
 
 
 @office_endpoint('app.integrations.enova.checking.run_checking_import')
-def run_checking_import(config, *, apply=False, today=None, months=None, force=False):
+def run_checking_import(config, *, apply=False, today=None, months=None, force=False, stop=None):
+    """stop: optional Event; a set event abandons the remaining companies without writing."""
     from app.db.dao_conn import get_conn
     from app.integrations.enova.document_counts import find_company
     if apply and not config.get('enabled', False):
@@ -309,6 +310,8 @@ def run_checking_import(config, *, apply=False, today=None, months=None, force=F
         if apply and not conn.execute('SELECT pg_try_advisory_xact_lock(748210)').fetchone()[0]:
             raise CheckingBusy('Import sprawdzania jest już uruchomiony.')
         for source in config['sources']:
+            if stop is not None and stop.is_set():
+                break
             company = None
             try:
                 with conn.transaction():

@@ -243,3 +243,32 @@ błędzie. Pełniejsze logi rotacyjne są w katalogu danych workera, w `logs/biu
 Brak aktualnego sygnału w panelu oznacza ostatni zapisany stan, nie aktywny postęp.
 Zadania wyłączone, oczekujące na godzinę lub sprawdzone dziś mają stan
 „Bez pobierania”, zamiast udawać zakończone pobranie.
+
+## Limity czasu, ponowienia i zmienne środowiskowe
+
+Zadania o skończonym czasie pracy (poczta, przypomnienia, faktury, Enova, KSeF,
+Saldeo, Płatnik) mają limit jednego przebiegu: `BIO_WORKER_JOB_TIMEOUT_SECONDS`
+(domyślnie 1800 s, nigdy mniej niż własny odstęp zadania). Przebieg, który go
+przekroczy, jest oznaczany jako błąd `Timeout` i nie blokuje kolejnego uruchomienia.
+e-ZLA, agent Płatnika GUI i ręczne pobrania w Sprawdzaniu czekają na systemy
+zewnętrzne i nie mają limitu czasu; ich postęp widać w panelu.
+
+Tydzień e-ZLA jest zapisywany jako „rozpoczęty” przed pobraniem. Jeśli proces
+zostanie przerwany przed potwierdzeniem zakończenia, następny przebieg pokazuje
+„Tydzień rozpoczęty, brak potwierdzenia zakończenia” i nie pobiera tygodnia ponownie.
+Po sprawdzeniu raportów w panelu e-ZLA usuń w bazie klucz `worker_ezla_started_week`
+(`DELETE FROM app_settings WHERE klucz='worker_ezla_started_week'`), aby pozwolić
+na ponowne pobranie. Błąd części firm nie zostawia tego znacznika — kolejny przebieg
+ponawia brakujące firmy.
+
+Zmienne środowiskowe procesu workera (w `worker.env` lub środowisku konta zadania):
+
+- `BIO_WORKER_THREADS` — liczba równoległych zadań (domyślnie 4, 1–10).
+- `BIO_WORKER_JOB_TIMEOUT_SECONDS` — limit jednego przebiegu (domyślnie 1800, 60–86400).
+- `BIO_WORKER_HEARTBEAT_SECONDS` — częstotliwość sygnału w panelu (domyślnie 10, 5–60).
+- `BIO_WORKER_LEADER_CHECK_SECONDS` — sprawdzanie blokady lidera (domyślnie 15, 5–60).
+
+Odstęp Enovy jest stały (30 s) i nie jest ustawieniem: sprawdzenie dotyczy lokalnej
+kolejki zmian etapu i łączy się z Enovą tylko wtedy, gdy etap się zmienił. Pozycje
+`enova_interval` zapisane przez starsze wersje są usuwane przy najbliższym zapisie
+ustawień workera.

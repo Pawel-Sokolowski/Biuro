@@ -22,11 +22,11 @@ class PlatnikAgentProfile(QWidget):
         super().__init__(parent)
         from app.integrations.platnik.gui_agent import default_profile
         self.path = default_profile()
-        profile = load_profile(self.path)
+        profile = self.saved_profile = load_profile(self.path)
         layout = QVBoxLayout(self)
         note = QLabel('Profil agenta Płatnika. Agent uruchamia Płatnika sam i odczytuje rejestr po zalogowaniu '
                       'na pulpicie serwera. „Wczytaj z Płatnika” pokazuje typy i identyfikatory kontrolek — '
-                      'skopiuj z wyniku AutomationId tabeli rejestru.')
+                      'skopiuj z wyniku AutomationId (uia) lub klasę tabeli rejestru (win32).')
         note.setWordWrap(True)
         layout.addWidget(note)
         form = QFormLayout()
@@ -37,8 +37,8 @@ class PlatnikAgentProfile(QWidget):
         self.backend.setCurrentText(profile.get('backend', 'uia'))
         self.title = QLineEdit((profile.get('window') or {}).get('title', ''))
         self.title.setPlaceholderText('Dokładny tytuł głównego okna Płatnika')
-        self.grid = QLineEdit((profile.get('grid') or {}).get('auto_id', ''))
-        self.grid.setPlaceholderText('AutomationId tabeli rejestru (z „Wczytaj z Płatnika”)')
+        self.grid = QLineEdit((profile.get('grid') or {}).get(self.grid_key(), ''))
+        self.grid.setPlaceholderText('AutomationId (uia) lub klasa (win32)')
         for label, widget in (('Plik Płatnika', self.executable), ('Interfejs', self.backend),
                               ('Tytuł okna', self.title), ('Tabela rejestru', self.grid)):
             form.addRow(label, widget)
@@ -69,36 +69,42 @@ class PlatnikAgentProfile(QWidget):
         layout.addWidget(self.save_button)
         layout.addStretch()
 
+    def grid_key(self):
+        return 'class_name' if self.backend.currentText() == 'win32' else 'auto_id'
+
+    def window_config(self):
+        return {'executable': self.executable.text().strip(), 'backend': self.backend.currentText(),
+                'window': {**(self.saved_profile.get('window') or {}), 'title': self.title.text().strip()}}
+
     def profile(self):
         columns = {}
         for name, (index, header) in self.columns.items():
             text = index.text().strip()
-            if text and header.text().strip():
-                columns[name] = {'index': int(text), 'header': header.text().strip()}
+            heading = header.text().strip()
+            if text or heading:
+                if not text.isdecimal() or not heading:
+                    raise ValueError(f'Podaj nieujemny indeks i nagłówek kolumny {name}.')
+                columns[name] = {'index': int(text), 'header': heading}
         labels = {}
         for line in self.status_labels.toPlainText().splitlines():
-            if '=' in line:
-                label, status = line.split('=', 1)
-                if label.strip() and status.strip():
-                    labels[label.strip()] = status.strip()
-        value = {'executable': self.executable.text().strip(), 'backend': self.backend.currentText(),
-                 'window': {'title': self.title.text().strip()}, 'tabs': [],
-                 'grid': {'auto_id': self.grid.text().strip()}, 'columns': columns,
-                 'status_labels': labels}
-        if value['backend'] == 'win32':
-            value['grid'] = {'class_name': self.grid.text().strip()}
-        return value
+            if not line.strip():
+                continue
+            label, _, status = (part.strip() for part in line.partition('='))
+            if not label or not status or label in labels:
+                raise ValueError('Podaj odrębne etykiety stanów w formacie etykieta = stan.')
+            labels[label] = status
+        return {'tabs': [], **self.saved_profile, **self.window_config(),
+                'grid': {self.grid_key(): self.grid.text().strip()}, 'columns': columns, 'status_labels': labels}
 
     def describe(self):
         """Run describe in-process against the given EXE; it starts Płatnik if needed."""
+        from app.integrations.platnik.gui_agent import validate_config
+        from app.integrations.platnik.gui_desktop import describe, main_window
+        from app.integrations.platnik.gui_evidence import ReadError
+
         try:
-            from app.integrations.platnik.gui_desktop import describe
-            from app.integrations.platnik.gui_evidence import ReadError
-            config = self.profile()
-            if not config['executable'] or not config['window']['title']:
-                raise ValueError('Podaj plik Płatnika i dokładny tytuł okna.')
-            controls = describe({'executable': Path(config['executable']),
-                                 'backend': config['backend'], 'window': config['window']})
+            config = validate_config(self.window_config(), full=False)
+            controls = describe(main_window(config))
         except ReadError:
             QMessageBox.warning(self, 'Agent Płatnika', 'Płatnik nie jest dostępny na tym pulpicie. '
                                 'Zaloguj się na pulpicie serwera, otwórz Płatnika i spróbuj ponownie.')
@@ -114,15 +120,15 @@ class PlatnikAgentProfile(QWidget):
             f"auto_id={item['auto_id'] or '-'} | id={item['control_id']}" for item in controls) or 'Brak kontrolek.')
 
     def save(self):
+        from app.integrations.platnik.gui_agent import validate_config
+
         try:
             value = self.profile()
-            if not value['executable'] or not value['window']['title'] or not value['grid']:
-                raise ValueError('Uzupełnij plik Płatnika, tytuł okna i tabelę rejestru.')
-            if not value['columns'] or not value['status_labels']:
-                raise ValueError('Uzupełnij kolumny rejestru i etykiety stanów.')
+            validate_config(value)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
         except (ValueError, OSError, TypeError) as error:
             QMessageBox.warning(self, 'Agent Płatnika', str(error))
             return
+        self.saved_profile = value
         QMessageBox.information(self, 'Agent Płatnika', 'Zapisano profil: ' + str(self.path))

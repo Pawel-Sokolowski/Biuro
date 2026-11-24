@@ -45,7 +45,10 @@ def load_view(config, backend, required, optional):
 
 
 def load_config(path, *, full=True):
-    config = json.loads(path.read_text(encoding='utf-8-sig'))
+    return validate_config(json.loads(path.read_text(encoding='utf-8-sig')), full=full)
+
+
+def validate_config(config, *, full=True):
     if not isinstance(config, dict):
         raise ValueError('Nieprawidłowy profil Płatnika.')
     executable = Path(config['executable'])

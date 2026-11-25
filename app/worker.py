@@ -125,8 +125,9 @@ def ksef_import_job():
         unmatched_by_month[period] = len(result.get('niedopasowane', ()))
     # Unmatched invoices are a normal outcome reported per month, not a job failure:
     # the run itself completed and the counter is visible in the result.
+    unmatched = sum(unmatched_by_month.values())
     return {'months': len(unmatched_by_month), 'unmatched_by_month': unmatched_by_month,
-            'unmatched': sum(unmatched_by_month.values()), 'mode': 'completed'}
+            'unmatched': unmatched, 'mode': 'partial' if unmatched else 'completed'}
 
 
 def ezla_job(stop=None,now=None):
@@ -147,10 +148,10 @@ def ezla_job(stop=None,now=None):
     set_setting('worker_ezla_started_week',week)
     result = run_sync(stop=stop)
     if result.get('mode') in ('disabled','busy','cancelled') or (stop is not None and stop.is_set()):
-        if result.get('mode')!='busy':
-            set_setting('worker_ezla_started_week','')
+        set_setting('worker_ezla_started_week','')
         return result
     if any(row.get('state')=='busy' for row in result.get('results',[])):
+        set_setting('worker_ezla_started_week','')
         return {**result,'mode':'busy'}
     if result['failed']:
         # A partial failure is retried within the week by the next run: keeping the

@@ -2,7 +2,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QFormLayout,QLineEdit,QCheckBox,
-    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar,QDialog,QScrollArea)
+    QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar,QDialog,QScrollArea,QPlainTextEdit)
 from PyQt6.QtCore import Qt,pyqtSignal
 from app.integrations.platnik.agent_service import SERVICE_NAME as AGENT_SERVICE
 from app.integrations.platnik.holidays import load,save,check_connection,import_year,PlatnikSqlError
@@ -12,6 +12,7 @@ from app.utils.background import TaskRunner
 
 class PlatnikSettings(QWidget):
     import_progress = pyqtSignal(int,str)
+    agent_test_progress = pyqtSignal(int,str,str,str)
 
     def __init__(self,actor_id,parent=None):
         super().__init__(parent)
@@ -20,10 +21,14 @@ class PlatnikSettings(QWidget):
             raise PermissionError('Tylko administrator konfiguruje Płatnika.')
         self.actor_id = actor_id
         self.runner = TaskRunner(self)
+        self.agent_test_runner = TaskRunner(self)
         self.error_diagnostic = None
         self._import_token = 0
         self._import_running = False
+        self._agent_test_token = 0
+        self._agent_test_log = None
         self.import_progress.connect(self._show_import_progress)
+        self.agent_test_progress.connect(self._show_agent_test_progress)
         config = load()
         layout = QVBoxLayout(self)
         note = QLabel('Osobne połączenie Microsoft SQL Server programu Płatnik. '
@@ -113,8 +118,9 @@ class PlatnikSettings(QWidget):
         layout.addWidget(self.error_button)
         # --- Agent Płatnika: kolejka w PostgreSQL i pliki libpq ---
         agent_note = QLabel('Agent Płatnika działa w tej samej instalacji (Biuro.exe --platnik-agent) i odbiera zlecenia '
-                            'z kolejki PostgreSQL, gdy pulpit serwera jest odblokowany. Wpisz hasło loginu PostgreSQL '
-                            'agenta — Biuro zapisze pliki libpq w Twoim profilu Windows.')
+                            'z kolejki PostgreSQL programu Biuro, gdy pulpit serwera jest odblokowany. Baza programu '
+                            'Płatnik nadal działa na SQL Server; PostgreSQL służy wyłącznie do kolejki. Wpisz hasło '
+                            'loginu PostgreSQL agenta — Biuro zapisze pliki libpq w Twoim profilu Windows.')
         agent_note.setWordWrap(True)
         layout.addWidget(agent_note)
         agent_form = QFormLayout()
@@ -125,7 +131,7 @@ class PlatnikSettings(QWidget):
         agent_form.addRow('Login agenta PostgreSQL', self.agent_user)
         agent_form.addRow('Hasło agenta', self.agent_password)
         layout.addLayout(agent_form)
-        self.agent_button = QPushButton('Zapisz pliki połączenia agenta (pg_service.conf, pgpass)')
+        self.agent_button = QPushButton('Zapisz pliki połączenia agenta (.pg_service.conf, pgpass)')
         self.agent_button.clicked.connect(self.save_agent_files)
         self.buttons.append(self.agent_button)
         layout.addWidget(self.agent_button)
@@ -133,6 +139,10 @@ class PlatnikSettings(QWidget):
         self.profile_button.clicked.connect(self.open_profile)
         self.buttons.append(self.profile_button)
         layout.addWidget(self.profile_button)
+        self.agent_test_button = QPushButton('Test agenta GUI krok po kroku (bez importu)')
+        self.agent_test_button.clicked.connect(self.test_agent)
+        self.buttons.append(self.agent_test_button)
+        layout.addWidget(self.agent_test_button)
         layout.addStretch()
         self._saved_state = self.form_state()
 
@@ -171,6 +181,64 @@ class PlatnikSettings(QWidget):
         QMessageBox.information(self, 'Agent Płatnika',
                                 'Zapisano pliki agenta:\n' + str(service) + '\n' + str(pgpass) +
                                 '\nNadaj loginowi agenta uprawnienia do kolejki (scripts/grant_platnik_gui_agent.sql).')
+
+    def test_agent(self):
+        from app.integrations.platnik.gui_agent import diagnose
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Test agenta GUI Płatnika')
+        dialog.resize(640, 420)
+        layout = QVBoxLayout(dialog)
+        explanation = QLabel('Test sprawdza profil, kolejkę PostgreSQL, aktywny pulpit i widoki GUI Płatnika. '
+                             'Jeśli Płatnik jest zamknięty, może go uruchomić. Nie pobiera zadań, nie odczytuje '
+                             'danych pracowników i nie wykonuje importu.')
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        self._agent_test_log = QPlainTextEdit(dialog)
+        self._agent_test_log.setReadOnly(True)
+        layout.addWidget(self._agent_test_log)
+        self._agent_test_token += 1
+        token = self._agent_test_token
+
+        def progress(stage, state, detail):
+            try:
+                self.agent_test_progress.emit(token, stage, state, detail)
+            except RuntimeError:
+                pass
+
+        from app.integrations.platnik.gui_agent import default_profile
+        path = default_profile()
+        self.busy(True)
+        dialog.show()
+        self._agent_test_dialog = dialog
+        try:
+            self.agent_test_runner.submit(
+                lambda: diagnose(path, progress=progress),
+                lambda _: self.agent_test_done(token),
+                lambda error: self.agent_test_failed(token, error),
+            )
+        except Exception as error:
+            self.agent_test_failed(token, error)
+
+    def _show_agent_test_progress(self, token, stage, state, detail):
+        if token != self._agent_test_token or self._agent_test_log is None:
+            return
+        prefix = {'running': 'W trakcie', 'passed': 'OK', 'failed': 'BŁĄD'}.get(state, state)
+        line = f'{prefix}: {stage}'
+        if detail:
+            line += f' — {detail}'
+        self._agent_test_log.appendPlainText(line)
+
+    def agent_test_done(self, token):
+        self.busy(False)
+        self.status.setText('Test agenta GUI Płatnika zakończony. Szczegóły są widoczne w oknie testu.')
+        self._show_agent_test_progress(token, 'Gotowe', 'passed', '')
+
+    def agent_test_failed(self, token, error):
+        self.busy(False)
+        message = str(error) if isinstance(error, (ValueError, PermissionError)) else \
+            f'Test przerwany ({type(error).__name__}).'
+        self._show_agent_test_progress(token, 'Test', 'failed', message)
+        self.status.setText('Test agenta GUI Płatnika nie powiódł się. Szczegóły są widoczne w oknie testu.')
 
     def _review_links(self):
         from app.admin.settings.platnik_links import PlatnikLinksDialog

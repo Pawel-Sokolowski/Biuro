@@ -17,9 +17,12 @@ Python and `.venv` are unnecessary for an installed `Biuro.exe`.
    **Biuro.exe** in the file chooser.
 4. Enter the task account's **Windows** credentials. Do not enter the SQL `sa`
    password or the Biuro application password in this prompt.
-5. Check that **Settings → Worker w tle** displays a recent heartbeat. You can
-   close the Biuro window; the worker starts with the server and runs without
-   an interactive Windows login. The server must remain powered on.
+5. The installer also registers **Biuro-Platnik-Worker**, which starts at logon
+   in the current Windows account and is launched immediately. The main worker
+   starts with the server and runs without an interactive login; the Płatnik GUI
+   agent only works while that account has an active, unlocked desktop. Check
+   **Settings → Worker w tle** for a recent heartbeat and **Ustawienia → Płatnik**
+   for the step-by-step agent test. The server must remain powered on.
 
 For a nonstandard installation folder, use an Administrator PowerShell window
 in the helper folder:

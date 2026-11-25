@@ -84,11 +84,21 @@ def open_authenticated_history(page, config):
     return same_origin(page, config)
 
 
-def read_history(config, stop=None):
+def read_history(config, stop=None, progress=None):
     from playwright.sync_api import sync_playwright
     from app.integrations.saldeo_web.settings import OPERATIONS_ROWS, validate
     validate(config)
     items = []
+    pages = rows_seen = 0
+
+    def result(state, *, reason=None):
+        return {'state': state, 'items': items[:5000], 'pages': pages,
+                'rows_seen': rows_seen, 'reason': reason}
+
+    def report(stage):
+        if progress:
+            progress(stage, {'pages': pages, 'rows_seen': rows_seen, 'items': len(items)})
+
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(profile_path(), executable_path=resolve_browser(config), headless=True,
                                                        accept_downloads=False, service_workers='allow')
@@ -96,19 +106,34 @@ def read_history(config, stop=None):
             page = context.pages[0] if context.pages else context.new_page()
             # The operations table is an Angular view: give it time on a slow office link.
             page.set_default_timeout(45000)
+            report('opening_history')
             if not open_authenticated_history(page, config):
-                return {'state': 'login_required', 'items': []}
+                report('login_required')
+                return result('login_required', reason='login_required')
             if config.get('open_selector'):
                 page.locator(config['open_selector']).first.click()
             for _ in range(config['max_pages']):
                 if stop and stop.is_set():
-                    return {'state': 'interrupted', 'items': items}
+                    report('interrupted')
+                    return result('interrupted', reason='stopped')
                 # Require a positive page marker, never treat a failed selector as an empty success.
                 page.locator(config['logged_in_selector']).first.wait_for(state='visible')
                 # The list renders in place: wait for rows, or for the paginator that an
                 # account without operations still shows, instead of timing out on rows.
-                page.locator(config['item_selector']).or_(page.locator('input[qa-id="paginatorPage"]')).first.wait_for(state='visible')
+                ready = page.locator(config['item_selector']).or_(
+                    page.locator('input[qa-id="paginatorPage"]'))
+                if config.get('empty_selector'):
+                    ready = ready.or_(page.locator(config['empty_selector']))
+                ready.first.wait_for(state='visible')
                 rows = page.locator(config['item_selector']).filter(visible=True)
+                row_count = rows.count()
+                if row_count == 0:
+                    empty = config.get('empty_selector')
+                    if not empty or not page.locator(empty).filter(visible=True).count():
+                        report('rows_not_found')
+                        return result('partial', reason='rows_not_found')
+                pages += 1
+                rows_seen += row_count
                 if config['item_selector'] == OPERATIONS_ROWS:
                     batch = rows.evaluate_all(OPERATIONS_EXTRACT)
                 else:
@@ -118,25 +143,33 @@ def read_history(config, stop=None):
                     title: e.querySelector('.content-col .font-14')?.innerText || '',
                     period: e.querySelector('.content-col .font-12-grey')?.innerText || ''}))''')
                 items.extend(batch)
+                report('history_page_read')
                 if len(items) >= 5000:
-                    return {'state': 'partial', 'items': items[:5000]}
+                    return result('partial', reason='item_limit')
                 if not config['next_selector']:
                     # Explicitly partial: absence of a configured paginator does not prove full history.
-                    return {'state': 'partial', 'items': items}
-                if not _next_page(page, config, items):
-                    return {'state': 'ok', 'items': items}
+                    return result('partial', reason='paginator_not_configured')
+                has_next_page = _next_page(page, config, items)
+                if has_next_page is None:
+                    report('paginator_not_found')
+                    return result('partial', reason='paginator_not_found')
+                if not has_next_page:
+                    report('history_complete')
+                    return result('ok')
                 if stop:
                     if stop.wait(config['pause_seconds']):
-                        return {'state': 'interrupted', 'items': items}
+                        report('interrupted')
+                        return result('interrupted', reason='stopped')
                 else:
                     page.wait_for_timeout(config['pause_seconds'] * 1000)
-            return {'state': 'partial', 'items': items}
+            report('page_limit')
+            return result('partial', reason='page_limit')
         finally:
             context.close()
 
 
 def _next_page(page, config, items):
-    """Advance one page; False means the history is complete.
+    """Advance a page; False means complete and None means the control is missing.
 
     Saldeo has two paginators: a page-number input (qa-id=paginatorPage with a max) and,
     for custom views, a next/prev button. Both are supported so an existing installation
@@ -144,8 +177,7 @@ def _next_page(page, config, items):
     """
     control = page.locator(config['next_selector']).first
     if not control.count() or not control.is_visible():
-        # No paginator at all: a single page is the whole history.
-        return False
+        return None
     if control.evaluate('e => e.tagName.toLowerCase()') == 'input':
         maximum = str(control.get_attribute('max') or '').strip()
         current = str(control.input_value() or '1').strip()
@@ -154,12 +186,8 @@ def _next_page(page, config, items):
         previous = page.locator(config['item_selector']).all_inner_texts()
         control.fill(str(int(current) + 1 if current.isdigit() else 2))
         control.press('Enter')
-        try:
-            page.wait_for_function('''s => JSON.stringify(Array.from(document.querySelectorAll(s.selector)).map(e=>e.innerText)) !== JSON.stringify(s.previous)''',
-                                   arg={'selector': config['item_selector'], 'previous': previous})
-        except Exception:
-            # The table did not change: the last page was already shown.
-            return False
+        page.wait_for_function('''s => JSON.stringify(Array.from(document.querySelectorAll(s.selector)).map(e=>e.innerText)) !== JSON.stringify(s.previous)''',
+                               arg={'selector': config['item_selector'], 'previous': previous})
         return True
     if control.is_disabled() or control.get_attribute('aria-disabled') == 'true':
         return False

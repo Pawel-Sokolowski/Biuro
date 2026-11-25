@@ -84,6 +84,27 @@ class WorkerMonitorTests(TestCase):
         from app.services.worker_monitor import _setting
         self.assertEqual(_setting('{broken', {}), {})
         self.assertEqual(_setting('', []), [])
+        self.assertEqual(_setting('{"unexpected": true}', []), [])
+        self.assertEqual(_setting('[{}, "bad"]', []), [])
+
+    def test_full_status_refresh_shows_every_worker_job_and_safe_result_counts(self):
+        from app.admin.settings.worker_monitor import JOB_LABELS
+        now = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
+        with patch('app.security.authorization.is_administrator', return_value=True):
+            panel = WorkerMonitor(1)
+        try:
+            panel.render({'heartbeat': {'checked_at': now, 'enabled': True, 'jobs': {
+                'mail': {'state': 'ok', 'result': {'accounts': 2, 'sent': 3}},
+            }}, 'events': [], 'progress': {}, 'ezla_enabled': True, 'ezla_companies': [], 'companies': []})
+            self.assertEqual(panel.jobs.rowCount(), len(JOB_LABELS))
+            names = [panel.jobs.item(row, 0).text() for row in range(panel.jobs.rowCount())]
+            mail_row = names.index('Poczta')
+            self.assertEqual(panel.jobs.item(mail_row, 2).text(), 'konta: 2; wysłano: 3')
+            platnik_row = names.index('Płatnik GUI — sprawdzanie wysyłki')
+            self.assertEqual(panel.jobs.item(platnik_row, 1).text(), 'Brak raportu z workera')
+            self.assertIn('nie uruchamia ich ponownie', panel.refresh_button.toolTip())
+        finally:
+            panel.close()
 
     def test_leftover_ezla_progress_is_reported_as_stale(self):
         now = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()

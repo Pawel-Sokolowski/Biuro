@@ -38,10 +38,28 @@ class OdbcSupportTests(TestCase):
         self.assertIn('TrustServerCertificate={no}', driver.connect.call_args.args[0])
         connection.close.assert_called_once()
 
+    def test_remote_tcp_endpoint_is_used_for_the_enova_database(self):
+        connection = Mock()
+        connection.cursor.return_value.fetchone.return_value = ('EnovaFirmy',)
+        driver = SimpleNamespace(drivers=lambda: [SUPPORTED_DRIVERS[0]], connect=Mock(return_value=connection))
+        with patch.dict('sys.modules', {'pyodbc': driver}):
+            result = check_connection({
+                'server': 'tcp:sql.example.test,51433',
+                'database': 'EnovaFirmy',
+                'username': 'reader',
+                'sources': [],
+            }, password='secret')
+        self.assertTrue(result[0]['ok'])
+        connection_string = driver.connect.call_args.args[0]
+        self.assertIn('SERVER={tcp:sql.example.test,51433}', connection_string)
+        self.assertIn('DATABASE={EnovaFirmy}', connection_string)
+        connection.close.assert_called_once()
+
     def test_named_instance_requires_backslash(self):
         from app.integrations.enova.odbc_support import validate_server
         self.assertEqual(validate_server(r'192.168.1.16\SQLEXPRESS'), r'192.168.1.16\SQLEXPRESS')
         self.assertEqual(validate_server('sql.example,1433'), 'sql.example,1433')
+        self.assertEqual(validate_server('tcp:sql.example,1433'), 'tcp:sql.example,1433')
         with self.assertRaisesRegex(ValueError, 'ukośnika wstecznego'):
             validate_server('192.168.1.16/SQLEXPRESS')
 

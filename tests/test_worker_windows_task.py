@@ -14,7 +14,7 @@ class WindowsTaskUpgradeTests(unittest.TestCase):
         cls.sid = subprocess.check_output(['powershell.exe','-NoProfile','-NonInteractive','-Command',
             '([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value'],text=True).strip()
 
-    def execute(self,mode,*,running=True,foreign=False,arguments='--worker'):
+    def execute(self,mode,*,running=True,foreign=False,arguments='--worker',agent=False):
         stubs = r'''
 $script:events = New-Object 'System.Collections.Generic.List[string]'
 $script:state = 'STATE_VALUE'
@@ -22,8 +22,14 @@ $script:foreign = FOREIGN_VALUE
 function Get-ScheduledTask {
     param($TaskName,$ErrorAction)
     $taskExe = if ($script:foreign) { 'C:\AnotherInstallation\Biuro.exe' } else { $p.exe }
-    # The install also registers the interactive Płatnik agent task; report it as absent.
-    if ($TaskName -eq 'Biuro-Platnik-Worker') { return $null }
+    if ($TaskName -eq 'Biuro-Platnik-Worker') {
+        if (-not AGENT_PRESENT) { return $null }
+        return [pscustomobject]@{
+            Principal = [pscustomobject]@{ UserId = $p.sid }
+            Actions = @([pscustomobject]@{ Execute = $p.exe; Arguments = '--platnik-agent' })
+            State = $script:state
+        }
+    }
     return [pscustomobject]@{
         Principal = [pscustomobject]@{ UserId = $p.sid }
         Actions = @([pscustomobject]@{ Execute = $taskExe; Arguments = 'ARGUMENTS_VALUE' })
@@ -59,7 +65,7 @@ function Start-Process {
     $runner | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($milliseconds) return $true }
     return $runner
 }
-'''.replace('STATE_VALUE','Running' if running else 'Ready').replace('FOREIGN_VALUE','$true' if foreign else '$false').replace('ARGUMENTS_VALUE',arguments)
+'''.replace('STATE_VALUE','Running' if running else 'Ready').replace('FOREIGN_VALUE','$true' if foreign else '$false').replace('ARGUMENTS_VALUE',arguments).replace('AGENT_PRESENT','$true' if agent else '$false')
         command = TASK_COMMAND.replace("[Console]::Out.Write('ok')",
             '[Console]::Out.Write((ConvertTo-Json -InputObject ($script:events.ToArray()) -Compress))')
         return subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',stubs+command],
@@ -69,22 +75,35 @@ function Start-Process {
     def test_reinstall_stops_then_starts_the_existing_running_worker(self):
         result = self.execute('install')
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),['stop','start','register:Biuro-Platnik-Worker'])
+        self.assertEqual(json.loads(result.stdout),[
+            'stop','update:Biuro-Background-Worker','start','register:Biuro-Platnik-Worker','start',
+        ])
 
     def test_existing_stopped_worker_is_started_without_recreating_the_task(self):
         result = self.execute('install',running=False)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),['start','register:Biuro-Platnik-Worker'])
+        self.assertEqual(json.loads(result.stdout),[
+            'update:Biuro-Background-Worker','start','register:Biuro-Platnik-Worker','start',
+        ])
 
     def test_explicit_restart_waits_for_stop_before_start(self):
         result = self.execute('restart')
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),['stop','start'])
+        self.assertEqual(json.loads(result.stdout),[
+            'stop','update:Biuro-Background-Worker','start','register:Biuro-Platnik-Worker','start',
+        ])
 
     def test_source_environment_task_is_managed_not_treated_as_foreign(self):
         result = self.execute('install',running=False,arguments='-m app.worker')
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),['start','register:Biuro-Platnik-Worker'])
+        self.assertEqual(json.loads(result.stdout),[
+            'update:Biuro-Background-Worker','start','register:Biuro-Platnik-Worker','start',
+        ])
+
+    def test_stopping_an_already_stopped_worker_does_not_issue_a_stop(self):
+        result = self.execute('stop',running=False)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout),[])
 
     def test_another_installation_is_neither_stopped_nor_started(self):
         result = self.execute('install',foreign=True)
@@ -93,13 +112,20 @@ function Start-Process {
 
 
 class PlatnikAgentTaskTests(WindowsTaskUpgradeTests):
-    """The interactive Płatnik agent task is registered in the same install click."""
+    """The interactive Płatnik task is installed and started with the main worker."""
 
     def test_install_registers_the_agent_task_as_interactive_at_logon(self):
         result = self.execute('install')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('register:Biuro-Platnik-Worker', json.loads(result.stdout))
 
-    def test_restart_does_not_touch_the_agent_task(self):
-        result = self.execute('restart')
-        self.assertEqual(json.loads(result.stdout), ['stop', 'start'])
+    def test_restart_stops_and_restarts_the_existing_interactive_agent(self):
+        result = self.execute('restart', agent=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['stop', 'stop', 'update:Biuro-Background-Worker', 'start', 'start'])
+        self.assertNotIn('update:Biuro-Platnik-Worker', json.loads(result.stdout))
+
+    def test_stop_stops_both_workers(self):
+        result = self.execute('stop', agent=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['stop', 'stop'])

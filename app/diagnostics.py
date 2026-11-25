@@ -32,7 +32,7 @@ class PrivacyFilter(logging.Filter):
         for secret in sorted(set(filter(None, self.secrets)), key=len, reverse=True):
             escaped = re.escape(secret)
             message = re.sub(
-                rf'(?<![0-9A-Za-z]){escaped}(?![0-9A-Za-z])',
+                rf'(?<![\w.-]){escaped}(?![\w.-])',
                 '[redacted]',
                 message,
             )

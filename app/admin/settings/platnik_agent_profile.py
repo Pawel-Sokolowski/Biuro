@@ -38,8 +38,11 @@ class PlatnikAgentProfile(QWidget):
         self.backend.setCurrentText(profile.get('backend', 'uia'))
         self.title = QLineEdit((profile.get('window') or {}).get('title', ''))
         self.title.setPlaceholderText('Dokładny tytuł głównego okna Płatnika')
-        self.grid = QLineEdit((profile.get('grid') or {}).get(self.grid_key(), ''))
-        self.grid.setPlaceholderText('AutomationId (uia) lub klasa (win32)')
+        grid = profile.get('grid') or {}
+        grid_value = (grid.get('control_id', grid.get('class_name', '')) if self.backend.currentText() == 'win32'
+                      else grid.get('auto_id', grid.get('class_name', '')))
+        self.grid = QLineEdit(str(grid_value))
+        self.grid.setPlaceholderText('AutomationId (uia), Control ID lub klasa (win32)')
         for label, widget in (('Plik Płatnika', self.executable), ('Interfejs', self.backend),
                               ('Tytuł okna', self.title), ('Tabela rejestru', self.grid)):
             form.addRow(label, widget)
@@ -71,7 +74,15 @@ class PlatnikAgentProfile(QWidget):
         layout.addStretch()
 
     def grid_key(self):
-        return 'class_name' if self.backend.currentText() == 'win32' else 'auto_id'
+        if self.backend.currentText() == 'win32':
+            return 'control_id' if self.grid.text().strip().isdecimal() else 'class_name'
+        return 'auto_id'
+
+    def grid_locator(self):
+        value = self.grid.text().strip()
+        if self.backend.currentText() == 'win32' and value.isdecimal():
+            return {'control_id': int(value)}
+        return {self.grid_key(): value}
 
     def window_config(self):
         return {'executable': self.executable.text().strip(), 'backend': self.backend.currentText(),
@@ -95,7 +106,7 @@ class PlatnikAgentProfile(QWidget):
                 raise ValueError('Podaj odrębne etykiety stanów w formacie etykieta = stan.')
             labels[label] = status
         return {'tabs': [], **self.saved_profile, **self.window_config(),
-                'grid': {self.grid_key(): self.grid.text().strip()}, 'columns': columns, 'status_labels': labels}
+                'grid': self.grid_locator(), 'columns': columns, 'status_labels': labels}
 
     def describe(self):
         """Run describe in-process against the given EXE; it starts Płatnik if needed."""

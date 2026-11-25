@@ -51,7 +51,7 @@ def write_files(host, port, dbname, user, password, *, directory=None):
     """Write both files with owner-only permissions and return their paths."""
     target = Path(directory) if directory else _settings_dir()
     target.mkdir(parents=True, exist_ok=True)
-    service, pgpass = target / 'pg_service.conf', target / 'pgpass.conf'
+    service, pgpass = target / '.pg_service.conf', target / 'pgpass.conf'
     for path, text in ((service, service_file(host, port, dbname, user)),
                        (pgpass, pgpass_line(host, port, dbname, user, password))):
         path.write_text(text, encoding='utf-8', newline='\n')
@@ -77,4 +77,4 @@ def _restrict(path):
 
 def files_exist(directory=None):
     target = Path(directory) if directory else _settings_dir()
-    return (target / 'pg_service.conf').is_file() and (target / 'pgpass.conf').is_file()
+    return (target / '.pg_service.conf').is_file() and (target / 'pgpass.conf').is_file()

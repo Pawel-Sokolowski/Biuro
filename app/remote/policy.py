@@ -49,11 +49,11 @@ def bind(function,values,spec,actor_id):
 
 
 def resource_access(operation,values,actor_id):
-    from app.security.authorization import is_administrator
+    from app.security.authorization import is_administrator,is_privileged_account
     if operation.startswith('app.db.dao_employees.') and operation.rsplit('.',1)[1] in (
         'update_employee','delete_employee','set_employee_active','change_employee_password'):
         if not is_administrator(actor_id):
-            if is_administrator(values.get('pracownik_id')):
+            if is_privileged_account(values.get('pracownik_id')):
                 raise PermissionError('Kontem administratora może zarządzać tylko administrator.')
     if values.get('from_remote'):
         raise PermissionError('Tę operację wykonuje synchronizacja serwera.')

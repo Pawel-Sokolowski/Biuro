@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, MagicMock
 from app.integrations.saldeo_web.executable import resolve
 from app.integrations.saldeo_web.browser import remember_login_fields
 from app.integrations.saldeo_web.settings import DEFAULTS
@@ -46,6 +46,74 @@ class BrowserSetupTests(TestCase):
         with patch('app.db.dao_app_settings.set_setting') as save:
             self.assertFalse(remember_login_fields(page,1))
             save.assert_not_called()
+
+
+class HistoryReadTests(TestCase):
+    def run_history(self, *, empty_marker=False):
+        from types import SimpleNamespace
+        from app.integrations.saldeo_web.browser import read_history
+        from app.integrations.saldeo_web.settings import DEFAULTS
+
+        page = Mock()
+        row_locator = Mock()
+        row_locator.filter.return_value = row_locator
+        row_locator.count.return_value = 0
+        row_locator.evaluate_all.return_value = []
+        empty_locator = Mock()
+        empty_locator.filter.return_value = empty_locator
+        empty_locator.count.return_value = int(empty_marker)
+        marker = Mock()
+        paginator = Mock()
+        page.locator.side_effect = lambda selector: {
+            DEFAULTS['logged_in_selector']: marker,
+            DEFAULTS['item_selector']: row_locator,
+            'input[qa-id="paginatorPage"]': paginator,
+            '#empty': empty_locator,
+        }[selector]
+        context = Mock()
+        context.pages = [page]
+        playwright = MagicMock()
+        playwright.return_value.__enter__.return_value.chromium.launch_persistent_context.return_value = context
+        config = {**DEFAULTS, 'enabled': True, 'empty_selector': '#empty' if empty_marker else ''}
+        updates = []
+        with patch.dict('sys.modules', {
+            'playwright.sync_api': SimpleNamespace(sync_playwright=playwright),
+        }), patch('app.integrations.saldeo_web.browser.open_authenticated_history', return_value=True), \
+             patch('app.integrations.saldeo_web.settings.validate'), \
+             patch('app.integrations.saldeo_web.browser.profile_path', return_value='profile'), \
+             patch('app.integrations.saldeo_web.browser.resolve_browser', return_value='browser.exe'):
+            result = read_history(config, progress=lambda stage, counts: updates.append((stage, counts)))
+        return result, updates, context
+
+    def test_unmatched_row_selector_is_reported_as_partial_not_empty_success(self):
+        result, updates, context = self.run_history()
+        self.assertEqual((result['state'], result['reason'], result['rows_seen']), ('partial', 'rows_not_found', 0))
+        self.assertEqual(updates[-1][0], 'rows_not_found')
+        context.close.assert_called_once()
+
+    def test_configured_empty_history_marker_allows_confirmed_empty_result(self):
+        result, _updates, _context = self.run_history(empty_marker=True)
+        self.assertEqual((result['state'], result['pages'], result['rows_seen']), ('ok', 1, 0))
+
+    def test_missing_paginator_is_not_treated_as_a_complete_history(self):
+        from app.integrations.saldeo_web.browser import _next_page
+        page = Mock()
+        page.locator.return_value.first.count.return_value = 0
+        self.assertIsNone(_next_page(page, {'next_selector': '#next', 'item_selector': '.row'}, []))
+
+    def test_failed_page_change_is_not_mistaken_for_the_last_page(self):
+        from app.integrations.saldeo_web.browser import _next_page
+        page = Mock()
+        control = page.locator.return_value.first
+        control.count.return_value = 1
+        control.is_visible.return_value = True
+        control.evaluate.return_value = 'input'
+        control.get_attribute.return_value = '5'
+        control.input_value.return_value = '1'
+        page.locator.return_value.all_inner_texts.return_value = ['same row']
+        page.wait_for_function.side_effect = TimeoutError('page did not change')
+        with self.assertRaisesRegex(TimeoutError, 'page did not change'):
+            _next_page(page, {'next_selector': '#page', 'item_selector': '.row'}, [])
 
 
 class SavedLoginTests(TestCase):

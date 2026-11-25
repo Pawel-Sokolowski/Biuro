@@ -13,12 +13,12 @@ def needs_initial_admin() -> bool:
     conn = get_conn()
     try:
         employee_ids = [row[0] for row in conn.execute(
-            "SELECT id FROM pracownicy WHERE COALESCE(aktywny,1)=1"
+            "SELECT id FROM pracownicy"
         ).fetchall()]
     finally:
         conn.close()
-    from app.security.authorization import is_administrator
-    return not any(is_administrator(employee_id) for employee_id in employee_ids)
+    from app.security.authorization import is_privileged_account
+    return not any(is_privileged_account(employee_id) for employee_id in employee_ids)
 
 
 def create_initial_admin(email: str, password: str, imie: str = "Główny", nazwisko: str = "Administrator") -> int:
@@ -33,11 +33,11 @@ def create_initial_admin(email: str, password: str, imie: str = "Główny", nazw
         # Serialize first-run creation, including an old database containing
         # only non-admin employee rows. Do not rely on a separate preflight.
         conn.execute("SELECT pg_advisory_xact_lock(748208)")
-        from app.security.authorization import is_administrator
+        from app.security.authorization import is_privileged_account
         employee_ids = [row[0] for row in conn.execute(
-            "SELECT id FROM pracownicy WHERE COALESCE(aktywny,1)=1"
+            "SELECT id FROM pracownicy"
         ).fetchall()]
-        if any(is_administrator(employee_id) for employee_id in employee_ids):
+        if any(is_privileged_account(employee_id) for employee_id in employee_ids):
             raise PermissionError("Administrator już istnieje. Nowe konta tworzy administrator.")
         cur = conn.execute(
             "INSERT INTO pracownicy (email, haslo_hash, imie, nazwisko, aktywny, is_admin, rola_id) VALUES (%s, %s, %s, %s, 1, 1, %s) RETURNING id",

@@ -50,6 +50,14 @@ def get_permissions(pracownik_id: Optional[int]) -> Dict[str, bool]:
 @office_endpoint('app.security.authorization.is_administrator')
 @cached
 def is_administrator(pracownik_id: Optional[int]) -> bool:
+    return _is_privileged_account(pracownik_id, active_only=True)
+
+
+def is_privileged_account(pracownik_id: Optional[int]) -> bool:
+    return _is_privileged_account(pracownik_id, active_only=False)
+
+
+def _is_privileged_account(pracownik_id: Optional[int], *, active_only: bool) -> bool:
     if not pracownik_id:
         return False
     conn = get_conn()
@@ -59,7 +67,8 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
             """
             SELECT 1 FROM pracownicy p
             LEFT JOIN role r ON r.id = p.rola_id
-            WHERE p.id = %s AND COALESCE(p.aktywny, 1) = 1
+            WHERE p.id = %s
+              AND (NOT %s OR COALESCE(p.aktywny, 1) = 1)
               AND (
                   COALESCE(p.is_admin, 0) = 1
                   OR COALESCE(p.rola_id, 0) = 4
@@ -71,7 +80,7 @@ def is_administrator(pracownik_id: Optional[int]) -> bool:
                   )
               )
             """,
-            (pracownik_id,),
+            (pracownik_id, active_only),
         ).fetchone()
         return row is not None
     finally:

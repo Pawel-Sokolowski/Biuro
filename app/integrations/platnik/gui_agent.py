@@ -10,7 +10,8 @@ import subprocess
 import sys
 from time import sleep
 
-from app.integrations.platnik.gui_desktop import describe, download_confirmation, grid_rows, interactive_desktop, main_window
+from app.integrations.platnik.gui_desktop import (describe, download_confirmation, grid_rows,
+                                                   interactive_desktop, main_window, register)
 from app.integrations.platnik.gui_evidence import ERRORS, OPTIONAL_COLUMNS, REQUIRED_COLUMNS, STATUSES, ReadError, collect, label
 
 MODULE = 'app.integrations.platnik.gui_agent'
@@ -119,14 +120,23 @@ def read_job(config, job):
 def bounded_read(path, job):
     python = Path(sys.executable)
     console = python.with_name('python.exe') if python.name.lower() == 'pythonw.exe' else python
+    command = ([str(console), '--platnik-agent', 'read-job', '--config', str(path)]
+               if getattr(sys, 'frozen', False)
+               else [str(console), '-m', MODULE, 'read-job', '--config', str(path)])
     try:
         process = subprocess.run(
-            [str(console), '-m', MODULE, 'read-job', '--config', str(path)],
+            command,
             input=json.dumps(job), text=True, encoding='utf-8', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=JOB_TIMEOUT, check=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        return json.loads(process.stdout)
+        outcome = json.loads(process.stdout)
+        if (not isinstance(outcome, dict)
+                or not (set(outcome) == {'error'} and isinstance(outcome['error'], str)
+                        and outcome['error'] in ERRORS
+                        or set(outcome) == {'findings'} and isinstance(outcome['findings'], list))):
+            return {'error': 'ReadFailed'}
+        return outcome
     except subprocess.TimeoutExpired:
         return {'error': 'Timeout'}
     except (subprocess.CalledProcessError, OSError, ValueError):
@@ -140,7 +150,76 @@ def connect(config):
                            options='-c statement_timeout=5000')
 
 
+def check_queue_access(config):
+    from psycopg import sql
+    schema = sql.Identifier(config['schema']).as_string()
+    with connect(config) as connection:
+        available = connection.execute("""
+            SELECT has_function_privilege(current_user, %s, 'EXECUTE'),
+                   has_function_privilege(current_user, %s, 'EXECUTE'),
+                   has_table_privilege(current_user, %s, 'SELECT,INSERT,UPDATE,DELETE')
+        """, (f'{schema}.platnik_gui_claim()',
+              f'{schema}.platnik_gui_finish(uuid,uuid,jsonb,text)',
+              f'{schema}.platnik_gui_checks')).fetchone()
+    if not all(available[:2]) or available[2]:
+        raise ValueError('Sprawdź uprawnienia dedykowanego konta agenta.')
+    return True
+
+
+def require_interactive_desktop():
+    if not interactive_desktop():
+        raise ReadError('DesktopUnavailable')
+    return True
+
+
+def diagnose(path=None, *, progress=None):
+    """Check the agent setup without claiming jobs or reading/importing documents."""
+    if sys.platform != 'win32':
+        raise ValueError('Diagnostyka agenta Płatnika wymaga Windows.')
+    path = (Path(path) if path is not None else default_profile()).resolve()
+    report = progress or (lambda _stage, _state, _detail: None)
+
+    def step(name, operation, success):
+        report(name, 'running', '')
+        try:
+            result = operation()
+        except Exception as error:
+            if isinstance(error, ReadError):
+                detail = ERRORS.get(error.code, 'Operacja nie powiodła się.')
+            elif name == 'Profil agenta':
+                detail = str(error)
+            elif name == 'Połączenie z kolejką PostgreSQL':
+                detail = f'Połączenie nie powiodło się ({type(error).__name__}). Sprawdź pliki libpq agenta i uprawnienia.'
+            else:
+                detail = f'Nie powiodło się ({type(error).__name__}).'
+            report(name, 'failed', detail)
+            raise
+        report(name, 'passed', success(result))
+        return result
+
+    config = step('Profil agenta', lambda: load_config(path), lambda value:
+                  f'Profil i ścieżka do Płatnika są poprawne: {value["executable"].name}.')
+    step('Połączenie z kolejką PostgreSQL', lambda: check_queue_access(config),
+         lambda _value: 'Połączenie i uprawnienia do kolejki są poprawne.')
+    step('Pulpit Windows', require_interactive_desktop,
+         lambda _value: 'Aktywna sesja pulpitu jest dostępna.')
+    window = step('Okno Płatnika', lambda: main_window(config),
+                  lambda _value: 'Okno Płatnika jest widoczne; uruchomiono je tylko jeśli nie było otwarte.')
+    step('Tabela deklaracji', lambda: register(window, config),
+         lambda value: f'Znaleziono tabelę i {len(value[2])} skonfigurowanych kolumn.')
+    if config.get('confirmation_download'):
+        step('Tabela zestawów wysłanych', lambda: register(
+            window, {**config['confirmation_download'], 'backend': config['backend']}),
+             lambda value: f'Znaleziono tabelę i {len(value[2])} skonfigurowanych kolumn.')
+    report('Test zakończony', 'passed',
+           'Nie pobrano zadań, nie odczytano danych pracowników i nie wykonano importu.')
+    return True
+
+
 def run(config, path, *, once=False):
+    if once and not interactive_desktop():
+        raise ReadError('DesktopUnavailable')
+
     from psycopg import Error, sql
     from psycopg.types.json import Jsonb
 
@@ -189,7 +268,8 @@ def default_profile():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', nargs='?', default='run', choices=('run', 'once', 'probe', 'describe', 'read-job'))
+    parser.add_argument('mode', nargs='?', default='run',
+                        choices=('run', 'once', 'probe', 'describe', 'read-job'))
     parser.add_argument('--config', type=Path, default=None,
                         help='Profil agenta. Domyślnie katalog danych Biuro: platnik-agent.json')
     args = parser.parse_args(argv)
@@ -204,18 +284,7 @@ def main(argv=None):
             print(json.dumps(describe(main_window(config)), ensure_ascii=True, indent=2))
         elif args.mode == 'probe':
             import pywinauto  # noqa: F401  Loaded on the agent VM to check the Windows runtime.
-            from psycopg import sql
-            schema = sql.Identifier(config['schema']).as_string()
-            with connect(config) as conn:
-                available = conn.execute("""
-                    SELECT has_function_privilege(current_user, %s, 'EXECUTE'),
-                           has_function_privilege(current_user, %s, 'EXECUTE'),
-                           has_table_privilege(current_user, %s, 'SELECT,INSERT,UPDATE,DELETE')
-                """, (f'{schema}.platnik_gui_claim()',
-                      f'{schema}.platnik_gui_finish(uuid,uuid,jsonb,text)',
-                      f'{schema}.platnik_gui_checks')).fetchone()
-            if not all(available[:2]) or available[2]:
-                raise ValueError('Sprawdź uprawnienia dedykowanego konta agenta.')
+            check_queue_access(config)
             print('Połączenie z kolejką działa. Pulpit: ' + ('aktywny.' if interactive_desktop() else 'niedostępny.'))
         elif args.mode == 'read-job':
             print(json.dumps({'findings': read_job(config, json.load(sys.stdin))}, ensure_ascii=True))

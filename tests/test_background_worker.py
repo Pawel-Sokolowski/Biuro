@@ -3,8 +3,9 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 from unittest import TestCase
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, MagicMock
 from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet
 from app.services.worker_settings import DEFAULTS, save_settings, load_settings
@@ -58,6 +59,15 @@ class PlatnikGuiScheduleTests(TestCase):
 class WorkerLoopTests(TestCase):
     """Loop behaviour that needs no database: corrupt state, timeouts and cadence."""
 
+    def test_corrupt_worker_settings_fail_closed_to_disabled_defaults(self):
+        from app.services.worker_settings import DEFAULTS, load_settings
+        for raw in ('{bad json', '[]', '{"enabled": true, "mail_interval": "soon"}'):
+            with self.subTest(raw=raw), patch('app.services.worker_settings.get_setting', return_value=raw):
+                with self.assertLogs('app.services.worker_settings', level='WARNING'):
+                    settings = load_settings()
+                self.assertEqual(settings, DEFAULTS)
+                self.assertFalse(settings['enabled'])
+
     def test_heartbeat_survives_a_corrupt_event_log_and_failed_recovery(self):
         from app.worker import serve
         settings = {'enabled': False}
@@ -77,13 +87,82 @@ class WorkerLoopTests(TestCase):
         from app.worker import _parse_setting
         with self.assertLogs('app.worker', level='WARNING') as logs:
             self.assertEqual(_parse_setting('{oops', []), [])
-        self.assertIn('worker_setting_unreadable', '\n'.join(logs.output))
+            self.assertEqual(_parse_setting('{"wrong":"shape"}', []), [])
+        self.assertEqual('\n'.join(logs.output).count('worker_setting_unreadable'), 2)
+
+    def test_timed_out_job_is_not_resubmitted_while_its_thread_is_live(self):
+        from app.services.worker_settings import DEFAULTS
+        from app.worker import serve
+
+        class ResponsiveStop(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(min(timeout or 0.01, 0.01))
+
+        settings = {**DEFAULTS, 'enabled': True}
+        settings.update({name: False for name in (
+            'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo',
+            'platnik', 'platnik_gui', 'checking_refresh',
+        )})
+        stop, started, release, duplicate, released = (
+            ResponsiveStop(), threading.Event(), threading.Event(), threading.Event(), threading.Event()
+        )
+        timed_out, finished_after_timeout = threading.Event(), threading.Event()
+        calls = 0
+
+        def job(_name, _stop):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                release.wait(2)
+            elif not released.is_set():
+                duplicate.set()
+                stop.set()
+            return {}
+
+        def persist(key, value):
+            if key == 'background_worker_heartbeat':
+                status = json.loads(value)['jobs'].get('mail', {})
+                if status.get('state') == 'failed' and status.get('error_type') == 'Timeout':
+                    if status.get('still_running'):
+                        timed_out.set()
+                    else:
+                        finished_after_timeout.set()
+
+        leadership = MagicMock()
+        leadership.return_value.__enter__.return_value.execute.return_value = [1]
+        with patch('app.worker.leadership', leadership), \
+             patch('app.worker.get_setting', return_value=None), \
+             patch('app.worker.load_settings', return_value=settings), \
+             patch('app.worker.set_setting', side_effect=persist), \
+             patch('app.worker.run_job', side_effect=job), \
+             patch('app.worker.job_timeout', return_value=0.01), \
+             patch('app.worker.job_interval', return_value=0.01), \
+             patch('app.worker.WORKER_THREADS', 2), \
+             patch('app.worker.HEARTBEAT_SECONDS', 0), \
+             patch('app.services.checking_refresh.recover_interrupted'), \
+             patch('app.services.worker_setup.worker_env_path', return_value=Path('worker.env')):
+            result = []
+            worker = threading.Thread(target=lambda: result.append(serve(once=True, stop=stop)))
+            worker.start()
+            self.assertTrue(started.wait(2))
+            self.assertTrue(timed_out.wait(2))
+            self.assertFalse(duplicate.wait(0.05))
+            released.set()
+            release.set()
+            self.assertTrue(finished_after_timeout.wait(2))
+            stop.set()
+            worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(duplicate.is_set())
 
     def test_job_without_a_timeout_is_never_abandoned(self):
         from app.worker import job_timeout
         self.assertIsNone(job_timeout('ezla', {}))
         self.assertIsNone(job_timeout('checking_refresh', {}))
         self.assertEqual(job_timeout('mail', {'mail_interval': 120}), 1800)
+        self.assertEqual(job_timeout('platnik_gui', {'platnik_gui_interval': 60}), 1800)
 
     def test_job_interval_uses_fixed_cadence_for_enova(self):
         from app.worker import job_interval

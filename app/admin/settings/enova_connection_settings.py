@@ -29,7 +29,7 @@ class EnovaConnectionSettings(QWidget):
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.server = QLineEdit(config.get('server', ''))
-        self.server.setPlaceholderText(r'192.168.1.10\ENOVA lub sql.firma.local,1433')
+        self.server.setPlaceholderText(r'tcp:enova.firma.local,1433 lub 192.168.1.10\ENOVA')
         self.database = QLineEdit(config.get('database',''))
         self.database.setPlaceholderText('Np. Biuro_rachunkowe — baza do testu połączenia i wyszukiwania baz firm')
         from app.integrations.enova.odbc_support import SUPPORTED_DRIVERS
@@ -78,9 +78,12 @@ class EnovaConnectionSettings(QWidget):
         for field in (self.declarations_query,self.payroll_query,self.hr_events_query,self.jpk_query):
             field.textChanged.connect(self.update_adapter_status)
         self.update_adapter_status()
-        local_note = QLabel('Test połączenia działa z tego komputera, bez uruchamiania workera. '
-                            'Wpisz główną bazę Enovy, aby sprawdzić ją przed przypisaniem baz firm. '
-                            'Sterownik musi być zainstalowany na tym komputerze; Enova może używać innego dostawcy SQL.')
+        local_note = QLabel('Test połączenia wykonuje serwer Biuro, a import zaplanowany — host workera. Nie muszą '
+                            'działać na maszynie z Enova365, ale każdy z tych hostów musi mieć sterownik ODBC i '
+                            'dostęp sieciowy do SQL Server. Wpisz osiągalną nazwę DNS lub IP serwera SQL. Dla osobnej '
+                            'maszyny użyj portu TCP, np. tcp:enova.firma.local,1433; SQL Server musi mieć włączone '
+                            'TCP/IP i dopuścić połączenie w zaporze. Wpisz główną bazę Enovy, aby sprawdzić ją przed '
+                            'przypisaniem baz firm.')
         local_note.setWordWrap(True)
         layout.addWidget(local_note)
         note = QLabel('Wpisz nazwę bazy Enova przy każdej importowanej firmie. Puste pole pomija firmę. '

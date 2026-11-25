@@ -2,8 +2,10 @@
 from app.remote.boundary import endpoint as office_endpoint
 from copy import deepcopy
 import json
+import logging
 from app.db.dao_app_settings import get_setting, set_setting
 
+logger = logging.getLogger(__name__)
 KEY = 'background_worker'
 DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
             'enova': True, 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
@@ -23,8 +25,15 @@ OBSOLETE = ('enova_interval',)
 @office_endpoint('app.services.worker_settings.load_settings')
 def load_settings():
     value = deepcopy(DEFAULTS)
-    value.update({key: item for key, item in json.loads(get_setting(KEY) or '{}').items() if key not in OBSOLETE})
-    validate(value)
+    try:
+        stored = json.loads(get_setting(KEY) or '{}')
+        if not isinstance(stored, dict):
+            raise ValueError('worker_settings_not_object')
+        value.update({key: item for key, item in stored.items() if key not in OBSOLETE})
+        validate(value)
+    except (TypeError, ValueError, KeyError) as error:
+        logger.warning('worker_settings_unreadable error_type=%s', type(error).__name__)
+        value = deepcopy(DEFAULTS)
     return value
 
 

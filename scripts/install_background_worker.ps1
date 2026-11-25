@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ProjectDirectory = '',
     [string]$ExecutablePath,
@@ -74,6 +74,17 @@ try {
         throw 'Biuro.exe or a source installation with .venv was not found. Install Biuro first, or pass -ExecutablePath "C:\path\Biuro.exe". An installed EXE does not require Python or .venv.'
     }
     $workingDirectory = if ($mode -eq 'installed EXE') { Split-Path $program -Parent } else { $project }
+    $agentProgram = $program
+    $agentArguments = '--platnik-agent'
+    $agentWorkingDirectory = $workingDirectory
+    if ($mode -eq 'Python source environment') {
+        $agentProgram = Join-Path (Split-Path $program -Parent) 'pythonw.exe'
+        if (-not (Test-Path -LiteralPath $agentProgram)) {
+            throw 'The source environment is missing pythonw.exe, required for the interactive Płatnik agent.'
+        }
+        $agentArguments = '-m app.integrations.platnik.gui_agent'
+        $agentWorkingDirectory = $project
+    }
     Write-Output "PowerShell: $($PSVersionTable.PSVersion)"
     Write-Output "Mode: $mode"
     Write-Output "Program: $program"
@@ -98,6 +109,19 @@ try {
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         throw "Task '$TaskName' already exists. Edit it in Task Scheduler or choose another -TaskName. It was not replaced."
     }
+    $agentTaskName = 'Biuro-Platnik-Worker'
+    $oldAgentTask = Get-ScheduledTask -TaskName $agentTaskName -ErrorAction SilentlyContinue
+    if ($oldAgentTask) {
+        $agentSid = $oldAgentTask.Principal.UserId
+        if ($agentSid -notmatch '^S-1-') {
+            $agentSid = (New-Object Security.Principal.NTAccount($agentSid)).Translate(
+                [Security.Principal.SecurityIdentifier]).Value
+        }
+        if ($oldAgentTask.Actions.Count -ne 1 -or $oldAgentTask.Actions[0].Execute -ne $agentProgram -or
+            $oldAgentTask.Actions[0].Arguments -ne $agentArguments -or $agentSid -ne $identity.User.Value) {
+            throw "Task '$agentTaskName' belongs to another installation or Windows account. It was not replaced."
+        }
+    }
     Write-Output 'The task account needs access to the executable, PostgreSQL and its own Biuro configuration.'
     Write-Output 'Use Biuro - konfiguracja workera to save PostgreSQL and shared key in this Windows account''s Biuro\worker.env.'
     Write-Output 'For sources, configure the project .env. Passwords are requested locally and are not written to the installer log.'
@@ -118,9 +142,23 @@ try {
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
     $password = $credential.GetNetworkCredential().Password
+    $agentCreated = $false
     try {
+        if (-not $oldAgentTask) {
+            $agentAction = New-ScheduledTaskAction -Execute $agentProgram -Argument $agentArguments -WorkingDirectory $agentWorkingDirectory
+            $agentTrigger = New-ScheduledTaskTrigger -AtLogOn -User $identity.Name
+            $agentSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
+                -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+            $agentPrincipal = New-ScheduledTaskPrincipal -UserId $identity.User.Value -LogonType Interactive -RunLevel Limited
+            Register-ScheduledTask -TaskName $agentTaskName -Action $agentAction -Trigger $agentTrigger `
+                -Settings $agentSettings -Principal $agentPrincipal | Out-Null
+            $agentCreated = $true
+        }
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -User $credential.UserName -Password $password | Out-Null
     } catch {
+        if ($agentCreated) {
+            Unregister-ScheduledTask -TaskName $agentTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
         $registrationError = $_.Exception.Message
         if ($password) { $registrationError = $registrationError.Replace($password, '[redacted]') }
         throw $registrationError
@@ -128,9 +166,11 @@ try {
     Add-Content -LiteralPath $installerLog -Value "$(Get-Date -Format o) Registered task: $TaskName; mode: $mode" -Encoding UTF8
     if (-not $NoStart) {
         Start-ScheduledTask -TaskName $TaskName
+        Start-ScheduledTask -TaskName $agentTaskName
         Write-Output "Task '$TaskName' registered and launch requested. This does not yet confirm that the worker is healthy."
+        Write-Output "Interactive task '$agentTaskName' installed and started for the current Windows session."
     } else {
-        Write-Output "Task '$TaskName' registered. Start it in Task Scheduler after completing configuration."
+        Write-Output "Tasks '$TaskName' and '$agentTaskName' registered. They will start when their triggers are met."
     }
     Write-Output 'Confirm the heartbeat in Biuro > Settings > Worker w tle. If absent, inspect Task Scheduler and the task account''s Biuro\logs\biuro.log.'
     if (-not $NonInteractive) { [void](Read-Host 'Press Enter to finish') }

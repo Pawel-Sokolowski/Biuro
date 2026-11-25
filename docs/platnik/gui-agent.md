@@ -126,14 +126,17 @@ uzupełnij również `confirmation_download` w jego lokalnym profilu.
 
 ## Rejestracja i próba
 
-Uruchom z katalogu repozytorium w PowerShell na koncie agenta. Pierwsze
-polecenie sprawdza profil, pakiety i uprawnienia kolejki. Drugie rejestruje
-zadanie i uruchamia je w bieżącej sesji.
+Zainstaluj **Biuro-Background-Worker** z ustawień workera albo uruchom
+`scripts\install_background_worker.cmd`. Ta sama operacja rejestruje
+**Biuro-Platnik-Worker** jako osobne zadanie interaktywne przy logowaniu i
+uruchamia je w bieżącej sesji. Główny worker działa także bez zalogowanego
+użytkownika; agent GUI wymaga aktywnego, odblokowanego pulpitu.
 
-```powershell
-.\scripts\install_platnik_gui_agent.ps1 -Config C:\Biuro\platnik-agent.json -CheckOnly
-.\scripts\install_platnik_gui_agent.ps1 -Config C:\Biuro\platnik-agent.json -Start
-```
+W **Ustawienia → Płatnik** kliknij **Test agenta GUI krok po kroku (bez importu)**.
+Test pokazuje osobno walidację profilu, dostęp do kolejki PostgreSQL, pulpit,
+okno Płatnika i skonfigurowane tabele. Może uruchomić Płatnika, jeśli jest
+zamknięty. Nie pobiera zadań z kolejki, nie odczytuje danych pracowników i nie
+importuje wyników.
 
 Wybierz w **Kadry → Sprawdzanie → Raport → Składki ZUS (miesięcznie)**
 okres z już zaimportowaną deklaracją i kliknij **Sprawdź wysyłkę w Płatniku**.
@@ -147,9 +150,8 @@ Status potwierdzenia wymaga identyfikatora potwierdzenia. Wynik bez
 wpisu oznacza, że agent w odczytanym widoku nie znalazł zgodnego zestawu.
 Domyślna kolumna raportu zachowuje stan deklaracji z Płatnika.
 
-Na czas próby można zatrzymać zadanie Harmonogramu i uruchomić
-`gui_agent once` z tym samym `--config`. Plik `agent.log` obok profilu
-zawiera identyfikator zadania i wynik techniczny. Test wdrożeniowy powinien
+Plik `agent.log` obok profilu zawiera identyfikator zadania i wynik techniczny.
+Test wdrożeniowy powinien
 objąć zestaw potwierdzony, wysłany i zweryfikowany przypadek bez wpisu, a
 następnie ponowny odczyt po odblokowaniu sesji. Dla profilu z pobieraniem
 użyj zestawu wysłanego z ważnym identyfikatorem. Sprawdź, czy Płatnik

@@ -1,8 +1,31 @@
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from tests.base import DbTestCase
 from app.db.dao_conn import get_conn
 from app.integrations.saldeo_web.history import parse, ingest, apply_pending, list_history, notification_batches
+
+
+class WorkerRunTests(TestCase):
+    def test_worker_reports_page_row_and_short_name_match_counts(self):
+        from app.integrations.saldeo_web.sync import run
+        item = {'title': 'DEMOCO - Komplet dokumentów', 'period': 'Październik 2026',
+                'text': 'Zakończone\nDEMOCO - Komplet dokumentów\nPaździernik 2026'}
+        lock = MagicMock()
+        lock.return_value.__enter__.return_value = True
+        saved = []
+        with patch('app.integrations.saldeo_web.sync.load', return_value={'enabled': True, 'history_url': 'https://saldeo.test/history'}), \
+             patch('app.integrations.saldeo_web.sync.browser_lock', lock), \
+             patch('app.integrations.saldeo_web.sync.apply_pending', side_effect=[1, 2]), \
+             patch('app.integrations.saldeo_web.sync.read_history',
+                   side_effect=lambda _config, _stop, progress: (
+                       progress('history_page_read', {'pages': 3, 'rows_seen': 8, 'items': 1}),
+                       {'state': 'ok', 'items': [item], 'pages': 3, 'rows_seen': 8})[1]), \
+             patch('app.integrations.saldeo_web.sync.ingest', return_value=1), \
+             patch('app.integrations.saldeo_web.sync.set_setting', side_effect=lambda key, value: saved.append((key, value))):
+            result = run()
+        self.assertEqual((result['pages'], result['rows_seen'], result['scanned'], result['recognized'],
+                          result['new'], result['applied']), (3, 8, 1, 1, 1, 3))
+        self.assertTrue(any('"stage": "history_page_read"' in value for _key, value in saved))
 
 
 class ParserTests(TestCase):

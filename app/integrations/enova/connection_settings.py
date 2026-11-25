@@ -36,7 +36,7 @@ def save_connection(config, *, actor_id, password=''):
         raise PermissionError('Tylko administrator może zmieniać połączenie Enova.')
     requested_months(date.today(), config['months_back'])
     if not str(config.get('server', '')).strip():
-        raise ValueError('Uzupełnij serwer SQL (adres IP\\instancja lub host,port).')
+        raise ValueError('Uzupełnij adres SQL Server osiągalny z serwera Biuro (np. tcp:enova.firma.local,1433).')
     seen_nips, seen_databases = set(), set()
     for source in config['sources']:
         nip = normalize_nip(source['nip'])

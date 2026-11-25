@@ -120,13 +120,18 @@ Poniższe instrukcje źródłowe i skryptowe są alternatywą dla administrator�
    ```
 
    Skrypt pyta lokalnie o konto Windows, uruchamia zadanie natychmiast,
-   konfiguruje brak limitu czasu i ponowienie po awarii. Istniejącego zadania
-   nie nadpisuje. Zadanie działa także bez interaktywnego logowania.
+   konfiguruje brak limitu czasu i ponowienie po awarii. Razem z nim rejestruje
+   interaktywne zadanie `Biuro-Platnik-Worker` przy logowaniu i uruchamia agenta
+   w bieżącej sesji. Agent GUI wymaga aktywnego, odblokowanego pulpitu; główny
+   worker działa również bez logowania. Istniejących zadań nie nadpisuje.
    Alternatywnie uruchom stale `python -m app.worker` przez własny menedżer usług.
    Zaktualizowany plik EXE obsługuje również `Biuro.exe --worker` oraz
    `Biuro.exe --worker --once`; dla EXE skonfiguruj zadanie uruchamiające go
    z argumentem `--worker`, z właściwym `.env` konta zadania.
-7. Sprawdź stan i ostatni sygnał w „Worker w tle”, a na serwerze log `logs/biuro.log`.
+7. Przycisk **Pobierz pełny stan teraz** pokazuje status wszystkich zadań,
+   także tych jeszcze nieuruchomionych, wraz z bezpiecznymi licznikami wyniku.
+   Odczyt stanu nie uruchamia zadań ponownie. Sprawdź również ostatni sygnał
+   w „Worker w tle” oraz na serwerze log `logs/biuro.log`.
    Szczegóły importów są w audycie, a szczegóły kolejki e-mail przy fakturach.
    Stan błędu jednego zadania nie zatrzymuje pozostałych.
 

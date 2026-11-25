@@ -12,7 +12,13 @@ from app.utils.background import TaskRunner
 JOB_LABELS = {'platnik_gui': 'Płatnik GUI — sprawdzanie wysyłki', 'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — ZUS i wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
               'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'partial': 'Częściowo wykonano',
-          'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania'}
+          'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania',
+          'not_reported': 'Brak raportu z workera'}
+DETAIL_COUNTS = {'accounts': 'konta', 'companies': 'firmy', 'failed': 'błędy',
+                 'queued': 'w kolejce', 'sent': 'wysłano', 'rows': 'wpisy',
+                 'unmatched': 'niedopasowane', 'months': 'miesiące',
+                 'pages': 'strony', 'rows_seen': 'wiersze', 'scanned': 'odczytane',
+                 'recognized': 'rozpoznane komplety', 'applied': 'zastosowane'}
 
 MODES = {'waiting': 'Oczekiwanie na godzinę odczytu', 'checked_today': 'Sprawdzono już dzisiaj',
          'disabled': 'Wyłączono w ustawieniach usługi', 'not_configured': 'Brak konfiguracji usługi',
@@ -25,6 +31,19 @@ def state_label(value):
     result = value.get('result') or {}
     mode = value.get('mode') or (result.get('mode') if isinstance(result, dict) else None)
     return MODES.get(mode) or STATES.get(value.get('state'), value.get('state'))
+
+
+def status_detail(value):
+    details = []
+    result = value.get('result')
+    if isinstance(result, dict):
+        for key, label in DETAIL_COUNTS.items():
+            count = result.get(key)
+            if type(count) is int:
+                details.append(f'{label}: {count}')
+    if value.get('still_running'):
+        details.append('wątek nadal działa po limicie czasu')
+    return '; '.join(details) or '—'
 
 
 class WorkerMonitor(QWidget):
@@ -41,9 +60,10 @@ class WorkerMonitor(QWidget):
         self.summary.setWordWrap(True)
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         bar.addWidget(self.summary, 1)
-        refresh = QPushButton('Odśwież')
-        refresh.clicked.connect(self.refresh)
-        bar.addWidget(refresh)
+        self.refresh_button = QPushButton('Pobierz pełny stan teraz')
+        self.refresh_button.clicked.connect(self.refresh)
+        self.refresh_button.setToolTip('Pobiera od razu zapisane statusy wszystkich zadań; nie uruchamia ich ponownie.')
+        bar.addWidget(self.refresh_button)
         live_logs = QPushButton('Otwórz bieżące logi')
         live_logs.clicked.connect(lambda: self.tabs.setCurrentWidget(self.log_page))
         bar.addWidget(live_logs)
@@ -60,7 +80,7 @@ class WorkerMonitor(QWidget):
         self.progress = QLabel()
         self.progress.setWordWrap(True)
         self.progress.setTextFormat(Qt.TextFormat.PlainText)
-        self.jobs = self._table(['Zadanie', 'Stan', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
+        self.jobs = self._table(['Zadanie', 'Stan', 'Szczegóły', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
         status_layout.addWidget(self.jobs)
         self.tabs.addTab(status_page, 'Status')
         log_page = QWidget()
@@ -114,7 +134,7 @@ class WorkerMonitor(QWidget):
             note = QLabel('Ostatni zapisany stan zadań. Brak wpisu oznacza, że worker nie zgłosił jeszcze przebiegu.')
             note.setWordWrap(True)
             page_layout.addWidget(note)
-            table = self._table(['Zadanie', 'Stan', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
+            table = self._table(['Zadanie', 'Stan', 'Szczegóły', 'Start', 'Koniec', 'Następne sprawdzenie', 'Typ błędu'])
             page_layout.addWidget(table)
             if 'enova' in keys:
                 page_layout.addWidget(QLabel('Odczyty Enovy oczekujące na ponowienie'))
@@ -186,12 +206,18 @@ class WorkerMonitor(QWidget):
             self.instance_info.setText('Worker nie zgłosił jeszcze identyfikatora procesu i wersji. '
                                        'Panel odczytuje stan tej bazy Biuro; nie uruchamia kolejnego workera.')
         jobs = heartbeat.get('jobs', {})
-        job_rows = {name: [JOB_LABELS.get(name, name), state_label(value),
-            value.get('started_at'), value.get('finished_at'), value.get('next_run_at'), value.get('error_type')]
-            for name, value in jobs.items()}
+        if not isinstance(jobs, dict):
+            jobs = {}
+        job_rows = {}
+        for name, label in JOB_LABELS.items():
+            value = jobs.get(name, {'state': 'not_reported'})
+            if not isinstance(value, dict):
+                value = {'state': 'not_reported'}
+            job_rows[name] = [label, state_label(value), status_detail(value),
+                value.get('started_at'), value.get('finished_at'), value.get('next_run_at'), value.get('error_type')]
         self._fill(self.jobs, list(job_rows.values()))
         for keys, table in self.job_views.items():
-            self._fill(table, [job_rows[key] for key in keys if key in job_rows])
+            self._fill(table, [job_rows[key] for key in keys])
         self._log_data = data
         self.render_logs()
         progress = data['progress']

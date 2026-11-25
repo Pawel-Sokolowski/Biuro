@@ -13,7 +13,19 @@ from app.integrations.saldeo_web.history import list_history
 LABELS = {'pending':'Oczekuje', 'applied':'Zapisano komplet', 'needs_mapping':'Do przypisania',
           'ignored':'Inne powiadomienie', 'ok':'Historia sprawdzona', 'partial':'Historia niepełna — sprawdź stronicowanie',
           'login_required':'Wymagane logowanie / 2FA', 'error':'Błąd odczytu — sprawdź przeglądarkę i selektory',
-          'disabled':'Wyłączony', 'browser_busy':'Przeglądarka zajęta', 'interrupted':'Przerwano'}
+          'disabled':'Wyłączony', 'browser_busy':'Przeglądarka zajęta', 'interrupted':'Przerwano',
+          'running':'Sprawdzanie w toku'}
+STAGES = {'starting':'Przygotowanie', 'opening_history':'Otwieranie historii Saldeo',
+          'login_required':'Wymagane logowanie', 'history_page_read':'Odczytano stronę historii',
+          'rows_not_found':'Nie znaleziono wpisów zgodnych z selektorem',
+          'paginator_not_found':'Nie znaleziono kontrolki stronicowania',
+          'history_complete':'Historia odczytana', 'interrupted':'Przerwano',
+          'page_limit':'Osiągnięto limit stron'}
+REASONS = {'rows_not_found':'Historia pokazała stronę/paginator, ale nie wpisy. Sprawdź selektor wpisu lub pustej historii.',
+           'paginator_not_found':'Nie znaleziono skonfigurowanej kontrolki stronicowania; odczyt może być niepełny.',
+           'paginator_not_configured':'Nie skonfigurowano stronicowania; odczyt nie jest pełny.',
+           'page_limit':'Zwiększ maksymalną liczbę stron.',
+           'item_limit':'Osiągnięto limit 5000 wyników; odczyt nie jest pełny.'}
 
 
 class SaldeoHistory(QWidget):
@@ -49,13 +61,31 @@ class SaldeoHistory(QWidget):
         super().hideEvent(event)
 
     def refresh(self):
-        self.runner.submit(lambda: (list_history(self.actor_id), json.loads(get_setting('saldeo_web_status') or '{}')), self.render,
+        def read():
+            status = json.loads(get_setting('saldeo_web_status') or '{}')
+            return list_history(self.actor_id), status if isinstance(status, dict) else {}
+        self.runner.submit(read, self.render,
                            lambda _: self.status.setText('Nie udało się odczytać historii. Sprawdź połączenie i aktualizację bazy.'), key='saldeo-history')
 
     def render(self, payload):
         rows, status = payload
         state = LABELS.get(status.get('state'), 'Jeszcze nie sprawdzono')
-        self.status.setText(state + '; ostatnie sprawdzenie: ' + str(status.get('checked_at', '—')) + '\n' + f'Historia Saldeo — ostatnie {len(rows)} zdarzeń. Zdarzenia „Do przypisania” są ponawiane po poprawieniu nazwy skróconej firmy.')
+        stage = STAGES.get(status.get('stage'))
+        if stage:
+            state += ' — ' + stage
+        counts = []
+        for key, label in (('pages','strony'), ('rows_seen','wpisy'), ('scanned','odczytane'),
+                           ('recognized','komplety'), ('new','nowe'), ('applied','zastosowane')):
+            value = status.get(key)
+            if type(value) is int:
+                counts.append(f'{label}: {value}')
+        details = '; '.join(counts)
+        reason = REASONS.get(status.get('reason')) or status.get('reason')
+        error = status.get('error_type')
+        suffix = ' '.join(value for value in (details, reason, f'Błąd: {error}' if error else '') if value)
+        self.status.setText(state + '; ostatnie sprawdzenie: ' + str(status.get('checked_at', '—')) +
+                            (('\n' + suffix) if suffix else '') +
+                            f'\nHistoria Saldeo — ostatnie {len(rows)} zdarzeń. Dopasowanie używa nazwy skróconej firmy Saldeo, takiej samej jak automatyzacja e-maili; wpisy „Do przypisania” są ponawiane po poprawieniu mapowania.')
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             values = [row['detected_at'], row['source_time'], row['company_name'], row['miesiac'], LABELS.get(row['state'], row['state']), row['body']]
@@ -225,8 +255,18 @@ class SaldeoWebSettings(QWidget):
         self.runner.submit(work, self.done, self.failed)
 
     def done(self, result):
-        self.status.setText(LABELS.get(result['state'],result['state']) + f"; nowe: {result.get('new',0)}, zastosowane: {result.get('applied',0)}")
+        self.status.setText(
+            LABELS.get(result['state'], result['state']) +
+            f"; strony: {result.get('pages', 0)}, wiersze: {result.get('rows_seen', 0)}, "
+            f"odczytane: {result.get('scanned', 0)}, rozpoznane komplety: {result.get('recognized', 0)}, "
+            f"nowe: {result.get('new', 0)}, zastosowane: {result.get('applied', 0)}"
+        )
 
     def failed(self, _):
-        status = json.loads(get_setting('saldeo_web_status') or '{}')
+        try:
+            status = json.loads(get_setting('saldeo_web_status') or '{}')
+            if not isinstance(status, dict):
+                status = {}
+        except (TypeError, ValueError):
+            status = {}
         self.status.setText(LABELS.get(status.get('state'), 'Nie udało się sprawdzić Saldeo. Sprawdź logowanie, widok i dostęp do serwera.'))

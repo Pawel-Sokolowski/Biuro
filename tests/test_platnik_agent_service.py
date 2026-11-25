@@ -44,7 +44,7 @@ class ServiceFileTests(unittest.TestCase):
             service, pgpass = write_files('192.168.1.12', '5432', 'biuro', SERVICE_NAME, 'sekret',
                                           directory=directory)
             self.assertTrue(files_exist(directory))
-            self.assertEqual(service, Path(directory) / 'pg_service.conf')
+            self.assertEqual(service, Path(directory) / '.pg_service.conf')
             self.assertEqual(pgpass, Path(directory) / 'pgpass.conf')
             self.assertIn('user=' + SERVICE_NAME, service.read_text(encoding='utf-8'))
             self.assertTrue(pgpass.read_text(encoding='utf-8').endswith(':sekret\n'))

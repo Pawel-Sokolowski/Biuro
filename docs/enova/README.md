@@ -220,8 +220,9 @@ Potwierdzony przykład czerwca 2026: 18 ZR + 2 SPU + 1 RKVE = 21.
 ## Konfiguracja w aplikacji i zakładka Księgowość
 
 Administrator otwiera **Ustawienia → System → Enova — połączenie**. Pole serwera
-przyjmuje `IP\INSTANCJA` lub `host,port`. Nazwa serwera musi odpowiadać
-certyfikatowi SQL Server. Login SQL powinien mieć wyłącznie prawa SELECT.
+przyjmuje `IP\INSTANCJA`, `host,port` lub `tcp:host,port` dla zdalnego serwera.
+Adres musi być osiągalny z serwera Biuro i hosta workera, a nazwa serwera powinna
+odpowiadać certyfikatowi SQL Server. Login SQL powinien mieć wyłącznie prawa SELECT.
 W tabeli firm wpisz nazwę bazy Enova; puste pole pomija firmę. NIP jest sprawdzany
 przy każdym imporcie. Hasło jest przechowywane zaszyfrowane przez Fernet;
 aplikacja i konto zadania wymagają tego samego `BIO_ENCRYPTION_KEY`.
@@ -286,8 +287,9 @@ Przycisk **Sprawdź połączenie z bazą Enova** w ustawieniach korzysta z aktua
 wpisanego serwera, loginu, hasła i nazw baz, bez konieczności zapisywania ustawień.
 Sprawdza logowanie i dostęp do każdej wskazanej bazy (`SELECT DB_NAME()`), nie
 uruchamia importu, nie zmienia liczników ani statusów. Puste hasło wykorzystuje
-zapisane hasło. Test połączenia z komputera użytkownika nie zastępuje testu na
-serwerze, gdzie uruchamiany jest importer.
+zapisane hasło. Test połączenia wykonywany z aplikacji trafia do serwera Biuro.
+Zaplanowany import łączy się z hosta workera. Jeśli są to różne maszyny, obie
+muszą mieć dostęp sieciowy do SQL Server Enova.
 
 Na Windows Server z dostępem do PostgreSQL Biuro i SQL Server Enova zainstaluj
 **worker ze źródeł**, Python 3.14+, zależności `requirements-enova.lock` i Microsoft
@@ -301,22 +303,34 @@ a proces kończy się po imporcie. Serwer musi być włączony w czasie pracy za
 ustawienie StartWhenAvailable nadrabia pominięty termin. W Harmonogramie zadań
 sprawdź ręcznie pierwsze uruchomienie pod docelowym kontem, wynik i logi `logs/enova`.
 
-### Test z komputera użytkownika i sterownik
+### Test połączenia i sterownik
 
-Przycisk „Sprawdź połączenie z bazą Enova” łączy się bezpośrednio **z komputera,
-na którym działa Biuro**. Worker nie jest potrzebny do testu. Wystarczą serwer,
-login i hasło; bez mapowań firm sprawdzane jest logowanie do domyślnej bazy konta.
-Po wpisaniu baz firm test sprawdza również dostęp do każdej z nich.
+Przycisk „Sprawdź połączenie z bazą Enova” wykonuje test na **serwerze Biuro**
+przez API, a nie na komputerze użytkownika. Import cykliczny działa na hoście
+workera. Każdy host wykonujący połączenie musi mieć zgodny sterownik ODBC oraz
+dostęp sieciowy do SQL Server Enova.
+
+Gdy Enova SQL Server działa na osobnej maszynie, wpisz nazwę DNS lub IP widoczne
+z serwera Biuro i workera. Dla statycznego portu TCP użyj na przykład
+`tcp:enova.firma.local,1433` (albo `tcp:192.168.1.20,1433`). Włącz TCP/IP w
+konfiguracji SQL Server i zezwól na ten port w zaporze. Nazwa z certyfikatu TLS
+powinna odpowiadać użytej nazwie DNS; opcja zaufania własnemu certyfikatowi
+wyłącza jego weryfikację, ale nie szyfrowanie.
+
+Wystarczą serwer, login i hasło; bez mapowań firm test sprawdza domyślną bazę
+konta. Po wpisaniu baz firm sprawdza również dostęp do każdej z nich.
 
 Windowsowy instalator Biuro zawiera moduł Python `pyodbc`. Sterownik systemowy
 Microsoft ODBC Driver for SQL Server jest oddzielnym składnikiem Windows.
-Opcja „Automatycznie” wybiera z zainstalowanych lokalnie sterowników najpierw 18,
-a następnie 17. Można też jawnie wskazać wersję. Każdy PC i worker wykrywają
-sterownik we własnym środowisku. Wymagana jest zgodna architektura (zwykle x64).
+Opcja „Automatycznie” wybiera zainstalowane na hoście wykonującym operację
+sterowniki — najpierw 18, a następnie 17. Można też jawnie wskazać wersję.
+Serwer Biuro i worker wykrywają sterownik we własnym środowisku; instalacja na
+komputerze użytkownika nie zastępuje instalacji na tych hostach. Wymagana jest
+zgodna architektura (zwykle x64).
 Działająca Enova nie gwarantuje dostępności tego samego sterownika: może używać
 własnego dostawcy .NET zamiast ODBC. Brak modułu w starym EXE wymaga aktualizacji
 Biuro, a brak systemowego sterownika wymaga instalacji Microsoft ODBC Driver
-na komputerze wykonującym połączenie. TLS i sprawdzanie certyfikatu pozostają
+na hoście wykonującym połączenie. TLS i sprawdzanie certyfikatu pozostają
 włączone dla obu wersji.
 
 ## Księgowość i Kadry — Widok miesięczny oraz Sprawdzanie

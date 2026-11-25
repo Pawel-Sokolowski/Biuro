@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
-from app.integrations.platnik.gui_agent import load_config, read_job
+from app.integrations.platnik.gui_agent import bounded_read, load_config, read_job, run
 from app.integrations.platnik.gui_desktop import checked_columns, payer_rows, select_sent_set
 from app.integrations.platnik.gui_evidence import ReadError, collect, display_check
 from app.utils.nip import normalize_nip
@@ -127,3 +127,66 @@ class DownloadTests(TestCase):
         with self.assertRaisesRegex(ReadError, 'ProfileMismatch'):
             select_sent_set(Mock(), {'backend': 'win32'}, '9', 'POTW-9')
         grid.get_item.assert_not_called()
+
+
+class AgentProcessTests(TestCase):
+    def test_frozen_reader_reenters_the_agent_entry_point(self):
+        executable = r'C:\Program Files\Biuro\Biuro.exe'
+        profile = Path(r'C:\Users\Agent\AppData\Local\Biuro\platnik-agent.json')
+        completed = Mock(stdout='{"findings": []}')
+        with patch('app.integrations.platnik.gui_agent.sys.frozen', True, create=True), \
+             patch('app.integrations.platnik.gui_agent.sys.executable', executable), \
+             patch('app.integrations.platnik.gui_agent.subprocess.CREATE_NO_WINDOW', 0, create=True), \
+             patch('app.integrations.platnik.gui_agent.subprocess.run', return_value=completed) as process:
+            result = bounded_read(profile, {'nip': NIP, 'period': MONTH})
+        self.assertEqual(result, {'findings': []})
+        self.assertEqual(process.call_args.args[0], [
+            executable, '--platnik-agent', 'read-job', '--config', str(profile),
+        ])
+
+    def test_reader_rejects_malformed_child_output(self):
+        completed = Mock(stdout='[]')
+        with patch('app.integrations.platnik.gui_agent.subprocess.CREATE_NO_WINDOW', 0, create=True), \
+             patch('app.integrations.platnik.gui_agent.subprocess.run', return_value=completed):
+            self.assertEqual(bounded_read(Path('profile.json'), {}), {'error': 'ReadFailed'})
+
+    def test_one_shot_run_reports_unavailable_desktop(self):
+        with patch('app.integrations.platnik.gui_agent.interactive_desktop', return_value=False), \
+             self.assertRaisesRegex(ReadError, 'DesktopUnavailable'):
+            run({}, Path('profile.json'), once=True)
+
+
+class AgentDiagnosticTests(TestCase):
+    def test_test_walkthrough_reports_each_read_only_stage(self):
+        from app.integrations.platnik.gui_agent import diagnose
+        config = {'executable': Path('/tmp/Platnik.exe'), 'backend': 'uia', 'confirmation_download': None}
+        window = Mock()
+        progress = []
+        with patch('app.integrations.platnik.gui_agent.sys.platform', 'win32'), \
+             patch('app.integrations.platnik.gui_agent.load_config', return_value=config), \
+             patch('app.integrations.platnik.gui_agent.check_queue_access', return_value=True), \
+             patch('app.integrations.platnik.gui_agent.interactive_desktop', return_value=True), \
+             patch('app.integrations.platnik.gui_agent.main_window', return_value=window), \
+             patch('app.integrations.platnik.gui_agent.register',
+                   return_value=(Mock(), 0, {'nip': 0, 'period': 1})):
+            self.assertTrue(diagnose(Path('profile.json'), progress=lambda *event: progress.append(event)))
+        self.assertEqual([stage for stage, state, _detail in progress if state == 'running'], [
+            'Profil agenta', 'Połączenie z kolejką PostgreSQL', 'Pulpit Windows',
+            'Okno Płatnika', 'Tabela deklaracji',
+        ])
+        self.assertEqual(progress[-1][0], 'Test zakończony')
+        self.assertIn('nie wykonano importu', progress[-1][2])
+
+    def test_test_walkthrough_stops_at_queue_failure(self):
+        from app.integrations.platnik.gui_agent import diagnose
+        config = {'executable': Path('/tmp/Platnik.exe'), 'backend': 'uia'}
+        progress = []
+        with patch('app.integrations.platnik.gui_agent.sys.platform', 'win32'), \
+             patch('app.integrations.platnik.gui_agent.load_config', return_value=config), \
+             patch('app.integrations.platnik.gui_agent.check_queue_access', side_effect=OSError), \
+             patch('app.integrations.platnik.gui_agent.main_window') as open_window:
+            with self.assertRaises(OSError):
+                diagnose(Path('profile.json'), progress=lambda *event: progress.append(event))
+        self.assertEqual(progress[-1][1], 'failed')
+        self.assertIn('pliki libpq agenta', progress[-1][2])
+        open_window.assert_not_called()

@@ -26,9 +26,9 @@ from app.services.worker_settings import ENOVA_INTERVAL, load_settings
 logger = logging.getLogger(__name__)
 JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh')
 # Jobs that can wait for a remote system for hours. A wall-clock limit for these
-# would fail healthy runs; every other job is bounded so a hung call cannot hold
-# its executor slot (and the job itself) for ever.
-UNBOUNDED_JOBS = frozenset({'ezla', 'platnik_gui', 'checking_refresh'})
+# would fail healthy runs; other jobs are timed out and kept tracked to avoid
+# resubmitting work that may still be running.
+UNBOUNDED_JOBS = frozenset({'ezla', 'checking_refresh'})
 # Upper bound for the heartbeat event log; the monitor shows the newest ones.
 EVENTS_LIMIT = 500
 
@@ -260,15 +260,27 @@ def leadership():
 
 def _parse_setting(raw, default):
     try:
-        return json.loads(raw) if raw else default
+        value = json.loads(raw) if raw else default
     except (TypeError, ValueError):
         logger.warning('worker_setting_unreadable')
         return default
+    if not isinstance(value, type(default)):
+        logger.warning('worker_setting_unreadable')
+        return default
+    return value
 
 
 def serve(*, once=False, stop=None):
-    stop = stop or threading.Event()
+    stop = stop if stop is not None else threading.Event()
     running, last_started, statuses = {}, {}, {}
+    started_monotonic, timed_out = {}, set()
+    started_lock = threading.Lock()
+
+    def execute_job(name):
+        with started_lock:
+            started_monotonic[name] = clock.monotonic()
+        return run_job(name, stop)
+
     events = _parse_setting(get_setting('background_worker_events'), [])[-EVENTS_LIMIT:]
     with leadership() as leader, ThreadPoolExecutor(max_workers=WORKER_THREADS, thread_name_prefix='biuro-job') as pool:
         try:
@@ -297,21 +309,37 @@ def serve(*, once=False, stop=None):
             for name, future in list(running.items()):
                 if not future.done():
                     # A run that never returns would otherwise hold its slot and block the
-                    # job for ever. Bounded jobs are given up here; the worker thread itself
-                    # is left to the executor, and the job's own interval starts again.
+                    # job for ever. Report the timeout, but keep tracking the live future:
+                    # Python cannot stop its thread, and resubmitting could duplicate side effects.
                     timeout = job_timeout(name, settings)
-                    started = last_started.get(name)
-                    if timeout is None or started is None or clock.monotonic() - started < timeout:
+                    with started_lock:
+                        started = started_monotonic.get(name)
+                    if (name in timed_out or timeout is None or started is None
+                            or clock.monotonic() - started < timeout):
                         continue
                     logger.error('worker_job_timeout job=%s seconds=%s', name, timeout)
                     statuses[name] = {'state': 'failed', 'error_type': 'Timeout',
                                       'started_at': statuses[name].get('started_at'),
-                                      'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()}
+                                      'finished_at': datetime.now(ZoneInfo('Europe/Warsaw')).isoformat(),
+                                      'still_running': True}
                     events.append({'at': statuses[name]['finished_at'], 'job': name, 'state': 'failed',
                                    'error_type': 'Timeout'})
                     events_changed = True
-                    del running[name]
+                    timed_out.add(name)
                     last_started[name] = clock.monotonic()
+                    continue
+                if name in timed_out:
+                    try:
+                        future.result()
+                    except Exception as error:
+                        logger.error('worker_job_failed_after_timeout job=%s error_type=%s',
+                                     name, type(error).__name__)
+                    del running[name]
+                    timed_out.remove(name)
+                    with started_lock:
+                        started_monotonic.pop(name, None)
+                    statuses[name]['still_running'] = False
+                    events_changed = True
                     continue
                 started_at = statuses[name].get('started_at')
                 try:
@@ -336,6 +364,8 @@ def serve(*, once=False, stop=None):
                                if isinstance(statuses[name].get('result'), dict) else None})
                 events_changed = True
                 del running[name]
+                with started_lock:
+                    started_monotonic.pop(name, None)
             gui_scheduled_at = None
             if settings['enabled'] and settings['platnik_gui']:
                 gui_status = statuses.setdefault('platnik_gui', {'state': 'skipped', 'result': {'mode': 'waiting'}})
@@ -345,10 +375,10 @@ def serve(*, once=False, stop=None):
                     due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= job_interval(name, settings))
                     if name == 'platnik_gui':
                         due = due and settings_now >= gui_scheduled_at
-                    if due:
+                    if due and len(running) < WORKER_THREADS:
                         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
                         try:
-                            future = pool.submit(copy_context().run, run_job, name, stop)
+                            future = pool.submit(copy_context().run, execute_job, name)
                         except Exception as error:
                             # A refused submission must not leave a job "running" for ever
                             # with no future to collect.

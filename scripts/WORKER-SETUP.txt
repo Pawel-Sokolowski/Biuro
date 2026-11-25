@@ -16,9 +16,12 @@ BIURO 1.5 - PROGRAM I WORKER Z JEDNEJ INSTALKI
 5. W Zadania wybierz zadania, odstepy i wlacz worker; zapisz.
 6. W Instalacja kliknij Zainstaluj autostart i uruchom worker.
    Zaakceptuj UAC NA TYM SAMYM KONCIE WINDOWS. W oknie aplikacji podaj
-   haslo tego konta Windows (nie PIN, nie haslo Biuro).
+   haslo tego konta Windows (nie PIN, nie haslo Biuro). Razem z glownym
+   workerem instaluje sie interaktywny agent Platnika przy logowaniu.
 7. Sprawdz swiezy sygnal i wyniki w Panel i logi. Zamkniecie panelu
    nie zatrzymuje workera. Dziala po restarcie i bez zalogowania Windows.
+   Agent GUI Platnika wymaga aktywnej, odblokowanej sesji Windows.
+   Test agenta krok po kroku jest w Ustawienia -> Platnik.
 
 Menu Start -> Biuro Worker otwiera panel z przyciskami instalacji,
 uruchamiania, restartu i zatrzymania (w oknie autostartu po UAC).
@@ -35,5 +38,5 @@ Nie ma tez jeszcze konektora SQL Platnika ani automatycznego podpisywania.
 Deklaracje/UPO/kadry z Enovy wymagaja dopasowanych zapytan SQL.
 
 Stare pliki .cmd/.ps1 pozostaja narzedziami pomocniczymi administratora.
-Normalna instalacja nie wymaga ich otwierania. Nie uruchamiaj zadania
-ponownie w celu testowania: wlaczone zadania moga wykonywac prawdziwe wysylki.
+Normalna instalacja nie wymaga ich otwierania. Nie uruchamiaj zadan
+biznesowych ponownie w celu testowania: moga wykonywac prawdziwe wysylki.

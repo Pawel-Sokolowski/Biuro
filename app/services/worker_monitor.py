@@ -8,9 +8,22 @@ from app.db.dao_app_settings import get_setting
 def _setting(raw, default):
     """A corrupt or half-written JSON value must not blank the whole panel."""
     try:
-        return json.loads(raw) if raw else default
+        value = json.loads(raw) if raw else default
     except (TypeError, ValueError):
         return default
+    if not isinstance(value, type(default)):
+        return default
+    if isinstance(default, list) and any(not isinstance(item, dict) for item in value):
+        return default
+    return value
+
+
+def _job_statuses(heartbeat):
+    jobs = heartbeat.get('jobs')
+    if not isinstance(jobs, dict):
+        return {}
+    return {name: status for name, status in jobs.items()
+            if isinstance(name, str) and isinstance(status, dict)}
 
 
 @office_endpoint('app.services.worker_monitor.snapshot')
@@ -19,16 +32,21 @@ def snapshot(actor_id):
     if not is_administrator(actor_id):
         raise PermissionError('Brak dostępu do panelu workera.')
     heartbeat = _setting(get_setting('background_worker_heartbeat'), {})
+    heartbeat['jobs'] = _job_statuses(heartbeat)
+    if not isinstance(heartbeat.get('instance'), dict):
+        heartbeat['instance'] = {}
     events = _setting(get_setting('background_worker_events'), [])
     from app.services.worker_activity import KEY, LIMIT
     activity = _setting(get_setting(KEY), [])
-    events = sorted(events + activity, key=lambda event: event.get('at', ''))[-LIMIT:]
+    events = sorted(events + activity, key=lambda event: str(event.get('at') or ''))[-LIMIT:]
     # The worker clears its live cursor when a run ends, so a stage that is still
     # stored while the e-ZLA job is not running is left over from an interrupted run.
     progress = _setting(get_setting('ezla_progress'), {})
-    if progress.get('stage') and (heartbeat.get('jobs') or {}).get('ezla', {}).get('state') != 'running':
+    if progress.get('stage') and heartbeat['jobs'].get('ezla', {}).get('state') != 'running':
         progress = {**progress, 'stale': True}
     config = _setting(get_setting('ezla_service'), {})
+    if not isinstance(config.get('companies'), list):
+        config['companies'] = []
     with get_conn() as conn:
         rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,s.payload::text AS wartosc FROM firmy f
             LEFT JOIN company_checking_snapshots s ON s.source='ezla_sync' AND s.company_id=f.id AND s.period=''

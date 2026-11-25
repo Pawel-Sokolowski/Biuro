@@ -63,6 +63,27 @@ class ProfileEditorTests(unittest.TestCase):
             self.assertTrue(box.warning.called)
             self.assertFalse((Path(directory) / 'platnik-agent.json').exists())
 
+    def test_win32_control_id_is_saved_as_an_integer_locator(self):
+        from app.integrations.platnik.gui_agent import load_config
+
+        with TemporaryDirectory() as directory:
+            page = self.page(directory)
+            executable = Path(directory) / 'Platnik.exe'
+            executable.touch()
+            page.executable.setText(str(executable))
+            page.title.setText('Płatnik')
+            page.backend.setCurrentText('win32')
+            page.grid.setText('42')
+            for index, (name, (index_field, header_field)) in enumerate(page.columns.items()):
+                index_field.setText(str(index))
+                header_field.setText(name.upper())
+            page.status_labels.setPlainText('Wysłany = sent')
+            with patch('app.admin.settings.platnik_agent_profile.QMessageBox'):
+                page.save()
+            saved = json.loads(page.path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['grid'], {'control_id': 42})
+            self.assertEqual(load_config(page.path)['grid'], {'control_id': 42})
+
     def test_describe_uses_window_without_validating_columns(self):
         with TemporaryDirectory() as directory:
             page = self.page(directory)

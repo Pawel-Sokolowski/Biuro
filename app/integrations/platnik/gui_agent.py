@@ -191,7 +191,7 @@ def diagnose(path=None, *, progress=None):
             result = operation()
         except Exception as error:
             if isinstance(error, ReadError):
-                detail = ERRORS.get(error.code, 'Operacja nie powiodła się.')
+                detail = error.detail or ERRORS.get(error.code, 'Operacja nie powiodła się.')
             elif name == 'Profil agenta':
                 detail = str(error)
             elif name == 'Połączenie z kolejką PostgreSQL':

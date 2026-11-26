@@ -76,6 +76,9 @@ class PlatnikAgentProfile(QWidget):
         self.describe_button = QPushButton('Wczytaj z Płatnika…')
         self.describe_button.clicked.connect(self.describe)
         layout.addWidget(self.describe_button)
+        self.check_button = QPushButton('Sprawdź odczyt tabeli')
+        self.check_button.clicked.connect(self.check_register)
+        layout.addWidget(self.check_button)
         self.save_button = QPushButton('Zapisz profil agenta')
         self.save_button.clicked.connect(self.save)
         layout.addWidget(self.save_button)
@@ -151,6 +154,23 @@ class PlatnikAgentProfile(QWidget):
                 line += ' | UIA: ' + (', '.join(item['uia_patterns']) or 'brak wzorców tabeli')
             lines.append(line)
         self.result.setPlainText('\n'.join(lines) or 'Brak kontrolek.')
+
+    def check_register(self):
+        from app.integrations.platnik.gui_agent import validate_config
+        from app.integrations.platnik.gui_desktop import main_window, probe_register
+        from app.integrations.platnik.gui_evidence import ERRORS, ReadError
+
+        try:
+            config = validate_config(self.profile())
+            message = probe_register(main_window(config), config)
+        except ReadError as error:
+            message = error.detail or ERRORS[error.code]
+        except (ValueError, OSError, TypeError) as error:
+            message = str(error)
+        except Exception:
+            logging.getLogger(__name__).exception('Płatnik register check failed')
+            message = 'Nie udało się sprawdzić odczytu tabeli. Szczegóły zapisano w dzienniku Biuro.'
+        self.result.setPlainText(message)
 
     def save(self):
         from app.integrations.platnik.gui_agent import validate_config

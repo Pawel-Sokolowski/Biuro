@@ -146,6 +146,12 @@ def register(window, config):
     if not interactive_desktop():
         raise ReadError('DesktopUnavailable')
     if config['backend'] == 'win32':
+        from pywinauto.controls.common_controls import ListViewWrapper
+
+        if not isinstance(wrapper, ListViewWrapper):
+            raise ReadError('ProfileMismatch', detail=(
+                'Odczyt Win32 wymaga kontrolki ListView. Dla TdxDBGrid sprawdź w UIA wzorce Grid i Table.'
+            ))
         row_count = wrapper.item_count()
         if row_count > MAX_ROWS:
             raise ReadError('ScanLimit')
@@ -165,7 +171,10 @@ def register(window, config):
         raw = wrapper.iface_grid
         headers = wrapper.iface_table.GetCurrentColumnHeaders()
     except NoPatternInterfaceError:
-        raise ReadError('ProfileMismatch') from None
+        raise ReadError('ProfileMismatch', detail=(
+            'Wybrana kontrolka nie udostępnia wymaganych wzorców UIA Grid i Table. '
+            'Jeśli w rejestrze jest tylko TdxDBGrid bez tych wzorców, użyj importu Płatnika przez SQL.'
+        )) from None
     row_count = raw.CurrentRowCount
     if row_count > MAX_ROWS:
         raise ReadError('ScanLimit')
@@ -181,6 +190,22 @@ def register(window, config):
             return cell.window_text()
 
     return wrapper, row_count, columns, cell_text
+
+
+def probe_register(window, config):
+    """Verify that the first row can be read without returning any cell values."""
+    _, row_count, columns, read = register(window, config)
+    if not row_count:
+        return f'Nagłówki zgodne ({len(columns)}). Otwórz rejestr z danymi, aby sprawdzić odczyt komórek.'
+    try:
+        values = [read(0, index) for index in columns.values()]
+    except ReadError:
+        raise
+    except Exception:
+        raise ReadError('ReadFailed', detail='Znaleziono tabelę, ale nie udało się odczytać pierwszego wiersza.') from None
+    if not any(label(value) for value in values):
+        raise ReadError('ProfileMismatch', detail='Pierwszy wiersz jest pusty. Wybierz rejestr zawierający dane.')
+    return f'Odczytano pierwszy wiersz i sprawdzono nagłówki ({len(columns)} kolumn).'
 
 
 def uia_cell(grid, row, column):

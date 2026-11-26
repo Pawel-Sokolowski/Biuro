@@ -136,6 +136,16 @@ class DesktopTests(TestCase):
 
 
 class DownloadTests(TestCase):
+    @patch('app.integrations.platnik.gui_desktop.register')
+    def test_probe_reads_configured_columns_and_reports_no_values(self, register):
+        from app.integrations.platnik.gui_desktop import probe_register
+        read = Mock(side_effect=['private NIP', 'private status'])
+        register.return_value = (Mock(), 1, {'nip': 0, 'status': 2}, read)
+        report = probe_register(Mock(), {})
+        self.assertEqual([args.args for args in read.call_args_list], [(0, 0), (0, 2)])
+        self.assertIn('Odczytano pierwszy wiersz', report)
+        self.assertNotIn('private', report)
+
     @patch('app.integrations.platnik.gui_agent.interactive_desktop', return_value=True)
     @patch('app.integrations.platnik.gui_agent.download_confirmation')
     @patch('app.integrations.platnik.gui_agent.grid_rows')

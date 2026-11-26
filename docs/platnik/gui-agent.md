@@ -67,8 +67,10 @@ NIP-em płatnika i okresem.
    wartości stanów. W trybie UIA pole **Tabela rejestru** przyjmuje
    `class=NazwaKlasy`, jeśli klasa jednoznacznie wskazuje tabelę i jej
    `AutomationId` zmienia się między sesjami. **Wczytaj z Płatnika…** podaje
-   wzorce UIA dostępne dla wykrytych tabel. Agent sprawdza nagłówki podczas
-   każdego odczytu.
+   wzorce UIA dostępne dla wykrytych tabel. Po uzupełnieniu pól wybierz
+   **Sprawdź odczyt tabeli** przy otwartym rejestrze z danymi. Przycisk
+   sprawdza nagłówki i odczyt pierwszego wiersza bez wyświetlania jego danych
+   ani pobierania zadania z kolejki.
 
 ```powershell
 py -3.14 -m venv "$env:LOCALAPPDATA\Biuro\PlatnikAgent\venv"

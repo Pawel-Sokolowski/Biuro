@@ -25,9 +25,10 @@ RECEIPT_REFERENCE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_./+ -]{0,127}')
 
 
 class ReadError(Exception):
-    def __init__(self, code):
+    def __init__(self, code, *, detail=None):
         super().__init__(code)
         self.code = code
+        self.detail = detail
 
 
 def label(raw):

@@ -258,10 +258,10 @@ class FakturyPage(QWidget):
     SETTLEMENT_HEADERS = ["ID", "Data zapłaty", "Numer faktury", "Data wystawienia", "Nabywca", "Kwota",
                           "Sposób", "Przelew / tytuł", "Zaksięgował"]
 
-    def __init__(self, pracownik_id, parent=None):
+    def __init__(self, pracownik_id, parent=None, *, defer_load=False):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
-        self.logic = FakturyLogic()
+        self.logic = None if defer_load else FakturyLogic()
         self._view_settings = QSettings("Biuro", "OfficeManager")
         self._payment_filter_key = f"users/{pracownik_id}/invoices/payment_filter"
         self._draft_rows = None
@@ -272,6 +272,9 @@ class FakturyPage(QWidget):
         self._issued_kind_filter = None
         self._refresh_later = QTimer(self)
         self._invoice_reads = TaskRunner(self)
+        self._buyer_reads = TaskRunner(self)
+        self._buyer_filters_loaded = False
+        self._buyer_filters_loading = False
         self._invoice_commands = CommandRunner(self)
         self._generation_busy = False
         self._generation_progress = None
@@ -317,7 +320,10 @@ class FakturyPage(QWidget):
             if not finance:
                 button.setToolTip('Wymaga dodatkowego uprawnienia: rozliczanie płatności i raporty finansowe.')
         self.tabs.setCurrentWidget(self.tab_wystawione)
-        self.refresh_async()
+        if not defer_load:
+            from app.remote.screen_data import invoice_filter_entities
+            self._fill_buyer_filters(invoice_filter_entities())
+            self.refresh_async()
 
     def closeEvent(self, event):
         timer = getattr(self, "_refresh_later", None)
@@ -344,12 +350,6 @@ class FakturyPage(QWidget):
         self.firma_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.firma_combo.setMinimumWidth(260)
         self.firma_combo.addItem("Wszystkie firmy", None)
-        from app.remote.screen_data import invoice_filter_entities
-        rows, contractors = invoice_filter_entities()
-        for row in rows:
-            self.firma_combo.addItem(row[1], row[0])
-        for row in contractors:
-            self.firma_combo.addItem(f"{row[1]} (kontrahent)", -row[0])
         completer = self.firma_combo.completer()
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         completer.setFilterMode(Qt.MatchFlag.MatchContains)
@@ -367,6 +367,37 @@ class FakturyPage(QWidget):
         controls.addStretch()
         self._build_action_bar(controls)
         return controls
+
+    def _fill_buyer_filters(self, entities):
+        companies, contractors = entities
+        blocked = self.firma_combo.blockSignals(True)
+        try:
+            for company_id, name in companies:
+                self.firma_combo.addItem(name, company_id)
+            for contractor_id, name in contractors:
+                self.firma_combo.addItem(f"{name} (kontrahent)", -contractor_id)
+        finally:
+            self.firma_combo.blockSignals(blocked)
+        self._buyer_filters_loaded = True
+        self._buyer_filters_loading = False
+        self.firma_combo.setEnabled(True)
+        self.firma_combo.setToolTip("")
+
+    def _load_buyer_filters_async(self):
+        if self._buyer_filters_loaded or self._buyer_filters_loading:
+            return
+        from app.remote.screen_data import invoice_filter_entities
+
+        self._buyer_filters_loading = True
+        self.firma_combo.setEnabled(False)
+        self.firma_combo.setToolTip("Wczytywanie firm i kontrahentów…")
+
+        def failed(exc):
+            self._buyer_filters_loading = False
+            self.firma_combo.setToolTip("Nie udało się wczytać firm i kontrahentów. Kliknij Odśwież, aby ponowić.")
+            logger.warning("Nie można wczytać filtra nabywców: %s", exc)
+
+        self._buyer_reads.submit(invoice_filter_entities, self._fill_buyer_filters, failed)
 
     def _build_action_bar(self, controls):
         """Jeden pasek akcji nad zakładkami: tworzenie, wystawianie, kontrahenci.
@@ -1130,9 +1161,12 @@ class FakturyPage(QWidget):
             logger.error('invoice_generation_failed: %s', exc, exc_info=(type(exc), exc, exc.__traceback__))
             QMessageBox.critical(self, 'Błąd', f'Generowanie faktur: {exc}')
 
+        def generate():
+            generator = logic if logic is not None else FakturyLogic()
+            return generator.generate_and_save_invoices_for_month(month, only_active=True, progress=update)
+
         try:
-            self._invoice_commands.submit(lambda: logic.generate_and_save_invoices_for_month(month, only_active=True, progress=update),
-                                          self._generation_finished, failed)
+            self._invoice_commands.submit(generate, self._generation_finished, failed)
         except Exception as exc:
             failed(exc)
 
@@ -1212,6 +1246,7 @@ class FakturyPage(QWidget):
                     len(invoices), fetched - started, perf_counter() - fetched)
 
     def refresh_async(self):
+        self._load_buyer_filters_async()
         if self.positions_table.state() == QAbstractItemView.State.EditingState:
             self._refresh_later.start()
             return

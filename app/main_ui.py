@@ -493,7 +493,7 @@ class OfficeManagerApp(QMainWindow):
         self._monthly_parking = park_monthly_editor(self.page_monthly, self)
         self.page_ksiegowosc = DepartmentPage(self.pracownik_id, 'accounting', self.page_monthly)
         self.page_kadry = DepartmentPage(self.pracownik_id, 'payroll', self.page_monthly)
-        self.page_dashboard = DashboardPage(self.pracownik_id)
+        self.page_dashboard = DashboardPage(self.pracownik_id, defer_load=True)
         # These pages own background monitoring and must start before tab visits.
         self.page_email = EmailPage(self.pracownik_id)
         self.page_email.folder_visibility_changed.connect(self.refresh_email_badge_async)
@@ -503,10 +503,10 @@ class OfficeManagerApp(QMainWindow):
         self.page_calendar = CalendarPage(self.pracownik_id)
         self._loaded_pages = {}
         self._lazy_pages = {
-            "page_companies": (3, lambda: CompanyUI(self.pracownik_id, self)),
-            "page_faktury": (6, lambda: FakturyPage(self.pracownik_id)),
-            "page_raporty": (7, lambda: ReportsPage(self.pracownik_id)),
-            "page_tasks": (8, lambda: TasksPage(self.pracownik_id)),
+            "page_companies": (3, lambda: CompanyUI(self.pracownik_id, self, defer_load=True)),
+            "page_faktury": (6, lambda: FakturyPage(self.pracownik_id, defer_load=True)),
+            "page_raporty": (7, lambda: ReportsPage(self.pracownik_id, defer_load=True)),
+            "page_tasks": (8, lambda: TasksPage(self.pracownik_id, defer_load=True)),
             "page_settings": (10, lambda: GlobalSettingsPage(self.pracownik_id, True, self)),
         }
         eager = {0: self.page_dashboard, 1: self.page_ksiegowosc, 2: self.page_kadry,
@@ -894,6 +894,8 @@ class OfficeManagerApp(QMainWindow):
     def _refresh_page_contents(self, index: int):
         """Odświeża dane widoku po przełączeniu, żeby zmiany z innych widoków były widoczne."""
         page = self.pages.widget(index)
+        if page is self.page_dashboard:
+            return  # DashboardPage refreshes from showEvent.
         for name, (row, _) in self._lazy_pages.items():
             if row == index:
                 page = self._ensure_page(name)

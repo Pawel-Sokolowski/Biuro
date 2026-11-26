@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSignalBlocker, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -29,20 +30,55 @@ from app.companies.company_names import company_display_name
 from app.db.dao_companies import list_companies
 from app.db.dao_employees import list_employees
 from app.db.dao_tasks import TASK_STATUSES, delete_tasks, list_tasks, save_task, set_tasks_status
+from app.utils.background import TaskRunner
+
+logger = logging.getLogger(__name__)
 
 
 class TasksPage(QWidget):
-    def __init__(self, pracownik_id: int, parent=None):
+    def __init__(self, pracownik_id: int, parent=None, *, defer_load=False):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
+        self._defer_load = defer_load
+        self._references_loaded = False
+        self._references_loading = False
+        self._task_scope = None
+        self._task_rows = None
+        self._task_reads = TaskRunner(self)
+        self._reference_reads = TaskRunner(self)
         self._build_ui()
-        self._load_reference_data()
+        self.extra_activities = None
+        self._activity_host = QWidget(self.tabs)
+        QVBoxLayout(self._activity_host)
+        self._activity_status = QLabel("Wczytywanie firm i pracowników…")
+        self._activity_host.layout().addWidget(self._activity_status)
+        self.tabs.addTab(self._activity_host, "Czynności dodatkowe")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        if defer_load:
+            self._new_button.setEnabled(False)
+            self._edit_button.setEnabled(False)
+        else:
+            self._populate_reference_data(self._read_reference_data())
+            self._create_activity_page()
+            self._refresh()
+
+    def _create_activity_page(self):
         from app.tasks.extra_activities_ui import ExtraActivitiesPage
-        self.extra_activities = ExtraActivitiesPage(self.pracownik_id, self.companies, self.employees, self)
+        self.extra_activities = ExtraActivitiesPage(
+            self.pracownik_id, self.companies, self.employees, self._activity_host,
+            defer_load=self._defer_load,
+        )
         self.extra_activities.open_task.connect(self._open_task)
-        self.extra_activities.activities_changed.connect(self._refresh)
-        self.tabs.addTab(self.extra_activities, "Czynności dodatkowe")
-        self._refresh()
+        if not self._defer_load:
+            self.extra_activities.activities_changed.connect(self._refresh_tasks)
+        self._activity_status.hide()
+        self._activity_host.layout().addWidget(self.extra_activities)
+
+    def _on_tab_changed(self, *_):
+        if self._defer_load:
+            self.refresh_async()
+        elif self.tabs.currentWidget() is self._activity_host:
+            self.extra_activities.refresh()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -59,11 +95,13 @@ class TasksPage(QWidget):
         self.status_filter.addItem("Wszystkie", None)
         for status in TASK_STATUSES:
             self.status_filter.addItem(status, status)
-        self.status_filter.currentIndexChanged.connect(self._refresh)
+        self.status_filter.currentIndexChanged.connect(self._refresh_tasks)
 
         self.assignee_filter = QComboBox()
         self.assignee_filter.addItem("Wszyscy", None)
-        self.assignee_filter.currentIndexChanged.connect(self._refresh)
+        self.assignee_filter.addItem("Moje zadania", self.pracownik_id)
+        self.assignee_filter.setCurrentIndex(1)
+        self.assignee_filter.currentIndexChanged.connect(self._refresh_tasks)
 
         filters.addWidget(QLabel("Status:"))
         filters.addWidget(self.status_filter)
@@ -88,10 +126,14 @@ class TasksPage(QWidget):
         self.table.setWordWrap(True)
         self.table.verticalHeader().setMinimumSectionSize(44)
         layout.addWidget(self.table)
+        self._load_status = QLabel()
+        self._load_status.hide()
+        layout.addWidget(self._load_status)
 
         actions = FlowLayout()
         btn_add = QPushButton("Nowe zadanie")
         btn_edit = QPushButton("Edytuj")
+        self._new_button, self._edit_button = btn_add, btn_edit
         btn_delete = QPushButton("Usuń")
         btn_add.clicked.connect(self._new_task)
         btn_edit.clicked.connect(self._edit_selected)
@@ -111,30 +153,110 @@ class TasksPage(QWidget):
         actions.addWidget(btn_select_all)
         layout.addLayout(actions)
 
-    def _load_reference_data(self):
-        self.companies = list_companies(self.pracownik_id)
-        self.employees = list_employees()
-        self.assignee_filter.blockSignals(True)
+    def _read_reference_data(self):
+        return list_companies(self.pracownik_id), list_employees()
+
+    def _populate_reference_data(self, result):
+        self.companies, self.employees = result
+        selected = self.assignee_filter.currentData()
+        blocked = self.assignee_filter.blockSignals(True)
         try:
+            self.assignee_filter.clear()
+            self.assignee_filter.addItem("Wszyscy", None)
             for employee in self.employees:
                 label = f"{employee.get('imie', '')} {employee.get('nazwisko', '')}".strip()
                 self.assignee_filter.addItem(label, employee["id"])
-            index = self.assignee_filter.findData(self.pracownik_id)
-            if index < 0:
+            if self.assignee_filter.findData(self.pracownik_id) < 0:
                 self.assignee_filter.addItem("Moje zadania", self.pracownik_id)
-                index = self.assignee_filter.count() - 1
-            self.assignee_filter.setCurrentIndex(index)
+            self.assignee_filter.setCurrentIndex(max(0, self.assignee_filter.findData(selected)))
         finally:
-            self.assignee_filter.blockSignals(False)
+            self.assignee_filter.blockSignals(blocked)
+        self._references_loaded = True
+        self._references_loading = False
+        self._new_button.setEnabled(True)
+        self._edit_button.setEnabled(True)
+        if self._defer_load and self.tabs.currentWidget() is self._activity_host:
+            self._refresh_activities()
+
+    def _load_reference_data_async(self):
+        if self._references_loaded or self._references_loading:
+            return
+        self._references_loading = True
+        self._new_button.setToolTip("Wczytywanie firm i pracowników…")
+        self._edit_button.setToolTip(self._new_button.toolTip())
+        self._activity_status.setText(self._new_button.toolTip())
+
+        def loaded(result):
+            self._new_button.setToolTip("")
+            self._edit_button.setToolTip("")
+            self._populate_reference_data(result)
+
+        def failed(exc):
+            self._references_loading = False
+            message = "Nie udało się wczytać firm i pracowników. Otwórz zakładkę ponownie."
+            self._new_button.setToolTip(message)
+            self._edit_button.setToolTip(message)
+            self._activity_status.setText(message)
+            logger.warning("Nie można wczytać filtrów zadań: %s", exc)
+
+        self._reference_reads.submit(self._read_reference_data, loaded, failed)
+
+    def _refresh_activities(self):
+        if not self._references_loaded:
+            return
+        if self.extra_activities is None:
+            self._create_activity_page()
+        self.extra_activities.refresh()
+
+    def refresh_async(self):
+        if self.tabs.currentWidget() is self._activity_host:
+            self._refresh_activities()
+        else:
+            self._refresh_tasks_async()
+        self._load_reference_data_async()
+
+    def _refresh_tasks(self):
+        if self._defer_load:
+            self._refresh_tasks_async()
+        else:
+            self._refresh()
 
     def _refresh(self):
         status = self.status_filter.currentData()
         employee_id = self.assignee_filter.currentData()
+        self._task_reads.invalidate()
         rows = list_tasks(status=status, pracownik_id=employee_id, viewer_id=self.pracownik_id)
+        self._task_scope = status, employee_id
+        self._render_tasks(rows)
+
+    def _refresh_tasks_async(self):
+        scope = self.status_filter.currentData(), self.assignee_filter.currentData()
+        actor = self.pracownik_id
+        if scope != self._task_scope:
+            self._task_scope = scope
+            self._task_rows = None
+            self.table.setRowCount(0)
+            self._load_status.setText("Wczytywanie zadań…")
+            self._load_status.show()
+
+        def failed(exc):
+            self._load_status.setText("Nie udało się odświeżyć zadań.")
+            self._load_status.show()
+            logger.warning("Nie można wczytać zadań: %s", exc)
+
+        self._task_reads.submit(
+            lambda: list_tasks(status=scope[0], pracownik_id=scope[1], viewer_id=actor),
+            self._render_tasks, failed, key=scope,
+        )
+
+    def _render_tasks(self, rows):
+        self._load_status.hide()
+        if rows == self._task_rows:
+            return
+        self._task_rows = rows
         self.table.setRowCount(0)
-        for task in rows:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
+        self.table.setRowCount(len(rows))
+        for row, task in enumerate(rows):
             values = [
                 task.get("tytul", ""),
                 task.get("firma_nazwa") or "—",
@@ -150,17 +272,12 @@ class TasksPage(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole, task["id"])
                 self.table.setItem(row, col, item)
         self.table.resizeRowsToContents()
-        if hasattr(self, "extra_activities"):
-            self.extra_activities.refresh()
 
     def show_assignment_notification(self, task_id):
-        self.tabs.setCurrentIndex(0)
-        self.status_filter.blockSignals(True)
-        self.assignee_filter.blockSignals(True)
-        self.status_filter.setCurrentIndex(self.status_filter.findData(None))
-        self.assignee_filter.setCurrentIndex(max(0, self.assignee_filter.findData(self.pracownik_id)))
-        self.status_filter.blockSignals(False)
-        self.assignee_filter.blockSignals(False)
+        with QSignalBlocker(self.tabs), QSignalBlocker(self.status_filter), QSignalBlocker(self.assignee_filter):
+            self.tabs.setCurrentIndex(0)
+            self.status_filter.setCurrentIndex(self.status_filter.findData(None))
+            self.assignee_filter.setCurrentIndex(max(0, self.assignee_filter.findData(self.pracownik_id)))
         self._refresh()
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
@@ -200,7 +317,7 @@ class TasksPage(QWidget):
         except (PermissionError, ValueError) as exc:
             QMessageBox.warning(self, "Błąd", str(exc))
             return
-        self._refresh()
+        self._refresh_tasks()
         if changed < len(ids):
             QMessageBox.warning(
                 self, "Status", f"Zmieniono {changed} z {len(ids)} zadań (reszta bez uprawnień)."
@@ -208,7 +325,7 @@ class TasksPage(QWidget):
 
     def _new_task(self):
         TaskDialog(self, self.pracownik_id, self.companies, self.employees).exec()
-        self._refresh()
+        self._refresh_tasks()
 
     def _edit_selected(self):
         task_id = self._selected_id()
@@ -229,7 +346,10 @@ class TasksPage(QWidget):
                 self.employees,
                 task,
             ).exec()
-            self._refresh()
+            if self.tabs.currentWidget() is self._activity_host:
+                self.extra_activities.refresh()
+            else:
+                self._refresh_tasks()
         else:
             QMessageBox.warning(self, "Zadanie", "Nie masz dostępu do powiązanego zadania lub zostało ono usunięte.")
 
@@ -242,7 +362,7 @@ class TasksPage(QWidget):
             return
         try:
             deleted = delete_tasks(ids, actor_id=self.pracownik_id)
-            self._refresh()
+            self._refresh_tasks()
             if deleted < len(ids):
                 QMessageBox.warning(
                     self, "Usuwanie", f"Usunięto {deleted} z {len(ids)} zadań (reszta bez uprawnień)."

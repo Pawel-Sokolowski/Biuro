@@ -229,7 +229,7 @@ class WorkerSetupWindow(QMainWindow):
             12: lambda: self.declaration_year_page(actor_id),
         }
         for title in ('Panel i logi', 'Zadania', 'e-ZLA', 'Odczyt z Enovy', 'Konta poczty',
-                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa HTTPS', 'Deklaracje — import roczny'):
+                      'Konto systemowe', 'Przypomnienia', 'KSeF', 'Saldeo', 'Płatnik', 'Usługa HTTPS/HTTP', 'Deklaracje — import roczny'):
             self.tabs.addTab(QWidget(), title)
         self.tabs.currentChanged.connect(self.open_tab)
 

@@ -12,9 +12,9 @@ class ServerSettings(QWidget):
         if client() is not None:
             raise PermissionError('Konfigurację usługi wykonaj lokalnie na serwerze.')
         layout = QVBoxLayout(self)
-        note = QLabel('Stanowiska pracowników łączą się przez HTTPS. Hasła usług, baza i klucz szyfrowania '
-                      'pozostają na serwerze. Użyj certyfikatu dla nazwy serwera, zaufanego na komputerach biura. '
-                      'Zapisz ustawienia, a następnie uruchom ponownie worker.')
+        note = QLabel('Stanowiska pracowników łączą się przez HTTPS albo — wyłącznie w sieci lokalnej — HTTP. '
+                      'HTTP nie szyfruje haseł, sesji ani danych. Hasła usług, baza i klucz szyfrowania pozostają '
+                      'na serwerze. Zapisz ustawienia, a następnie uruchom ponownie worker.')
         note.setWordWrap(True)
         layout.addWidget(note)
         form = QFormLayout()
@@ -32,12 +32,12 @@ class ServerSettings(QWidget):
         self.lan_http.setToolTip('Bez certyfikatu całe połączenie, łącznie z hasłami, jest jawne. Dozwolone '
                                  'wyłącznie na adresie LAN serwera, np. 192.168.1.116 — nie na 0.0.0.0. '
                                  'Do pracy zdalnej używaj HTTPS.')
-        for label,widget in [('Usługa',self.enabled),('Adres nasłuchu',self.bind),('Port HTTPS',self.port),
+        for label,widget in [('Usługa',self.enabled),('Adres nasłuchu',self.bind),('Port HTTPS/HTTP',self.port),
                              ('Certyfikat PEM',self.certificate),('Klucz TLS PEM',self.private_key),
                              ('Sieć lokalna',self.lan_http)]:
             form.addRow(label,widget)
         layout.addLayout(form)
-        save = QPushButton('Sprawdź certyfikat i zapisz na serwerze')
+        save = QPushButton('Sprawdź ustawienia i zapisz na serwerze')
         save.clicked.connect(self.save)
         layout.addWidget(save)
         layout.addStretch()
@@ -68,12 +68,13 @@ class ServerSettings(QWidget):
             if not values['BIO_API_BIND'] or any('\n' in value or '\r' in value for value in values.values()):
                 raise ValueError('Nieprawidłowa konfiguracja nasłuchu HTTPS.')
             save_local_config(get_dsn(),ensure_encryption_key(),api_settings=values)
-        except (ValueError,OSError,ssl.SSLError):
-            QMessageBox.warning(self,'Usługa biura','Nie zapisano. Sprawdź adres oraz poprawność i uprawnienia plików certyfikatu i klucza TLS.')
+        except (ValueError,OSError,ssl.SSLError) as error:
+            QMessageBox.warning(self,'Usługa biura',f'Nie zapisano: {error}')
             return
         if plain:
             QMessageBox.information(self,'Usługa biura','Zapisano: HTTP tylko w sieci lokalnej, bez szyfrowania. '
                                     'Uruchom ponownie worker. Stanowiskom podaj adres http://' + bind
                                     + ':' + str(self.port.value()))
             return
-        QMessageBox.information(self,'Usługa biura','Zapisano na serwerze. Uruchom ponownie worker. Stanowiskom podaj adres https://nazwa-serwera:'+str(self.port.value()))
+        QMessageBox.information(self,'Usługa biura','Zapisano na serwerze. Uruchom ponownie worker. '
+                                'Stanowiskom podaj adres https://nazwa-serwera:'+str(self.port.value()))

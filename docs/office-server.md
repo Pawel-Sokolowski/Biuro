@@ -1,6 +1,7 @@
 # Połączenie stanowisk z usługą Biuro
 
-Stanowisko pracownika podaje adres HTTPS serwera, e-mail i hasło pracownika.
+Stanowisko pracownika podaje adres HTTPS (albo HTTP wyłącznie w zaufanej sieci
+lokalnej), e-mail i hasło pracownika.
 Nie wymaga PostgreSQL, DB_URL ani BIO_ENCRYPTION_KEY. Nie istnieje funkcja pobierania
 lub synchronizowania klucza. Serwer wykonuje operacje na bazie i połączenia z pocztą,
 Enovą, Płatnikiem, KSeF i e-ZLA z użyciem swoich lokalnych danych dostępu.
@@ -10,7 +11,7 @@ Enovą, Płatnikiem, KSeF i e-ZLA z użyciem swoich lokalnych danych dostępu.
 1. W istniejącym panelu `Biuro.exe --worker-setup` zachowaj konfigurację bazy
    i dotychczasowy klucz szyfrowania na koncie uruchamiającym worker. Dane te
    nie są przekazywane stanowiskom. Kopia zapasowa klucza należy do administratora.
-2. W zakładce **Usługa HTTPS** włącz usługę, wybierz adres nasłuchu i port (domyślnie
+2. W zakładce **Usługa HTTPS/HTTP** włącz usługę, wybierz adres nasłuchu i port (domyślnie
    8443), podaj ścieżki do certyfikatu PEM i prywatnego klucza TLS PEM. Certyfikat
    musi odpowiadać nazwie serwera i być zaufany na komputerach pracowników.
    Certyfikat TLS jest odrębnym kluczem od klucza szyfrowania danych Biuro.
@@ -32,28 +33,36 @@ Opcjonalnie samą usługę uruchamia `Biuro.exe --api-server` lub
 `BIO_API_ENABLED=1` włącza usługę wewnątrz workera; samodzielne `--api-server`
 uruchamia ją bez zadań importu.
 
-### Próbne połączenie bez certyfikatu (tylko lokalnie)
+### Połączenie HTTP bez certyfikatu (wyłącznie w zaufanej sieci lokalnej)
 
-Do testów w sieci biura można na chwilę wyłączyć TLS. **Sesje i wszystkie dane
-lecą wtedy jawnym tekstem** — nie używaj tego w sieci, do której mają dostęp
-osoby postronne, i nie zostawiaj tego włączonego.
+Jeśli tymczasowo nie chcesz wdrażać certyfikatu na stanowiskach, możesz użyć
+HTTP w zaufanej sieci lokalnej. **Hasła, sesje i wszystkie dane lecą wtedy jawnym
+tekstem** — osoby mające dostęp do tej sieci mogą je przechwycić. Nie używaj HTTP
+przez Internet ani VPN współdzielony z osobami postronnymi; HTTPS pozostaje
+zalecanym trybem.
 
-1. Na serwerze, w `%LOCALAPPDATA%\Biuro\.env` (albo w środowisku usługi):
+1. Na serwerze w zakładce **Usługa HTTPS/HTTP** włącz usługę i zaznacz **Zezwól na
+   HTTP tylko w sieci lokalnej**. Ustaw **Adres nasłuchu** na konkretny prywatny
+   adres LAN serwera, np. `192.168.1.116` — nie `0.0.0.0`. Usuń ścieżki certyfikatu
+   i klucza TLS, jeśli są wpisane. Zapisz ustawienia i uruchom ponownie worker.
+   Alternatywnie ustaw w `%LOCALAPPDATA%\Biuro\worker.env` (albo w środowisku usługi):
 
    ```
    BIO_API_ENABLED=1
+   BIO_API_BIND=192.168.1.116
    BIO_API_ALLOW_PLAIN_HTTP=1
    ```
 
-   `BIO_API_CERT` i `BIO_API_TLS_KEY` mogą zostać puste. Gdy certyfikat jest
-   ustawiony, TLS ma pierwszeństwo i flaga niczego nie wyłącza.
-2. Na stanowisku uruchom aplikację z parametrem `--allow-plain-http` (albo ustaw
-   `BIO_ALLOW_PLAIN_HTTP=1`) i wpisz adres z `http://`, np.
-   `http://192.168.1.116:8443`.
+   Bezpiecznik serwera odmawia uruchomienia HTTP na adresie publicznym lub
+   wildcard. Zezwól stanowiskom na połączenie z portem usługi w zaporze Windows.
+2. Na stanowisku w oknie logowania zaznacz **Zezwól na niezabezpieczone HTTP w sieci
+   lokalnej (bez certyfikatu)** i podaj adres `http://`, np.
+   `http://192.168.1.116:8443`. Wybór zostaje zapamiętany na tym komputerze.
+   Możesz też uruchomić aplikację z parametrem `--allow-plain-http` albo ustawić
+   `BIO_ALLOW_PLAIN_HTTP=1`; wtedy zgoda jest wstępnie zaznaczona.
 
-Bez tej flagi klient odrzuca adres `http://`, a serwer bez certyfikatu nie
-wystartuje. Oba przypadki zgłaszają błąd konfiguracji zamiast połączyć się
-niezauważenie bez szyfrowania.
+Bez jawnej zgody klient odrzuca adres `http://`, a serwer bez certyfikatu nie
+wystartuje. Te zabezpieczenia zapobiegają przypadkowemu połączeniu bez szyfrowania.
 
 Pierwszego administratora, aktualizację schematu i lokalną konfigurację klucza
 wykonuje się na serwerze. `--direct` jawnie uruchamia lokalny panel administracyjny

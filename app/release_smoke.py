@@ -21,6 +21,13 @@ def run():
     output.parent.mkdir(parents=True, exist_ok=True)
     result = {'version': __version__, 'checks': []}
     try:
+        from openpyxl.compat import numbers
+        from importlib.util import find_spec
+        if find_spec('numpy') is not None:
+            raise RuntimeError('Unexpected bundled NumPy; rebuild from packaging/biuro.spec')
+        if not numbers.NUMERIC_TYPES:
+            raise RuntimeError('openpyxl numeric compatibility types are unavailable')
+        result['checks'].append('openpyxl_without_numpy')
         from app.worker_setup_ui import ConnectionDialog, WorkerSetupWindow
         from app.worker_install_ui import WorkerInstallDialog
         from app.key_setup_ui import KeySetupDialog

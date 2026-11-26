@@ -31,7 +31,8 @@ def runtime_module(name):
     return not any(part in {'test', 'tests', 'examples', 'benchmarks'} for part in name.split('.'))
 
 
-ROOT = Path(SPEC).resolve().parent.parent
+SPEC_DIR = Path(SPEC).resolve().parent
+ROOT = SPEC_DIR.parent if SPEC_DIR.name.casefold() == "packaging" else SPEC_DIR
 APP = ROOT / "app"
 APP_VERSION = (APP / "VERSION").read_text(encoding="utf-8").strip()
 # The installer, application and Windows EXE resource share one version source.

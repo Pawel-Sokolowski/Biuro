@@ -20,6 +20,9 @@ python -c "import mt940; from importlib.metadata import version; print('mt-940',
 python -m PyInstaller --clean --noconfirm packaging\biuro.spec
 ```
 
+`Biuro.spec` at the repository root is a compatibility entry point to the same
+build definition. Do not keep a separate PyInstaller dependency list there.
+
 Run scripts/prepare_odbc_prerequisite.ps1 on Windows before compiling
 installer/biuro.iss in Inno Setup. The installer expects the PyInstaller output
 in dist/Biuro and the verified MSI in installer/prerequisites.

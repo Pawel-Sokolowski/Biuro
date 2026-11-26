@@ -53,7 +53,7 @@ def typ_from_forma(forma_opodatkowania: Any) -> Optional[str]:
         return None
     if "ryczalt" in forma:
         return "RYCZALT"
-    if "kpir" in forma or "przychod" in forma:
+    if "kpir" in forma or "przychod" in forma or "skala podatkowa" in forma or "podatek liniowy" in forma:
         return "KPIR"
     if "ksieg" in forma or "rachunkow" in forma or "kh" == forma:
         return "KH"

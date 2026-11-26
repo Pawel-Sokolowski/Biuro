@@ -18,6 +18,9 @@
 #ifnexist MyBuildDir + "\_internal\PyQt6\Qt6\plugins\platforms\qwindows.dll"
   #error "Qt Windows platform plugin missing from the PyInstaller distribution"
 #endif
+#ifexist MyBuildDir + "\_internal\numpy\__init__.py"
+  #error "Unexpected NumPy files in the distribution; remove dist\Biuro and rebuild with packaging\biuro.spec"
+#endif
 
 #ifnexist MyOdbcMsi
   #error "Prepare the signed driver first: powershell -File scripts\prepare_odbc_prerequisite.ps1"
@@ -52,6 +55,10 @@ Name: "custom"; Description: "Wybór programu i workera"; Flags: iscustom
 [Components]
 Name: "program"; Description: "Program Biuro — stanowisko użytkownika"; Types: program
 Name: "worker"; Description: "Worker na tym serwerze — zadania w tle i panel konfiguracji"
+
+[InstallDelete]
+; Remove the previous PyInstaller payload first so obsolete bundled modules cannot survive upgrades.
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 Source: "..\docs\worker-configuration.md"; DestDir: "{app}\docs"; Flags: ignoreversion; Components: worker

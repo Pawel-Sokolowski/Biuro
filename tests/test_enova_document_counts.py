@@ -203,6 +203,18 @@ class EnovaImportTests(DbTestCase):
 
 
 class AutomaticAccountingTypeTests(TestCase):
+    def test_income_tax_labels_resolve_to_bookkeeping_types_for_enova(self):
+        from app.integrations.enova.document_counts import resolve_source
+        from app.integrations.enova.checking import checking_source
+        for label in ('Skala podatkowa', 'Podatek liniowy'):
+            with self.subTest(label=label):
+                company = {'nazwa': 'Przykład', 'forma_opodatkowania': label}
+                self.assertEqual(resolve_source(SOURCE, company)['accounting_type'], 'KPIR')
+                self.assertEqual(checking_source(SOURCE, company)['accounting_type'], 'KPIR')
+        self.assertEqual(resolve_source(SOURCE, {'forma_opodatkowania': 'Ryczałt',
+                                                  'status_vat': 'Czynny'})['accounting_type'],
+                         'RYCZALT')
+
     def test_combined_legal_form_is_a_fallback_but_explicit_accounting_form_has_priority(self):
         from app.integrations.enova.document_counts import resolve_source
         from app.integrations.enova.checking import checking_source

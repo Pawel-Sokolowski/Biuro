@@ -47,6 +47,30 @@ class ServerLoginAddressTests(unittest.TestCase):
                 preferences.setValue('office_server', 'https://saved.example:8443')
                 self.assertEqual(ServerLoginDialog().server.text(), 'https://saved.example:8443')
 
+    def test_http_requires_and_uses_the_login_dialog_opt_in(self):
+        from app.remote.login_ui import ServerLoginDialog
+
+        with TemporaryDirectory() as directory:
+            preferences = QSettings(str(Path(directory) / 'user.ini'), QSettings.Format.IniFormat)
+            preferences.setValue('allow_plain_http', False)
+            with (
+                mock.patch('app.remote.login_ui.QSettings') as settings_type,
+                mock.patch('app.remote.login_ui.QTimer.singleShot'),
+                mock.patch('app.remote.login_ui.allow_plain_http', return_value=False),
+                mock.patch.dict(os.environ, {'BIO_SERVER_URL': ''}),
+            ):
+                settings_type.Format = QSettings.Format
+                settings_type.side_effect = lambda org, app: preferences
+                dialog = ServerLoginDialog()
+                try:
+                    with self.assertRaisesRegex(ValueError, 'parametrem --allow-plain-http'):
+                        dialog._new_connection('http://192.168.1.116:8443')
+                    dialog.allow_http.setChecked(True)
+                    connection = dialog._new_connection('http://192.168.1.116:8443')
+                    self.assertTrue(connection.plain_http)
+                finally:
+                    dialog.close()
+
 
 def visible_texts(widget):
     from PyQt6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QTabWidget
@@ -293,4 +317,3 @@ def visible_headers(page):
 
 if __name__ == "__main__":
     unittest.main()
-

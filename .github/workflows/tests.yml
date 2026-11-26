@@ -187,6 +187,9 @@ jobs:
               throw "Missing packaged runtime dependency: $relative"
             }
           }
+          if (Test-Path -LiteralPath (Join-Path $root 'numpy')) {
+            throw 'Unexpected NumPy payload; openpyxl must use its supported no-NumPy fallback'
+          }
       - name: Migrate twice and test packaged executable
         shell: pwsh
         run: |

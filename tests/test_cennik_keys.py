@@ -22,6 +22,9 @@ class CennikKeysTests(unittest.TestCase):
 
     def test_helpers(self):
         self.assertEqual(typ_from_forma("KPiR"), "KPIR")
+        self.assertEqual(typ_from_forma("Skala podatkowa"), "KPIR")
+        self.assertEqual(typ_from_forma("Podatek liniowy"), "KPIR")
+        self.assertEqual(typ_from_forma("Ryczałt"), "RYCZALT")
         self.assertEqual(typ_from_forma("Księgi rachunkowe"), "KH")
         self.assertEqual(vat_flag_from_status("Czynny"), "T")
         self.assertIsNone(vat_flag_from_status("Brak danych"))

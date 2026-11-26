@@ -36,18 +36,21 @@ class ServerLoginDialog(QDialog):
         self.connection = None
         self.runner = CommandRunner(self)
         self.settings = QSettings('Biuro','OfficeManager')
+        self.plain_http = bool(self.settings.value('allow_plain_http', allow_plain_http(), type=bool))
         # Retire the legacy saved-password mechanism without ever decrypting it.
         self.settings.remove('saved_password')
         layout = QVBoxLayout(self)
         intro = QLabel('Połącz się z serwerem swojego biura. Dane dostępu do usług pozostają na serwerze.')
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        self.allow_http = QCheckBox('Zezwól na niezabezpieczone HTTP w sieci lokalnej (bez certyfikatu)')
+        self.allow_http.setChecked(self.plain_http)
+        self.allow_http.setToolTip('HTTP nie szyfruje haseł, sesji ani danych. Używaj wyłącznie w zaufanej sieci lokalnej.')
+        layout.addWidget(self.allow_http)
         form = QFormLayout()
-        self.plain_http = allow_plain_http()
         self.server = QLineEdit(_initial_server_address(self.settings))
-        self.server.setPlaceholderText('http://127.0.0.1:8443' if self.plain_http else 'https://serwer.biura:8443')
-        if self.plain_http:
-            self.server.setToolTip('Tryb próbny: połączenie bez certyfikatu, dane nie są szyfrowane.')
+        self.allow_http.toggled.connect(self._update_server_hint)
+        self._update_server_hint(self.allow_http.isChecked())
         self.email = QLineEdit(str(self.settings.value('saved_email','') or ''))
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -79,8 +82,15 @@ class ServerLoginDialog(QDialog):
         if self.server.text():
             QTimer.singleShot(0,self.resume)
 
+    def _new_connection(self, server):
+        return OfficeClient(server, plain_http=self.allow_http.isChecked())
+
+    def _update_server_hint(self, allow_http):
+        self.server.setPlaceholderText('http://192.168.1.116:8443' if allow_http else 'https://serwer.biura:8443')
+        self.server.setToolTip('HTTP nie szyfruje haseł, sesji ani danych.' if allow_http else '')
+
     def busy(self,value):
-        for widget in (self.server,self.email,self.password,self.connect_button,self.remember):
+        for widget in (self.server,self.email,self.password,self.connect_button,self.remember,self.allow_http):
             widget.setEnabled(not value and (widget is not self.remember or os.name=='nt'))
 
     def resume(self):
@@ -93,7 +103,7 @@ class ServerLoginDialog(QDialog):
             return
         self.busy(True)
         self.status.setText('Łączenie z serwerem biura…')
-        connection = OfficeClient(server, plain_http=self.plain_http)
+        connection = self._new_connection(server)
         def work():
             connection.resume(token)
             return connection
@@ -110,7 +120,7 @@ class ServerLoginDialog(QDialog):
 
     def connect_office(self):
         try:
-            connection = OfficeClient(self.server.text(), plain_http=self.plain_http)
+            connection = self._new_connection(self.server.text())
             email,password,remember = self.email.text().strip(),self.password.text(),self.remember.isChecked()
             if not email or not password:
                 raise ValueError('Podaj e-mail i hasło pracownika.')
@@ -128,6 +138,7 @@ class ServerLoginDialog(QDialog):
         self.connection = connection
         self.pracownik_id = connection.employee_id
         self.settings.setValue('office_server',connection.server)
+        self.settings.setValue('allow_plain_http',self.allow_http.isChecked())
         self.settings.setValue('saved_email',self.email.text().strip())
         if store:
             try:
@@ -144,7 +155,7 @@ class ServerLoginDialog(QDialog):
 
     def reset_password(self):
         try:
-            connection = OfficeClient(self.server.text(), plain_http=self.plain_http)
+            connection = self._new_connection(self.server.text())
             email = self.email.text().strip()
             if not email:
                 raise ValueError('Najpierw wpisz adres e-mail pracownika.')

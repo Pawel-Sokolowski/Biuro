@@ -1,5 +1,6 @@
 """Weekly ZUS and durable, company-scoped Enova reads; run on CI only."""
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 from tests.base import DbTestCase
@@ -75,6 +76,24 @@ class WorkerSchedulingTests(DbTestCase):
             self.assertEqual(remote.call_args.kwargs['months'],['2026-09','2026-10','2026-11'])
             self.assertFalse(self.pending())
 
+    def test_enova_cancelled_during_checking_preserves_the_pending_change(self):
+        save_month_status(self.company, '2026-11', {'etap': 'Zaksięgowane'})
+        expected = self.pending()
+        stop = Event()
+
+        def interrupt(*_args, **_kwargs):
+            stop.set()
+            return []
+
+        with patch('app.integrations.enova.connection_settings.load_connection',
+                   return_value={**self.config, 'checking_enabled': True}), \
+             patch('app.integrations.enova.document_counts.run_import', return_value=[{'ok': True}]), \
+             patch('app.integrations.enova.checking.run_checking_import', side_effect=interrupt):
+            self.assertEqual(enova_job(stop)['mode'], 'cancelled')
+        self.assertEqual(self.pending(), expected)
+        with get_conn() as conn:
+            self.assertEqual(conn.execute('SELECT attempts FROM enova_stage_requests').fetchone()[0], 0)
+
     def test_sent_accounting_stage_refreshes_count_even_if_upo_read_fails(self):
         now = datetime.now(ZoneInfo('Europe/Warsaw'))
         month = now.strftime('%Y-%m')
@@ -146,6 +165,15 @@ class WorkerSchedulingTests(DbTestCase):
         with patch('app.integrations.ezla.sync.run_sync', side_effect=read):
             ezla_job(now=monday)
         self.assertEqual(seen['started'], '2026-11-16')
+
+    def test_ezla_reported_error_leaves_the_week_retryable(self):
+        monday = datetime(2026, 11, 16, 3, tzinfo=ZoneInfo('Europe/Warsaw'))
+        result = {'mode': 'completed', 'companies': 1, 'failed': 0}
+        with patch('app.integrations.ezla.sync.run_sync', side_effect=[ValueError('Błąd konfiguracji'), result]):
+            with self.assertRaisesRegex(ValueError, 'Błąd konfiguracji'):
+                ezla_job(now=monday)
+            self.assertEqual(get_setting('worker_ezla_started_week'), '')
+            self.assertEqual(ezla_job(now=monday)['mode'], 'completed')
 
     def test_failed_or_busy_week_is_not_marked_completed(self):
         monday = datetime(2026,11,16,3,tzinfo=ZoneInfo('Europe/Warsaw'))

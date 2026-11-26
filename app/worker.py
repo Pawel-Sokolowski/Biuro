@@ -146,7 +146,12 @@ def ezla_job(stop=None,now=None):
         # operator decision (clear the marker) instead of resubmitting blind.
         return {'mode':'incomplete_week','companies':0,'failed':0}
     set_setting('worker_ezla_started_week',week)
-    result = run_sync(stop=stop)
+    try:
+        result = run_sync(stop=stop)
+    except Exception:
+        # Reported failures are retryable. A process killed mid-run leaves the marker behind.
+        set_setting('worker_ezla_started_week', '')
+        raise
     if result.get('mode') in ('disabled','busy','cancelled') or (stop is not None and stop.is_set()):
         set_setting('worker_ezla_started_week','')
         return result

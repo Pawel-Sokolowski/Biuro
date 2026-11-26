@@ -54,7 +54,7 @@ def read_section(company_id, actor_id, section, *, year=None, account_id=None):
         return {
             'company': company,
             'options': _field_options(),
-            'tax_offices': dao.get_tax_offices(),
+            'tax_offices': [{'nazwa': row['nazwa']} for row in dao.get_tax_offices()],
             'employees': dao.get_employees_list(),
             'authorizations': dao.get_pelnomocnictwa(company_id) if company_id else {},
             'cash_default': get_setting_bool(CASH_DEFAULT_KEYS),

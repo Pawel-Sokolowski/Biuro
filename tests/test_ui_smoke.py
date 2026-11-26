@@ -143,6 +143,31 @@ class UiSmokeTests(DbTestCase):
         form._delete_partner()
         self.assertEqual(get_partners(self.firma), [])
 
+    def test_direct_company_editor_loads_secondary_data_when_opening_the_tab(self):
+        from threading import get_ident
+        from app.companies import form_data
+        from app.companies.company_form import CompanyForm
+        from tests.test_review_optimizations import wait_until
+
+        threads = []
+        original = form_data.read_section
+
+        def read(*args, **kwargs):
+            threads.append(get_ident())
+            return original(*args, **kwargs)
+
+        with mock.patch.object(form_data, 'read_section', side_effect=read) as sections:
+            form = CompanyForm(self.firma, actor_id=1, defer_load=True, year=2025)
+            self.addCleanup(form.close)
+            self.assertTrue(wait_until(lambda: 'nazwa' in form.inputs))
+            self.assertEqual(form.inputs['nazwa'].text(), 'Alfa')
+            self.assertEqual(form.annual_year.value(), 2025)
+            self.assertEqual([call.args[2] for call in sections.call_args_list], ['basic'])
+            form.section_tabs.setCurrentWidget(form.section_pages['Notatki'])
+            self.assertTrue(wait_until(lambda: 'Notatki' in form._card_tabs))
+            self.assertEqual([call.args[2] for call in sections.call_args_list], ['basic', 'notes'])
+            self.assertTrue(all(thread != get_ident() for thread in threads))
+
     def test_company_form_saves_pelnomocnictwa_table(self):
         from app.companies.company_form import CompanyForm
         from app.db.dao_companies import get_pelnomocnictwa

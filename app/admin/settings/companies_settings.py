@@ -293,16 +293,9 @@ class CompaniesSettings(QWidget):
             QMessageBox.information(self, "Firmy", "Wybierz firmę.")
             return
 
-        firma = self.logic.get_company(fid)
-        if not firma:
-            QMessageBox.critical(self, "Błąd", "Nie znaleziono firmy.")
-            return
-
-        CompanyForm(
-            firma["id"],
-            self,
-            actor_id=self.pracownik_id,
-        ).exec()
+        dialog = CompanyForm(fid, self, actor_id=self.pracownik_id, defer_load=True)
+        dialog.exec()
+        dialog.deleteLater()
         self._refresh()
 
     # ============================================================

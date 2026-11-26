@@ -33,7 +33,8 @@ def remote_class(name):
         for method_name,method in inspect.getmembers(original):
             if not callable(method) or method_name.startswith('__') or method_name.startswith('open_') or method_name.startswith('more_option_'):
                 continue
-            if method_name in ('_get_conn','ensure_schema_minimum','ensure_role_columns','_finish_timer','_auto_check_suspension'):
+            if method_name in ('_get_conn','ensure_schema_minimum','ensure_role_columns','_finish_timer','_auto_check_suspension',
+                               '_assert_company_access'):
                 continue
             if original.__name__=='MonthlyViewLogic' and method_name in (
                 'format_seconds','is_general_timer_running','is_company_timer_running','get_running_seconds',

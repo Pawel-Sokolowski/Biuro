@@ -22,7 +22,10 @@ from app.integrations.platnik.insurance import scope_xml
 REQUIRED = requirements({**MONTHLY, **ANNUAL})
 FIELDS = {'form', 'source_id', 'payer_id', 'nip', 'report_id', 'miesiac',
           'employee_id', 'employee_name', 'raw_status', 'valid_link'}
-OPTIONAL_FIELDS = {'insurance_code', 'filing_status', 'sent_at', 'upo', 'upo_at'} | AMOUNT_FIELDS
+OPTIONAL_FIELDS = {'insurance_code', 'filing_status', 'filing_status_raw',
+                   'sent_at', 'upo', 'upo_at'} | AMOUNT_FIELDS
+SET_DOCUMENT_COLUMNS = {'ID_DOKUMENT', 'ID_ZESTAW'}
+SET_COLUMNS = {'ID', 'ID_PLATNIK', 'DATA_WYS', 'DATA_POTW', 'ID_POTW', 'STATUSPT'}
 
 
 def source_query(cursor, config, *, annual=False, scoped=False):
@@ -33,7 +36,8 @@ def source_query(cursor, config, *, annual=False, scoped=False):
             raise ValueError('Zamiennik SQL Płatnika wymaga pełnej ścieżki na serwerze workera.')
         return path.read_text(encoding='utf-8-sig')
     specs = ANNUAL if annual else MONTHLY | ADDITIONAL_MONTHLY
-    table_list = ','.join("'" + name + "'" for name in (*requirements(specs), 'PLATN_IDENT'))
+    table_list = ','.join("'" + name + "'" for name in
+                          (*requirements(specs), 'PLATN_IDENT', 'ZESTAW_DOKUM', 'ZESTAW'))
     cursor.execute("SELECT t.name,c.name FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id "
                    "JOIN sys.columns c ON c.object_id=t.object_id WHERE s.name='dbo' "
                    "AND t.name IN (" + table_list + ")")
@@ -43,6 +47,8 @@ def source_query(cursor, config, *, annual=False, scoped=False):
     columns = {}
     for table, column in metadata:
         columns.setdefault(table.upper(), set()).add(column.upper())
+    has_set_metadata = (SET_DOCUMENT_COLUMNS <= columns.get('ZESTAW_DOKUM', set())
+                        and SET_COLUMNS <= columns.get('ZESTAW', set()))
     specs = resolve_fields(ANNUAL if annual else MONTHLY, columns)
     required = requirements(specs)
     missing = [table + '.' + name for table, names in required.items()
@@ -65,7 +71,8 @@ def source_query(cursor, config, *, annual=False, scoped=False):
                 specs[code] = spec
     path = Path(__file__).resolve().parents[3] / 'docs/platnik/queries/declarations.sql'
     query = path.read_text(encoding='utf-8-sig')
-    records = records_sql(specs, document_key, 'STATUSPT' in columns['DOKUMENT'],columns)
+    records = records_sql(specs, document_key, 'STATUSPT' in columns['DOKUMENT'], columns,
+                          has_set_metadata=has_set_metadata)
     period = "CONVERT(char(4),r.reporting_date,112) AS rok" if annual else "CONVERT(char(7),r.reporting_date,120) AS miesiac"
     scope_parameter, scope_cte, scope_filter = '', '', ''
     if scoped:
@@ -160,15 +167,25 @@ def normalize(rows, months, selected_nips, *, annual=False, owner_ids=None):
         if row.get('insurance_code'):
             from app.companies.holiday_eligibility import insurance_code
             entry['insurance_code'] = insurance_code(row['insurance_code'])
+        sent = filing_timestamp(row.get('sent_at'))
+        upo = str(row.get('upo') or '').strip()
+        upo_at = filing_timestamp(row.get('upo_at'))
+        raw_set_status = str(row.get('filing_status_raw') or '').strip()
+        entry['filing_status_raw'] = raw_set_status
         if status := str(row.get('filing_status') or '').strip().casefold():
-            sent, upo = filing_timestamp(row.get('sent_at')), str(row.get('upo') or '').strip()
             labels = {'draft': 'Roboczy', 'sent': 'Wysłany', 'accepted': 'Potwierdzony',
                       'rejected': 'Odrzucony', 'unknown': 'Nieustalony'}
             if (status not in labels or (status == 'sent' and not sent) or
                     (status == 'accepted' and not upo)):
                 raise ValueError('Status wysyłki Płatnika wymaga potwierdzonych danych źródłowych.')
-            entry.update(status=status, status_text=labels[status], sent_at=sent, upo=upo,
-                         upo_at=filing_timestamp(row.get('upo_at')))
+            entry.update(status=status, status_text=labels[status])
+        elif upo:
+            entry.update(status='accepted', status_text='Potwierdzony (UPO)')
+        elif any((raw_set_status, sent, upo_at)):
+            entry['status_text'] = (f'Status zestawu w Płatniku: {raw_set_status}'
+                                    if raw_set_status else 'Status zestawu w Płatniku nieustalony')
+        if any((sent, upo, upo_at)):
+            entry.update(sent_at=sent, upo=upo, upo_at=upo_at)
         if annual:
             entry['reporting_year'] = month
         elif owner_ids is not None:

@@ -82,6 +82,37 @@ class PlatnikDeclarationRulesTests(TestCase):
         with self.assertRaises(ValueError):
             source_query(cursor, {})
 
+    def test_set_tables_expose_saved_status_and_receipt_metadata(self):
+        cursor = Mock()
+        metadata = [(table, col) for table, cols in REQUIRED.items() for col in cols]
+        metadata += [('DOKUMENT', 'ID_DOKUMENT'), ('ZESTAW_DOKUM', 'ID_DOKUMENT'),
+                     ('ZESTAW_DOKUM', 'ID_ZESTAW')]
+        metadata += [('ZESTAW', column) for column in
+                     ('ID', 'ID_PLATNIK', 'DATA_WYS', 'DATA_POTW', 'ID_POTW', 'STATUSPT')]
+        cursor.fetchmany.return_value = metadata
+        query = source_query(cursor, {})
+        self.assertIn('FROM dbo.ZESTAW_DOKUM zd', query)
+        self.assertIn('JOIN dbo.ZESTAW z ON z.ID=zd.ID_ZESTAW', query)
+        self.assertIn('zd.ID_DOKUMENT=a.ID_DOKUMENT', query)
+        self.assertIn('z.ID_PLATNIK=a.ID_PLATNIK', query)
+        self.assertIn('set_info.filing_status_raw AS filing_status_raw', query)
+        self.assertIn('set_info.sent_at AS sent_at', query)
+        self.assertIn('set_info.upo AS upo', query)
+        self.assertIn('set_info.upo_at AS upo_at', query)
+        self.assertIn('ORDER BY z.DATA_WYS DESC, z.ID DESC', query)
+
+    def test_saved_upo_proves_acceptance_and_preserves_receipt_number_and_date(self):
+        from datetime import datetime
+        row = {**ROW, 'filing_status_raw': 'X', 'sent_at': datetime(2026, 11, 20, 10, 30),
+               'upo': 'RECEIPT-123', 'upo_at': datetime(2026, 11, 21, 12, 0)}
+        entry = normalize([row], ['2026-11'], [NIP])[NIP]['2026-11'][0]
+        self.assertEqual(entry['status'], 'accepted')
+        self.assertEqual(entry['status_text'], 'Potwierdzony (UPO)')
+        self.assertEqual(entry['filing_status_raw'], 'X')
+        self.assertEqual(entry['sent_at'], '2026-11-20T10:30:00')
+        self.assertEqual(entry['upo'], 'RECEIPT-123')
+        self.assertEqual(entry['upo_at'], '2026-11-21T12:00:00')
+
     def test_corrections_are_preserved_and_source_code_is_not_proof_of_acceptance(self):
         records = normalize([ROW, {**ROW, 'source_id': 2, 'report_id': '02'}], ['2026-11'], [NIP])
         entries = records[NIP]['2026-11']

@@ -12,6 +12,7 @@ from time import sleep
 
 from app.integrations.platnik.gui_desktop import (describe, download_confirmation, grid_rows,
                                                    interactive_desktop, main_window, register)
+from app.integrations.platnik.gui_diagnostic_capture import capture_wizard_walkthrough, discover_executable
 from app.integrations.platnik.gui_evidence import ERRORS, OPTIONAL_COLUMNS, REQUIRED_COLUMNS, STATUSES, ReadError, collect, label
 
 MODULE = 'app.integrations.platnik.gui_agent'
@@ -269,19 +270,35 @@ def default_profile():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', nargs='?', default='run',
-                        choices=('run', 'once', 'probe', 'describe', 'read-job'))
+                        choices=('run', 'once', 'probe', 'describe', 'read-job', 'capture-walkthrough'))
     parser.add_argument('--config', type=Path, default=None,
                         help='Profil agenta. Domyślnie katalog danych Biuro: platnik-agent.json')
+    parser.add_argument('--output', type=Path, default=None,
+                        help='Plik JSON dla capture-walkthrough; domyślnie LOCALAPPDATA\\Biuro\\diagnostics.')
+    parser.add_argument('--executable', type=Path, default=None,
+                        help='Płatnik EXE, gdy nie ma profilu agenta.')
     args = parser.parse_args(argv)
     if sys.platform != 'win32':
         raise SystemExit('Agent Płatnika wymaga Windows.')
     path = (args.config or default_profile()).resolve()
-    if not path.is_file():
-        raise SystemExit('Brak profilu agenta Płatnika: ' + str(path) + '. Uzupełnij go w Ustawieniach → Płatnik.')
     try:
-        config = load_config(path, full=args.mode != 'describe')
+        capture_only = args.mode == 'capture-walkthrough'
+        if capture_only and args.executable is not None:
+            executable = args.executable.expanduser().resolve()
+            if not executable.is_file():
+                raise SystemExit('Nie znaleziono pliku Płatnika: ' + str(executable))
+            config = {'executable': executable}
+        elif capture_only and not path.is_file():
+            config = {'executable': discover_executable()}
+        elif not path.is_file():
+            raise SystemExit('Brak profilu agenta Płatnika: ' + str(path) + '. Uzupełnij go w Ustawieniach → Płatnik.')
+        else:
+            config = load_config(path, full=args.mode not in ('describe', 'capture-walkthrough'))
         if args.mode == 'describe':
             print(json.dumps(describe(main_window(config)), ensure_ascii=True, indent=2))
+        elif args.mode == 'capture-walkthrough':
+            output, count = capture_wizard_walkthrough(config, args.output)
+            print(f'Zapisano {count} stanów kreatora do: {output}')
         elif args.mode == 'probe':
             import pywinauto  # noqa: F401  Loaded on the agent VM to check the Windows runtime.
             check_queue_access(config)
@@ -297,9 +314,11 @@ def main(argv=None):
             print(json.dumps({'error': exc.code}))
         else:
             raise SystemExit(ERRORS[exc.code]) from None
-    except Exception:
+    except Exception as error:
         if args.mode == 'read-job':
             print(json.dumps({'error': 'ReadFailed'}))
+        elif args.mode == 'capture-walkthrough':
+            raise SystemExit(f'Przechwytywanie nie powiodło się ({type(error).__name__}).') from None
         else:
             # Profile paths and credentials may appear in native error details.
             raise SystemExit('Sprawdź profil agenta, uprawnienia i połączenie z PostgreSQL.') from None

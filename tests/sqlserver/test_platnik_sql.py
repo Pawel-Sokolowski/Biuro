@@ -19,7 +19,11 @@ ALIASES = {
     ('ZUSRZA', 'I_1_2OKRROZL'): 'I_1_2OKKROZL',
     ('ZUSRPA', 'I_1_1IDRAPS'): 'I_1_11DRAPS',
 }
-TABLES = requirements(FORMS) | REGISTRY_TABLES
+SET_TABLES = {
+    'ZESTAW': {'ID', 'ID_PLATNIK', 'DATA_WYS', 'DATA_POTW', 'ID_POTW', 'STATUSPT'},
+    'ZESTAW_DOKUM': {'ID', 'ID_ZESTAW', 'ID_DOKUMENT'},
+}
+TABLES = requirements(FORMS) | REGISTRY_TABLES | SET_TABLES
 
 
 @unittest.skipUnless(DSN, 'Requires the isolated GitHub SQL Server service')
@@ -50,7 +54,9 @@ class PlatnikSqlTests(unittest.TestCase):
             columns = []
             for name in sorted(names):
                 kind = ('int' if name == 'ID' or name.startswith('ID_') else
-                        'datetime' if name.endswith('DATAWYPEL') or name in ('DATAOD','DATADO') else 'nvarchar(64)')
+                        'datetime' if name.endswith('DATAWYPEL') or name in
+                        ('DATAOD', 'DATADO', 'DATA_WYS', 'DATA_POTW') else
+                        'char(1)' if name in ('STATUS', 'STATUSPT') else 'nvarchar(64)')
                 columns.append('[' + name + '] ' + kind)
             cls.writer.execute('CREATE TABLE dbo.' + table + '(' + ','.join(columns) + ')')
         cls.writer.execute('CREATE USER import_reader WITHOUT LOGIN; GRANT SELECT ON SCHEMA::dbo TO import_reader;')
@@ -130,6 +136,25 @@ class PlatnikSqlTests(unittest.TestCase):
         self.assertEqual((parent['raw_status'], child['raw_status']), ('P', 'N'))
         self.assertEqual(child['valid_link'], 1)
         self.assertEqual(child['insurance_code'],'051000')
+
+    def test_set_status_and_receipt_fields_are_read_from_linked_set(self):
+        self.document(1)
+        self.form('DRA', 1)
+        self.writer.execute(
+            "INSERT INTO dbo.ZESTAW (ID, ID_PLATNIK, DATA_WYS, DATA_POTW, ID_POTW, STATUSPT) VALUES "
+            "(49, 7, '2026-11-19T10:30:00', '2026-11-19T12:00:00', 'OLD-RECEIPT', 'A'), "
+            "(50, 7, '2026-11-20T10:30:00', '2026-11-21T12:00:00', 'RECEIPT-123', 'X')")
+        self.writer.execute(
+            "INSERT INTO dbo.ZESTAW_DOKUM (ID, ID_ZESTAW, ID_DOKUMENT) VALUES (60, 49, 1), (61, 50, 1)")
+        row, = self.query()
+        self.assertEqual(row['filing_status_raw'], 'X')
+        self.assertEqual(row['sent_at'].isoformat(), '2026-11-20T10:30:00')
+        self.assertEqual(row['upo'], 'RECEIPT-123')
+        self.assertEqual(row['upo_at'].isoformat(), '2026-11-21T12:00:00')
+        entry = normalize([row], ['2026-11'], [NIP])[NIP]['2026-11'][0]
+        self.assertEqual(entry['status'], 'accepted')
+        self.assertEqual(entry['status_text'], 'Potwierdzony (UPO)')
+        self.assertEqual(entry['upo'], 'RECEIPT-123')
 
     def test_amount_columns_keep_zero_and_include_rca_budget_funding(self):
         self.document(1)

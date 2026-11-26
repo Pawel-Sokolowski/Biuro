@@ -66,12 +66,32 @@ def resolve_fields(specs, columns):
     return resolved
 
 
-def records_sql(specs, document_key, has_status, columns=None):
+def records_sql(specs, document_key, has_status, columns=None, *, has_set_metadata=False):
     """Identifiers come only from this shipped catalogue and a two-name key allowlist."""
     if document_key not in ('ID', 'ID_DOKUMENT'):
         raise ValueError('Nieprawidłowy klucz dokumentu Płatnika.')
     columns = columns or {}
     status = 'CONVERT(nvarchar(32),d.STATUSPT)' if has_status else 'CAST(NULL AS nvarchar(32))'
+    set_columns = ("""set_info.filing_status_raw AS filing_status_raw,
+            set_info.sent_at AS sent_at, set_info.upo AS upo, set_info.upo_at AS upo_at"""
+                   if has_set_metadata else
+                   """CAST(NULL AS nvarchar(32)) AS filing_status_raw,
+            CAST(NULL AS datetime) AS sent_at, CAST(NULL AS nvarchar(35)) AS upo,
+            CAST(NULL AS datetime) AS upo_at""")
+
+    def set_join(document, payer):
+        if not has_set_metadata:
+            return ''
+        return f"""
+            OUTER APPLY (
+                SELECT TOP (1) z.STATUSPT AS filing_status_raw, z.DATA_WYS AS sent_at,
+                    NULLIF(LTRIM(RTRIM(z.ID_POTW)),N'') AS upo, z.DATA_POTW AS upo_at
+                FROM dbo.ZESTAW_DOKUM zd
+                JOIN dbo.ZESTAW z ON z.ID=zd.ID_ZESTAW
+                WHERE zd.ID_DOKUMENT={document} AND z.ID_PLATNIK={payer}
+                ORDER BY z.DATA_WYS DESC, z.ID DESC
+            ) set_info"""
+
     payer_identity_visible = {'ID_PLATNIK', 'NIP'} <= columns.get('PLATN_IDENT', set())
     def insurance(table, alias, prefix):
         if not prefix:
@@ -102,9 +122,11 @@ def records_sql(specs, document_key, has_status, columns=None):
             a.ID_PLATNIK AS payer_id, {nip} AS nip, {period} AS source_period,
             {report} AS report_id, {employee_id} AS employee_id, {name} AS employee_name,
             {status} AS raw_status,
+            {set_columns},
             CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK THEN 1 ELSE 0 END AS valid_link,
             N'{spec.get('kind', 'month')}' AS period_kind, {code_expr} AS insurance_code, {amounts}
-            FROM dbo.{spec['table']} a LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT""")
+            FROM dbo.{spec['table']} a LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT
+            {set_join('a.ID_DOKUMENT', 'a.ID_PLATNIK')}""")
         if spec.get('child'):
             child_code = insurance(spec['child'], 'u', spec.get('insurance_prefix', 'III_B_1_'))
             amounts = amounts_sql(spec['child'], 'u', columns.get(spec['child'], set()))
@@ -119,11 +141,13 @@ def records_sql(specs, document_key, has_status, columns=None):
             result.append(f"""SELECT N'ZUS {code}', u.ID_DOKUMENT, COALESCE(a.ID_PLATNIK,u.ID_PLATNIK), {child_nip},
                 {period}, {report}, u.ID_UBEZPIECZONY,
                 LTRIM(RTRIM(COALESCE(u.{spec['first']},N'') + N' ' + COALESCE(u.{spec['last']},N''))),
-                {child_status}, CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK
+                {child_status}, {set_columns},
+                CASE WHEN d.{document_key} IS NOT NULL AND d.ID_PLATNIK=a.ID_PLATNIK
                     AND u.ID_PLATNIK=a.ID_PLATNIK AND child_d.{document_key} IS NOT NULL
                     AND child_d.ID_PLATNIK=a.ID_PLATNIK AND child_d.ID_DOK_NAD=a.ID_DOKUMENT THEN 1 ELSE 0 END,
                 N'{spec.get('kind', 'month')}', {child_code}, {amounts}
                 FROM dbo.{spec['child']} u LEFT JOIN dbo.{spec['table']} a ON a.ID_DOKUMENT=u.ID_DOK_NAD
                 LEFT JOIN dbo.DOKUMENT d ON d.{document_key} = a.ID_DOKUMENT
-                LEFT JOIN dbo.DOKUMENT child_d ON child_d.{document_key} = u.ID_DOKUMENT{orphan_join}""")
+                LEFT JOIN dbo.DOKUMENT child_d ON child_d.{document_key} = u.ID_DOKUMENT{orphan_join}
+                {set_join('u.ID_DOKUMENT', 'u.ID_PLATNIK')}""")
     return '\nUNION ALL\n'.join(result)

@@ -826,7 +826,10 @@ class AccountingPage(QWidget):
                                 str(entry.get('upo') or '—'), issue or 'OK',
                                 _date(entry.get('created_at')),
                                 (f"Status źródłowy: {entry['raw_status']}" if entry.get('raw_status') else '') +
-                                (f"{'; ' if entry.get('raw_status') else ''}dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
+                                (f"{'; ' if entry.get('raw_status') else ''}Status zestawu Płatnika: {entry['filing_status_raw']}"
+                                 if entry.get('filing_status_raw') else '') +
+                                (f"{'; ' if entry.get('raw_status') or entry.get('filing_status_raw') else ''}"
+                                 f"dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
                                  if entry.get('source_system') == 'platnik' and entry.get('source_id') else ''),
                                 form_key(entry['form']) in NOT_SENT_FORMS])
                 receipts.append(_upo_tooltip(entry))

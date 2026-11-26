@@ -230,8 +230,9 @@ zliczone nad tabelą. Stan zapisuje tabela `zakonczenie_roku`; programu nie
 
 **JPK_V7M (Enova).** W wystawionych fakturach przycisk **JPK_V7M (Enova)**
 generuje ewidencję sprzedaży z numerami KSeF (`NrKSeF`) dla zaznaczonych
-faktur. Program pyta o kod urzędu i e-mail (zapamiętuje je w ustawieniach)
-i zapisuje `JPK_V7M_<miesiąc>.xml`. To plik ewidencji VAT bez pozycji
+faktur z jednego miesiąca. Przed zapisaniem sprawdź miesiąc i listę numerów
+w oknie eksportu oraz uzupełnij kod urzędu i e-mail. Program zapisuje
+`JPK_V7M_<miesiąc>.xml`. To plik ewidencji VAT bez pozycji
 i płatności, więc Enova zaimportuje go jako wpisy rejestru VAT, a nie pełne
 faktury. Struktura odpowiada schemie JPK_V7M (3).
 

@@ -5,12 +5,12 @@ from datetime import datetime
 from decimal import Decimal
 from time import perf_counter
 
-from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QSettings, QRunnable, QThreadPool
+from PyQt6.QtCore import QDate, Qt, QUrl, pyqtSignal, QModelIndex, QObject, QThread, QTimer, QSettings, QRunnable, QThreadPool, QSaveFile, QIODevice
 from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QFontMetrics, QGuiApplication
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
     QDateEdit, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton,
-    QCheckBox, QDoubleSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QDoubleSpinBox, QPlainTextEdit, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from app.widgets.flow_layout import FlowLayout
@@ -1729,38 +1729,65 @@ class FakturyPage(QWidget):
 
     def _export_jpk_v7m(self):
         from app.db.dao_app_settings import get_setting, set_setting
-        from app.invoices.jpk_v7 import JpkError, build_jpk_v7m
+        from app.invoices.jpk_v7 import JpkError, build_jpk_v7m, selected_export_month
         if not self._can_export():
             return
         ids = self._selected_ids(self.issued_table)
         if not ids:
             QMessageBox.information(self, "JPK_V7M", "Zaznacz wystawione faktury do eksportu.")
             return
-        invoices = [dict(invoice, positions=decode_positions(invoice.get("pozycje_json")))
-                    for invoice in invoice_selection(ids, self.pracownik_id, details=True)]
-        office = get_setting("jpk_kod_urzedu") or ""
-        office, ok = QInputDialog.getText(self, "JPK_V7M", "Kod urzędu skarbowego (4 cyfry):", text=office)
-        if not ok:
-            return
-        email = get_setting("jpk_email") or ""
-        email, ok = QInputDialog.getText(self, "JPK_V7M", "E-mail podatnika:", text=email)
-        if not ok:
-            return
-        month = self._current_month()
-        seller = {"nip": get_setting("faktury_sprzedawca_nip"), "name": get_setting("faktury_sprzedawca_nazwa"), "email": email}
+        period = self._current_period()
         try:
-            xml = build_jpk_v7m(invoices, seller, month[:4], month[5:7], office)
+            invoices = invoice_selection(ids, self.pracownik_id, details=True)
+            month = selected_export_month(ids, invoices, period)
+        except (JpkError, PermissionError) as exc:
+            QMessageBox.warning(self, "JPK_V7M", str(exc))
+            return
+        invoices = [dict(invoice, positions=decode_positions(invoice.get("pozycje_json"))) for invoice in invoices]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Eksport JPK_V7M")
+        dialog.resize(520, 380)
+        fields = QFormLayout(dialog)
+        office = QLineEdit(get_setting("jpk_kod_urzedu") or "", dialog)
+        email = QLineEdit(get_setting("jpk_email") or "", dialog)
+        fields.addRow("Miesiąc ewidencji", QLabel(month, dialog))
+        fields.addRow("Kod urzędu skarbowego (4 cyfry)", office)
+        fields.addRow("E-mail podatnika", email)
+        preview = QPlainTextEdit("\n".join(str(invoice.get('numer') or '—') for invoice in invoices), dialog)
+        preview.setReadOnly(True)
+        fields.addRow(QLabel(f"Zaznaczone faktury w pliku ({len(invoices)})", dialog))
+        fields.addRow(preview)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=dialog)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Zapisz XML…")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        fields.addRow(buttons)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        office_code, email_address = office.text().strip(), email.text().strip()
+        dialog.deleteLater()
+        if not accepted:
+            return
+        seller = {"nip": get_setting("faktury_sprzedawca_nip"), "name": get_setting("faktury_sprzedawca_nazwa"), "email": email_address}
+        try:
+            xml = build_jpk_v7m(invoices, seller, month[:4], month[5:7], office_code)
         except JpkError as exc:
             QMessageBox.warning(self, "JPK_V7M", str(exc))
             return
-        set_setting("jpk_kod_urzedu", office.strip())
-        set_setting("jpk_email", email.strip())
         path, _ = QFileDialog.getSaveFileName(self, "Zapisz JPK_V7M", f"JPK_V7M_{month}.xml", "XML (*.xml)")
         if not path:
             return
-        with open(path, "wb") as handle:
-            handle.write(xml)
-        QMessageBox.information(self, "JPK_V7M", "Zapisano plik JPK_V7M.")
+        output = QSaveFile(path)
+        if not output.open(QIODevice.OpenModeFlag.WriteOnly) or output.write(xml) != len(xml) or not output.commit():
+            QMessageBox.warning(self, "JPK_V7M", f"Nie udało się zapisać pliku. {output.errorString()}")
+            return
+        if is_administrator(self.pracownik_id):
+            try:
+                set_setting("jpk_kod_urzedu", office_code)
+                set_setting("jpk_email", email_address)
+            except Exception:
+                logger.warning("Nie zapisano domyślnych ustawień eksportu JPK_V7M.")
+        QMessageBox.information(self, "JPK_V7M", f"Zapisano {len(invoices)} pozycji sprzedaży za {month}.")
 
     def _export_ids(self, ids, mark):
         if not self._can_export():

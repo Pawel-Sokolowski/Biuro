@@ -1,5 +1,5 @@
 """JPK_V7M(3): ewidencja sprzedaży z numerami KSeF (do importu w Enovie)."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from xml.etree import ElementTree as ET
 
@@ -21,6 +21,24 @@ FIELD_ORDER = ["K_10", "K_13", "K_15", "K_16", "K_17", "K_18", "K_19", "K_20"]
 
 class JpkError(ValueError):
     pass
+
+
+def selected_export_month(invoice_ids, invoices, period):
+    if not invoices or len(invoices) != len(invoice_ids) or {i['id'] for i in invoices} != set(invoice_ids):
+        raise JpkError("Nie udało się odczytać wszystkich zaznaczonych faktur. Odśwież listę i zaznacz je ponownie.")
+    if any(not invoice.get('eksportowana') for invoice in invoices):
+        raise JpkError("Eksport JPK wymaga wystawionych faktur. Odśwież listę.")
+    months = {invoice.get('miesiac') for invoice in invoices}
+    if len(months) != 1:
+        raise JpkError("Zaznacz faktury z jednego miesiąca do eksportu JPK_V7M.")
+    month, = months
+    try:
+        parsed = date.fromisoformat(f'{month}-01')
+    except ValueError:
+        raise JpkError("Zaznaczone faktury mają nieprawidłowy miesiąc.") from None
+    if period not in (month, str(parsed.year)):
+        raise JpkError("Miesiąc zaznaczonych faktur nie odpowiada filtrowi. Odśwież listę.")
+    return month
 
 
 def _digits(value):
@@ -49,6 +67,9 @@ def build_jpk_v7m(invoices, seller, year, month, office_code, system_name="Biuro
         raise JpkError("Anulowane faktury nie podlegają eksportowi JPK.")
     if not invoices:
         raise JpkError("Brak faktur do eksportu.")
+    missing_positions = [str(invoice.get('numer') or '—') for invoice in invoices if not invoice.get('positions')]
+    if missing_positions:
+        raise JpkError("Brak pozycji VAT na fakturach: " + ", ".join(missing_positions))
 
     ET.register_namespace("", NS)
     ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
@@ -102,10 +123,6 @@ def build_jpk_v7m(invoices, seller, year, month, office_code, system_name="Biuro
             _sub(row, "NrKSeF", invoice["ksef_numer"])
         else:
             _sub(row, "BFK", "1")
-        if invoice.get("rodzaj") == "korekta":
-            _sub(row, "KorektaPodstawyOpodt", "1")
-            if invoice.get("termin_platnosci"):
-                _sub(row, "TerminPlatnosci", str(invoice["termin_platnosci"])[:10])
         for field in FIELD_ORDER:
             if field in sums:
                 _sub(row, field, "%.2f" % sums[field])

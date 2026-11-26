@@ -64,6 +64,11 @@ def validate_config(config, *, full=True):
             isinstance(value, str) and value.strip() for value in window.values()) or not window:
         raise ValueError('Profil wymaga dokładnego tytułu lub klasy okna Płatnika.')
     result = {'executable': executable.resolve(), 'backend': backend, 'window': window}
+    if config.get('launcher'):
+        launcher = Path(config['launcher'])
+        if not launcher.is_absolute() or launcher.suffix.lower() != '.exe' or not launcher.is_file():
+            raise ValueError('Podaj pełną ścieżkę do programu uruchamiającego Płatnika (.exe).')
+        result['launcher'] = launcher.resolve()
     if not full:
         return result
     view = load_view(config, backend, REQUIRED_COLUMNS, OPTIONAL_COLUMNS)

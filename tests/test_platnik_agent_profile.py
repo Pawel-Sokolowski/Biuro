@@ -28,10 +28,12 @@ class ProfileEditorTests(unittest.TestCase):
             page = self.page(directory)
             executable = Path(directory) / 'Płatnik.exe'
             executable.touch()
+            launcher = Path(directory) / 'P2start.exe'
+            launcher.touch()
             page.executable.setText(str(executable))
-            page.title.setText('Płatnik 10.02.002')
-            page.backend.setCurrentText('win32')
-            page.grid.setText('registry-grid')
+            page.launcher.setText(str(launcher))
+            page.window_class.setText('PlatnikMain')
+            page.grid.setText('class=TdxDBGrid')
             for index, (name, (index_field, header_field)) in enumerate(page.columns.items()):
                 index_field.setText(str(index))
                 header_field.setText(name.upper())
@@ -40,12 +42,16 @@ class ProfileEditorTests(unittest.TestCase):
                 page.save()
             saved = json.loads(page.path.read_text(encoding='utf-8'))
             self.assertEqual(saved['executable'], str(executable))
-            self.assertEqual(saved['grid'], {'class_name': 'registry-grid'})
+            self.assertEqual(saved['grid'], {'class_name': 'TdxDBGrid'})
+            self.assertEqual(saved['window'], {'class_name': 'PlatnikMain'})
             self.assertEqual(saved['columns']['nip'], {'index': 0, 'header': 'NIP'})
             self.assertEqual(saved['status_labels'], {'Wysłany': 'sent'})
-            self.assertEqual(load_config(page.path)['grid'], saved['grid'])
+            config = load_config(page.path)
+            self.assertEqual(config['grid'], saved['grid'])
+            self.assertEqual(config['launcher'], launcher.resolve())
             reopened = self.page(directory)
-            self.assertEqual(reopened.grid.text(), 'registry-grid')
+            self.assertEqual(reopened.grid.text(), 'class=TdxDBGrid')
+            self.assertEqual(reopened.launcher.text(), str(launcher))
 
     def test_incomplete_profile_is_refused(self):
         with TemporaryDirectory() as directory:

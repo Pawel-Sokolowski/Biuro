@@ -25,26 +25,34 @@ class PlatnikAgentProfile(QWidget):
         self.path = default_profile()
         profile = self.saved_profile = load_profile(self.path)
         layout = QVBoxLayout(self)
-        note = QLabel('Profil agenta Płatnika. Agent uruchamia Płatnika sam i odczytuje rejestr po zalogowaniu '
-                      'na pulpicie serwera. „Wczytaj z Płatnika” pokazuje typy i identyfikatory kontrolek — '
-                      'skopiuj z wyniku AutomationId (uia) lub klasę tabeli rejestru (win32).')
+        note = QLabel('„Wczytaj z Płatnika” pokazuje kontrolki otwartego rejestru. '
+                      'Odczyt UIA wymaga wzorców Grid i Table.')
         note.setWordWrap(True)
         layout.addWidget(note)
         form = QFormLayout()
         self.executable = QLineEdit(profile.get('executable', ''))
-        self.executable.setPlaceholderText(r'C:\Platnik\Płatnik.exe')
+        self.executable.setPlaceholderText(r'C:\Platnik\p2.exe')
+        self.launcher = QLineEdit(profile.get('launcher', ''))
+        self.launcher.setPlaceholderText(r'C:\Platnik\P2start.exe')
         self.backend = QComboBox()
         self.backend.addItems(('uia', 'win32'))
         self.backend.setCurrentText(profile.get('backend', 'uia'))
-        self.title = QLineEdit((profile.get('window') or {}).get('title', ''))
+        window = profile.get('window') or {}
+        self.title = QLineEdit(window.get('title', ''))
         self.title.setPlaceholderText('Dokładny tytuł głównego okna Płatnika')
+        self.window_class = QLineEdit(window.get('class_name', ''))
+        self.window_class.setPlaceholderText('Użyj klasy, jeśli tytuł zmienia się po wyborze płatnika')
         grid = profile.get('grid') or {}
-        grid_value = (grid.get('control_id', grid.get('class_name', '')) if self.backend.currentText() == 'win32'
-                      else grid.get('auto_id', grid.get('class_name', '')))
+        grid_value = grid.get('auto_id', '')
+        if self.backend.currentText() == 'win32':
+            grid_value = grid.get('control_id', grid.get('class_name', ''))
+        elif not grid_value and grid.get('class_name'):
+            grid_value = 'class=' + grid['class_name']
         self.grid = QLineEdit(str(grid_value))
-        self.grid.setPlaceholderText('AutomationId (uia), Control ID lub klasa (win32)')
-        for label, widget in (('Plik Płatnika', self.executable), ('Interfejs', self.backend),
-                              ('Tytuł okna', self.title), ('Tabela rejestru', self.grid)):
+        self.grid.setPlaceholderText('AutomationId lub class=NazwaKlasy (uia), Control ID lub klasa (win32)')
+        for label, widget in (('Plik Płatnika', self.executable), ('Program uruchamiający (opcjonalnie)', self.launcher),
+                              ('Interfejs', self.backend), ('Tytuł okna', self.title),
+                              ('Klasa okna', self.window_class), ('Tabela rejestru', self.grid)):
             form.addRow(label, widget)
         layout.addLayout(form)
         self.columns = {}
@@ -73,20 +81,19 @@ class PlatnikAgentProfile(QWidget):
         layout.addWidget(self.save_button)
         layout.addStretch()
 
-    def grid_key(self):
-        if self.backend.currentText() == 'win32':
-            return 'control_id' if self.grid.text().strip().isdecimal() else 'class_name'
-        return 'auto_id'
-
     def grid_locator(self):
         value = self.grid.text().strip()
-        if self.backend.currentText() == 'win32' and value.isdecimal():
-            return {'control_id': int(value)}
-        return {self.grid_key(): value}
+        if self.backend.currentText() == 'win32':
+            return {'control_id': int(value)} if value.isdecimal() else {'class_name': value}
+        if value.startswith('class='):
+            return {'class_name': value.removeprefix('class=').strip()}
+        return {'auto_id': value}
 
     def window_config(self):
+        window = {'title': self.title.text().strip(), 'class_name': self.window_class.text().strip()}
         return {'executable': self.executable.text().strip(), 'backend': self.backend.currentText(),
-                'window': {**(self.saved_profile.get('window') or {}), 'title': self.title.text().strip()}}
+                'launcher': self.launcher.text().strip(),
+                'window': {key: value for key, value in window.items() if value}}
 
     def profile(self):
         columns = {}
@@ -112,14 +119,16 @@ class PlatnikAgentProfile(QWidget):
         """Run describe in-process against the given EXE; it starts Płatnik if needed."""
         from app.integrations.platnik.gui_agent import validate_config
         from app.integrations.platnik.gui_desktop import describe, main_window
-        from app.integrations.platnik.gui_evidence import ReadError
+        from app.integrations.platnik.gui_evidence import ERRORS, ReadError
 
         try:
             config = validate_config(self.window_config(), full=False)
             controls = describe(main_window(config))
-        except ReadError:
-            QMessageBox.warning(self, 'Agent Płatnika', 'Płatnik nie jest dostępny na tym pulpicie. '
-                                'Zaloguj się na pulpicie serwera, otwórz Płatnika i spróbuj ponownie.')
+        except ReadError as error:
+            message = ERRORS[error.code]
+            if error.code == 'AppUnavailable':
+                message = 'Nie znaleziono okna pasującego do ścieżki oraz podanego tytułu lub klasy Płatnika.'
+            QMessageBox.warning(self, 'Agent Płatnika', message)
             return
         except ImportError:
             logging.getLogger(__name__).exception('Płatnik GUI automation import failed')
@@ -134,9 +143,14 @@ class PlatnikAgentProfile(QWidget):
             QMessageBox.warning(self, 'Agent Płatnika', 'Nie udało się odczytać kontrolek Płatnika. '
                                 'Szczegóły zapisano w dzienniku Biuro.')
             return
-        self.result.setPlainText('\n'.join(
-            f"{item['control_type'] or '?'} | class={item['class_name'] or '-'} | "
-            f"auto_id={item['auto_id'] or '-'} | id={item['control_id']}" for item in controls) or 'Brak kontrolek.')
+        lines = []
+        for item in controls:
+            line = (f"{item['control_type'] or '?'} | class={item['class_name'] or '-'} | "
+                    f"auto_id={item['auto_id'] or '-'} | id={item['control_id']}")
+            if 'uia_patterns' in item:
+                line += ' | UIA: ' + (', '.join(item['uia_patterns']) or 'brak wzorców tabeli')
+            lines.append(line)
+        self.result.setPlainText('\n'.join(lines) or 'Brak kontrolek.')
 
     def save(self):
         from app.integrations.platnik.gui_agent import validate_config

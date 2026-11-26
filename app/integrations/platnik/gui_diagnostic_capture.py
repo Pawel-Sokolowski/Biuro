@@ -7,7 +7,7 @@ import re
 import sys
 from time import sleep
 
-from app.integrations.platnik.gui_desktop import interactive_desktop, process_image
+from app.integrations.platnik.gui_desktop import interactive_desktop, process_image, uia_grid_metadata
 from app.integrations.platnik.gui_evidence import ReadError
 
 POLL_SECONDS = 0.5
@@ -95,6 +95,8 @@ def describe_backend(handle, backend):
             caption = safe_button_caption(control.window_text())
             if caption:
                 item['caption'] = caption
+        if backend == 'uia':
+            item.update(uia_grid_metadata(info))
         controls.append(item)
         if len(controls) >= MAX_CONTROLS_PER_WINDOW:
             break
@@ -118,7 +120,7 @@ def describe_win32_children(handle):
             item['rectangle'] = {'left': rect[0], 'top': rect[1], 'right': rect[2], 'bottom': rect[3]}
         except Exception:
             item['rectangle'] = None
-        if class_name == 'Button':
+        if class_name in ('Button', 'TButton', 'TCorelButton'):
             caption = safe_button_caption(win32gui.GetWindowText(hwnd))
             if caption:
                 item['caption'] = caption

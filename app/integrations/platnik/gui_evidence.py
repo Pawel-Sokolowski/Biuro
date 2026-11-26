@@ -21,6 +21,7 @@ MAX_ROWS = 10000
 REQUIRED_COLUMNS = {'nip', 'period', 'form', 'report', 'status', 'set_id', 'receipt'}
 OPTIONAL_COLUMNS = {'sent_at'}
 REFERENCE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_./ -]{0,127}')
+RECEIPT_REFERENCE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_./+ -]{0,127}')
 
 
 class ReadError(Exception):
@@ -71,7 +72,7 @@ def clean_finding(item):
     sent_at = sent_timestamp(item.get('sent_at'))
     set_id = item['set_id']
     if (form not in FORMS or status not in STATUSES or not REFERENCE.fullmatch(set_id)
-            or (receipt and not REFERENCE.fullmatch(receipt))
+            or (receipt and not RECEIPT_REFERENCE.fullmatch(receipt))
             or (status == 'accepted' and not receipt) or (status == 'sent' and not sent_at)):
         raise ValueError('Nieprawidłowe potwierdzenie zestawu.')
     return {'form': form, 'report': report_number(item['report']), 'status': status,

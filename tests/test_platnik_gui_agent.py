@@ -1,11 +1,12 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
 from app.integrations.platnik.gui_agent import bounded_read, load_config, read_job, run
-from app.integrations.platnik.gui_desktop import checked_columns, payer_rows, select_sent_set
+from app.integrations.platnik.gui_desktop import checked_columns, main_window, payer_rows, select_sent_set, uia_grid_metadata
 from app.integrations.platnik.gui_evidence import ReadError, collect, display_check
 from app.utils.nip import normalize_nip
 
@@ -52,6 +53,11 @@ class EvidenceTests(TestCase):
             collect([{**ROW, 'status': 'Przekazany', 'sent_at': ''}], NIP, MONTH, LABELS)
         self.assertEqual(collect([{**ROW, 'status': 'Nieznany'}], NIP, MONTH, LABELS), [])
 
+    def test_receipt_reference_accepts_the_plus_separated_zus_format(self):
+        receipt = 'PW+000000001+20261125150800+0T'
+        found, = collect([{**ROW, 'receipt': receipt}], NIP, MONTH, LABELS)
+        self.assertEqual(found['receipt'], receipt)
+
     def test_header_order_must_match_profile(self):
         field = {'nip': {'index': 0, 'header': 'Numer NIP'}}
         self.assertEqual(checked_columns(field, [' Numer   NIP ', 'Miesiąc']), {'nip': 0})
@@ -90,6 +96,43 @@ class EvidenceTests(TestCase):
             config.write_text(json.dumps(profile), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'zakładki UIA'):
                 load_config(config)
+
+
+class DesktopTests(TestCase):
+    def test_launcher_connects_to_the_verified_application_process(self):
+        executable = Path('p2.exe')
+        launcher = Path('P2start.exe')
+        desktop = Mock()
+        desktop.windows.side_effect = [[], [Mock(process_id=Mock(return_value=42))]]
+        app = Mock(process=42)
+        modules = {
+            'pywinauto': SimpleNamespace(Application=Mock(return_value=app), Desktop=Mock(return_value=desktop)),
+            'pywinauto.timings': SimpleNamespace(wait_until=lambda _timeout, _retry, lookup, **_kwargs: lookup()),
+        }
+        config = {'executable': executable, 'launcher': launcher, 'backend': 'uia',
+                  'window': {'class_name': 'PlatnikMain'}}
+        with patch.dict('sys.modules', modules), \
+             patch('app.integrations.platnik.gui_desktop.interactive_desktop', return_value=True), \
+             patch('app.integrations.platnik.gui_desktop.process_image', return_value=executable), \
+             patch('app.integrations.platnik.gui_desktop.Popen') as launch:
+            self.assertIs(main_window(config), app.window.return_value)
+        launch.assert_called_once_with([str(launcher)], cwd=launcher.parent)
+        app.start.assert_not_called()
+        app.connect.assert_called_once_with(process=42, timeout=5)
+        app.window.assert_called_once_with(class_name='PlatnikMain')
+
+    def test_grid_diagnostics_distinguish_legacy_accessibility_from_grid_patterns(self):
+        class UnsupportedPattern(Exception):
+            pass
+
+        def interface(_element, name):
+            if name != 'LegacyIAccessible':
+                raise UnsupportedPattern
+
+        definitions = SimpleNamespace(NoPatternInterfaceError=UnsupportedPattern, get_elem_interface=interface)
+        info = SimpleNamespace(control_type='Pane', class_name='TdxDBGrid', element=object())
+        with patch.dict('sys.modules', {'pywinauto.uia_defines': definitions}):
+            self.assertEqual(uia_grid_metadata(info), {'uia_patterns': ['LegacyIAccessible']})
 
 
 class DownloadTests(TestCase):

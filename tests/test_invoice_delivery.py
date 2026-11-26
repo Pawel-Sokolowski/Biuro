@@ -122,6 +122,36 @@ class InvoiceDeliveryTests(unittest.TestCase):
         reserve.assert_not_called()
         smtp.assert_not_called()
 
+    def test_changed_xml_fails_before_smtp_reservation(self):
+        self.xml_path.write_bytes(self.xml + b'\n')
+        with patch.object(delivery, 'get_conn') as reserve, \
+             patch.object(delivery, '_delivery_state') as state, \
+             patch('app.email.email_actions.open_smtp') as smtp:
+            with self.assertRaisesRegex(KsefError, 'różni się'):
+                delivery.deliver_if_queued(1, 7, self.xml_path)
+        self.assertEqual(state.call_args.args, (1, 'failed_before_send'))
+        reserve.assert_not_called()
+        smtp.assert_not_called()
+
+    def test_accepted_smtp_persists_copy_warning_without_retrying(self):
+        conn, smtp = Mock(), Mock()
+        conn.execute.return_value.fetchone.return_value = (1,)
+        smtp.send_message.return_value = {}
+
+        def save_state(invoice_id, status, *, error, pdf):
+            self.invoice.update(invoice_email_status=status, invoice_email_error=error)
+
+        with patch.object(delivery, 'get_conn', return_value=conn), \
+             patch.object(delivery, '_delivery_state', side_effect=save_state), \
+             patch('app.email.email_actions.store_sent_copy', return_value=False), \
+             patch('app.email.email_actions.open_smtp', return_value=nullcontext(smtp)):
+            result = delivery.deliver_if_queued(1, 7, self.xml_path)
+            repeated = delivery.deliver_if_queued(1, 7, self.xml_path)
+        self.assertEqual(result['status'], 'sent')
+        self.assertIn('SMTP', result['warning'])
+        self.assertEqual(repeated['warning'], result['warning'])
+        smtp.send_message.assert_called_once()
+
     def test_uncertain_smtp_result_does_not_retry_and_revoked_sender_cannot_send(self):
         conn=Mock();conn.execute.return_value.fetchone.return_value=(1,)
         def update(invoice_id,status,**kwargs):self.invoice['invoice_email_status']=status

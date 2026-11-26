@@ -1095,6 +1095,7 @@ INVOICE_LIST_SQL = """
            f.miesiac, f.rodzaj, f.numer, f.status,
            f.status, f.cancelled_at, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
            f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer, f.ksef_status, f.ksef_srodowisko_wysylki, f.ksef_nip_wysylki, f.invoice_email_status,
+           f.invoice_email_status = 'sent' AND NULLIF(f.invoice_email_error, '') IS NOT NULL AS invoice_email_copy_warning,
            f.korygowana_faktura_id, f.przyczyna_korekty
     FROM faktury f
     LEFT JOIN firmy c ON c.id = f.firma_id

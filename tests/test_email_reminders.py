@@ -81,6 +81,16 @@ class ReminderDeliveryTests(DbTestCase):
         self.assertEqual(run_reminders(at('2026-11-16')), 0)
         self.assertEqual(self.sender.call_count, 1)
 
+    def test_failed_smtp_is_reported_and_the_same_reminder_is_not_retried(self):
+        from app.services.email_reminders import run_reminder_batch
+
+        self.enable('documents')
+        self.sender.return_value = False, 'SMTP niedostępny'
+        outcome = run_reminder_batch(at('2026-11-12'))
+        self.assertEqual(outcome, {'sent': 0, 'failed': 1, 'mode': 'failed'})
+        self.assertEqual(run_reminders(at('2026-11-12', 10)), 0)
+        self.sender.assert_called_once()
+
     def test_payment_uses_remaining_amount_and_stops_after_settlement(self):
         invoice = self.invoice()
         with get_conn() as conn:

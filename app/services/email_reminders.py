@@ -265,7 +265,18 @@ def _candidates(conn, kind, now, rule, target_id=None):
 
 
 def run_reminders(now=None, *, stop=None):
-    """Run from GUI timer or an unattended process. Never send when rules are disabled."""
+    """Return the sent count for the desktop timer and the command-line entry point."""
+    return run_reminder_batch(now, stop=stop)['sent']
+
+
+def _reminder_outcome(sent, failed, mode='completed'):
+    if failed:
+        mode = 'partial' if sent else 'failed'
+    return {'sent': sent, 'failed': failed, 'mode': mode}
+
+
+def run_reminder_batch(now=None, *, stop=None):
+    """Return the outcome of the current automatic reminder pass."""
     from app.email.email_actions import send_email_smtp
     from app.services.manual_reminders import lock_day, sent_manually_today
     from app.utils.system_mailbox import get_system_account
@@ -275,14 +286,16 @@ def run_reminders(now=None, *, stop=None):
     settings = load_settings()
     rules = {kind: settings[kind] for kind in ('documents', 'payments')
              if settings[kind]['enabled'] and _send_window_is_open(settings[kind], now)}
-    if not rules or (stop is not None and stop.is_set()):
-        return 0
+    if stop is not None and stop.is_set():
+        return _reminder_outcome(0, 0, 'cancelled')
+    if not rules:
+        return _reminder_outcome(0, 0, 'idle')
     account = get_system_account()
     if not account or not account.get('aktywne'):
         logger.warning('Przypomnienia: skonfiguruj konto systemowe w ustawieniach.')
-        return 0
+        return _reminder_outcome(0, 0, 'not_configured')
     conn = get_conn()
-    sent = 0
+    sent = failed = 0
     try:
         # Unique claims span workstations and are committed before SMTP.
         # Uncertain attempts never retry automatically.
@@ -293,7 +306,7 @@ def run_reminders(now=None, *, stop=None):
             template = next(t for t in settings['templates'] if t['name'] == rule['template'])
             for target_id in _unclaimed_targets(conn, kind, window, rule):
                 if stop is not None and stop.is_set():
-                    return sent
+                    return _reminder_outcome(sent, failed, 'cancelled')
                 now = fixed_now or datetime.now(zone)
                 # A new day can change the target period, slot and manual-send lock.
                 if now.date() != window.date() or not _send_window_is_open(rule, now):
@@ -348,7 +361,8 @@ def run_reminders(now=None, *, stop=None):
                     ('sent' if ok else 'failed', None if ok else error, ok, claim[0]))
                 conn.commit()
                 sent += int(ok)
-        return sent
+                failed += int(not ok)
+        return _reminder_outcome(sent, failed)
     finally:
         conn.close()
 

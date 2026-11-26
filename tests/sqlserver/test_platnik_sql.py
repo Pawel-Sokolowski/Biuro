@@ -53,7 +53,7 @@ class PlatnikSqlTests(unittest.TestCase):
                 names.update(prefix + field for field in ('1KODTYTUB', '2PRDOEM', '3STNIEP'))
             columns = []
             for name in sorted(names):
-                kind = ('int' if name == 'ID' or name.startswith('ID_') else
+                kind = ('int' if name == 'ID' or (name.startswith('ID_') and name != 'ID_POTW') else
                         'datetime' if name.endswith('DATAWYPEL') or name in
                         ('DATAOD', 'DATADO', 'DATA_WYS', 'DATA_POTW') else
                         'char(1)' if name in ('STATUS', 'STATUSPT') else 'nvarchar(64)')

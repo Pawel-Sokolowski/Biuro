@@ -100,6 +100,7 @@ class PlatnikDeclarationRulesTests(TestCase):
         self.assertIn('set_info.upo AS upo', query)
         self.assertIn('set_info.upo_at AS upo_at', query)
         self.assertIn('ORDER BY z.DATA_WYS DESC, z.ID DESC', query)
+        self.assertIn('r.filing_status_raw,r.sent_at,r.upo,r.upo_at,', query)
 
     def test_saved_upo_proves_acceptance_and_preserves_receipt_number_and_date(self):
         from datetime import datetime
@@ -308,6 +309,7 @@ class PlatnikSourceSqlTests(DbTestCase):
                           "pg_temp.try_date(RIGHT(r.compact_period,4) || LEFT(r.compact_period,2) || '01','YYYYMMDD')")
         sql = sql.replace("r.compact_period NOT LIKE N'%[^0-9]%'", "r.compact_period ~ '^[0-9]+$'")
         sql = re.sub(r'nvarchar\(\d+\)', 'varchar', sql)
+        sql = sql.replace('CAST(NULL AS datetime)', 'CAST(NULL AS timestamp)')
         sql = sql.replace('LEN(', 'length(').replace("N'", "'").replace('dbo.', '').replace(' + ', ' || ').replace('?', '%s')
         bounds = ('2025-01-01', '2026-01-01') if annual else ('2026-06-01', '2026-07-01')
         return [dict(row) for row in conn.execute(sql, bounds).fetchall()]

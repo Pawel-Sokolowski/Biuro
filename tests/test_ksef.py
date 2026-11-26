@@ -400,6 +400,23 @@ class KsefTests(DbTestCase):
         client.download_invoice_bytes.assert_called_once_with(number)
         client.export_invoice_package.assert_not_called()
 
+    def test_import_keeps_unnumbered_draft_with_same_amount_separate(self):
+        company = self.make_company("KSeF identity", nip="5252525252")
+        draft_id = dao_invoices.create_manual_invoice(
+            "firma", company, [{"nazwa": "Inna usługa", "ilosc": 1, "cena_netto": 200, "vat": 23}],
+            "2026-10-15", "2026-10-15", "2026-10-31",
+        )
+        official = "1234567890-20261015-AAAAAA-BB"
+        data = ksef_sync.parse_fa3_invoice(FA3_XML)
+        draft = dao_invoices.get_invoice_by_id(draft_id)
+        self.assertEqual(draft["kwota_brutto"], data["gross"])
+        action, imported = ksef_sync._upsert_downloaded_invoice(data, official)
+        self.assertEqual(action, "utworzone")
+        self.assertNotEqual(imported, draft_id)
+        self.assertFalse(dao_invoices.get_invoice_by_id(draft_id)["eksportowana"])
+        self.assertIsNone(dao_invoices.get_invoice_by_id(draft_id)["ksef_numer"])
+        self.assertEqual(dao_invoices.get_invoice_by_id(imported)["ksef_numer"], official)
+
     def test_import_never_reuses_a_different_number_or_overwrites_ksef_identity(self):
         company = self.make_company("KSeF identity", nip="5252525252")
         existing = dao_invoices.create_or_update_invoice(

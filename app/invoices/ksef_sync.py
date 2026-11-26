@@ -149,7 +149,7 @@ def _upsert_downloaded_invoice(
     data: Dict[str, Any], ksef_number: str, company_id: Optional[int] = None,
     contractor_id: Optional[int] = None,
 ) -> tuple[str, int]:
-    """Zastępuje lokalną treść dokumentem KSeF, zachowując jego ID i płatności."""
+    """Importuje fakturę lub dopisuje identyfikatory do rozpoznanego dokumentu."""
     ksef_number = _valid_ksef_number(ksef_number)
     if not ksef_number:
         raise KsefError("Faktura nie ma prawidłowego numeru KSeF.")
@@ -198,15 +198,8 @@ def _upsert_downloaded_invoice(
             ).fetchall()
             if numbered:
                 existing = [row for row in numbered if row["miesiac"] == data["month"]] or numbered
-        if not existing:
-            # A numberless draft can only be matched by a unique payer, period and amount.
-            existing = conn.execute(
-                f"SELECT * FROM faktury WHERE {owner_column} = %s AND miesiac = %s "
-                "AND rodzaj = %s AND cancelled_at IS NULL AND COALESCE(eksportowana,0)=0 "
-                "AND NULLIF(BTRIM(numer),'') IS NULL AND COALESCE(ksef_numer,'')='' "
-                "AND kwota_brutto=%s ORDER BY id FOR UPDATE",
-                (company["id"], data["month"], local_kind, data["gross"]),
-            ).fetchall()
+        # The same customer can have separate invoices for the same amount and month.
+        # If neither document number matches, import the XML into a separate row.
         if len(existing) > 1 or (existing and existing[0]["ksef_numer"] not in (None, "", ksef_number)):
             return "niejednoznaczna_faktura", 0
         address = data["buyer_address"]

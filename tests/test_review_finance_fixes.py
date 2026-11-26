@@ -178,6 +178,8 @@ class ReviewFinanceFixTests(DbTestCase):
 
     def test_late_pending_response_cannot_regress_rejected_status(self):
         self._pending_submission()
+        with get_conn() as conn:
+            conn.execute("UPDATE faktury SET invoice_email_status='queued' WHERE id=%s", (self.invoice,))
         rejected = SimpleNamespace(invoice_submission_status=lambda *a: {'status': {'code': 450}})
         def late(*args):
             ksef_submission.refresh_invoice_submission(self.invoice, 1, client=rejected)
@@ -185,7 +187,9 @@ class ReviewFinanceFixTests(DbTestCase):
         result = ksef_submission.refresh_invoice_submission(
             self.invoice, 1, client=SimpleNamespace(invoice_submission_status=late),
         )
-        self.assertEqual(invoices.get_invoice_by_id(self.invoice)['ksef_status'], 'odrzucona')
+        invoice = invoices.get_invoice_by_id(self.invoice)
+        self.assertEqual(invoice['ksef_status'], 'odrzucona')
+        self.assertEqual(invoice['invoice_email_status'], 'blocked_by_ksef')
         self.assertGreaterEqual(result['status']['code'], 400)
 
     def test_external_contractor_correction_preserves_identity_and_can_be_compensated(self):

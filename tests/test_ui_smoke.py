@@ -153,6 +153,24 @@ class UiSmokeTests(DbTestCase):
         form._save_pelnomocnictwa()
         self.assertEqual(get_pelnomocnictwa(self.firma), {"PEL": [self.emp], "UPL": []})
 
+    def test_company_form_preserves_hidden_and_concurrently_added_authorizations(self):
+        from app.companies.company_form import CompanyForm
+        from app.db.dao_companies import get_pelnomocnictwa, update_pelnomocnictwa
+        from app.db.dao_employees import set_employee_active
+        inactive = self.make_employee("inactive@x.pl")
+        other = self.make_employee("other@x.pl")
+        set_pelnomocnictwa(self.firma, "PEL", [inactive])
+        set_employee_active(inactive, False)
+        form = CompanyForm(self.firma)
+        update_pelnomocnictwa(self.firma, [("UPL", other, True)])
+        rows = [form.pel_table.item(r, 0).data(Qt.ItemDataRole.UserRole) for r in range(form.pel_table.rowCount())]
+        self.assertNotIn(inactive, rows)
+        form.pel_table.item(rows.index(self.emp), 2).setCheckState(Qt.CheckState.Checked)
+        form._save_pelnomocnictwa()
+        authorizations = get_pelnomocnictwa(self.firma)
+        self.assertEqual(authorizations["PEL"], [inactive])
+        self.assertCountEqual(authorizations["UPL"], [other, self.emp])
+
     def test_company_form_full_save_succeeds(self):
         from unittest import mock
         from app.companies.company_form import CompanyForm

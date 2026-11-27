@@ -1,5 +1,6 @@
 """Named data operations formerly embedded in desktop widget constructors."""
 from app.remote.boundary import endpoint as office_endpoint
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 
 
@@ -15,7 +16,9 @@ def activity_rows(firma_id,miesiac):
 @office_endpoint('app.remote.screen_data.invoice_entities')
 def invoice_entities():
     with get_conn() as conn:
-        companies = [dict(row) for row in conn.execute("SELECT id,nazwa,nazwa_skrocona,nip FROM firmy ORDER BY COALESCE(NULLIF(nazwa_skrocona,''),nazwa)").fetchall()]
+        companies = [dict(row) for row in conn.execute(
+            f"SELECT f.id,f.nazwa,f.nazwa_skrocona,f.nip,{company_label_sql('f')} AS nazwa_wyswietlana "
+            "FROM firmy f ORDER BY nazwa_wyswietlana,f.id").fetchall()]
         contractors = [dict(row) for row in conn.execute('SELECT id,nazwa,nip FROM kontrahenci ORDER BY nazwa').fetchall()]
     return companies,contractors
 
@@ -23,7 +26,7 @@ def invoice_entities():
 @office_endpoint('app.remote.screen_data.invoice_filter_entities')
 def invoice_filter_entities():
     with get_conn() as conn:
-        companies = conn.execute("SELECT id,COALESCE(NULLIF(TRIM(nazwa_skrocona),''),nazwa) FROM firmy ORDER BY LOWER(COALESCE(NULLIF(TRIM(nazwa_skrocona),''),nazwa)),id").fetchall()
+        companies = conn.execute(f"SELECT f.id,{company_label_sql('f')} AS nazwa FROM firmy f ORDER BY nazwa,f.id").fetchall()
         contractors = conn.execute('SELECT id,nazwa FROM kontrahenci ORDER BY LOWER(nazwa),id').fetchall()
     return companies,contractors
 
@@ -41,16 +44,18 @@ def reportable_employees(actor_id):
 def search_company_buyers(term):
     with get_conn() as conn:
         pattern = '%'+str(term)+'%'
-        return conn.execute('''SELECT id,COALESCE(NULLIF(TRIM(nazwa_skrocona),''),nazwa) AS nazwa,nip
-            FROM firmy WHERE nazwa ILIKE %s OR nazwa_skrocona ILIKE %s OR nip ILIKE %s
-            ORDER BY lower(COALESCE(NULLIF(TRIM(nazwa_skrocona),''),nazwa)),id LIMIT 30''',(pattern,pattern,pattern)).fetchall()
+        name = company_label_sql('f')
+        return conn.execute(f'''SELECT f.id,{name} AS nazwa,f.nip
+            FROM firmy f WHERE f.nazwa ILIKE %s OR {name} ILIKE %s OR f.nip ILIKE %s
+            ORDER BY lower({name}),f.id LIMIT 30''',(pattern,pattern,pattern)).fetchall()
 
 
 @office_endpoint('app.remote.screen_data.company_identities')
 def company_identities(short_names=False):
     with get_conn() as conn:
-        name = "COALESCE(NULLIF(nazwa_skrocona,''),nazwa)" if short_names else 'nazwa'
-        return conn.execute(f'SELECT id,{name} AS nazwa,nazwa_skrocona,nip,forma_dzialalnosci,forma_opodatkowania,status_vat FROM firmy ORDER BY lower({name}),id').fetchall()
+        name = company_label_sql('f') if short_names else 'f.nazwa'
+        return conn.execute(f'''SELECT f.id,{name} AS nazwa,f.nazwa_skrocona,f.nip,f.forma_dzialalnosci,
+            f.forma_opodatkowania,f.status_vat FROM firmy f ORDER BY lower({name}),f.id''').fetchall()
 
 
 @office_endpoint('app.remote.screen_data.reminder_preview_jobs')

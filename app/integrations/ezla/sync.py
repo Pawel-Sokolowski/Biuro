@@ -6,6 +6,7 @@ import hashlib
 import json
 import threading
 from zoneinfo import ZoneInfo
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 from app.db.dao_app_settings import set_setting
 from app.db.checking_storage import read_snapshot, save_snapshot
@@ -189,8 +190,8 @@ def load_reports(actor_id, month):
     with get_conn() as conn:
         # app_settings contains plain text too. Materialize the authorized report
         # subset before JSON casts; a JOIN/WHERE alone does not fix evaluation order.
-        rows = conn.execute('''WITH selected_reports AS MATERIALIZED (
-            SELECT f.id,COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa) AS nazwa,
+        rows = conn.execute(f'''WITH selected_reports AS MATERIALIZED (
+            SELECT f.id,{company_label_sql('f')} AS nazwa,
                    f.nip,f.forma_dzialalnosci,a.klucz AS report_key,a.wartosc
             FROM firmy f JOIN app_settings a
               ON a.klucz='ezla_report_' || f.id::text || '_' || right(a.klucz,64)

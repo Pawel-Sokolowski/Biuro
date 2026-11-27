@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import advisory_lock, get_conn
 from app.integrations.enova.accounting import require_access
 from app.remote.boundary import endpoint as office_endpoint
@@ -60,11 +61,11 @@ def scope(
 
     with get_conn() as conn:
         rows = conn.execute(
-            '''
-            SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa, nip
-            FROM firmy
-            WHERE id = ANY(%s)
-            ORDER BY id
+            f'''
+            SELECT f.id, {company_label_sql('f')} AS nazwa, f.nip
+            FROM firmy f
+            WHERE f.id = ANY(%s)
+            ORDER BY f.id
             ''',
             (ids,),
         ).fetchall()

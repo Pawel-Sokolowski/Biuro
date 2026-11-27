@@ -1,5 +1,5 @@
 """Explicit company/owner identities; an owner's tax ID never replaces the company NIP."""
-from app.integrations.enova.document_counts import normalize_nip
+from app.utils.nip import normalize_nip
 
 
 # Formy działalności, w których występują wspólnicy. JDG i „osoba fizyczna”
@@ -9,6 +9,7 @@ PARTNER_FORMS = ('spółka cywilna', 'spolka cywilna', 'spółka jawna', 'spolka
                  'spolka komandytowo-akcyjna', 'spółka partnerska', 'spolka partnerska',
                  'spółka z o.o.', 'spółka z ograniczoną odpowiedzialnością', 'spółka akcyjna',
                  's.c.', 's.c', 'sc', 's.j.', 'sp.k.', 's.k.a.', 'sp. z o.o.', 's.a.')
+CIVIL_FORMS = ('spółka cywilna', 'spolka cywilna', 's.c.', 's.c', 'sc')
 
 
 def has_partners(company):
@@ -22,7 +23,7 @@ def has_partners(company):
 
 def is_civil(company):
     value = ' '.join(str(company.get('forma_dzialalnosci') or '').strip().casefold().split())
-    return value in ('spółka cywilna', 'spolka cywilna', 's.c.', 's.c', 'sc')
+    return value in CIVIL_FORMS
 
 
 def payer_nips(company, partners=()):

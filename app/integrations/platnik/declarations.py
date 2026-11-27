@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from psycopg import Error as DatabaseError
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn, get_coordination_conn
 from app.integrations.enova.document_counts import normalize_nip
 from app.integrations.enova.jpk import filing_timestamp
@@ -376,11 +377,11 @@ def read_year(actor_id, year):
         raise ValueError('Nieprawidłowy rok raportów ZUS.')
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute('''SELECT f.*, y.company_json, a.payload AS platnik_annual
+        rows = conn.execute(f'''SELECT f.*, {company_label_sql('f')} AS nazwa_wyswietlana, y.company_json, a.payload AS platnik_annual
             FROM firmy f LEFT JOIN year_end_snapshots y ON y.firma_id=f.id AND y.rok=%s
             LEFT JOIN company_checking_snapshots a
                 ON a.source='platnik_declarations' AND a.company_id=f.id AND a.period=%s
-            WHERE f.id=ANY(%s) ORDER BY lower(COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa)),f.id''',
+            WHERE f.id=ANY(%s) ORDER BY nazwa_wyswietlana,f.id''',
             (year, str(year), ids)).fetchall()
     result = []
     for row in rows:

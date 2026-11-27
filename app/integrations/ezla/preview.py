@@ -1,6 +1,7 @@
 """Resolve report payer against authorized companies and existing Enova mapping."""
 from app.remote.boundary import endpoint as office_endpoint
 import re
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 from app.integrations.enova.accounting import require_access
 from app.security.authorization import assigned_company_ids
@@ -15,8 +16,8 @@ def preview_report(actor_id, path):
     report = read_report(path)
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        companies = conn.execute("SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa, "
-                                 "nip, forma_dzialalnosci FROM firmy WHERE id=ANY(%s)", (ids,)).fetchall()
+        companies = conn.execute(f"SELECT f.id, {company_label_sql('f')} AS nazwa, "
+                                 "f.nip, f.forma_dzialalnosci FROM firmy f WHERE f.id=ANY(%s)", (ids,)).fetchall()
     matches = []
     for row in companies:
         try:

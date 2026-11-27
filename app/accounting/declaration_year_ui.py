@@ -35,7 +35,7 @@ class AnnualDeclarationImport(QWidget):
             self.companies = [dict(row) for row in rows]
             self.controls.buttons['declaration_year'].setEnabled(bool(rows))
             self.controls.status.setText(f'Firm: {len(rows)}. Domyślnie zaznaczone wszystkie; wybierz rok i pobierz dane.')
-        self.reader.submit(company_identities,loaded,
+        self.reader.submit(lambda: company_identities(short_names=True),loaded,
             lambda error:self.controls.status.setText('Nie udało się wczytać listy firm. Otwórz import ponownie.'))
 
 

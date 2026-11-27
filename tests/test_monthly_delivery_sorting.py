@@ -1,8 +1,9 @@
 from unittest import TestCase
+from unittest.mock import Mock
 from PyQt6.QtCore import QPersistentModelIndex, Qt
-from PyQt6.QtWidgets import QTableView
+from PyQt6.QtWidgets import QTableView, QTableWidget
 from app.monthly_view.monthly_view_model import MonthlyViewModel
-from app.utils.table_sorting import enable_header_sort
+from app.utils.table_sorting import SortableItem, enable_header_sort
 from tests.base import QT_APP
 
 
@@ -62,6 +63,27 @@ class MonthlyDeliverySortingTests(TestCase):
         self.assertEqual(model.index(0, 0).data(), 'Łąka')
         table.horizontalHeader().sectionDoubleClicked.emit(3)
         self.assertEqual(ids(model), [1, 2])
+
+    def test_payroll_uses_partnership_name_for_contract_counts(self):
+        data = [{'id': 1, 'nazwa': 'Spółka — Jan Kowalski', 'nazwa_podstawowa': 'Spółka', 'uop': 4}]
+        model = MonthlyViewModel(data, 'kadry')
+        self.assertEqual(model.index(0, 0).data(), 'Spółka')
+        self.assertEqual(model.index(0, 3).data(), '4')
+
+    def test_widget_sort_keeps_selection_without_triggering_a_detail_reload(self):
+        table = QTableWidget(2, 1)
+        self.addCleanup(table.close)
+        selected = SortableItem('Z')
+        table.setItem(0, 0, selected)
+        table.setItem(1, 0, SortableItem('A'))
+        table.setCurrentItem(selected)
+        load_details = Mock()
+        table.itemSelectionChanged.connect(load_details)
+        enable_header_sort(table)
+        table.horizontalHeader().sectionDoubleClicked.emit(0)
+        self.assertEqual(table.item(0, 0).text(), 'A')
+        self.assertIs(table.currentItem(), selected)
+        load_details.assert_not_called()
 
     def test_sort_survives_refresh_and_delivery_date_edits(self):
         model = MonthlyViewModel(rows(), 'kadry')

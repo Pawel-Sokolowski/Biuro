@@ -143,6 +143,8 @@ class MonthlyViewModel(QAbstractTableModel):
 
     def _display_value(self, row, col):
         if col == 0:
+            if self._mode == 'kadry' and row.get('nazwa_podstawowa'):
+                return row['nazwa_podstawowa']
             return company_display_name(row)
         if col == self._docs_col():
             return self._delivered_text(row)
@@ -167,12 +169,18 @@ class MonthlyViewModel(QAbstractTableModel):
         row = self._rows[index.row()]
         col = index.column()
 
+        if col == 0 and role == Qt.ItemDataRole.ToolTipRole:
+            details = []
+            if row.get('zastepstwo'):
+                who = row.get('zastepstwo_za')
+                details.append(f'Zastępstwo za: {who}' if who else 'Zastępstwo')
+            if row.get('nip'):
+                details.append(f"NIP: {row['nip']}")
+            return '\n'.join(details)
+
         if col == 0 and row.get("zastepstwo"):
             if role == Qt.ItemDataRole.DisplayRole:
-                return "↪ " + company_display_name(row)
-            if role == Qt.ItemDataRole.ToolTipRole:
-                who = row.get("zastepstwo_za")
-                return f"Zastępstwo za: {who}" if who else "Zastępstwo"
+                return "↪ " + self._display_value(row, col)
             if role == Qt.ItemDataRole.ForegroundRole:
                 return QColor("#1a5fb4")
             if role == Qt.ItemDataRole.FontRole:

@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 import re
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSignalBlocker, Qt
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 
 from app.utils.polish_sort import polish_sort_key
@@ -65,6 +65,8 @@ def apply_header_sort(view):
     selected = getattr(view, '_header_sort', None)
     if selected is not None and 0 <= selected[0] < view.model().columnCount():
         if isinstance(view, QTableWidget):
-            view.sortItems(*selected)
+            # Reordering keeps the selection. Do not reload details for the same record.
+            with QSignalBlocker(view):
+                view.sortItems(*selected)
         else:
             view.model().sort(*selected)

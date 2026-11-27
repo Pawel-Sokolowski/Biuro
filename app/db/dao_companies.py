@@ -4,6 +4,7 @@ import psycopg
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn, Row
 from app.companies.company_names import company_display_name
 from app.security.authorization import assigned_company_ids, can, is_administrator
@@ -112,8 +113,9 @@ def _attach_pelnomocnictwa(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def list_companies(actor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
-    sql = """
-        SELECT f.id, f.nazwa, f.nazwa_skrocona, f.nip, f.miasto, f.status, f.uslugi_zawieszone,
+    sql = f"""
+        SELECT f.id, f.nazwa, f.nazwa_skrocona, {company_label_sql('f')} AS nazwa_wyswietlana,
+               f.nip, f.miasto, f.status, f.uslugi_zawieszone,
                f.glowny_cennik, f.limit_dokumentow,
                f.vat_czynny, f.forma_opodatkowania,
                TRIM(COALESCE(pk.imie, '') || ' ' || COALESCE(pk.nazwisko, '')) AS ksiegowa,
@@ -152,9 +154,9 @@ def list_mailing_companies(actor_id: int) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = [dict(row) for row in conn.execute(
-            "SELECT id, nazwa, nazwa_skrocona, nip, adres_email, forma_dzialalnosci, "
-            "forma_opodatkowania, status FROM firmy "
-            "WHERE id = ANY(%s) ORDER BY LOWER(COALESCE(NULLIF(nazwa_skrocona, ''), nazwa)), id",
+            f"SELECT f.id, f.nazwa, f.nazwa_skrocona, {company_label_sql('f')} AS nazwa_wyswietlana, "
+            "f.nip, f.adres_email, f.forma_dzialalnosci, f.forma_opodatkowania, f.status FROM firmy f "
+            "WHERE f.id = ANY(%s) ORDER BY nazwa_wyswietlana, f.id",
             (ids,),
         ).fetchall()]
         from app.companies.identities import is_civil, company_recipients
@@ -182,8 +184,9 @@ def get_companies_filtered(
     conn = get_conn()
     cur = conn.cursor()
 
-    base_select = """
-        SELECT f.id, f.nazwa, f.nazwa_skrocona, f.nip, f.miasto,
+    name = company_label_sql('f')
+    base_select = f"""
+        SELECT f.id, f.nazwa, f.nazwa_skrocona, {name} AS nazwa_wyswietlana, f.nip, f.miasto,
                COALESCE(f.status, 'Aktywne') AS status, f.uslugi_zawieszone,
                f.glowny_cennik, f.limit_dokumentow, f.vat_czynny,
                f.forma_opodatkowania,
@@ -202,7 +205,7 @@ def get_companies_filtered(
         params.append(employee_id)
 
     if search:
-        where.append("(LOWER(f.nazwa) LIKE %s OR LOWER(f.nazwa_skrocona) LIKE %s OR LOWER(f.nip) LIKE %s)")
+        where.append(f"(f.nazwa ILIKE %s OR {name} ILIKE %s OR f.nip ILIKE %s)")
         q = f"%{search.lower()}%"
         params.extend([q, q, q])
 

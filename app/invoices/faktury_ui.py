@@ -205,7 +205,7 @@ class KsefUnmatchedDialog(QDialog):
         company.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         company.addItem("— Wybierz firmę lub kontrahenta —", None)
         for candidate in self.companies:
-            name = candidate.get("nazwa_skrocona") or candidate["nazwa"]
+            name = company_display_name(candidate)
             label = " (kontrahent)" if candidate["kind"] == "kontrahent" else ""
             company.addItem(f"{name}{label} — NIP {candidate.get('nip') or 'brak'}",
                             (candidate["kind"], candidate["id"]))
@@ -779,7 +779,7 @@ class FakturyPage(QWidget):
             if len(nip) != 10:
                 QMessageBox.warning(self, "KSeF", "Wybrana firma nie ma poprawnego NIP-u.")
                 return
-            buyer_nip, company_label = nip, f"firmy {company_display_name(row)} (NIP {nip})"
+            buyer_nip, company_label = nip, f"firmy {self.firma_combo.itemText(self.firma_combo.currentIndex())} (NIP {nip})"
         answer = QMessageBox.question(
             self, "Pobierz faktury sprzedaży z KSeF",
             f"Pobrać faktury sprzedaży {company_label} za {month}?\n\n"
@@ -820,7 +820,7 @@ class FakturyPage(QWidget):
             return
         number, ok = QInputDialog.getText(
             self, "Pobierz fakturę z KSeF",
-            f"Firma: {company_display_name(row)} (NIP {nip}), miesiąc {month}.\n\n"
+            f"Firma: {self.firma_combo.itemText(self.firma_combo.currentIndex())} (NIP {nip}), miesiąc {month}.\n\n"
             "Numer faktury lub numer KSeF (puste = wszystkie faktury tej firmy):",
         )
         if not ok:
@@ -1310,7 +1310,7 @@ class FakturyPage(QWidget):
             self.draft_table.setRowCount(0)
             self.draft_table.setRowCount(len(invoices))
             for row, inv in enumerate(invoices):
-                values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+                values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), company_display_name(inv) or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
                           f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                           _fmt_date(inv["data_wystawienia"]), _fmt_date(inv["termin_platnosci"])]
                 for column, value in enumerate(values):
@@ -1361,7 +1361,7 @@ class FakturyPage(QWidget):
                         matching_states.add("unpaid")
                     if selected_state not in matching_states:
                         continue
-                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
+                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), company_display_name(inv) or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
                               inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Oczekuje na ponowienie PDF", "blocked_before_send":"Popraw dane wysyłki PDF", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]

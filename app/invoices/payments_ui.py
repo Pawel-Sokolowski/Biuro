@@ -90,6 +90,10 @@ def _read_bank_review(actor_id, include_all, limit, pages=1, search=''):
             paging and len(page) == INVOICE_CHOICE_PAGE_SIZE, found)
 
 
+def _buyer_name(invoice):
+    return invoice.get('buyer_label') or invoice.get('buyer') or ''
+
+
 class Mt940ImportWorker(QObject):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str, str)
@@ -432,11 +436,11 @@ class BankPaymentReview(QDialog):
         first = QStandardItem('Wszyscy kontrahenci')
         self._contractor_model.appendRow(first)
         contractor_rows = {}
-        for invoice in sorted(invoices, key=lambda item: str(item.get('buyer') or '').casefold()):
+        for invoice in sorted(invoices, key=lambda item: _buyer_name(item).casefold()):
             kind, value = contractor_key(invoice)
             key = f'{kind}:{value}'
             if key not in contractor_rows:
-                item = QStandardItem(invoice.get('buyer') or '(bez nazwy)')
+                item = QStandardItem(_buyer_name(invoice) or '(bez nazwy)')
                 item.setData(key, Qt.ItemDataRole.UserRole)
                 contractor_rows[key] = self._contractor_model.rowCount()
                 self._contractor_model.appendRow(item)
@@ -614,7 +618,7 @@ class BankPaymentReview(QDialog):
             invoice = self._invoices_by_id[invoice_id]
             prefix = "★ " if invoice_id in suggested else ""
             combo.addItem(
-                f"{prefix}{invoice['numer'] or '(bez numeru)'} — {invoice['buyer']} — saldo {money_text(invoice['balance'])} zł"
+                f"{prefix}{invoice['numer'] or '(bez numeru)'} — {_buyer_name(invoice)} — saldo {money_text(invoice['balance'])} zł"
                 + ('; dostępna wpłata ręczna' if invoice.get('manual_payments') else ''),
                 invoice_id,
             )
@@ -738,7 +742,7 @@ class BankPaymentReview(QDialog):
             f"Data: {transfer['data_operacji']}\n"
             f"Tytuł: {transfer.get('tytul') or ''}\n"
             f"Kontrahent: {transfer.get('kontrahent') or ''}\n"
-            f"Faktura: {invoice['numer']} — {invoice['buyer']}\n"
+            f"Faktura: {invoice['numer']} — {_buyer_name(invoice)}\n"
             f"Kwota przypisania: {amount} PLN"
         )
         if manual_id is not None:
@@ -801,7 +805,7 @@ class BankPaymentReview(QDialog):
             QMessageBox.warning(self, "Rozliczenie", "Najpierw wybierz faktury dla przelewów do rozliczenia.")
             return
         details = "\n".join(
-            f"Przelew #{transfer['id']} ({transfer['data_operacji']}) → {invoice['numer']} — {invoice['buyer']}: {amount:.2f} PLN"
+            f"Przelew #{transfer['id']} ({transfer['data_operacji']}) → {invoice['numer']} — {_buyer_name(invoice)}: {amount:.2f} PLN"
             + (' (powiązanie ręcznej wpłaty)' if manual_id is not None else '')
             + (' (starszy import — potwierdź kierunek zgodny ze znakiem kwoty)' if legacy else '')
             for transfer, invoice, amount, manual_id, legacy in operations

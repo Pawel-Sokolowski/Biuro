@@ -868,6 +868,7 @@ class AccountingPage(QWidget):
         kind = selected[3:] if selected.startswith('hr:') else None
         for row in rows:
             before = len(records)
+            employer = row.get('nazwa_podstawowa') or row.get('nazwa')
             report = decoded(row.get('hr'))
             if report.get('events') is None:
                 missing += 1
@@ -884,12 +885,12 @@ class AccountingPage(QWidget):
                 if days is not None and status in ('Bezterminowa', 'Późniejszy termin'):
                     continue
                 employee = event['employee_name'] + ' (' + event['employee_id'] + ')'
-                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', employee,
+                records.append([employer, row.get('nip'), row.get('kadrowa') or '—', employee,
                                 event.get('document_number') or '—', event.get('detail') or HR_LABELS[event['event_type']],
                                 event.get('due_date') or '—', status, _date(report.get('imported_at')), row['id']])
             if len(records) == before:
                 state = 'Brak odczytu' if report.get('events') is None else 'Brak terminów w wybranym zakresie'
-                records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', '—', '—', HR_LABELS.get(kind, '—'), '—',
+                records.append([employer, row.get('nip'), row.get('kadrowa') or '—', '—', '—', HR_LABELS.get(kind, '—'), '—',
                                 state, _date(report.get('imported_at')), row['id']])
         records.sort(key=lambda record: (0 if record[7] in ('Po terminie', 'Brak terminu') else 1, record[6], record[0]))
         self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa (obecna, z zastępstwami)', 'Pracownik', 'Numer dokumentu',

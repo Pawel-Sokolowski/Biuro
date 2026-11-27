@@ -154,13 +154,24 @@ class CheckingIntegrationTests(DbTestCase):
         self.assertEqual(page.table.item(0, 0).text(), 'B')
         page.close()
 
-    def test_short_names_remain_searchable_by_legal_name_and_keep_company_ids(self):
+    def test_only_civil_companies_with_colliding_labels_show_partner_names(self):
         from PyQt6.QtCore import Qt
         from app.accounting.accounting_ui import AccountingPage
+        from app.db.dao_companies import get_companies_filtered, save_partner
 
-        other = self.make_company('Druga firma do sprawdzenia')
+        other = self.make_company('Druga firma do sprawdzenia', forma_dzialalnosci='Spółka z o.o.')
+        unique = self.make_company('Unikalna spółka cywilna', nazwa_skrocona='Unikalna', forma_dzialalnosci='s.c.')
         with get_conn() as conn:
             conn.execute("UPDATE firmy SET nazwa_skrocona='Wspólny skrót' WHERE id = ANY(%s)", ([self.company, other],))
+            conn.execute("UPDATE firmy SET forma_dzialalnosci='Spółka cywilna' WHERE id = %s", (self.company,))
+        save_partner(self.company, {'imie_pierwsze': 'Jan', 'nazwisko': 'Kowalski'})
+        save_partner(self.company, {'imie_pierwsze': 'Anna', 'nazwisko': 'Nowak'})
+        save_partner(other, {'imie_pierwsze': 'Tomasz', 'nazwisko': 'Inny'})
+        save_partner(unique, {'imie_pierwsze': 'Ewa', 'nazwisko': 'Inna'})
+        expected = {self.company: 'Wspólny skrót — Anna Nowak, Jan Kowalski',
+                    other: 'Wspólny skrót', unique: 'Unikalna'}
+        search = get_companies_filtered('Jan Kowalski', 'Wszystkie', None, self.admin)
+        self.assertEqual([(r['id'], r['nazwa_wyswietlana']) for r in search], [(self.company, expected[self.company])])
         rows = list_accounting(self.admin, '2026-11')
         page = AccountingPage(self.admin)
         self.addCleanup(page.close)
@@ -169,16 +180,43 @@ class CheckingIntegrationTests(DbTestCase):
         selector.setCurrentIndex(selector.findData('comparison'))
         table = page.comparison_tables['accounting']
         table.frozen_column.horizontalHeader().sectionDoubleClicked.emit(0)
+        seen = set()
         for row in range(table.rowCount()):
             item = table.item(row, 0)
-            if item.data(Qt.ItemDataRole.UserRole) not in (self.company, other):
+            company_id = item.data(Qt.ItemDataRole.UserRole)
+            if company_id not in expected:
                 continue
-            self.assertEqual(item.text(), 'Wspólny skrót')
+            seen.add(company_id)
+            self.assertEqual(item.text(), expected[company_id])
             table.selectRow(row)
-            self.assertEqual(page.selected_company_ids(), [item.data(Qt.ItemDataRole.UserRole)])
+            self.assertEqual(page.selected_company_ids(), [company_id])
+        self.assertEqual(seen, set(expected))
         page.search.setText('Druga firma do sprawdzenia')
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.item(0, 0).data(Qt.ItemDataRole.UserRole), other)
+
+    def test_hr_uses_one_company_identity_for_all_civil_partnership_employee_records(self):
+        from PyQt6.QtCore import Qt
+        from app.accounting.accounting_ui import AccountingPage
+
+        company = {'id': self.company, 'nip': NIP, 'forma_dzialalnosci': 's.c.',
+                   'nazwa': 'Spółka — Jan Kowalski, Anna Nowak', 'nazwa_podstawowa': 'Spółka'}
+        company['hr'] = {'events': [
+            {'event_type': kind, 'event_id': str(index), 'employee_id': '23', 'employee_name': 'Pracownik Testowy',
+             'due_date': None, 'status': 'active'}
+            for index, kind in enumerate(('contract_end', 'medical_exam', 'ohs_training'), 1)
+        ]}
+        page = AccountingPage(self.admin, department='payroll')
+        self.addCleanup(page.close)
+        page.render([company], '2026-11')
+        reports = page.report_selectors['payroll']
+        reports.setCurrentIndex(reports.findData('hr'))
+        page.hr_range.setCurrentIndex(page.hr_range.findData(None))
+        self.assertEqual(page.hr_table.rowCount(), 3)
+        for row in range(3):
+            self.assertEqual(page.hr_table.item(row, 0).text(), 'Spółka')
+            self.assertEqual(page.hr_table.item(row, 0).data(Qt.ItemDataRole.UserRole), self.company)
+            self.assertEqual(page.hr_table.item(row, 1).text(), NIP)
 
     def test_payroll_view_shows_employee_declarations_and_hr_without_comparisons(self):
         from app.accounting.accounting_ui import AccountingPage

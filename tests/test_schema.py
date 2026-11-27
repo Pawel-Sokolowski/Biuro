@@ -10,8 +10,48 @@ from tests.base import DbTestCase
 
 
 class AlembicDeploymentTests(unittest.TestCase):
-    def test_fresh_upgrade_provisions_bulk_history_before_first_campaign(self):
+    def test_invoice_description_upgrade_repairs_existing_draft_saves(self):
+        from alembic import command
+        from alembic.config import Config
         from app.config import get_schema
+        from app.db.dao_companies import save_company
+        from app.db.dao_invoices import create_manual_invoice, get_invoice_by_id
+        from app.db.dao_kontrahenci import save_kontrahent
+        from app.db.schema import schema_is_current, upgrade_database
+        from tests.base import create_test_schema, drop_test_schema
+
+        previous = get_schema()
+        schema = create_test_schema()
+        try:
+            config = Config()
+            config.set_main_option('script_location', str(Path(__file__).resolve().parents[1] / 'app/db/migrations'))
+            command.upgrade(config, '20261127_01')
+            with get_conn() as conn:
+                # Fresh bootstraps already have this column. Installed databases may not.
+                conn.execute('ALTER TABLE faktury DROP COLUMN IF EXISTS opis_dodatkowy')
+            self.assertFalse(schema_is_current())
+            upgrade_database()
+            self.assertTrue(schema_is_current())
+            buyers = [
+                ('firma', save_company({'nazwa': 'Firma testowa'})),
+                ('kontrahent', save_kontrahent({'typ': 'osoba_fizyczna', 'nazwa': 'Jan Testowy'})),
+            ]
+            for kind, buyer_id in buyers:
+                with self.subTest(kind=kind):
+                    invoice_id = create_manual_invoice(
+                        kind, buyer_id, [{'nazwa': 'Usługa', 'ilosc': 1, 'cena_netto': 10, 'vat': 23}],
+                        '2026-11-27', '2026-11-27', '2026-12-04', opis_dodatkowy='Opis testowy',
+                    )
+                    invoice = get_invoice_by_id(invoice_id)
+                    self.assertEqual(invoice['status'], 'robocza')
+                    self.assertEqual(invoice['opis_dodatkowy'], 'Opis testowy')
+        finally:
+            drop_test_schema(schema, previous)
+
+    def test_fresh_upgrade_provisions_bulk_history_before_first_campaign(self):
+        from unittest.mock import patch
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+        from app.config import get_dsn, get_schema
         from app.db.schema import schema_is_current, upgrade_database
         from app.services.bulk_mail_log import history
         from tests.base import create_test_schema, drop_test_schema
@@ -20,7 +60,9 @@ class AlembicDeploymentTests(unittest.TestCase):
         schema = create_test_schema()
         try:
             upgrade_database()
-            upgrade_database()
+            keyword_dsn = make_conninfo(**conninfo_to_dict(get_dsn()))
+            with patch('app.config.get_dsn', return_value=keyword_dsn):
+                upgrade_database()
             self.assertTrue(schema_is_current())
             with get_conn() as conn:
                 tables = {row[0] for row in conn.execute(

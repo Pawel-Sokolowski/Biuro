@@ -779,7 +779,7 @@ class FakturyPage(QWidget):
             if len(nip) != 10:
                 QMessageBox.warning(self, "KSeF", "Wybrana firma nie ma poprawnego NIP-u.")
                 return
-            buyer_nip, company_label = nip, f"firmy {self.firma_combo.itemText(self.firma_combo.currentIndex())} (NIP {nip})"
+            buyer_nip, company_label = nip, f"firmy {company_display_name(row)} (NIP {nip})"
         answer = QMessageBox.question(
             self, "Pobierz faktury sprzedaży z KSeF",
             f"Pobrać faktury sprzedaży {company_label} za {month}?\n\n"
@@ -820,7 +820,7 @@ class FakturyPage(QWidget):
             return
         number, ok = QInputDialog.getText(
             self, "Pobierz fakturę z KSeF",
-            f"Firma: {self.firma_combo.itemText(self.firma_combo.currentIndex())} (NIP {nip}), miesiąc {month}.\n\n"
+            f"Firma: {company_display_name(row)} (NIP {nip}), miesiąc {month}.\n\n"
             "Numer faktury lub numer KSeF (puste = wszystkie faktury tej firmy):",
         )
         if not ok:

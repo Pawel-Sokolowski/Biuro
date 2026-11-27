@@ -341,7 +341,7 @@ def get_employees_list() -> List[Dict[str, Any]]:
 def get_company(firma_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM firmy WHERE id = %s", (firma_id,))
+    cur.execute(f"SELECT f.*, {company_label_sql('f')} AS nazwa_wyswietlana FROM firmy f WHERE f.id = %s", (firma_id,))
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None

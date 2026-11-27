@@ -289,9 +289,27 @@ class UiSmokeTests(DbTestCase):
         self.assertTrue(any("Komplet" in t for t in visible_headers(page)))
 
     def test_main_window_sidebar_is_polish(self):
+        from PyQt6.QtCore import QCoreApplication, QEvent
         from app.main_ui import OfficeManagerApp
-        win = OfficeManagerApp(self.emp)
-        items = [win.sidebar.item(i).text() for i in range(win.sidebar.count())]
+        from app.notifications import NotificationCenter
+        from app.utils.background import CommandRunner, TaskRunner
+
+        # This checks the navigation shell. Startup reads from its other views
+        # must not keep using the test schema while tearDown drops it.
+        with (
+            mock.patch.object(TaskRunner, 'submit'),
+            mock.patch.object(CommandRunner, 'submit'),
+            mock.patch.object(NotificationCenter, 'refresh'),
+            mock.patch.object(OfficeManagerApp, '_start_email_reminders'),
+            mock.patch.object(OfficeManagerApp, '_start_saldeo_push_watcher'),
+        ):
+            win = OfficeManagerApp(self.emp)
+            try:
+                items = [win.sidebar.item(i).text() for i in range(win.sidebar.count())]
+            finally:
+                win.close()
+                win.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.assertIn("Pulpit", items)
         self.assertIn("Kalendarz", items)
         self.assertEqual(items[1:3], ["Księgowość", "Kadry"])

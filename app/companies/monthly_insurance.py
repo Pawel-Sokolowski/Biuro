@@ -65,10 +65,15 @@ def estimate_end(title, periods, as_of):
     return _shift_month(as_of, remaining + 1) - timedelta(days=1)
 
 
-def summarize_periods(registry, month, company):
+def _registry_dates(registry, month):
     month_start, next_month = map(date.fromisoformat, month_bounds(month))
     imported = date.fromisoformat(registry['imported_at'][:10])
     as_of = min(next_month - timedelta(days=1), imported)
+    return month_start, imported, as_of
+
+
+def summarize_periods(registry, month, company):
+    month_start, imported, as_of = _registry_dates(registry, month)
     if as_of < month_start:
         return set(), [], []
     try:
@@ -117,6 +122,23 @@ def summarize_periods(registry, month, company):
     return codes, notes, deadlines
 
 
+def _latest_code(registry, entries, month):
+    if registry:
+        first, _, as_of = _registry_dates(registry, month)
+        day = as_of.isoformat()
+        latest = max(((row['from'], row['code']) for row in registry['periods']
+                      if first <= as_of and row['from'] <= day and (not row['until'] or day < row['until'])),
+                     default=None)
+        if latest:
+            start, code = latest
+            return f'{code} · {start}'
+    if entries:
+        latest = max(entries, key=lambda entry: (entry.get('sent_at') or '', entry['insurance_code']))
+        sent_at = latest.get('sent_at')
+        return f"{latest['insurance_code']} · {sent_at[:10]}" if sent_at else latest['insurance_code']
+    return ''
+
+
 def read_codes(conn, company_ids, month, companies=None):
     from app.integrations.platnik.declarations import decoded_snapshot
     result = {}
@@ -130,16 +152,16 @@ def read_codes(conn, company_ids, month, companies=None):
     for company_id, sources in snapshots.items():
         snapshot = sources.get('platnik_declarations', {})
         entries = [entry for entry in snapshot.get('declarations',[]) if entry.get('insurance_code')]
-        codes, notes, deadlines = set(), [], []
-        if registry := sources.get('platnik_insurance'):
-            codes, notes, deadlines = summarize_periods(registry, month, (companies or {}).get(company_id, {}))
+        registry = sources.get('platnik_insurance')
+        notes, deadlines = [], []
+        if registry:
+            _, notes, deadlines = summarize_periods(registry, month, (companies or {}).get(company_id, {}))
         if snapshot:
-            codes.update(entry['insurance_code'] for entry in entries)
             notes += list(dict.fromkeys(
                 f"{entry.get('employee_name') or 'Płatnik'} — {entry['insurance_code']} — {entry['form']} "
                 f"(NIP {entry.get('payer_nip') or 'brak'}, dokument {entry.get('source_id') or '—'})" for entry in entries))
             notes.append('Odczyt dokumentów: ' + str(snapshot.get('imported_at') or 'brak'))
         if notes or deadlines:
-            result[company_id] = {'insurance_codes': '; '.join(sorted(codes)),
+            result[company_id] = {'insurance_codes': _latest_code(registry, entries, month),
                                   'insurance_details': '\n'.join(notes), 'insurance_deadline': '; '.join(deadlines)}
     return result

@@ -255,7 +255,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 headers = ["Firma", "Nr faktury", "Zapłacona", "Komplet", "Etap", "Ilość dokumentów", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj", "⋯", "VAT", "EU"]
             else:
                 headers = ["Firma", "Komplet", "Etap", "UoP", "UZ", "UoD", "Czas", "Stoper", "Notatki", "Usługa", "Edytuj",
-                           "Kody ubezpieczenia", "Ulga ZUS do"]
+                           "Kod ubezpieczenia i data", "Ulga ZUS do"]
             if 0 <= section < len(headers):
                 return headers[section]
         return QVariant()

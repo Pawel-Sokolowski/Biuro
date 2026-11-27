@@ -59,6 +59,27 @@ class PayrollNameTests(unittest.TestCase):
         self.assertEqual(positions[0]["nazwa"], "Usługa kadrowo-płacowa")
         self.assertEqual((positions[0]["ilosc"], positions[0]["netto"], positions[0]["brutto"]), (1, 210, 258.3))
 
+    def test_january_invoice_names_payroll_in_january_and_overage_in_december(self):
+        logic = FakturyLogic()
+        company = {"fakturowac": 1, "glowny_cennik": "test", "limit_dokumentow": 20,
+                   "stala_kwota_kadry": 210}
+        with patch.object(logic, "_get_company", return_value=company), \
+             patch.object(logic, "_get_extra_services", return_value=[]), \
+             patch.object(logic, "_get_main_pricing", return_value={"cena_netto_ksiegowosc": 382.5,
+                                                                  "cena_za_dokument_ponad_limit": 5.5}), \
+             patch.object(logic, "_accounting_vat", return_value=23), \
+             patch.object(logic, "_kadry_vat", return_value=23), \
+             patch("app.db.dao_companies.count_zdrowotna_units", return_value=1), \
+             patch("app.invoices.faktury_logic.count_documents_for_month", return_value=74) as count:
+            positions = logic.generate_invoice_positions(1, "2027-01")
+        count.assert_called_once_with(1, "2026-12")
+        self.assertEqual([item["nazwa"] for item in positions], [
+            "Usługa księgowa",
+            "Cena ponad limit dokumentów 20 szt. grudzień 2026r., 74 dokumenty",
+            "Usługa kadrowo-płacowa styczeń 2027r.",
+        ])
+        self.assertEqual((positions[1]["ilosc"], positions[1]["netto"]), (54, 297))
+
 
 class PayrollInvoiceNamePersistenceTests(DbTestCase):
     MONTH = "2026-10"
@@ -88,19 +109,29 @@ class PayrollInvoiceNamePersistenceTests(DbTestCase):
         self.assertEqual(result["id"], self.invoice)
         saved = get_invoice_by_id(self.invoice)
         positions = json.loads(saved["pozycje_json"])
-        self.assertEqual([p["nazwa"] for p in positions], ["Usługa płacowa – UoP"])
+        self.assertEqual([p["nazwa"] for p in positions], ["Usługa płacowa – UoP październik 2026r."])
         self.assertEqual((positions[0]["ilosc"], saved["kwota_netto"], saved["kwota_brutto"]), (2, 80.0, 98.4))
 
     def test_issued_document_keeps_legacy_name(self):
         mark_exported([self.invoice], 1)
         before = get_invoice_by_id(self.invoice)
         generated = FakturyLogic().generate_invoice_positions(self.firma, self.MONTH)
-        self.assertEqual(generated[0]["nazwa"], "Usługa płacowa – UoP")
+        self.assertEqual(generated[0]["nazwa"], "Usługa płacowa – UoP październik 2026r.")
         result = FakturyLogic().generate_and_save_invoice(self.firma, self.MONTH)
         self.assertTrue(result["skipped"])
         after = get_invoice_by_id(self.invoice)
         self.assertEqual(after["pozycje_json"], before["pozycje_json"])
         self.assertEqual((after["kwota_netto"], after["kwota_brutto"]), (80.0, 98.4))
+
+    def test_regeneration_uses_contracts_for_invoice_month_not_latest_company_counts(self):
+        from app.db.dao_monthly import save_month_contracts
+
+        save_month_contracts(self.firma, self.MONTH, 3, 0, 0)
+        save_month_contracts(self.firma, "2026-11", 8, 0, 0)
+        result = FakturyLogic().generate_and_save_invoice(self.firma, self.MONTH)
+        saved = get_invoice_by_id(result["id"])
+        position, = json.loads(saved["pozycje_json"])
+        self.assertEqual((position["ilosc"], saved["kwota_netto"], saved["kwota_brutto"]), (3, 120, 147.6))
 
 
 if __name__ == "__main__":

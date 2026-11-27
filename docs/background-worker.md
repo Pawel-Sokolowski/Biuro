@@ -30,6 +30,14 @@ Worker odświeża własne przełączniki i odstępy co kilka sekund.
   ręcznie zmieniona. Ręczna edycja (także zero) chroni licznik. Starych ręcznych zer
   sprzed tej funkcji nie można odróżnić od domyślnych pustych liczników; wpisz takie
   zero ponownie w Widoku miesięcznym, aby jawnie chronić miesiąc.
+- **Enova — odczyt tygodniowy w niedzielę**. Domyślnie o 20:00 czasu polskiego
+  worker pobiera dane dla skonfigurowanych firm. Korzysta z ustawionego zakresu
+  miesięcy i istniejących reguł zapisu liczników. Jeden przebieg obejmuje
+  dokumenty, deklaracje i ich statusy (w tym JPK), dane kadrowe oraz terminy umów,
+  badań i BHP. Godzinę i przełącznik znajdziesz w Zadaniach workera.
+  Jeżeli serwer pominie wyznaczony termin, odczyt ruszy po ponownym uruchomieniu.
+  Po błędzie worker ponawia brakujące odczyty co 5 minut, zachowując wyniki firm,
+  dla których odczyt się powiódł. Odczyt po zmianie etapu działa niezależnie.
 - Opcjonalny import wystawionych faktur z KSeF dla bieżącego i poprzedniego miesiąca.
   Korzysta z istniejących ustawień KSeF.
 

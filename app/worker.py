@@ -24,7 +24,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import ENOVA_INTERVAL, load_settings
 
 logger = logging.getLogger(__name__)
-JOBS = ('mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh')
+JOBS = ('mail', 'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh')
 # Jobs that can wait for a remote system for hours. A wall-clock limit for these
 # would fail healthy runs; other jobs are timed out and kept tracked to avoid
 # resubmitting work that may still be running.
@@ -43,15 +43,20 @@ def _env_int(name, default, minimum, maximum):
 
 # Jobs share a small executor to leave
 # pool capacity for UI/API requests and avoids a startup connection storm.
-WORKER_THREADS = _env_int('BIO_WORKER_THREADS', 4, 1, len(JOBS))
+WORKER_THREADS = _env_int('BIO_WORKER_THREADS', 4, 1, 10)
 HEARTBEAT_SECONDS = _env_int('BIO_WORKER_HEARTBEAT_SECONDS', 10, 5, 60)
 LEADER_CHECK_SECONDS = _env_int('BIO_WORKER_LEADER_CHECK_SECONDS', 15, 5, 60)
 JOB_TIMEOUT_SECONDS = _env_int('BIO_WORKER_JOB_TIMEOUT_SECONDS', 1800, 60, 86400)
+ENOVA_WEEKLY_RETRY_SECONDS = 300
 
 
 def job_interval(name, settings):
     """Seconds between runs; Enova polls its local queue on a fixed short cadence."""
-    return ENOVA_INTERVAL if name == 'enova' else settings[name + '_interval']
+    if name == 'enova':
+        return ENOVA_INTERVAL
+    if name == 'enova_weekly':
+        return ENOVA_WEEKLY_RETRY_SECONDS
+    return settings[name + '_interval']
 
 
 def job_timeout(name, settings):
@@ -111,6 +116,11 @@ def invoices_job():
 def enova_job(stop=None, *, now=None):
     from app.services.enova_stage import run
     return run(stop, now=now)
+
+
+def enova_weekly_job(stop=None):
+    from app.services.enova_weekly import run
+    return run(stop)
 
 
 def ksef_import_job():
@@ -225,7 +235,8 @@ def run_job(name, stop=None):
     from app.utils.request_cache import request_scope
     with request_scope():
         return {'mail': lambda: mail_job(stop), 'reminders': lambda: reminders_job(stop),
-                'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
+                'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'enova_weekly': lambda: enova_weekly_job(stop),
+                'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
                 'platnik_gui': platnik_gui_job, 'checking_refresh': lambda: checking_refresh_job(stop)}[name]()
 
 
@@ -376,11 +387,17 @@ def serve(*, once=False, stop=None):
             if settings['enabled'] and settings['platnik_gui']:
                 gui_status = statuses.setdefault('platnik_gui', {'state': 'skipped', 'result': {'mode': 'waiting'}})
                 gui_scheduled_at = platnik_gui_schedule(settings_now, settings['platnik_gui_time'], gui_status.get('result'))
+            weekly_scheduled_at = None
+            weekly_result = statuses.get('enova_weekly', {}).get('result') or {}
+            if weekly_result.get('next_scheduled_at') and weekly_result.get('scheduled_time') == settings.get('enova_weekly_time'):
+                weekly_scheduled_at = datetime.fromisoformat(weekly_result['next_scheduled_at'])
             for name in JOBS:
                 if settings['enabled'] and settings[name] and name not in running:
                     due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= job_interval(name, settings))
                     if name == 'platnik_gui':
                         due = due and settings_now >= gui_scheduled_at
+                    if name == 'enova_weekly' and weekly_scheduled_at is not None:
+                        due = settings_now >= weekly_scheduled_at
                     if due and len(running) < WORKER_THREADS:
                         stamp = datetime.now(ZoneInfo('Europe/Warsaw')).isoformat()
                         try:
@@ -411,6 +428,8 @@ def serve(*, once=False, stop=None):
                     next_run = now+timedelta(seconds=delay)
                     if name == 'platnik_gui' and gui_scheduled_at > now:
                         next_run = gui_scheduled_at
+                    if name == 'enova_weekly' and weekly_scheduled_at is not None:
+                        next_run = weekly_scheduled_at
                     if name=='ezla' and (status.get('result') or {}).get('mode') in ('waiting','checked_this_week','incomplete_week'):
                         at = time.fromisoformat(settings['ezla_time'])
                         next_run = now.replace(hour=at.hour,minute=at.minute,second=0,microsecond=0)+timedelta(days=(-now.weekday())%7)

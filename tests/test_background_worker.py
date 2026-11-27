@@ -100,7 +100,7 @@ class WorkerLoopTests(TestCase):
 
         settings = {**DEFAULTS, 'enabled': True}
         settings.update({name: False for name in (
-            'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo',
+            'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo',
             'platnik', 'platnik_gui', 'checking_refresh',
         )})
         stop, started, release, duplicate, released = (
@@ -171,6 +171,55 @@ class WorkerLoopTests(TestCase):
         self.assertEqual(job_interval('mail', DEFAULTS), DEFAULTS['mail_interval'])
 
 
+class EnovaWeeklyTests(TestCase):
+    def setUp(self):
+        self.warsaw = ZoneInfo('Europe/Warsaw')
+        self.settings = {}
+        self.sources = [{'database': 'A'}, {'database': 'B'}]
+        self.enterContext(patch('app.services.enova_weekly.get_setting', side_effect=self.settings.get))
+        self.enterContext(patch('app.services.enova_weekly.set_setting', side_effect=self.settings.__setitem__))
+        self.enterContext(patch('app.services.enova_weekly.load_settings', return_value=DEFAULTS))
+        self.connection = self.enterContext(patch('app.integrations.enova.connection_settings.load_connection',
+            return_value={'enabled': True, 'sources': self.sources, 'months_back': 2}))
+        self.documents = self.enterContext(patch('app.integrations.enova.document_counts.run_import',
+            return_value=[{'database': source['database'], 'ok': True} for source in self.sources]))
+        self.checking = self.enterContext(patch('app.integrations.enova.checking.run_checking_import',
+            return_value=[{'database': source['database'], 'ok': True} for source in self.sources]))
+
+    def test_waits_for_sunday_then_catches_up_once_when_worker_returns(self):
+        from app.services.enova_weekly import run
+
+        waiting = run(now=datetime(2026, 10, 24, 19, tzinfo=self.warsaw))
+        self.assertEqual(waiting['next_scheduled_at'], '2026-10-25T20:00:00+01:00')
+        self.connection.assert_not_called()
+        monday = datetime(2026, 10, 26, 8, tzinfo=self.warsaw)
+        result = run(now=monday)
+        self.assertEqual(result['mode'], 'completed')
+        self.assertEqual(result['next_scheduled_at'], '2026-11-01T20:00:00+01:00')
+        self.documents.assert_called_once()
+        self.checking.assert_called_once()
+        self.assertEqual(self.checking.call_args.kwargs['today'], monday.date())
+        self.assertEqual(self.checking.call_args.kwargs['months'], self.documents.call_args.kwargs['months'])
+        self.assertEqual(run(now=monday)['mode'], 'checked_this_week')
+        self.documents.assert_called_once()
+        self.checking.assert_called_once()
+
+    def test_retries_checking_only_for_the_company_with_failed_hr_read(self):
+        from app.services.enova_weekly import run
+
+        sunday = datetime(2026, 11, 29, 20, tzinfo=self.warsaw)
+        self.checking.side_effect = [
+            [{'database': 'A', 'ok': True}, {'database': 'B', 'ok': True, 'hr_failed': True}],
+            [{'database': 'B', 'ok': True}],
+        ]
+        result = run(now=sunday)
+        self.assertEqual((result['mode'], result['applied'], result['failed']), ('partial', 1, 1))
+        result = run(now=sunday.replace(minute=5))
+        self.assertEqual((result['mode'], result['applied'], result['failed']), ('completed', 2, 0))
+        self.documents.assert_called_once()
+        self.assertEqual(self.checking.call_args.args[0]['sources'], [{'database': 'B'}])
+
+
 class WorkerTests(DbTestCase):
     def setUp(self):
         super().setUp()
@@ -196,7 +245,7 @@ class WorkerTests(DbTestCase):
 
     def test_worker_runs_enabled_jobs_independently_and_records_failed_job(self):
         from app.worker import serve
-        save_settings({**DEFAULTS, 'enabled': True, 'invoices': False, 'enova': False}, actor_id=self.admin)
+        save_settings({**DEFAULTS, 'enabled': True, 'invoices': False, 'enova': False, 'enova_weekly': False}, actor_id=self.admin)
         def job(name, stop=None):
             if name == 'mail':
                 raise RuntimeError('simulated')

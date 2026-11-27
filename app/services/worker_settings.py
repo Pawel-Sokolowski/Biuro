@@ -8,7 +8,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 logger = logging.getLogger(__name__)
 KEY = 'background_worker'
 DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
-            'enova': True, 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
+            'enova': True, 'enova_weekly': True, 'enova_weekly_time': '20:00', 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
             'reminders_interval': 60, 'invoices_interval': 60,
             'ezla_interval': 3600, 'ksef_import_interval': 3600, 'saldeo': False, 'saldeo_interval': 300, 'platnik': False, 'platnik_interval': 3600,
             'platnik_gui': False, 'platnik_gui_time': '16:00', 'platnik_gui_interval': 60,
@@ -41,10 +41,13 @@ def validate(value):
     from datetime import time
     time.fromisoformat(value['enova_time'])
     time.fromisoformat(value.get('ezla_time','02:00'))
+    weekly_at = time.fromisoformat(value['enova_weekly_time'])
+    if weekly_at.isoformat(timespec='minutes') != value['enova_weekly_time'] or weekly_at.tzinfo:
+        raise ValueError('Godzina tygodniowego odczytu Enovy musi mieć format GG:MM.')
     at = time.fromisoformat(value['platnik_gui_time'])
     if at.isoformat(timespec='minutes') != value['platnik_gui_time'] or at.tzinfo:
         raise ValueError('Godzina agenta Płatnika musi mieć format GG:MM.')
-    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):
+    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):
         if type(value[key]) is not bool:
             raise ValueError('Nieprawidłowy przełącznik workera.')
     for key in ('mail', 'reminders', 'invoices', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):

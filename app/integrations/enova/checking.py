@@ -288,7 +288,7 @@ def sync_checking(conn, config, source, company, day, *, divisor, apply, months=
         else:
             hr_snapshot = {'events': events, 'imported_at': stamp, 'as_of': day.isoformat(), 'database': source['database']}
             save_snapshot(conn, 'enova_hr', company_id, '', hr_snapshot)
-        if not force:
+        if not force and not hr_error:
             conn.execute('INSERT INTO app_settings(klucz,wartosc) VALUES (%s,%s) '
                          'ON CONFLICT(klucz) DO UPDATE SET wartosc=EXCLUDED.wartosc', (key, json.dumps(signature)))
     return {'mode': 'applied' if apply else 'preview', 'months': len(months),

@@ -10,7 +10,8 @@ from app.integrations.ezla.service import ServiceError
 from app.utils.background import TaskRunner
 
 JOB_LABELS = {'platnik_gui': 'Płatnik GUI — sprawdzanie wysyłki', 'checking_refresh':'Sprawdzanie — ręczne pobrania', 'platnik':'Płatnik — ZUS i wakacje składkowe', 'mail': 'Poczta', 'reminders': 'Przypomnienia', 'invoices': 'Faktury',
-              'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
+              'saldeo': 'Saldeo — powiadomienia', 'enova': 'Odczyt z Enovy po zmianie etapu',
+              'enova_weekly': 'Enova — odczyt tygodniowy', 'ezla': 'e-ZLA ZUS', 'ksef_import': 'Pobieranie KSeF'}
 STATES = {'running': 'W trakcie', 'ok': 'Zakończono', 'partial': 'Częściowo wykonano',
           'failed': 'Błąd', 'started': 'Rozpoczęto', 'skipped': 'Bez pobierania',
           'not_reported': 'Brak raportu z workera'}
@@ -21,6 +22,7 @@ DETAIL_COUNTS = {'accounts': 'konta', 'companies': 'firmy', 'failed': 'błędy',
                  'recognized': 'rozpoznane komplety', 'applied': 'zastosowane'}
 
 MODES = {'waiting': 'Oczekiwanie na godzinę odczytu', 'checked_today': 'Sprawdzono już dzisiaj',
+         'checked_this_week': 'Sprawdzono już w tym tygodniu',
          'disabled': 'Wyłączono w ustawieniach usługi', 'not_configured': 'Brak konfiguracji usługi',
          'busy': 'Odczyt już trwa', 'idle': 'Kolejka pusta', 'retry_waiting': 'Oczekiwanie na ponowienie',
          'empty': 'Brak firm do odczytu', 'cancelled': 'Przerwano',
@@ -125,7 +127,7 @@ class WorkerMonitor(QWidget):
         import_layout.addStretch()
         self.tabs.addTab(import_page, 'Import do Enovy')
         self.job_views = {}
-        for keys, title in ((('enova','checking_refresh'), 'Odczyt z Enovy'),
+        for keys, title in ((('enova','enova_weekly','checking_refresh'), 'Odczyt z Enovy'),
                             (('mail',), 'Poczta'),
                             (('invoices', 'reminders'), 'Faktury i przypomnienia'),
                             (('ksef_import',), 'KSeF'), (('platnik',), 'Płatnik')):

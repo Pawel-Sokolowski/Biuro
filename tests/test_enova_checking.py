@@ -106,6 +106,18 @@ class CheckingIntegrationTests(DbTestCase):
         row = next(row for row in list_accounting(self.admin, '2026-11') if row['id'] == self.company)
         self.assertEqual(active_types(row, 'accounting'), {'AMO'})
 
+    def test_failed_hr_read_can_be_retried_on_the_same_day(self):
+        config = {'enabled': True, 'months_back': 1, 'sources': [{**SOURCE, 'hr_events_query': 'hr.sql'}]}
+        day = date(2026, 11, 29)
+        counts = [{'nip': NIP, 'miesiac': '2026-11', 'dokumenty': 0, 'pozycje_bankowe': 0, 'rodzaje': {}}]
+        with patch('app.integrations.enova.checking.fetch_counts', return_value=counts), \
+             patch('app.integrations.enova.hr_events.fetch_events', side_effect=[RuntimeError('temporary'), []]) as fetch:
+            first, = run_checking_import(config, apply=True, today=day, months=['2026-11'])
+            second, = run_checking_import(config, apply=True, today=day, months=['2026-11'])
+        self.assertTrue(first['hr_failed'])
+        self.assertFalse(second['hr_failed'])
+        self.assertEqual(fetch.call_count, 2)
+
     def test_history_is_bounded_and_isolated_between_company_ids(self):
         # IDs such as 1 and 11 must never overlap through SQL LIKE wildcards.
         another = self.make_company('Other history')

@@ -136,7 +136,7 @@ class ReminderDeliveryTests(DbTestCase):
         with patch('app.services.email_reminders.datetime', wraps=datetime) as clock:
             clock.now.return_value = friday
 
-            def send(*args):
+            def send(*args, **kwargs):
                 clock.now.return_value = saturday
                 return True, 'OK'
 
@@ -157,7 +157,7 @@ class ReminderDeliveryTests(DbTestCase):
         self.enable('payments')
         stop = Event()
 
-        def send(*args):
+        def send(*args, **kwargs):
             stop.set()
             return True, 'OK'
 
@@ -253,7 +253,7 @@ class ReminderDeliveryTests(DbTestCase):
         self.invoice()
         self.enable('payments')
         started, release = Event(), Event()
-        def send(*args):
+        def send(*args, **kwargs):
             started.set()
             self.assertTrue(release.wait(5))
             return True, 'OK'
@@ -301,7 +301,7 @@ class ReminderDeliveryTests(DbTestCase):
     def test_accounting_assignment_removed_mid_batch_is_rechecked_before_sending(self):
         self.make_company('Second accounting', adres_email='second@example.com', ksiegowa_id=1)
         self.enable('documents')
-        def send(*args):
+        def send(*args, **kwargs):
             with get_conn() as conn:
                 conn.execute('UPDATE firmy SET ksiegowa_id=NULL WHERE adres_email<>%s', (args[1][0],))
             return True, 'OK'

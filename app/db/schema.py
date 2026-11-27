@@ -7,7 +7,7 @@ from app.remote.boundary import endpoint as office_endpoint
 from pathlib import Path
 from app.db.schema_baseline import init_db as _baseline_init_db
 from app.db.dao_conn import get_conn
-from app.db.platnik_gui_schema import VERSION as SCHEMA_VERSION
+from app.db.sent_copy_schema import VERSION as SCHEMA_VERSION
 
 
 def init_db():
@@ -51,6 +51,8 @@ def init_db():
         apply_company_bank_accounts(conn)
         from app.db.platnik_gui_schema import apply as apply_platnik_gui_checks
         apply_platnik_gui_checks(conn)
+        from app.db.sent_copy_schema import apply as apply_sent_copies
+        apply_sent_copies(conn)
 
 
 @office_endpoint('app.db.schema.schema_is_current')
@@ -72,5 +74,5 @@ def upgrade_database():
     heads = set(ScriptDirectory.from_config(config).get_heads())
     # Some local checkouts retain the old service-tables branch. The release
     # branch already creates those tables in revisions 20261121_01 and _02.
-    target = "20261121_08" if heads == {"20261116_03", "20261121_08"} else "head"
+    target = "20261127_01" if heads == {"20261116_03", "20261127_01"} else "head"
     command.upgrade(config, target)

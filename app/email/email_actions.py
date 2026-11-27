@@ -6,6 +6,8 @@ import base64
 import re
 import mimetypes
 import traceback
+from copy import deepcopy
+from smtplib import SMTPDataError, SMTPRecipientsRefused, SMTPSenderRefused
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -155,27 +157,16 @@ def choose_copy_folder(konto_id: int, from_addr: str, to_addrs: Iterable[str], s
 
 @office_endpoint('app.email.email_actions.store_sent_copy')
 def store_sent_copy(konto_id: int, msg: EmailMessage, folder: Optional[str]) -> bool:
-    """Zapisuje kopię wysłanej wiadomości na serwerze i w bazie; błąd nie psuje wysyłki."""
+    """Zapisuje kopię i próbuje ją od razu zsynchronizować z IMAP."""
     import logging
-    from app.email.email_storage import find_special_folder
-    from app.email.email_sync import append_message, sync_folder, list_folders_from_imap_and_store
+    from app.email.sent_copies import flush_copy, stage_copy
 
-    log = logging.getLogger(__name__)
     try:
-        target = folder or find_special_folder(konto_id, "sent")
-        if not target:
-            list_folders_from_imap_and_store(konto_id)
-            target = find_special_folder(konto_id, "sent")
-        if not target:
-            return False
-        if append_message(konto_id, target, msg.as_bytes()):
-            sync_folder(konto_id, target)
-            return True
-        else:
-            log.warning("Nie udało się zapisać kopii wysłanej wiadomości w %s", target)
-            return False
+        if not msg["Message-ID"]:
+            msg["Message-ID"] = make_msgid()
+        return flush_copy(stage_copy(konto_id, msg, folder, confirmed=True))
     except Exception:
-        log.warning("Nie udało się zapisać kopii wysłanej wiadomości", exc_info=True)
+        logging.getLogger(__name__).exception("Nie można zapisać kopii wysłanej wiadomości")
         return False
 
 
@@ -196,8 +187,7 @@ def send_email_smtp(
     copy_folder: Optional[str] = None,
     require_attachments: bool = False,
 ) -> Tuple[bool, str]:
-    """Wysyła wiadomość. Przy `save_copy` kopia trafia do `copy_folder` (np. folder oryginału,
-    folder z reguły filtra), a gdy go brak - do folderu Wysłane."""
+    """Wysyła wiadomość. Przy `save_copy` zapisuje ją w Wysłanych i opcjonalnym `copy_folder`."""
 
     try:
         cfg = get_smtp_config_for_account(konto_id)
@@ -231,58 +221,95 @@ def send_email_smtp(
 
 def _send_smtp_message(konto_id, cfg, msg, recipients, subject, *, timeout=30,
                        bcc=None, save_copy=False, copy_folder=None):
+    import logging
+    from app.email.sent_copies import confirm_copy, discard_reservation, flush_copy, stage_copy
+
+    log = logging.getLogger(__name__)
+    reservation = None
+    started = accepted = False
+    copy_warning = ''
+    rejected = set()
     try:
         # Wiadomość bez odbiorców nie może zostać uznana za wysłaną: SMTP przyjmie
         # kopię, a do nikogo ona nie dotrze. Ten błąd jest wyłapywany przed wysyłką.
         if not [address for address in recipients if str(address or '').strip()]:
             raise ValueError('Brak odbiorcy wiadomości. Nie wysłano.')
+        if save_copy:
+            reservation = stage_copy(konto_id, _archive_message(msg, bcc))
         with open_smtp(
             cfg["host"], cfg["port"], cfg["ssl"], cfg["user"], cfg["password"], timeout
         ) as smtp:
+            started = True
             refused = smtp.send_message(
                 msg,
                 from_addr=cfg["user"],
                 to_addrs=recipients,
             )
-
-        copy_warning = False
-        if save_copy:
-            # BCC is archive metadata only. Never put it on the SMTP wire.
-            from copy import deepcopy
-            archive = deepcopy(msg)
-            rejected = {address.casefold() for address in refused} if isinstance(refused,dict) else set()
-            accepted_bcc = [address for address in bcc or [] if address.casefold() not in rejected]
-            if accepted_bcc:
-                archive['Bcc'] = ', '.join(accepted_bcc)
-            copy_warning = not store_sent_copy(konto_id, archive, copy_folder)
-            if bcc:
-                # A BCC batch belongs to several clients; a move to only the first
-                # matching folder would lose it from all other clients and Sent.
+            accepted = True
+            rejected = {address.casefold() for address in refused} if isinstance(refused, dict) else set()
+            if reservation is not None:
+                accepted_bcc = [address for address in bcc or [] if address.casefold() not in rejected]
+                archive = _archive_message(msg, accepted_bcc)
                 try:
-                    from app.email.email_storage import find_special_folder
-                    sent = copy_folder or find_special_folder(konto_id, 'sent')
-                    folders = {}
-                    for recipient in accepted_bcc:
-                        target = choose_copy_folder(konto_id, cfg['user'], [recipient], subject)
-                        if target and target != sent:
-                            folders.setdefault(target, []).append(recipient)
-                    for target, addresses in folders.items():
-                        client_copy = deepcopy(msg)
-                        client_copy['Bcc'] = ', '.join(addresses)
-                        if not store_sent_copy(konto_id, client_copy, target):
-                            copy_warning = True
+                    confirm_copy(reservation, archive)
                 except Exception:
-                    copy_warning = True
-        if isinstance(refused, dict) and refused:
-            return False, "SMTP odrzucił część odbiorców: " + ", ".join(refused)
-        return True, ("Wysłano przez SMTP, ale nie potwierdzono wszystkich kopii IMAP / ich synchronizacji. "
-                      "Sprawdź folder Wysłane i foldery klientów; nie ponawiaj wysyłki do odbiorców." if copy_warning else "OK")
-
+                    log.exception("Nie można potwierdzić zapisanej kopii wiadomości")
+                    copy_warning = "Zapisana kopia wymaga potwierdzenia przez administratora."
     except Exception as exc:
-        return (
-            False,
-            f"{describe_error(exc)}\n{traceback.format_exc()}",
-        )
+        if not accepted:
+            if reservation is not None and (not started or isinstance(exc, (SMTPDataError, SMTPRecipientsRefused, SMTPSenderRefused))):
+                try:
+                    discard_reservation(reservation)
+                except Exception:
+                    log.exception("Nie można wycofać rezerwacji kopii wiadomości")
+            elif reservation is not None:
+                log.warning("sent_copy_awaiting_smtp_confirmation copy_id=%s", reservation)
+            return False, f"{describe_error(exc)}\n{traceback.format_exc()}"
+        # SMTP already confirmed DATA. A failed QUIT does not undo that confirmation.
+        log.warning("SMTP zakończył połączenie po przyjęciu wiadomości", exc_info=True)
+
+    if reservation is not None and not copy_warning:
+        try:
+            archived = flush_copy(reservation)
+            archived = _store_additional_copies(konto_id, cfg['user'], msg, archive, accepted_bcc, subject, copy_folder) and archived
+        except Exception:
+            log.exception("Nie można zsynchronizować kopii wiadomości")
+            archived = False
+        if not archived:
+            copy_warning = "Nie potwierdzono synchronizacji wszystkich kopii z IMAP. Biuro ponowi zapis kopii z kolejki."
+    if rejected:
+        result = "SMTP odrzucił część odbiorców: " + ", ".join(refused)
+        return False, result + (" " + copy_warning if copy_warning else "")
+    if copy_warning:
+        return True, f"Wysłano przez SMTP. {copy_warning} Sprawdź Wysłane i foldery klientów. Nie ponawiaj wysyłki."
+    return True, "OK"
+
+
+def _archive_message(message, bcc):
+    archive = deepcopy(message)
+    if bcc:
+        archive['Bcc'] = ', '.join(bcc)
+    return archive
+
+
+def _store_additional_copies(account_id, sender, message, archive, accepted_bcc, subject, copy_folder):
+    if not (copy_folder or accepted_bcc):
+        return True
+    from app.email.email_storage import find_special_folder
+
+    sent = find_special_folder(account_id, 'sent')
+    copies = {copy_folder: archive} if copy_folder and copy_folder != sent else {}
+    folders = {}
+    for recipient in accepted_bcc:
+        target = choose_copy_folder(account_id, sender, [recipient], subject)
+        if target and target != sent and target not in copies:
+            folders.setdefault(target, []).append(recipient)
+    copies.update({target: _archive_message(message, recipients) for target, recipients in folders.items()})
+    saved = True
+    for target, copy in copies.items():
+        if not store_sent_copy(account_id, copy, target):
+            saved = False
+    return saved
 
 
 class _MailTransaction:
@@ -355,6 +382,7 @@ def send_batch_emails(
                 ),
                 cc=msg_data.get("cc"),
                 bcc=msg_data.get("bcc"),
+                save_copy=True,
             )
 
             if ok:

@@ -93,7 +93,9 @@ class InvoiceDeliveryTests(unittest.TestCase):
         def update(invoice_id,status,**kwargs):self.invoice['invoice_email_status']=status
         with patch.object(delivery,'get_conn',return_value=conn), \
              patch.object(delivery,'_delivery_state',side_effect=update), \
-             patch('app.email.email_actions.store_sent_copy', return_value=True), \
+             patch('app.email.sent_copies.stage_copy', return_value=1), \
+             patch('app.email.sent_copies.confirm_copy'), \
+             patch('app.email.sent_copies.flush_copy', return_value=True), \
              patch('app.email.email_actions.open_smtp',return_value=nullcontext(smtp)):
             result=delivery.deliver_if_queued(1,7,str(self.xml_path))
             self.assertEqual(result['status'],'sent')
@@ -143,7 +145,9 @@ class InvoiceDeliveryTests(unittest.TestCase):
 
         with patch.object(delivery, 'get_conn', return_value=conn), \
              patch.object(delivery, '_delivery_state', side_effect=save_state), \
-             patch('app.email.email_actions.store_sent_copy', return_value=False), \
+             patch('app.email.sent_copies.stage_copy', return_value=1), \
+             patch('app.email.sent_copies.confirm_copy'), \
+             patch('app.email.sent_copies.flush_copy', return_value=False), \
              patch('app.email.email_actions.open_smtp', return_value=nullcontext(smtp)):
             result = delivery.deliver_if_queued(1, 7, self.xml_path)
             repeated = delivery.deliver_if_queued(1, 7, self.xml_path)

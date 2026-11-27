@@ -353,7 +353,7 @@ def run_reminder_batch(now=None, *, stop=None):
                     conn.commit()
                     break
                 try:
-                    ok, error = send_email_smtp(account['id'], recipients, subject, body)
+                    ok, error = send_email_smtp(account['id'], recipients, subject, body, save_copy=True)
                 except Exception as exc:
                     ok, error = False, str(exc)
                 conn.execute("""UPDATE email_reminder_log SET status = %s, error = %s,

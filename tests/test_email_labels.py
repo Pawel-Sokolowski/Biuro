@@ -136,7 +136,7 @@ class SentCopyTests(DbTestCase):
             in_reply_to="<a@x>", references="<r@x>")
         self.assertEqual(msg["In-Reply-To"], "<a@x>")
         self.assertEqual(msg["References"], "<r@x>  <a@x>".replace("  ", " "))
-        with mock.patch("app.email.email_sync.append_message", return_value=True) as app, \
+        with mock.patch("app.email.email_sync.append_sent_copy", return_value=True) as app, \
                 mock.patch("app.email.email_sync.sync_folder") as sync:
             email_actions.store_sent_copy(1, msg, "INBOX/Klient")
         app.assert_called_once()

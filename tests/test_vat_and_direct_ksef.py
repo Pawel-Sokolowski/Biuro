@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QTableWidget, QTableWidgetIte
 from app.invoices.positions import normalize_position
 from app.invoices.vat_summary import vat_summary, summary_html
 from app.invoices.fa3_builder import build_fa3_xml, validate_fa3
+from app.invoices.jpk_v7 import JpkError, NS, build_jpk_v7m, selected_export_month
 from app.invoices.ksef_client import KsefError
 from app.invoices import ksef_submission as submission
 from app.invoices.faktury_ui import FakturyPage
@@ -25,6 +26,38 @@ INVOICE = {'id':1, 'eksportowana':1, 'numer':'FV/1/2026', 'rodzaj':'faktura',
            'nabywca_nip':'1234567890', 'nabywca_pelna':'Nabywca <Test>', 'nabywca_adres':'Inna 2',
            'nabywca_kraj':'Polska', 'kwota_netto':100, 'kwota_brutto':123}
 POSITION = {'nazwa':'Usługa & pomoc', 'ilosc':1, 'cena_netto':100, 'vat':23}
+
+
+class JpkV7mTests(unittest.TestCase):
+    def test_export_refuses_an_incomplete_selection_or_mixed_months(self):
+        first = {**INVOICE, 'miesiac': '2026-10'}
+        second = {**first, 'id': 23, 'miesiac': '2026-11'}
+        with self.assertRaisesRegex(JpkError, 'wszystkich zaznaczonych'):
+            selected_export_month([1, 23], [first], '2026')
+        with self.assertRaisesRegex(JpkError, 'z jednego miesiąca'):
+            selected_export_month([1, 23], [first, second], '2026')
+        with self.assertRaisesRegex(JpkError, 'nie odpowiada filtrowi'):
+            selected_export_month([23], [second], '2026-10')
+        self.assertEqual(selected_export_month([23], [second], '2026'), '2026-11')
+
+    def test_xml_contains_every_invoice_and_does_not_mark_an_ordinary_credit_as_bad_debt(self):
+        seller = {**SELLER, 'email': 'biuro@example.com'}
+        first = {**INVOICE, 'numer': 'FV/23/2026', 'ksef_numer': '9876543210-20261101-123456789ABC-12',
+                 'positions': [normalize_position(POSITION)]}
+        credit = {**first, 'numer': 'KOR/1/2026', 'rodzaj': 'korekta',
+                  'ksef_numer': '9876543210-20261101-123456789ABD-12',
+                  'positions': [normalize_position({**POSITION, 'ilosc': -0.5})]}
+        xml = E.fromstring(build_jpk_v7m([first, credit], seller, 2026, 11, '1465'))
+        ns = {'jpk': NS}
+        rows = xml.findall('.//jpk:SprzedazWiersz', ns)
+        self.assertEqual([row.findtext('jpk:DowodSprzedazy', namespaces=ns) for row in rows],
+                         ['FV/23/2026', 'KOR/1/2026'])
+        self.assertEqual(rows[1].findtext('jpk:K_20', namespaces=ns), '-11.50')
+        self.assertIsNone(rows[1].find('jpk:KorektaPodstawyOpodt', ns))
+        self.assertIsNone(rows[1].find('jpk:TerminPlatnosci', ns))
+        self.assertEqual(xml.findtext('.//jpk:LiczbaWierszySprzedazy', namespaces=ns), '2')
+        with self.assertRaisesRegex(JpkError, 'FV/23/2026'):
+            build_jpk_v7m([{**first, 'positions': []}], seller, 2026, 11, '1465')
 
 
 class VatAndFa3Tests(unittest.TestCase):

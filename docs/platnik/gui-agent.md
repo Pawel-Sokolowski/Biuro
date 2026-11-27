@@ -53,6 +53,9 @@ NIP-em płatnika i okresem.
    rejestru w Płatniku.
 2. Skopiuj [przykład profilu](gui-agent.example.json) do lokalnego katalogu
    agenta. Uzupełnij ścieżkę EXE i dokładny tytuł lub klasę głównego okna.
+   W instalacji z `p2.exe` i `P2start.exe` podaj `p2.exe` jako **Plik Płatnika**
+   (`executable`) oraz `P2start.exe` jako **Program uruchamiający** (`launcher`).
+   Jeśli tytuł zmienia się po wybraniu płatnika, użyj samej klasy okna.
    Etykiety w przykładzie służą do zilustrowania formatu.
 3. W Płatniku otwórz rejestr dokumentów lub zestawów z widocznymi polami
    NIP-u, miesiąca, formularza, numeru deklaracji, identyfikatora zestawu,
@@ -61,7 +64,13 @@ NIP-em płatnika i okresem.
    jest również kolumna z datą i godziną wysyłki.
 4. Polecenie `describe` pokazuje typ i identyfikator widocznych kontrolek.
    Uzupełnij identyfikator rejestru, pozycje nagłówków od zera oraz dokładne
-   wartości stanów. Agent sprawdza nagłówki podczas każdego odczytu.
+   wartości stanów. W trybie UIA pole **Tabela rejestru** przyjmuje
+   `class=NazwaKlasy`, jeśli klasa jednoznacznie wskazuje tabelę i jej
+   `AutomationId` zmienia się między sesjami. **Wczytaj z Płatnika…** podaje
+   wzorce UIA dostępne dla wykrytych tabel. Po uzupełnieniu pól wybierz
+   **Sprawdź odczyt tabeli** przy otwartym rejestrze z danymi. Przycisk
+   sprawdza nagłówki i odczyt pierwszego wiersza bez wyświetlania jego danych
+   ani pobierania zadania z kolejki.
 
 ```powershell
 py -3.14 -m venv "$env:LOCALAPPDATA\Biuro\PlatnikAgent\venv"
@@ -110,6 +119,15 @@ potwierdzenie**. Płatnik weryfikuje podpis ZUS i rejestruje pobrany dokument,
 a agent odczytuje zaktualizowany stan z Płatnika i przekazuje go do Biuro. Plik potwierdzenia
 pozostaje zapisany przez Płatnika w jego bazie i katalogu przesyłek.
 [Instrukcja Płatnika, rozdział 5.6.7](https://pobierz.zus.pl/dystrybucja/a1_10_02_002/dokumentacja/Dok_Uzytk_A1_10.02.002_wersja_7.8.pdf)
+
+Jeśli trzeba sprawdzić zgodność instalacji z agentem, uruchom przechwytywanie
+z aktywnego pulpitu Płatnika. Otwórz **Zestawy wysłane** i przejdź przez kreator
+**Pobierz i rejestruj potwierdzenie** dla jednego wysłanego zestawu. Zakończ
+przechwytywanie przez Ctrl+C. Plik zawiera metadane kontrolek i wzorce UIA.
+
+```powershell
+& $agentPython -m app.integrations.platnik.gui_agent capture-walkthrough
+```
 
 ## Codzienne sprawdzanie wysyłki
 

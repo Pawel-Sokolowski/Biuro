@@ -85,7 +85,8 @@ def records_sql(specs, document_key, has_status, columns=None, *, has_set_metada
         return f"""
             OUTER APPLY (
                 SELECT TOP (1) z.STATUSPT AS filing_status_raw, z.DATA_WYS AS sent_at,
-                    NULLIF(LTRIM(RTRIM(z.ID_POTW)),N'') AS upo, z.DATA_POTW AS upo_at
+                    CASE WHEN z.DATA_POTW IS NOT NULL THEN NULLIF(LTRIM(RTRIM(z.ID_POTW)),N'') END AS upo,
+                    z.DATA_POTW AS upo_at
                 FROM dbo.ZESTAW_DOKUM zd
                 JOIN dbo.ZESTAW z ON z.ID=zd.ID_ZESTAW
                 WHERE zd.ID_DOKUMENT={document} AND z.ID_PLATNIK={payer}

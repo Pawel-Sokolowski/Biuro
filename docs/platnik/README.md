@@ -99,22 +99,20 @@ Własne zapytanie miesięczne może zwracać opcjonalne kolumny
 `contribution_guaranteed_benefits`, `contribution_bridging_pensions` i
 `contribution_insured_count` (liczba ubezpieczonych na DRA). Zapytanie może
 też zwracać `filing_status_raw`, `sent_at`, `upo` i `upo_at`; bez tych kolumn
-status i potwierdzenie pochodzą z wbudowanego połączenia z zestawem Płatnika.
+własne zapytanie nie przekazuje danych o wysyłce ani potwierdzeniu z zestawu.
 
 ## Statusy i potwierdzenia
 
 Adapter łączy dokumenty z `ZESTAW_DOKUM` i `ZESTAW`, jeśli widoczne są
 wymagane kolumny. Pobiera z zestawu źródłowy kod `STATUSPT`, daty `DATA_WYS`
-i `DATA_POTW` oraz identyfikator potwierdzenia `ID_POTW`. Gdy dokument należy
+i `DATA_POTW` oraz identyfikator przesyłki `ID_POTW`. Gdy dokument należy
 do kilku zestawów, używany jest najnowszy według daty wysyłki. UPO i daty
 pochodzą z zapisanych pól Płatnika, nie z czasu odczytu ani daty wypełnienia.
 
-Kod zestawu jest pokazywany dosłownie; nie mapujemy go na „przyjęty” lub
-„odrzucony” bez zweryfikowanego słownika. `ID_POTW` jest numerem UPO;
-jeśli Płatnik przechowuje ten numer, Biuro oznacza zestaw jako
-`Potwierdzony (UPO)` niezależnie od nieznanego kodu `STATUSPT`. `DATA_POTW`
-jest datą z UPO. Sam `DOKUMENT.STATUSPT` nie jest dowodem przyjęcia. Widok UPO
-w Płatniku może zawierać dodatkowe dane poza numerem i datą.
+Biuro pokazuje **Potwierdzony (UPO)** oraz numer w kolumnie UPO, gdy zestaw
+ma zapisane `ID_POTW` i datę potwierdzenia `DATA_POTW`. Płatnik może zapisać
+identyfikator przesyłki już podczas wysyłki. Gdy brakuje daty potwierdzenia,
+Biuro zachowuje źródłowy kod zestawu i datę wysyłki, jeśli są dostępne.
 
 ## Powiązania z Płatnikiem
 

@@ -156,6 +156,14 @@ class PlatnikSqlTests(unittest.TestCase):
         self.assertEqual(entry['status_text'], 'Potwierdzony (UPO)')
         self.assertEqual(entry['upo'], 'RECEIPT-123')
 
+        self.writer.execute('UPDATE dbo.ZESTAW SET DATA_POTW=NULL WHERE ID=50')
+        pending, = self.query()
+        self.assertIsNone(pending['upo'])
+        self.assertIsNone(pending['upo_at'])
+        entry = normalize([pending], ['2026-11'], [NIP])[NIP]['2026-11'][0]
+        self.assertEqual(entry['status'], 'unknown')
+        self.assertEqual(entry['sent_at'], '2026-11-20T10:30:00')
+
     def test_amount_columns_keep_zero_and_include_rca_budget_funding(self):
         self.document(1)
         self.form('DRA', 1)

@@ -4,7 +4,7 @@ from ctypes import byref, create_unicode_buffer, sizeof
 from ctypes import wintypes
 from pathlib import Path
 import re
-from subprocess import list2cmdline
+from subprocess import Popen, list2cmdline
 import sys
 
 from app.integrations.platnik.gui_evidence import MAX_ROWS, ReadError, label
@@ -73,19 +73,29 @@ def main_window(config):
     if not interactive_desktop():
         raise ReadError('DesktopUnavailable')
     from pywinauto import Application, Desktop
+    from pywinauto.timings import wait_until
 
     executable = config['executable']
     backend = config['backend']
+
+    def find_process():
+        pids = {window.process_id() for window in Desktop(backend='win32').windows()}
+        matching = {pid for pid in pids if process_image(pid) == executable}
+        if len(matching) > 1:
+            raise ReadError('AppUnavailable')
+        return next(iter(matching), None)
+
     try:
         # Desktop lists windows in the agent's own interactive session. Compare
         # full image paths before connecting and let Application scope all locators.
-        pids = {window.process_id() for window in Desktop(backend='win32').windows()}
-        pids = {pid for pid in pids if process_image(pid) == executable}
-        if len(pids) > 1:
-            raise ReadError('AppUnavailable')
+        pid = find_process()
         app = Application(backend=backend)
-        if pids:
-            app.connect(process=pids.pop(), timeout=5)
+        if pid is None and (launcher := config.get('launcher')):
+            Popen([str(launcher)], cwd=launcher.parent)
+            # The launcher may exit before or after the Płatnik process appears.
+            pid = wait_until(12, 0.25, find_process, op=lambda value, _: value is not None)
+        if pid is not None:
+            app.connect(process=pid, timeout=5)
         else:
             app.start(list2cmdline([str(executable)]), work_dir=str(executable.parent),
                       timeout=12, wait_for_idle=False)
@@ -136,6 +146,12 @@ def register(window, config):
     if not interactive_desktop():
         raise ReadError('DesktopUnavailable')
     if config['backend'] == 'win32':
+        from pywinauto.controls.common_controls import ListViewWrapper
+
+        if not isinstance(wrapper, ListViewWrapper):
+            raise ReadError('ProfileMismatch', detail=(
+                'Odczyt Win32 wymaga kontrolki ListView. Dla TdxDBGrid sprawdź w UIA wzorce Grid i Table.'
+            ))
         row_count = wrapper.item_count()
         if row_count > MAX_ROWS:
             raise ReadError('ScanLimit')
@@ -155,7 +171,10 @@ def register(window, config):
         raw = wrapper.iface_grid
         headers = wrapper.iface_table.GetCurrentColumnHeaders()
     except NoPatternInterfaceError:
-        raise ReadError('ProfileMismatch') from None
+        raise ReadError('ProfileMismatch', detail=(
+            'Wybrana kontrolka nie udostępnia wymaganych wzorców UIA Grid i Table. '
+            'Jeśli w rejestrze jest tylko TdxDBGrid bez tych wzorców, użyj importu Płatnika przez SQL.'
+        )) from None
     row_count = raw.CurrentRowCount
     if row_count > MAX_ROWS:
         raise ReadError('ScanLimit')
@@ -171,6 +190,22 @@ def register(window, config):
             return cell.window_text()
 
     return wrapper, row_count, columns, cell_text
+
+
+def probe_register(window, config):
+    """Verify that the first row can be read without returning any cell values."""
+    _, row_count, columns, read = register(window, config)
+    if not row_count:
+        return f'Nagłówki zgodne ({len(columns)}). Otwórz rejestr z danymi, aby sprawdzić odczyt komórek.'
+    try:
+        values = [read(0, index) for index in columns.values()]
+    except ReadError:
+        raise
+    except Exception:
+        raise ReadError('ReadFailed', detail='Znaleziono tabelę, ale nie udało się odczytać pierwszego wiersza.') from None
+    if not any(label(value) for value in values):
+        raise ReadError('ProfileMismatch', detail='Pierwszy wiersz jest pusty. Wybierz rejestr zawierający dane.')
+    return f'Odczytano pierwszy wiersz i sprawdzono nagłówki ({len(columns)} kolumn).'
 
 
 def uia_cell(grid, row, column):
@@ -322,6 +357,24 @@ def download_confirmation(window, view, set_id, receipt):
                     details.wrapper_object().post_message(WM_CLOSE)
 
 
+def uia_grid_metadata(info):
+    kind = info.control_type
+    if kind not in ('DataGrid', 'Table', 'List') and not (
+            kind == 'Pane' and 'grid' in (info.class_name or '').casefold()):
+        return {}
+
+    from pywinauto.uia_defines import NoPatternInterfaceError, get_elem_interface
+
+    patterns = []
+    for name in ('Grid', 'Table', 'Selection', 'LegacyIAccessible'):
+        try:
+            get_elem_interface(info.element, name)
+        except NoPatternInterfaceError:
+            continue
+        patterns.append(name)
+    return {'uia_patterns': patterns}
+
+
 def describe(window):
     """Report locator metadata only, without titles, cell values or screenshots."""
     controls = []
@@ -331,7 +384,10 @@ def describe(window):
         class_name = info.class_name
         if kind not in ('TabItem', 'DataGrid', 'Table', 'List', 'Pane') and class_name != 'SysListView32':
             continue
-        controls.append({'control_type': kind, 'class_name': class_name,
-                         'auto_id': getattr(info, 'automation_id', None),
-                         'control_id': getattr(info, 'control_id', None)})
+        control = {'control_type': kind, 'class_name': class_name,
+                   'auto_id': getattr(info, 'automation_id', None),
+                   'control_id': getattr(info, 'control_id', None)}
+        if kind is not None:
+            control.update(uia_grid_metadata(info))
+        controls.append(control)
     return controls

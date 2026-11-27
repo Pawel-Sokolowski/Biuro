@@ -135,18 +135,22 @@ class CompanyForm(QDialog):
         firma_id: Optional[int] = None,
         parent: Optional[QWidget] = None,
         actor_id: Optional[int] = None,
+        *,
+        defer_load: bool = False,
+        year: Optional[int] = None,
     ):
         super().__init__(parent)
 
         self.firma_id = firma_id
         self.actor_id = actor_id
+        self._initial_year = year if year is not None else date.today().year
         self.inputs: Dict[str, Any] = {}
 
         self.setWindowTitle("Firma")
         self.resize(1200, 900)
         from app.remote.state import client
-        self._remote_card = client() is not None
-        if not self._remote_card:
+        self._deferred_card = defer_load or client() is not None
+        if not self._deferred_card:
             self._build(None)
             return
 
@@ -154,6 +158,7 @@ class CompanyForm(QDialog):
         self._card_data = {}
         self._card_pending = {}
         self._card_tabs = set()
+        self.finished.connect(self._cancel_card_reads)
         layout = QVBoxLayout(self)
         waiting = QLabel('Wczytywanie karty firmy…')
         layout.addWidget(waiting)
@@ -179,6 +184,11 @@ class CompanyForm(QDialog):
             retry.show()
 
         self._read_section('basic', loaded, failed)
+
+    def _cancel_card_reads(self):
+        for runner in self._card_reads.values():
+            runner.invalidate()
+        self._card_pending.clear()
 
     def _build(self, snapshot):
         options = snapshot['options'] if snapshot is not None else None
@@ -296,7 +306,7 @@ class CompanyForm(QDialog):
             'status_vat': status_vat.currentText(),
             'forma_opodatkowania': forma_opodatkowania.currentText(),
             'forma_dzialalnosci': forma_dzialalnosci.currentText(),
-        }, defer_load=self._remote_card)
+        }, defer_load=self._deferred_card)
         monthly_box = QVBoxLayout(monthly_group)
         monthly_box.addWidget(self.monthly_setup)
 
@@ -306,7 +316,7 @@ class CompanyForm(QDialog):
         year_row.addWidget(QLabel("Rok:"))
         self.annual_year = QSpinBox()
         self.annual_year.setRange(2000, 2100)
-        self.annual_year.setValue(date.today().year)
+        self.annual_year.setValue(self._initial_year)
         year_row.addWidget(self.annual_year)
         year_row.addWidget(QLabel("Rozliczenie dla:"))
         self.annual_owner = QComboBox()
@@ -811,7 +821,7 @@ class CompanyForm(QDialog):
 
         filter_form = QHBoxLayout()
         self.filter_account = QComboBox()
-        for account in [] if self._remote_card else get_all_email_accounts():
+        for account in [] if self._deferred_card else get_all_email_accounts():
             self.filter_account.addItem(account["email"], account["id"])
         self.filter_sender = QComboBox()
         self.filter_sender.setEditable(True)
@@ -821,7 +831,7 @@ class CompanyForm(QDialog):
         sender_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         sender_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.filter_sender.setCompleter(sender_completer)
-        if not self._remote_card:
+        if not self._deferred_card:
             self.filter_account.currentIndexChanged.connect(lambda _: self._reload_filter_senders())
             self._reload_filter_senders()
         self.filter_folder = QComboBox()
@@ -832,7 +842,7 @@ class CompanyForm(QDialog):
         folder_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         folder_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.filter_folder.setCompleter(folder_completer)
-        if self._remote_card:
+        if self._deferred_card:
             self.filter_account.currentIndexChanged.connect(self._load_mail_choices)
         else:
             self.filter_account.currentIndexChanged.connect(lambda _: self._reload_filter_folders())
@@ -1073,13 +1083,12 @@ class CompanyForm(QDialog):
         # ============================================================
         if self.firma_id:
             self._load_company(snapshot['company'] if snapshot is not None else None)
-            if not self._remote_card:
+            if not self._deferred_card:
                 self._load_contacts()
                 self._load_email_filters()
                 self._load_partners()
                 self._load_notes()
-            self._refresh_cennik_options()
-        if self._remote_card:
+        if self._deferred_card:
             self._card_status = QLabel()
             self._card_status.setWordWrap(True)
             root_layout.insertWidget(root_layout.indexOf(self.section_tabs) + 1, self._card_status)
@@ -1345,7 +1354,7 @@ class CompanyForm(QDialog):
             return (get_owner_year_declarations(company_id, year, owner_id) if owner_id
                     else get_company_year_declarations(company_id, year))
 
-        if not self._remote_card:
+        if not self._deferred_card:
             self._show_annual_selection(read())
             return
         if not hasattr(self, '_annual_reads'):
@@ -1576,7 +1585,7 @@ class CompanyForm(QDialog):
         # Bez mapowania ponowne otwarcie pokazuje puste adresy, a kolejny
         # zapis formularza może nadpisać istniejące adresy pustymi danymi.
         data = self._payload_to_form_keys(data)
-        if not self._remote_card:
+        if not self._deferred_card:
             self._load_declaration_checkboxes(data)
 
         for key, widget in self.inputs.items():
@@ -1678,7 +1687,7 @@ class CompanyForm(QDialog):
         from app.db.dao_companies import get_partners, partner_contacts
         contacts = get_contacts(self.firma_id) if contacts is None else contacts
         partners = get_partners(self.firma_id) if partners is None else partners
-        if self._remote_card:
+        if self._deferred_card:
             self._card_data['people'] = {'contacts': contacts, 'partners': partners}
         rows = contacts + partner_contacts(self.firma_id, contacts, partners)
         self.contacts_table.setRowCount(0)
@@ -1838,7 +1847,7 @@ class CompanyForm(QDialog):
             return
 
         rows = get_partners(self.firma_id) if rows is None else rows
-        if self._remote_card and 'people' in self._card_data:
+        if self._deferred_card and 'people' in self._card_data:
             self._card_data['people']['partners'] = rows
         selected_owner = self.annual_owner.currentData()
         owner_ids = {owner["id"] for owner in rows}

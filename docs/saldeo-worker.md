@@ -44,7 +44,7 @@ Brak przycisku stronicowania w konfiguracji, osiągnięcie limitu stron/5000 wpi
 lub zmiana DOM dają wynik niepełny/błąd, a nie potwierdzenie nadrobienia całej
 historii. Nadrabiamy tylko wpisy nadal przechowywane w Saldeo. Jeżeli historia
 wymaga dodatkowego otwarcia dzwonka lub filtrów, adapter wymaga dopasowania;
-przycisk paginacji musi być selektorem Next, także gdy jest wyłączony.
+pole stronicowania może wskazywać numer strony albo przycisk następnej strony.
 
 Zapisana nazwa `nazwa_saldeo_firmy` jest porównywana z powiadomieniem bez różnic
 w wielkości liter i odstępach; kropki są zachowane. Obsługiwane przykłady:
@@ -94,10 +94,9 @@ pustych komórek, zachowując własne wpisy użytkownika.
 ## Pełna Lista operacji
 
 Zapis strony Saldeo potwierdził wiersze
-`bs-mat-table.background-operation-list-table .mat-row` oraz dwa przyciski
-„Następna strona”. Worker używa górnego przycisku, w obrębie listy operacji,
-także do potwierdzenia końca stronicowania po jego wyłączeniu. Zniknięcie
-przycisku po zmianie układu daje wynik niepełny.
+`bs-mat-table.background-operation-list-table .mat-row`. Standardowy odczyt
+korzysta z pola `input[qa-id="paginatorPage"]` i jego atrybutu `max`, żeby
+rozpoznać ostatnią stronę. Brak skonfigurowanej kontrolki daje wynik niepełny.
 
 Worker odczytuje tylko wiersze typu „Komplet dokumentów” ze statusem
 „Zakończone”. Nazwę firmy bierze z kolumny „Nazwa pliku / firma”, okres

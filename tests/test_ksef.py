@@ -136,6 +136,14 @@ class KsefRateLimitTests(unittest.TestCase):
             client._request("POST", "/sessions/online/X/invoices", token="access", json={})
         self.assertEqual(client.http.calls, 1)
 
+    def test_truncated_metadata_is_not_an_ordinary_final_page(self):
+        client = self.client([
+            FakeResponse(data={"hasMore": True, "invoices": [{"ksefNumber": "first"}]}),
+            FakeResponse(data={"hasMore": False, "isTruncated": True, "invoices": []}),
+        ])
+        with self.assertRaisesRegex(ksef_client.KsefError, "obciętą listę faktur"):
+            list(client.query_invoices(dt.datetime(2026, 10, 1)))
+
     def test_very_long_retry_after_gives_up_instead_of_waiting(self):
         client = self.client([FakeResponse(status=429, headers={"Retry-After": "300"})])
         with self.assertRaisesRegex(ksef_client.KsefError, "ograniczył zapytania na 300 s"):

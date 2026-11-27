@@ -612,7 +612,11 @@ def _execute(
                     value['period'],
                 ],
                 force=True,
+                stop=stop,
             )
+
+            if stop is not None and stop.is_set():
+                return None
 
             results += [
                 {

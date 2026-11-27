@@ -301,8 +301,10 @@ class CompanyUI(QWidget):
             QMessageBox.warning(self, "Firma", "Nie można odczytać ID firmy.")
             return
 
-        dlg = CompanyForm(firma_id, self, actor_id=self.pracownik_id)
-        if dlg.exec():
+        dlg = CompanyForm(firma_id, self, actor_id=self.pracownik_id, defer_load=True)
+        saved = dlg.exec()
+        dlg.deleteLater()
+        if saved:
             self._force_refresh()
 
     def _delete_company(self):

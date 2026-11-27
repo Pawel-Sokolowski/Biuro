@@ -236,9 +236,11 @@ class YearEndPage(QWidget):
         company, name, decl = sel
         if decl is None:
             from app.companies.company_form import CompanyForm
-            dlg = CompanyForm(company["id"], self, actor_id=self.pracownik_id)
-            dlg.annual_year.setValue(self.year.value())
-            if dlg.exec() == QDialog.DialogCode.Accepted:
+            dlg = CompanyForm(company["id"], self, actor_id=self.pracownik_id,
+                              defer_load=True, year=self.year.value())
+            saved = dlg.exec() == QDialog.DialogCode.Accepted
+            dlg.deleteLater()
+            if saved:
                 self.refresh()
             return
         dialog = DeclarationDialog(f"{name} — {decl['kod']} za {self.year.value()}", decl, self)

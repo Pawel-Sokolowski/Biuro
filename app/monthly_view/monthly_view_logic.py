@@ -690,7 +690,9 @@ class MonthlyViewLogic:
         from app.companies.company_form import CompanyForm
 
         self._assert_company_access(firma_id)
-        CompanyForm(firma_id, actor_id=self.pracownik_id).exec()
+        dialog = CompanyForm(firma_id, actor_id=self.pracownik_id, defer_load=True)
+        dialog.exec()
+        dialog.deleteLater()
 
     def mark_company_suspended_manual(self, firma_id: int):
         self.toggle_services_suspended(firma_id, True)

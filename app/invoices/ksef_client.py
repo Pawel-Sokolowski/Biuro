@@ -273,6 +273,8 @@ class KsefClient:
                 params={"sortOrder": "Asc", "pageOffset": offset, "pageSize": PAGE_SIZE},
                 json=body,
             ).json()
+            if data.get("isTruncated"):
+                raise KsefError("KSeF zwrócił obciętą listę faktur. Zawęź zakres dat i ponów pobieranie.")
             yield from data.get("invoices", [])
             if not data.get("hasMore"):
                 return

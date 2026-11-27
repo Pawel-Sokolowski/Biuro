@@ -62,27 +62,32 @@ def run(stop=None, *, now=None):
             documents, checked = [], []
             for periods in month_batches(months):
                 if stop is not None and stop.is_set():
-                    raise ValueError('Przerwano odczyt z Enovy.')
+                    break
                 reason = 'EnovaDocumentsFailed'
                 documents.extend(run_import(selected,apply=True,months=periods,stop=stop))
+                if stop is not None and stop.is_set():
+                    break
                 if config.get('checking_enabled',False):
                     reason = 'EnovaCheckingFailed'
                     checked.extend(run_checking_import(selected,apply=True,months=periods,force=True,stop=stop))
+            if stop is not None and stop.is_set():
+                break
             if (not documents and not checked) or any(not item['ok'] for item in documents):
                 reason = 'EnovaDocumentsFailed'
                 raise ValueError('Nie ukończono odczytu dokumentów lub JPK.')
-            if any(not item['ok'] for item in checked):
+            if config.get('checking_enabled', False) and (not checked or any(not item['ok'] for item in checked)):
                 reason = 'EnovaCheckingFailed'
                 raise ValueError('Nie ukończono odczytu do Sprawdzania.')
             consumed.extend(events)
             results.append({'company_id':company_id,'ok':True,'months':months})
         except Exception:
+            if stop is not None and stop.is_set():
+                break
             failed_at = now or datetime.now(timezone.utc)
             for row in events:
                 delay = min(3600, 60 * 2 ** min(row['attempts'], 6))
                 retries.append((company_id, row['period'], row['revision'], failed_at + timedelta(seconds=delay), reason))
-            if not (stop is not None and stop.is_set()):
-                record('enova', 'failed', company_id=company_id, error_type=reason)
+            record('enova', 'failed', company_id=company_id, error_type=reason)
             results.append({'company_id': company_id, 'ok': False, 'months': months, 'error_type': reason})
     if consumed or retries:
         with get_conn() as conn:

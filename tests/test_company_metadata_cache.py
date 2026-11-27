@@ -147,4 +147,4 @@ class CompanySearchMetadataTests(unittest.TestCase):
             self.page._edit_company()
         self.assertEqual(backups.call_count, 2)
         self.assertEqual(stored.call_count, 2)
-        form.assert_called_once_with(7, self.page, actor_id=1)
+        form.assert_called_once_with(7, self.page, actor_id=1, defer_load=True)

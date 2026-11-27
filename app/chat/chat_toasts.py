@@ -39,6 +39,7 @@ class ChatToaster(MailToaster):
         grouped = {}
         for message in messages:
             grouped.setdefault(message['konwersacja_id'], []).append(message)
+        notices = []
         for conversation_id, rows in grouped.items():
             message = rows[-1]
             sender = ' '.join(filter(None, (message.get('imie'), message.get('nazwisko')))) or 'Pracownik'
@@ -46,8 +47,11 @@ class ChatToaster(MailToaster):
             title = _compact(f"Czat — {name or 'Nowa wiadomość'}", 63)
             text = _compact(message.get('tresc') or 'Przesłano załącznik', 170)
             suffix = f"\nNowych wiadomości: {len(rows)}" if len(rows) > 1 else ''
-            self._show(title, f'{_compact(sender, 60)}: {text}{suffix}',
-                       {'kind': 'chat', 'conversation_id': conversation_id, 'message_id': message['id']})
+            notices.append((title, f'{_compact(sender, 60)}: {text}{suffix}',
+                            {'kind': 'chat', 'conversation_id': conversation_id, 'message_id': message['id']}))
+        self._show_batch(notices, ('Czat — nowe wiadomości',
+                                   f'Nowe wiadomości: {len(messages)} · rozmowy: {len(grouped)}',
+                                   {'kind': 'chat'}))
 
     def _failed(self, exc):
         self._busy = False

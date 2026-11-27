@@ -138,6 +138,8 @@ z numerem i urzędowym QR, wysyłka z zatwierdzonego konta pocztowego. PDF powst
 na podstawie przyjętego XML, a nie późniejszych zmian w kartotece. Adresaci są
 utrwalani w kolejce. Przycisk **Wyślij PDF e-mailem** umożliwia wysyłkę również
 faktur mających już numer KSeF. Stan wysyłki jest widoczny w tabeli faktur.
+Komunikat **Wysłano PDF · sprawdź kopię** oznacza potwierdzony odbiór przez
+SMTP i brak potwierdzenia zapisu lub synchronizacji kopii w folderze Wysłane.
 Niepewny wynik SMTP wymaga sprawdzenia; program nie ponawia automatycznie
 wiadomości, która mogła już dotrzeć. Nowa wersja wymaga jednokrotnego uruchomienia
 **Biuro – aktualizacja bazy** po instalacji.
@@ -424,7 +426,9 @@ W Windows każde powiadomienie o pojedynczym nowym mailu ma własny cel, więc
 kliknięcie starszego powiadomienia w trakcie działania aplikacji otwiera właściwą
 wiadomość. Dostęp do konta i tożsamość wiadomości są ponownie sprawdzane;
 sam UID nie służy do wyszukania celu. Powiadomienie zbiorcze otwiera zakładkę
-E-mail. Instalator oznacza skrót identyfikatorem `Biuro.OfficeManager`; po
+E-mail lub Czat. Gdy system korzysta z ikony w zasobniku, kilka wiadomości z
+jednej partii pojawia się w jednym powiadomieniu. Instalator oznacza skrót
+identyfikatorem `Biuro.OfficeManager`; po
 aktualizacji zależności przebuduj EXE i instalator, aby dołączyć projekcje WinRT XML.
 
 ### Mail masowy do klientów

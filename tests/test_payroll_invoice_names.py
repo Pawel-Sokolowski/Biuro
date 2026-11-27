@@ -123,6 +123,16 @@ class PayrollInvoiceNamePersistenceTests(DbTestCase):
         self.assertEqual(after["pozycje_json"], before["pozycje_json"])
         self.assertEqual((after["kwota_netto"], after["kwota_brutto"]), (80.0, 98.4))
 
+    def test_regeneration_uses_contracts_for_invoice_month_not_latest_company_counts(self):
+        from app.db.dao_monthly import save_month_contracts
+
+        save_month_contracts(self.firma, self.MONTH, 3, 0, 0)
+        save_month_contracts(self.firma, "2026-11", 8, 0, 0)
+        result = FakturyLogic().generate_and_save_invoice(self.firma, self.MONTH)
+        saved = get_invoice_by_id(result["id"])
+        position, = json.loads(saved["pozycje_json"])
+        self.assertEqual((position["ilosc"], saved["kwota_netto"], saved["kwota_brutto"]), (3, 120, 147.6))
+
 
 if __name__ == "__main__":
     unittest.main()

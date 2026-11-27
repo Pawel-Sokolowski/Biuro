@@ -16,7 +16,7 @@ from app.db.dao_invoices import (
     create_or_update_invoice,
     generate_extra_services_invoice,
 )
-from app.db.dao_monthly import count_documents_for_month
+from app.db.dao_monthly import count_documents_for_month, get_month_contracts
 from app.utils.months import previous_month
 from app.utils.month_names import MONTHS_PL
 from app.services.payroll_names import payroll_invoice_service_name
@@ -308,7 +308,8 @@ class FakturyLogic:
         # ---------------- Kadry ----------------
         if kd_on:
             payroll_period = _invoice_period_label(miesiac)
-            for position in self._kadry_positions(company, stala_kd):
+            payroll_company = company if stala_kd > 0 else {**company, **get_month_contracts(firma_id, miesiac)}
+            for position in self._kadry_positions(payroll_company, stala_kd):
                 pozycje.append({**position, "nazwa": f"{position['nazwa']} {payroll_period}"})
 
         # ---------------- Usługi dodatkowe (zawsze) ----------------

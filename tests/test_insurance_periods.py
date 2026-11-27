@@ -73,5 +73,5 @@ class InsuranceViewTests(DbTestCase):
             row = read_codes(conn, [company], '2026-11')[company]
         from app.monthly_view.monthly_view_model import MonthlyViewModel
         model = MonthlyViewModel([row], 'kadry')
-        self.assertEqual(model.data(model.index(0,11)), '059000')
+        self.assertEqual(model.data(model.index(0,11)), '059000 · 2026-01-01')
         self.assertEqual(model.data(model.index(0,12)), '2028-12-31 · prognoza')

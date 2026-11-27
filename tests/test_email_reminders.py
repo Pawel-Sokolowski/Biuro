@@ -165,11 +165,11 @@ class ReminderDeliveryTests(DbTestCase):
         clock = at('2026-11-09')
         with patch('app.services.email_reminders.datetime', wraps=datetime) as current:
             current.now.return_value = clock
-            self.assertEqual(run_job('reminders', stop), {'sent': 1})
+            self.assertEqual(run_job('reminders', stop), {'sent': 1, 'failed': 0, 'mode': 'cancelled'})
             stop.clear()
-            self.assertEqual(run_job('reminders', stop), {'sent': 1})
+            self.assertEqual(run_job('reminders', stop), {'sent': 1, 'failed': 0, 'mode': 'cancelled'})
             stop.clear()
-            self.assertEqual(run_job('reminders', stop), {'sent': 0})
+            self.assertEqual(run_job('reminders', stop), {'sent': 0, 'failed': 0, 'mode': 'completed'})
         self.assertEqual(self.sender.call_count, 2)
         self.assertNotEqual(self.sender.call_args_list[0].args[2], self.sender.call_args_list[1].args[2])
 

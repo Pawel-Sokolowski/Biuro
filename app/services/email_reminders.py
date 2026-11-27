@@ -362,7 +362,8 @@ def run_reminder_batch(now=None, *, stop=None):
                 conn.commit()
                 sent += int(ok)
                 failed += int(not ok)
-        return _reminder_outcome(sent, failed)
+        mode = 'cancelled' if stop is not None and stop.is_set() else 'completed'
+        return _reminder_outcome(sent, failed, mode)
     finally:
         conn.close()
 

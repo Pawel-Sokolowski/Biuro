@@ -305,23 +305,12 @@ class FakturyLogic:
             if ilosc <= 0:
                 continue
             cena_netto = self._to_float(u.get("cena_netto", 0.0))
-            netto = float(money(decimal_value(cena_netto) * decimal_value(ilosc)))
-            stawka_raw = u.get("stawka_vat") or "0"
-            if isinstance(stawka_raw, str):
-                stawka_raw = stawka_raw.replace("%", "").strip()
-            try:
-                vat = int(float(stawka_raw))
-            except Exception:
-                vat = 0
-            brutto = round(netto * (1 + vat / 100), 2)
             pozycje.append({
                 "nazwa": u.get("nazwa"),
                 "ilosc": ilosc,
                 "jednostka": u.get("jednostka") or "szt.",
-                "netto": netto,
                 "cena_netto": cena_netto,
-                "vat": vat,
-                "brutto": brutto,
+                "vat": u.get("stawka_vat") or "0",
                 "kategoria": u.get("kategoria"),
                 "usluga_id": u.get("usluga_id"),
                 "extra_service_row_id": u.get("extra_service_row_id"),

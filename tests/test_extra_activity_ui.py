@@ -115,6 +115,19 @@ class ExtraActivityUiTests(DbTestCase):
         page.refresh()
         self.assertEqual(page.table.rowCount(), 0)
 
+    def test_monthly_billable_service_keeps_vat_exemption_in_the_draft(self):
+        import json
+        from app.db.dao_invoices import get_invoice_for_company_month
+
+        with get_conn() as conn:
+            conn.execute("UPDATE uslugi_dodatkowe SET stawka_vat='zw' WHERE id=%s", (self.service_id,))
+        self.assertTrue(dao_services.record_monthly_extra_service(
+            self.company_id, '2026-09', self.service_id, 1.5, 100, True, 'godz.', 1,
+        ))
+        invoice = get_invoice_for_company_month(self.company_id, '2026-09')
+        [position] = json.loads(invoice['pozycje_json'])
+        self.assertEqual((position['vat_code'], position['netto'], position['brutto']), ('zw', 150, 150))
+
     def test_existing_unlinked_activity_offers_only_same_client_tasks(self):
         dao_services.add_company_extra_service(self.company_id, "2026-09", self.service_id, 1, 100, True)
         right_task = save_task("Właściwe zadanie", firma_id=self.company_id, created_by=1, actor_id=1)

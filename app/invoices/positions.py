@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from app.utils.money import decimal_amount
 
 CENT = Decimal("0.01")
+ZERO_VAT_CODES = ("zw", "np", "np i", "np ii", "np ue oo", "oo", "0 kr", "0 wdt", "0 ex")
 
 
 def decode_positions(value: str | None) -> List[Dict[str, Any]]:
@@ -35,7 +36,7 @@ def vat_percent(value: Any, default: float = 23.0) -> float:
     if value in (None, ""):
         return default
     text = str(value).replace("%", "").strip().lower()
-    if text in ("zw", "np", "np i", "np ii", "oo", "0 kr", "0 wdt", "0 ex"):
+    if text in ZERO_VAT_CODES:
         return 0.0
     return float(decimal_value(text, default))
 
@@ -55,7 +56,7 @@ def normalize_position(position: Dict[str, Any], *, preserve_amounts: bool = Fal
         cena = decimal_value(result.get("netto")) / ilosc if ilosc else Decimal(0)
 
     raw_vat = str(result.get("vat", result.get("stawka_vat", ""))).strip().lower()
-    if raw_vat in ("zw", "np", "np i", "np ii", "oo", "0 kr", "0 wdt", "0 ex"):
+    if raw_vat in ZERO_VAT_CODES:
         result["vat_code"] = raw_vat
     elif result.get("vat_code") and vat != 0:
         result.pop("vat_code", None)

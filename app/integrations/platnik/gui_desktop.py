@@ -297,29 +297,36 @@ WIZARD = r'Kreator potwierdzania zestawów\s*[-–—]\s*krok\s*{step}\s*/\s*5$'
 GROUP_SEND_WIZARD = r'Kreator grupowego wysyłania zestawów do ZUS\s*[-–—]\s*krok\s*\d+\s*/\s*\d+$'
 
 
+def accessible_window(wrapper):
+    from pywinauto import Desktop
+
+    return Desktop(backend='uia').window(handle=wrapper.handle).wrapper_object()
+
+
+def dialog_button(wrapper, *captions):
+    wanted = {label(caption) for caption in captions}
+    controls = [control for control in accessible_window(wrapper).descendants(control_type='Button')
+                if control.element_info.class_name in ('TCorelButton', 'TButton', 'Button')
+                and menu_label(control.window_text()) in wanted
+                and control.is_visible() and control.is_enabled()]
+    if len(controls) > 1:
+        raise ReadError('ProfileMismatch')
+    return controls[0] if controls else None
+
+
 def advance_wizard(app, step, button, *, message=None):
     if not interactive_desktop():
         raise ReadError('DesktopUnavailable')
     dialog = app.window(title_re=WIZARD.format(step=step))
     dialog.wait('exists visible enabled', timeout=15)
     wrapper = dialog.wrapper_object()
-    uia_dialog = None
-
-    def accessible_dialog():
-        nonlocal uia_dialog
-        if uia_dialog is None:
-            from pywinauto import Desktop
-
-            uia_dialog = Desktop(backend='uia').window(handle=wrapper.handle).wrapper_object()
-        return uia_dialog
-
     if message:
         shown = any(message in label(control.window_text())
                     for control in wrapper.descendants(class_name='Static') if control.is_visible())
         if not shown:
             from pywinauto.uia_defines import NoPatternInterfaceError
 
-            accessible = accessible_dialog()
+            accessible = accessible_window(wrapper)
             shown = any(message in label(control.window_text()) for control in
                         accessible.descendants(control_type='Text') if control.is_visible())
             if not shown:
@@ -335,14 +342,10 @@ def advance_wizard(app, step, button, *, message=None):
                 if menu_label(control.window_text()) == label(button)
                 and control.is_visible() and control.is_enabled()]
     if not controls:
-        # Płatnik also uses Delphi TCorelButton controls whose names are exposed via UIA.
-        controls = [control for control in accessible_dialog().descendants(control_type='Button')
-                    if control.element_info.class_name == 'TCorelButton'
-                    and menu_label(control.window_text()) == label(button)
-                    and control.is_visible() and control.is_enabled()]
-        if len(controls) != 1:
+        control = dialog_button(wrapper, button)
+        if control is None:
             raise ReadError('ProfileMismatch')
-        controls[0].invoke()
+        control.invoke()
         return
     if len(controls) != 1:
         raise ReadError('ProfileMismatch')

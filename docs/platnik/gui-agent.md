@@ -13,10 +13,35 @@ Składki ZUS (miesięcznie) → kolejka PostgreSQL → agent Windows → Płatni
 
 ## Koniec dnia na komputerze kadr
 
+### Wysyłka i potwierdzenia
+
+1. Na komputerze kadr zapisz PIN przez **Ustawienia → Płatnik → PIN
+   certyfikatu Płatnika…**. To poświadczenie bieżącego konta Windows.
+   Przy wymianie certyfikatu zapisz PIN nowego certyfikatu lub usuń wpis.
+2. W Biuro wybierz **Kadry → Sprawdzanie → Składki ZUS (miesięcznie) →
+   Płatnik — koniec dnia… → Wyślij i pobierz UPO…**.
+3. W Płatniku otwórz **Narzędzia → Wyślij za wielu płatników**, przejdź do
+   wyboru zestawów i wskaż dokumenty. Po zatwierdzeniu listy, kiedy przycisk
+   **Dalej** jest aktywny, kliknij w Biuro **Wyślij wybrane zestawy do ZUS**.
+   Agent kontynuuje sprawdzanie, podpisanie i przekazanie wskazanych zestawów
+   przez kreator Płatnika. Jeśli Płatnik wyświetli komunikat wymagający decyzji,
+   obsłuż go w Płatniku i kliknij **Wznów otwarty kreator**. Ponowne żądanie
+   PIN-u na tym samym etapie wymaga sprawdzenia przez operatora.
+4. Po wysyłce sprawdź wynik w Płatniku. Otwórz **Narzędzia → Pobierz za wielu
+   płatników**, wybierz wysłane zestawy i zatwierdź listę. W Biuro kliknij
+   **Pobierz i zarejestruj potwierdzenia**. Po zamknięciu kreatora przez agenta
+   Biuro odczyta statusy i UPO przez skonfigurowane połączenie SQL. Jeśli ZUS
+   udostępni potwierdzenie później, uruchom pobieranie potwierdzeń ponownie.
+
+Wysyłka dotyczy zestawów zaznaczonych w Płatniku. Zaznaczenie firm w Biuro
+określa zakres odczytu SQL. Do obsługi kreatorów wystarcza działające okno
+Płatnika. Profil tabeli jest potrzebny w osobnym trybie odczytu rejestru.
+[Instrukcja ZUS, rozdziały 5.6.14.1 i 5.6.14.2](https://pobierz.zus.pl/dystrybucja/a1_10_02_002/dokumentacja/Dok_Uzytk_A1_10.02.002_wersja_7.8.pdf)
+
+### Odczyt po wysyłce
+
 1. Na komputerze kadr otwórz Płatnika i zakończ pracę dla właściwych płatników.
-   Zweryfikuj zestawy i przejdź przez kreator wysyłki na swoim koncie. Dla
-   wielu zestawów możesz użyć **Kreatora grupowego wysyłania zestawów do ZUS**.
-   Certyfikat, podpis, PIN i decyzje w komunikatach obsługuj w Płatniku.
+   Jeśli wysyłkę wykonano bezpośrednio w Płatniku, sprawdź raport wysyłki.
 2. Dla wysłanych zestawów użyj **Narzędzia → Pobierz i rejestruj
    potwierdzenie**. Sprawdź wynik kreatora w Płatniku. Jeśli chcesz powierzyć
    ten krok agentowi, skonfiguruj i przetestuj osobny widok zestawów wysłanych.

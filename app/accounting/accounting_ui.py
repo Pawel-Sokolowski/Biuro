@@ -644,25 +644,35 @@ class AccountingPage(QWidget):
         box.setWindowTitle('Płatnik — koniec dnia')
         box.setText('Sprawdź wysyłki i potwierdzenia za bieżący oraz poprzedni miesiąc.')
         box.setInformativeText(
-            'Zweryfikuj i podpisz deklaracje w Płatniku. Jeśli ręcznie rejestrowano potwierdzenia, '
-            'pobierz ich wyniki przez SQL. Agent GUI wymaga otwartego Płatnika i sprawdzonego '
-            'profilu na tym komputerze.'
+            'Wybierz zestawy w Płatniku, aby obsłużyć wysyłkę i potwierdzenia. '
+            'Jeśli potwierdzenia są już zarejestrowane, pobierz ich wyniki przez SQL. '
+            'Odczyt rejestru przez agenta GUI wymaga sprawdzonego profilu na tym komputerze.'
         )
         sql = box.addButton('Pobierz wyniki przez SQL', QMessageBox.ButtonRole.AcceptRole)
         gui = None
+        filing = None
+        if sys.platform == 'win32':
+            filing = box.addButton('Wyślij i pobierz UPO…', QMessageBox.ButtonRole.AcceptRole)
         if sys.platform == 'win32' and self.platnik_daily_supported:
             gui = box.addButton('Uruchom agenta GUI', QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(sql)
         box.exec()
         choice = box.clickedButton()
-        if choice is sql:
+        if choice is sql or (filing is not None and choice is filing):
             from app.services.checking_refresh import run_now
             month = datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
-            self._run_platnik_day(
-                lambda: run_now(self.actor_id, 'platnik_declarations', sql_ids, month),
-                self._platnik_day_sql_done,
-            )
+
+            def sync_results():
+                return run_now(self.actor_id, 'platnik_declarations', sql_ids, month)
+
+            if choice is sql:
+                self._run_platnik_day(sync_results, self._platnik_day_sql_done)
+            else:
+                from app.accounting.platnik_filing_ui import PlatnikFilingDialog
+                dialog = PlatnikFilingDialog(sync_results, self._platnik_day_sql_done, self)
+                dialog.exec()
+                dialog.deleteLater()
         elif gui is not None and choice is gui:
             from app.integrations.platnik.gui_agent import diagnose, local_queue_target, run_pending
             from app.services.platnik_gui import request_daily_checks

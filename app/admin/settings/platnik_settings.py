@@ -1,5 +1,6 @@
 """Separate read-only Płatnik SQL connection, shared with the server worker."""
 from datetime import datetime
+import sys
 from zoneinfo import ZoneInfo
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QFormLayout,QLineEdit,QCheckBox,
     QComboBox,QPushButton,QLabel,QSpinBox,QMessageBox,QProgressBar,QDialog,QScrollArea,QPlainTextEdit)
@@ -148,6 +149,11 @@ class PlatnikSettings(QWidget):
         self.profile_button.clicked.connect(self.open_profile)
         self.buttons.append(self.profile_button)
         layout.addWidget(self.profile_button)
+        if sys.platform == 'win32':
+            from app.accounting.platnik_filing_ui import open_pin_settings
+            pin_button = QPushButton('PIN certyfikatu Płatnika…')
+            pin_button.clicked.connect(lambda: open_pin_settings(self))
+            layout.addWidget(pin_button)
         self.agent_test_button = QPushButton('Test agenta GUI krok po kroku (bez importu)')
         self.agent_test_button.clicked.connect(self.test_agent)
         self.buttons.append(self.agent_test_button)

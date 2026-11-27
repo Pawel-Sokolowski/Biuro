@@ -166,7 +166,7 @@ class CheckingIntegrationTests(DbTestCase):
         self.assertEqual(page.table.item(0, 0).text(), 'B')
         page.close()
 
-    def test_checking_always_uses_short_company_names(self):
+    def test_checking_disambiguates_only_civil_companies_with_duplicate_short_names(self):
         from PyQt6.QtCore import Qt
         from app.accounting.accounting_ui import AccountingPage
         from app.db.dao_companies import get_companies_filtered, save_partner
@@ -194,6 +194,8 @@ class CheckingIntegrationTests(DbTestCase):
         rows = list_accounting(self.admin, '2026-11')
         returned = {row['id']: row for row in rows if row['id'] in expected}
         self.assertEqual({company_id: row['nazwa'] for company_id, row in returned.items()}, expected)
+        expected[self.company] = 'Wspólny skrót — Anna Nowak, Jan Kowalski'
+        self.assertEqual({company_id: row['nazwa_wyswietlana'] for company_id, row in returned.items()}, expected)
 
         page = AccountingPage(self.admin)
         self.addCleanup(page.close)
@@ -217,6 +219,9 @@ class CheckingIntegrationTests(DbTestCase):
         page.search.setText('Druga firma do sprawdzenia')
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.item(0, 0).data(Qt.ItemDataRole.UserRole), other)
+        page.search.setText('Anna Nowak')
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.item(0, 0).data(Qt.ItemDataRole.UserRole), self.company)
 
     def test_hr_uses_one_company_identity_for_all_civil_partnership_employee_records(self):
         from PyQt6.QtCore import Qt

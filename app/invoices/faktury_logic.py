@@ -39,9 +39,15 @@ class FakturyLogic:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT *
-            FROM statusy_miesieczne
-            WHERE firma_id = %s AND miesiac = %s
+            SELECT s.*, EXISTS (
+                SELECT 1 FROM monthly_document_imports d
+                WHERE d.firma_id = s.firma_id AND d.miesiac = s.miesiac
+            ) OR EXISTS (
+                SELECT 1 FROM app_settings a
+                WHERE a.klucz = 'manual_document_count_' || s.firma_id || '_' || s.miesiac
+            ) AS document_count_recorded
+            FROM statusy_miesieczne s
+            WHERE s.firma_id = %s AND s.miesiac = %s
         """, (firma_id, miesiac))
         row = cur.fetchone()
         conn.close()
@@ -49,10 +55,12 @@ class FakturyLogic:
 
     def _get_document_count_for_invoice(self, firma_id: int, miesiac: str, fallback: int) -> int:
         document_month = previous_month(miesiac)
+        previous_status = self._get_month_status(firma_id, document_month)
+        if previous_status and (previous_status.get("document_count_recorded") or previous_status.get("ilosc_dok")):
+            return int(previous_status.get("ilosc_dok") or 0)
         imported_count = count_documents_for_month(firma_id, document_month)
         if imported_count:
             return imported_count
-        previous_status = self._get_month_status(firma_id, document_month)
         if previous_status and previous_status.get("ilosc_dok") is not None:
             return int(previous_status.get("ilosc_dok") or 0)
         return int(fallback or 0)

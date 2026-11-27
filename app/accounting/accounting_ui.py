@@ -13,7 +13,7 @@ from app.integrations.enova.accounting import (list_accounting, decoded, documen
 from app.integrations.enova.jpk import STATUSES
 from app.companies.cennik_keys import company_accounting_type
 from app.companies.identities import is_civil
-from app.companies.company_names import short_company_display_name
+from app.companies.company_names import company_display_name, short_company_display_name
 from app.integrations.enova.document_counts import normalize_nip
 from app.utils.background import CommandRunner, TaskRunner
 from app.utils.table_sorting import SortableItem, apply_header_sort
@@ -102,7 +102,7 @@ def _search_haystack(row):
     osoby na zastępstwie, jak i dla osoby, którą zastępuje.
     """
     parts = [
-        short_company_display_name(row),
+        company_display_name(row),
         row.get('nazwa_skrocona'),
         row.get('nazwa_podstawowa'),
         row.get('nazwa'),
@@ -388,8 +388,9 @@ class AccountingPage(QWidget):
                  else self.declaration_tables[department] if key=='declarations' or key.startswith('form:')
                  else self.tables[department])
         by_name = {}
+        display_name = short_company_display_name if key.startswith('hr') else company_display_name
         for company in self.refresh_companies():
-            name = short_company_display_name(company)
+            name = display_name(company)
             by_name.setdefault(name, []).append(company['id'])
         ids = set()
         for row in {item.row() for item in table.selectedItems()}:
@@ -456,7 +457,6 @@ class AccountingPage(QWidget):
         rows = [
             {
                 **row,
-                'nazwa': short_company_display_name(row),
                 'checking_period': month,
             }
             for row in rows
@@ -570,7 +570,7 @@ class AccountingPage(QWidget):
                 rows.append((company, nip, breakdown.get(nip, {}).get(scope) or {}))
         table.setRowCount(len(rows))
         for index, (company, nip, report) in enumerate(rows):
-            name = _item(short_company_display_name(company))
+            name = _item(company_display_name(company))
             name.setData(Qt.ItemDataRole.UserRole, company['id'])
             cells = [name, _item(nip or None)]
             for key in CONTRIBUTION_COLUMNS:
@@ -711,7 +711,7 @@ class AccountingPage(QWidget):
             simple = row['id'] in simple_ids
             historical = previous_active_types(row, self.period) if department == 'accounting' else set()
             cells = [
-                _item(short_company_display_name(row)),
+                _item(company_display_name(row)),
                 _item(row.get('nip')),
                 _item(row.get('forma_opodatkowania')),
             ]
@@ -781,7 +781,7 @@ class AccountingPage(QWidget):
             for kind in [None, *sorted(kinds)]:
                 values = comparison(row, self.period, department, kind)
                 percent = 'Nowe' if values['new'] else (f"{values['percent']:+.1f}%" if values['percent'] is not None else '—')
-                records.append([short_company_display_name(row), row.get('ksiegowa') or row.get('kadrowa') or '—',
+                records.append([company_display_name(row), row.get('ksiegowa') or row.get('kadrowa') or '—',
                                 'Razem' if kind is None else TYPE_LABELS.get(kind, kind),
                                 values['current'], values['previous'], values['delta'], percent, row['id']])
         self._fill(table, headers, records)
@@ -827,7 +827,7 @@ class AccountingPage(QWidget):
             if not entries and not selected:
                 # Nazwa formularza wg firmy (PIT-5/PIT-5L), nie wg podpisu zakładki.
                 empty_name = self._declaration_name(apply_not_sent or {'form': form}, row) if form else '—'
-                records.append([short_company_display_name(row), owner, '—', empty_name,
+                records.append([company_display_name(row), owner, '—', empty_name,
                                 'Brak danych' if decoded(row.get('checking')).get('declarations') is not None else 'Nie sprawdzono',
                                 '—', '—', '—', '—', 'Brak danych źródłowych', '—', '', False, row['id']])
                 receipts.append('')
@@ -846,7 +846,7 @@ class AccountingPage(QWidget):
                 issue = 'Nie wysyłane przez program' if form_key(entry['form']) in NOT_SENT_FORMS else declaration_issue(entry)
                 # Uwaga: kolejność kolumn = nagłówki w _fill; ostatnia kolumna to stan
                 # „bez żółtego” (PIT-y, których dziś nie wysyłamy).
-                records.append([short_company_display_name(row), owner, employee, name,
+                records.append([company_display_name(row), owner, employee, name,
                                 entry.get('status_text') or STATUSES.get(entry.get('status'), 'Nie sprawdzono'),
                                 _date(entry.get('sent_at')),
                                 'Tak' if (entry.get('upo') or entry.get('upo_confirmed_at')) else '—',

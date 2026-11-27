@@ -84,7 +84,7 @@ def flush_copy(copy_id):
                     return False
                 with get_conn() as conn:
                     conn.execute("UPDATE email_sent_copies SET state = 'appended' WHERE id = %s", (copy_id,))
-            sync_folder(account_id, target)
+            sync_folder(account_id, target, full_sync=False)
             with get_conn() as conn:
                 conn.execute('DELETE FROM email_sent_copies WHERE id = %s', (copy_id,))
             return True

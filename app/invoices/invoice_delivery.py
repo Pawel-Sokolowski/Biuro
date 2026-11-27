@@ -123,7 +123,7 @@ def _log_delivery(invoice_id, recipients, attachment_size, message_id):
         invoice_id, len(recipients), attachment_size, message_id)
 
 
-def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
+def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None, smtp_reserved=False):
     conn = get_conn()
     try:
         predicate = ''
@@ -134,12 +134,15 @@ def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
                             AND invoice_email_actor_id IS NOT DISTINCT FROM %s'''
             snapshot = (expected.get('invoice_email_recipients'), expected.get('invoice_email_account_id'),
                         expected.get('invoice_email_actor_id'))
+        if smtp_reserved:
+            predicate += " AND invoice_email_status = 'sending'"
+        else:
+            predicate += " AND invoice_email_status IN ('queued','preparing','failed_before_send')"
         conn.execute('''UPDATE faktury SET invoice_email_status=%s, invoice_email_error=%s,
                         invoice_email_pdf_path=COALESCE(%s,invoice_email_pdf_path),
                         invoice_email_sent_at=CASE WHEN %s='sent' THEN now() ELSE invoice_email_sent_at END
-                        WHERE id=%s AND (%s NOT IN ('failed_before_send','blocked_before_send')
-                        OR COALESCE(invoice_email_status,'') IN ('queued','preparing','failed_before_send'))''' + predicate,
-                     (status,error,pdf,status,invoice_id,status) + snapshot)
+                        WHERE id=%s''' + predicate,
+                     (status,error,pdf,status,invoice_id) + snapshot)
         conn.commit()
     finally:
         conn.close()
@@ -207,19 +210,15 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
     if not reserved:
         return {'status':'uncertain','error':'Inny proces obsłużył tę wysyłkę. Nie wysyłam ponownie.'}
     try:
-        ok, info = _send_smtp_message(account_id, config, message, recipients, subject, save_copy=True)
-        # Jedna wiadomość na fakturę: lista odbiorców trafia do „Do", nigdy do
-        # UDW, więc klient widzi własny adres i załącznik. Zapisujemy rozmiar,
-        # żeby dało się sprawdzić, czy PDF naprawdę poszedł.
-        if ok:
-            _log_delivery(invoice_id, recipients, len(attachment), message['Message-ID'])
+        status, info = _send_smtp_message(account_id, config, message, recipients, subject, save_copy=True)
     except Exception as exc:
-        ok, info = False, str(exc)
-    if not ok:
-        _delivery_state(invoice_id,'uncertain',error=info,pdf=pdf)
-        return {'status':'uncertain','error':info}
+        status, info = 'uncertain', str(exc)
+    if status != 'sent':
+        _delivery_state(invoice_id,status,error=info,pdf=pdf,expected=invoice,smtp_reserved=True)
+        return {'status':status,'error':info}
     warning = info if info and info != 'OK' else None
-    _delivery_state(invoice_id,'sent',error=warning,pdf=pdf)
+    _delivery_state(invoice_id,'sent',error=warning,pdf=pdf,expected=invoice,smtp_reserved=True)
+    _log_delivery(invoice_id, recipients, len(attachment), message['Message-ID'])
     return {'status':'sent','recipients':recipients,'path':pdf,'warning':warning}
 
 

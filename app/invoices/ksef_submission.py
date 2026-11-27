@@ -544,7 +544,7 @@ def process_invoice_batch(invoice_ids, actor_id, *, send=False, progress=None):
             delivery = deliver_if_queued(invoice_id, actor_id, path)
             accepted = _authorized_invoice(invoice_id, actor_id)
             result["accepted"].append({"id": invoice_id, "number": accepted.get("ksef_numer"), "path": path, "delivery": delivery})
-            if delivery and delivery.get("status") in ("uncertain", "blocked_before_send"):
+            if delivery and delivery.get("status") in ("uncertain", "blocked_before_send", "failed_before_send"):
                 result["errors"].append({"id":invoice_id, "description":delivery.get("error") or "Sprawdź wynik wysyłki e-mail."})
         except Exception as exc:
             result["errors"].append({"id": invoice_id, "description": str(exc)})

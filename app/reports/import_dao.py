@@ -8,7 +8,7 @@ import re
 
 from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
-from app.db.dao_monthly import contracts_by_month
+from app.db.dao_monthly import contracts_by_month, get_month_contracts_conn
 from app.reports.import_parse import (
     MIN_YEAR,
     compute_employee_report,
@@ -313,6 +313,7 @@ def _apply_kadry_contracts(conn, totals: Dict[Tuple[int, str, str], float]) -> i
         by_firm.setdefault(firma_id, {}).setdefault(month, {})[f"{typ}_ilosc"] = max(0, round(value / price))
     changed = 0
     for firma_id, months in by_firm.items():
+        conn.execute("SELECT id FROM firmy WHERE id = %s FOR NO KEY UPDATE", (firma_id,))
         for month in sorted(months):
             current = get_month_contracts_conn(conn, firma_id, month)
             current.update(months[month])
@@ -336,17 +337,6 @@ def _apply_kadry_contracts(conn, totals: Dict[Tuple[int, str, str], float]) -> i
         )
         changed += 1
     return changed + (_apply_kadry_prices(conn, no_price) if no_price else 0)
-
-
-def get_month_contracts_conn(conn, firma_id: int, month: str) -> Dict[str, int]:
-    row = conn.execute(
-        "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM kadry_umowy_miesieczne "
-        "WHERE firma_id = %s AND miesiac <= %s ORDER BY miesiac DESC LIMIT 1",
-        (firma_id, month),
-    ).fetchone() or conn.execute(
-        "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM firmy WHERE id = %s", (firma_id,)
-    ).fetchone()
-    return {k: int((row[k] if row else 0) or 0) for k in ("uop_ilosc", "uz_ilosc", "uod_ilosc")}
 
 
 def _apply_kadry_prices(conn, totals: Dict[Tuple[int, str, str], float]) -> int:

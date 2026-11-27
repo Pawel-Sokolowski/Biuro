@@ -544,11 +544,16 @@ class MonthlyViewPage(QWidget):
 
         self.model_ks = MonthlyViewModel([], "ksiegowosc", self)
         self.model_kadry = MonthlyViewModel([], "kadry", self)
+        for model in (self.model_ks, self.model_kadry):
+            model.save_failed.connect(self._show_save_error, Qt.ConnectionType.QueuedConnection)
 
         self._build_ui()
         self._load_initial_data()
         self.apply_department_default()
         self._setup_timer()
+
+    def _show_save_error(self, message):
+        QMessageBox.warning(self, "Widok miesięczny", f"Nie udało się zapisać zmiany. {message}")
 
     def apply_department_default(self):
         from app.preferences.department import default_department

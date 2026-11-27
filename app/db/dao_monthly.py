@@ -173,29 +173,34 @@ def get_month_contracts(firma_id: int, miesiac: str) -> Dict[str, int]:
     """Ilość umów w danym miesiącu: wpis miesięczny, a gdy go brak - ostatni wcześniejszy, a potem dane firmy."""
     conn = get_conn()
     try:
-        row = conn.execute(
-            """
-            SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM kadry_umowy_miesieczne
-            WHERE firma_id = %s AND miesiac <= %s
-            ORDER BY miesiac DESC LIMIT 1
-            """,
-            (firma_id, miesiac),
-        ).fetchone()
-        if row is None:
-            row = conn.execute(
-                "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM firmy WHERE id = %s", (firma_id,)
-            ).fetchone()
+        return get_month_contracts_conn(conn, firma_id, miesiac)
     finally:
         conn.close()
-    row = row or {}
-    return {k: int((row.get(k) if row else 0) or 0) for k in ("uop_ilosc", "uz_ilosc", "uod_ilosc")}
+
+
+def get_month_contracts_conn(conn, firma_id: int, miesiac: str) -> Dict[str, int]:
+    row = conn.execute(
+        "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM kadry_umowy_miesieczne "
+        "WHERE firma_id = %s AND miesiac <= %s ORDER BY miesiac DESC LIMIT 1",
+        (firma_id, miesiac),
+    ).fetchone() or conn.execute(
+        "SELECT uop_ilosc, uz_ilosc, uod_ilosc FROM firmy WHERE id = %s", (firma_id,)
+    ).fetchone()
+    return {k: int((row[k] if row else 0) or 0) for k in ("uop_ilosc", "uz_ilosc", "uod_ilosc")}
 
 
 @office_endpoint('app.db.dao_monthly.save_month_contracts')
-def save_month_contracts(firma_id: int, miesiac: str, uop: int, uz: int, uod: int) -> None:
-    """Zapisuje ilość umów w miesiącu; jeśli to najnowszy miesiąc, aktualizuje też kartę firmy."""
+def save_month_contracts(firma_id: int, miesiac: str, uop: Optional[int], uz: Optional[int], uod: Optional[int]) -> None:
+    """Zapisuje podane liczby umów i aktualizuje kartę firmy z najnowszego miesiąca."""
     conn = get_conn()
     try:
+        # Lock the company even when no contract row exists for the edited month.
+        conn.execute("SELECT id FROM firmy WHERE id = %s FOR NO KEY UPDATE", (firma_id,))
+        if None in (uop, uz, uod):
+            current = get_month_contracts_conn(conn, firma_id, miesiac)
+            uop = current["uop_ilosc"] if uop is None else uop
+            uz = current["uz_ilosc"] if uz is None else uz
+            uod = current["uod_ilosc"] if uod is None else uod
         conn.execute(
             """
             INSERT INTO kadry_umowy_miesieczne (firma_id, miesiac, uop_ilosc, uz_ilosc, uod_ilosc)

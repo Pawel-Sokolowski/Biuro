@@ -6,12 +6,12 @@ from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
 from app.utils.background import TaskRunner,CommandRunner
 from app.widgets.flow_layout import FlowLayout
 from app.services.checking_refresh import run_now,latest
-from app.companies.company_names import short_company_display_name
+from app.companies.company_names import company_display_name
 
 LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik', 'platnik_declarations':'Płatnik — formularze ZUS',
           'platnik_annual': 'Płatnik — IWA/ZSWA','declaration_year':'Deklaracje za cały rok'}
 STATES = {'queued':'W kolejce workera','running':'Pobieranie','completed':'Zakończono',
-          'partial':'Zakończono z błędami części firm','failed':'Błąd pobierania'}
+          'partial':'Zakończono częściowo','failed':'Błąd pobierania'}
 
 
 class CheckingRefreshControls(QWidget):
@@ -93,7 +93,7 @@ class CheckingRefreshControls(QWidget):
         listing = QListWidget()
         listing.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         for company in companies:
-            company_name = short_company_display_name(company)
+            company_name = company_display_name(company)
             item = QListWidgetItem(f"{company_name} | {company.get('nip') or 'brak NIP-u'}")
             item.setData(Qt.ItemDataRole.UserRole,company['id'])
             listing.addItem(item)
@@ -203,13 +203,16 @@ class CheckingRefreshControls(QWidget):
         box.setWindowTitle('Wynik pobierania ze źródła')
         box.setTextFormat(Qt.TextFormat.PlainText)
         box.setText(self.status.text())
-        companies = {row['id']: short_company_display_name(row)
+        companies = {row['id']: company_display_name(row)
                      for row in self.companies()}
         lines = []
         for result in self.result.get('results',[]):
             company = companies.get(result.get('company_id'),str(result.get('company_id') or '—'))
             success = result.get('ok',result.get('state')=='ok')
-            lines.append(company+': '+('pobrano' if success else 'nie pobrano')+'\n'+json.dumps(result,ensure_ascii=False))
+            status = 'pobrano' if success else 'nie pobrano'
+            if success and result.get('hr_failed'):
+                status = 'pobrano częściowo. Odczyt terminów kadrowych nie powiódł się.'
+            lines.append(company+': '+status+'\n'+json.dumps(result,ensure_ascii=False))
         box.setDetailedText('\n\n'.join(lines) or self.result.get('error') or 'Worker jeszcze nie zakończył żądania.')
         box.exec()
 

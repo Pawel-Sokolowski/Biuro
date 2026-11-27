@@ -22,7 +22,6 @@ from app.tasks.tasks_ui import TasksPage
 from app.notifications import NotificationCenter
 from app.kalendarz.calendar_ui import CalendarPage
 from app.dashboard.dashboard_ui import DashboardPage
-from app.widgets.flow_layout import FlowLayout
 
 from PyQt6.QtCore import QTimer, QSize
 from typing import Optional
@@ -446,8 +445,10 @@ class OfficeManagerApp(QMainWindow):
         lbl_user.setStyleSheet("font-size: 16px;")
         header_layout.addWidget(lbl_user)
 
-        # --- Live timer widget (po prawej stronie nagłówka) ---
-        # kontener i layout
+        # Wszystkie informacje o aktywnym stoperze i przyciski nagłówka
+        # są zakotwiczone po prawej stronie.
+        header_layout.addStretch(1)
+
         live_container = QWidget()
         live_layout = QHBoxLayout(live_container)
         live_layout.setContentsMargins(0, 0, 0, 0)
@@ -467,18 +468,26 @@ class OfficeManagerApp(QMainWindow):
             live_layout.addWidget(label)
 
         header_layout.addWidget(live_container)
-        actions = FlowLayout()
-        header_layout.addLayout(actions, 1)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        actions.setAlignment(Qt.AlignmentFlag.AlignRight)
+        header_layout.addLayout(actions)
+
         self.notification_center = NotificationCenter(self.pracownik_id, self._open_assignment_notification, header)
         actions.addWidget(self.notification_center)
+
         self.btn_general_timer = QPushButton("▶ Start stopera")
         self.btn_general_timer.setToolTip("Uruchom stoper dla zadań ogólnych (bez firmy)")
         self.btn_general_timer.clicked.connect(self._toggle_general_timer)
         actions.addWidget(self.btn_general_timer)
+
         self.btn_employee_timers = QPushButton("Mój czas")
         self.btn_employee_timers.setToolTip("Przeglądaj i poprawiaj swój czas we wszystkich firmach")
         self.btn_employee_timers.clicked.connect(self._open_employee_timers)
         actions.addWidget(self.btn_employee_timers)
+
         from app.remote.state import client
         if client() is not None:
             logout = QPushButton('Wyloguj')

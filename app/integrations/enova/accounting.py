@@ -3,7 +3,7 @@ from app.remote.boundary import endpoint as office_endpoint
 import calendar
 import datetime
 import json
-from app.db.company_labels import company_label_sql, short_company_name_sql
+from app.db.company_labels import short_company_name_sql
 from app.db.dao_conn import get_conn
 from app.security.authorization import allowed_tabs, assigned_company_ids
 from app.companies.cennik_keys import company_accounting_type
@@ -109,7 +109,7 @@ def list_accounting(actor_id, month):
     prior = history_months(month)
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute(f'''SELECT f.id,{company_label_sql('f')} AS nazwa,
+        rows = conn.execute(f'''SELECT f.id,{short_company_name_sql('f')} AS nazwa,
             {short_company_name_sql('f')} AS nazwa_podstawowa,
             f.nazwa AS nazwa_pelna,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,f.status_vat,f.vat_czynny,s.ilosc_dok,
             a.payload::text AS snapshot,j.payload::text AS jpk,c.payload::text AS checking,

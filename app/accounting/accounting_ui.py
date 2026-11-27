@@ -100,7 +100,8 @@ def _search_haystack(row):
     Obejmuje też opiekuna zastępowanego, żeby „moje firmy” działało zarówno dla
     osoby na zastępstwie, jak i dla osoby, którą zastępuje.
     """
-    parts = [row.get('nazwa'), row.get('nazwa_pelna'), row.get('nip'), row.get('ksiegowa'), row.get('kadrowa')]
+    parts = [row.get('nazwa_podstawowa'), row.get('nazwa'), row.get('nazwa_pelna'),
+             row.get('nip'), row.get('ksiegowa'), row.get('kadrowa')]
     for department in ('accounting', 'payroll'):
         parts.append((row.get('owner_original') or {}).get(department))
         parts.append((row.get(f'{department}_substitute') or {}).get('zastepowany'))
@@ -442,7 +443,14 @@ class AccountingPage(QWidget):
         self.source_note.setText('Nie udało się odczytać danych: ' + str(exc))
 
     def render(self, rows, month):
-        rows = [{**row, 'checking_period': month} for row in rows]
+        rows = [
+            {
+                **row,
+                'nazwa': row.get('nazwa_podstawowa') or row.get('nazwa'),
+                'checking_period': month,
+            }
+            for row in rows
+        ]
         for row in rows:
             for field in ('checking', 'snapshot', 'jpk', 'hr', 'checking_obligations'):
                 row[field] = decoded(row.get(field))

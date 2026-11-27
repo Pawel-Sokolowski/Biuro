@@ -166,7 +166,7 @@ class CheckingIntegrationTests(DbTestCase):
         self.assertEqual(page.table.item(0, 0).text(), 'B')
         page.close()
 
-    def test_only_civil_companies_with_colliding_labels_show_partner_names(self):
+    def test_checking_always_uses_short_company_names(self):
         from PyQt6.QtCore import Qt
         from app.accounting.accounting_ui import AccountingPage
         from app.db.dao_companies import get_companies_filtered, save_partner
@@ -180,11 +180,21 @@ class CheckingIntegrationTests(DbTestCase):
         save_partner(self.company, {'imie_pierwsze': 'Anna', 'nazwisko': 'Nowak'})
         save_partner(other, {'imie_pierwsze': 'Tomasz', 'nazwisko': 'Inny'})
         save_partner(unique, {'imie_pierwsze': 'Ewa', 'nazwisko': 'Inna'})
-        expected = {self.company: 'Wspólny skrót — Anna Nowak, Jan Kowalski',
-                    other: 'Wspólny skrót', unique: 'Unikalna'}
+
+        expected = {
+            self.company: 'Wspólny skrót',
+            other: 'Wspólny skrót',
+            unique: 'Unikalna',
+        }
+
         search = get_companies_filtered('Jan Kowalski', 'Wszystkie', None, self.admin)
-        self.assertEqual([(r['id'], r['nazwa_wyswietlana']) for r in search], [(self.company, expected[self.company])])
+        self.assertEqual(len(search), 1)
+        self.assertEqual(search[0]['id'], self.company)
+
         rows = list_accounting(self.admin, '2026-11')
+        returned = {row['id']: row for row in rows if row['id'] in expected}
+        self.assertEqual({company_id: row['nazwa'] for company_id, row in returned.items()}, expected)
+
         page = AccountingPage(self.admin)
         self.addCleanup(page.close)
         page.render(rows, '2026-11')
@@ -203,6 +213,7 @@ class CheckingIntegrationTests(DbTestCase):
             table.selectRow(row)
             self.assertEqual(page.selected_company_ids(), [company_id])
         self.assertEqual(seen, set(expected))
+
         page.search.setText('Druga firma do sprawdzenia')
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.item(0, 0).data(Qt.ItemDataRole.UserRole), other)

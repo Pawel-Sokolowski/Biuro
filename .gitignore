@@ -74,3 +74,4 @@ platnik-schema*.json
 /docs/dev-database.md
 /app/db/migrations/versions/20261116_03_service_tables.py
 /app/db/migrations/versions/20261116_02_index_cleanup.py
+/platnik_ui_dump/

@@ -18,7 +18,7 @@ from app.db.dao_companies import (
     delete_contact, get_pricing_kadry, get_ksiegowosc_options,
     get_partners, save_partner, delete_partner,
     get_company_field_options, get_tax_offices,
-    get_employees_list, get_pelnomocnictwa, set_pelnomocnictwa,
+    get_employees_list, get_pelnomocnictwa, update_pelnomocnictwa,
 )
 from app.db.dao_notes import (
     get_notes_for_company, save_company_note)
@@ -193,7 +193,6 @@ class CompanyForm(QDialog):
     def _build(self, snapshot):
         options = snapshot['options'] if snapshot is not None else None
         employees = snapshot['employees'] if snapshot is not None else get_employees_list()
-        self._employees = employees
         cash_default = snapshot['cash_default'] if snapshot is not None else self._checkbox_default('metoda_kasowa')
         self._cash_default = cash_default
         if snapshot is not None:
@@ -1459,7 +1458,6 @@ class CompanyForm(QDialog):
             logger.exception("Błąd zapisu firmy")
             QMessageBox.critical(self, "Firma", f"Nie udało się zapisać firmy: {e}")
             return False
-        self._populate_pelnomocnictwa(self._employees)
         return True
 
     def _add_company_email_filter(self):
@@ -1504,6 +1502,7 @@ class CompanyForm(QDialog):
     def _populate_pelnomocnictwa(self, employees, granted=None):
         if granted is None:
             granted = get_pelnomocnictwa(self.firma_id) if self.firma_id else {}
+        self._original_authorizations = {typ: set(granted.get(typ, [])) for typ in ("PEL", "UPL")}
         self.pel_table.setRowCount(len(employees))
         for row, emp in enumerate(employees):
             name_item = QTableWidgetItem(f"{emp['imie']} {emp['nazwisko']}")
@@ -1522,14 +1521,21 @@ class CompanyForm(QDialog):
                 self.pel_table.setItem(row, col, item)
 
     def _save_pelnomocnictwa(self):
-        selected = {"PEL": [], "UPL": []}
+        changes = []
         for row in range(self.pel_table.rowCount()):
             emp_id = self.pel_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
             for col, typ in ((1, "PEL"), (2, "UPL")):
-                if self.pel_table.item(row, col).checkState() == Qt.CheckState.Checked:
-                    selected[typ].append(emp_id)
-        for typ, ids in selected.items():
-            set_pelnomocnictwa(self.firma_id, typ, ids)
+                checked = self.pel_table.item(row, col).checkState() == Qt.CheckState.Checked
+                if checked != (emp_id in self._original_authorizations[typ]):
+                    changes.append((typ, emp_id, checked))
+        if changes:
+            update_pelnomocnictwa(self.firma_id, changes)
+            for typ, employee_id, checked in changes:
+                current = self._original_authorizations[typ]
+                if checked:
+                    current.add(employee_id)
+                else:
+                    current.discard(employee_id)
 
     def _on_save(self):
         error = self._validate()

@@ -250,6 +250,27 @@ def get_pelnomocnictwa(firma_id: int) -> Dict[str, List[int]]:
     return result
 
 
+@office_endpoint('app.db.dao_companies.update_pelnomocnictwa')
+def update_pelnomocnictwa(firma_id: int, changes: List[Tuple[str, int, bool]]) -> None:
+    """Update only the checkboxes changed in the company form."""
+    with get_conn() as conn:
+        conn.execute("SELECT id FROM firmy WHERE id = %s FOR UPDATE", (firma_id,))
+        for typ, employee_id, checked in changes:
+            if typ not in PELNOMOCNICTWO_TYPES or not isinstance(checked, bool):
+                raise ValueError("Nieprawidłowa zmiana pełnomocnictwa.")
+            params = (firma_id, typ, employee_id)
+            if checked:
+                conn.execute(
+                    "INSERT INTO pelnomocnictwa (firma_id, typ, pracownik_id) VALUES (%s, %s, %s) "
+                    "ON CONFLICT DO NOTHING", params,
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM pelnomocnictwa WHERE firma_id = %s AND typ = %s AND pracownik_id = %s",
+                    params,
+                )
+
+
 @office_endpoint('app.db.dao_companies.set_pelnomocnictwa')
 def set_pelnomocnictwa(firma_id: int, typ: str, employee_ids: List[int]) -> None:
     if typ not in PELNOMOCNICTWO_TYPES:

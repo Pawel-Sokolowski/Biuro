@@ -18,10 +18,16 @@ from app.db.dao_invoices import (
 )
 from app.db.dao_monthly import count_documents_for_month
 from app.utils.months import previous_month
+from app.utils.month_names import MONTHS_PL
 from app.services.payroll_names import payroll_invoice_service_name
 
 
 logger = logging.getLogger(__name__)
+
+
+def _invoice_period_label(period: str) -> str:
+    year, month = period.split("-")
+    return f"{MONTHS_PL[int(month) - 1]} {year}r."
 
 
 @office_remote_class('app.invoices.faktury_logic.FakturyLogic')
@@ -202,7 +208,6 @@ class FakturyLogic:
         vat_rate = self._accounting_vat()
         vat_mult = 1 + vat_rate / 100
 
-        status = self._get_month_status(firma_id, miesiac)
         extra = self._get_extra_services(firma_id, miesiac)
 
         pozycje: List[Dict[str, Any]] = []
@@ -259,9 +264,7 @@ class FakturyLogic:
 
         # ---------------- Dokumenty ponad limit ----------------
         if ks_full:
-            ilosc_dok = self._get_document_count_for_invoice(
-                firma_id, miesiac, int((status or {}).get("ilosc_dok") or 0)
-            )
+            ilosc_dok = self._get_document_count_for_invoice(firma_id, miesiac, 0)
             limit = int(company.get("limit_dokumentow") or 0)
             if ilosc_dok > limit:
                 ponad = ilosc_dok - limit
@@ -269,8 +272,15 @@ class FakturyLogic:
                     self._to_float(pricing.get("cena_za_dokument_ponad_limit", 0.0))
                 netto = float(money(decimal_value(ponad) * decimal_value(cena)))
                 brutto = round(netto * vat_mult, 2)
+                if ilosc_dok == 1:
+                    documents = "dokument"
+                elif ilosc_dok % 10 in (2, 3, 4) and ilosc_dok % 100 not in (12, 13, 14):
+                    documents = "dokumenty"
+                else:
+                    documents = "dokumentów"
+                document_period = _invoice_period_label(previous_month(miesiac))
                 pozycje.append({
-                    "nazwa": "Dokumenty ponad limit",
+                    "nazwa": f"Cena ponad limit dokumentów {limit} szt. {document_period}, {ilosc_dok} {documents}",
                     "ilosc": ponad,
                     "jednostka": "szt.",
                     "netto": netto,
@@ -297,7 +307,9 @@ class FakturyLogic:
 
         # ---------------- Kadry ----------------
         if kd_on:
-            pozycje.extend(self._kadry_positions(company, stala_kd))
+            payroll_period = _invoice_period_label(miesiac)
+            for position in self._kadry_positions(company, stala_kd):
+                pozycje.append({**position, "nazwa": f"{position['nazwa']} {payroll_period}"})
 
         # ---------------- Usługi dodatkowe (zawsze) ----------------
         for u in extra:

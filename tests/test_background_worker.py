@@ -45,15 +45,16 @@ class DeploymentKeyTests(TestCase):
 
 
 class PlatnikGuiScheduleTests(TestCase):
-    def test_daily_schedule_keeps_warsaw_hour_through_clock_change(self):
-        from app.worker import platnik_gui_schedule
+    def test_old_gui_schedule_is_ignored_on_upgrade(self):
+        from app.services.worker_settings import load_settings
+        from app.worker import JOBS
 
-        warsaw = ZoneInfo('Europe/Warsaw')
-        now = datetime(2026, 10, 24, 15, 59, tzinfo=warsaw)
-        self.assertEqual(platnik_gui_schedule(now, '16:00', None).isoformat(),
-                         '2026-10-24T16:00:00+02:00')
-        self.assertEqual(platnik_gui_schedule(now, '16:00', {'date': '2026-10-24'}).isoformat(),
-                         '2026-10-25T16:00:00+01:00')
+        with patch('app.services.worker_settings.get_setting',
+                   return_value='{"enabled":true,"platnik_gui":true,"platnik_gui_time":"16:00"}'):
+            settings = load_settings()
+        self.assertTrue(settings['enabled'])
+        self.assertNotIn('platnik_gui', settings)
+        self.assertNotIn('platnik_gui', JOBS)
 
 
 class WorkerLoopTests(TestCase):
@@ -101,7 +102,7 @@ class WorkerLoopTests(TestCase):
         settings = {**DEFAULTS, 'enabled': True}
         settings.update({name: False for name in (
             'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo',
-            'platnik', 'platnik_gui', 'checking_refresh',
+            'platnik', 'checking_refresh',
         )})
         stop, started, release, duplicate, released = (
             ResponsiveStop(), threading.Event(), threading.Event(), threading.Event(), threading.Event()
@@ -162,7 +163,6 @@ class WorkerLoopTests(TestCase):
         self.assertIsNone(job_timeout('ezla', {}))
         self.assertIsNone(job_timeout('checking_refresh', {}))
         self.assertEqual(job_timeout('mail', {'mail_interval': 120}), 1800)
-        self.assertEqual(job_timeout('platnik_gui', {'platnik_gui_interval': 60}), 1800)
 
     def test_job_interval_uses_fixed_cadence_for_enova(self):
         from app.worker import job_interval

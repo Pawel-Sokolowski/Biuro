@@ -15,8 +15,8 @@ class WorkerInstallDialog(QDialog):
         layout = QVBoxLayout(self)
         account, sid = identity()
         self.status = QLabel(f'Konto Windows: {account}\nGłówny worker uruchomi się po restarcie serwera, '
-                             'również bez zalogowanego użytkownika. Agent Płatnika GUI działa osobno przy logowaniu '
-                             'i wymaga aktywnego, odblokowanego pulpitu. Podaj hasło konta Windows (nie PIN i nie hasło Biuro). '
+                             'również bez zalogowanego użytkownika. Agenta Płatnika GUI uruchamiają kadry ze swojego komputera. '
+                             'Podaj hasło konta Windows (nie PIN i nie hasło Biuro). '
                              'Jeśli zadanie już istnieje dla tej instalacji, działający proces zostanie zatrzymany '
                              'i uruchomiony ponownie bez zmiany konta. Przed aktualizacją zakończ bieżące wysyłki.')
         self.status.setWordWrap(True)
@@ -56,9 +56,8 @@ class WorkerInstallDialog(QDialog):
         for button in self.buttons:
             button.setEnabled(True)
         self.status.setText(
-            'Zatrzymano główny worker i agenta Płatnika.' if mode == 'stop' else
-            'Uruchomiono główny worker i zadanie agenta Płatnika. Agent GUI wymaga aktywnego, '
-            'odblokowanego pulpitu. Sprawdź sygnał oraz wszystkie statusy w panelu Biuro Worker.'
+            'Zatrzymano główny worker.' if mode == 'stop' else
+            'Uruchomiono główny worker. Sprawdź sygnał i statusy w panelu Biuro Worker.'
         )
 
     def failed(self, error):

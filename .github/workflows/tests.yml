@@ -202,6 +202,21 @@ jobs:
           $env:BIO_SMOKE_OUTPUT = "$env:RUNNER_TEMP\packaged-smoke.json"
           Check-Process '.\dist\Biuro\Biuro.exe' '--smoke-test'
           Get-Content $env:BIO_SMOKE_OUTPUT
+          @'
+          import json
+          from pathlib import Path
+          import subprocess
+          from tempfile import TemporaryDirectory
+
+          with TemporaryDirectory() as directory:
+              child = subprocess.run(
+                  [r"dist\Biuro\Biuro.exe", "--platnik-agent", "read-job",
+                   "--config", str(Path(directory) / "missing.json")],
+                  input="{}", text=True, capture_output=True, check=True, timeout=60,
+              )
+          assert json.loads(child.stdout) == {"error": "ReadFailed"}
+          '@ | python -
+          if ($LASTEXITCODE) { throw 'Packaged Płatnik agent pipe failed' }
       - name: Build, install, test and uninstall installer
         shell: pwsh
         run: |

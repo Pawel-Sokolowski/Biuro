@@ -1,9 +1,11 @@
+from contextlib import nullcontext
+from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock, call, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 from app.integrations.platnik.gui_agent import bounded_read, load_config, read_job, run
 from app.integrations.platnik.gui_desktop import checked_columns, main_window, payer_rows, select_sent_set, uia_grid_metadata
@@ -208,8 +210,58 @@ class AgentProcessTests(TestCase):
              self.assertRaisesRegex(ReadError, 'DesktopUnavailable'):
             run({}, Path('profile.json'), once=True)
 
+    def test_manual_run_exits_after_draining_the_queue(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        jobs = [
+            ('first', 'lease-1', NIP, MONTH),
+            (True,),
+            ('second', 'lease-2', NIP, '2026-10'),
+            (True,),
+            None,
+        ]
+        connection.execute.return_value.fetchone.side_effect = jobs
+        with patch('app.integrations.platnik.gui_agent.interactive_desktop', return_value=True), \
+             patch('app.integrations.platnik.gui_agent.connect', return_value=connection), \
+             patch('app.integrations.platnik.gui_agent.bounded_read', return_value={'findings': []}) as read:
+            result = run({'schema': 'public'}, Path('profile.json'))
+        self.assertEqual(result, {'completed': 2, 'failed': 0, 'interrupted': None})
+        self.assertEqual(read.call_count, 2)
+        connection.__exit__.assert_called_once()
+
+    def test_legacy_autostart_modes_leave_the_queue_untouched(self):
+        from app.integrations.platnik.gui_agent import main
+
+        with patch('app.integrations.platnik.gui_agent.sys.platform', 'win32'), \
+             patch('app.integrations.platnik.gui_agent.run_pending') as process:
+            main([])
+            main(['run'])
+        process.assert_not_called()
+
+    def test_reader_uses_redirected_windows_handles_when_no_console_exists(self):
+        from app.integrations.platnik.gui_agent import _serve_read_job
+
+        source = StringIO('{"nip":"1234567890","period":"2026-11"}')
+        destination = StringIO()
+        module = 'app.integrations.platnik.gui_agent'
+        with patch(f'{module}.sys.stdin', None), patch(f'{module}.sys.stdout', None), \
+             patch(f'{module}._windows_pipe', side_effect=[nullcontext(source), nullcontext(destination)]) as pipe, \
+             patch(f'{module}.load_config', return_value={}), patch(f'{module}.read_job', return_value=[]) as read:
+            _serve_read_job(Path('profile.json'))
+        self.assertEqual(pipe.call_args_list, [call(-10, 'r'), call(-11, 'w')])
+        read.assert_called_once_with({}, {'nip': NIP, 'period': MONTH})
+        self.assertEqual(json.loads(destination.getvalue()), {'findings': []})
+
 
 class AgentDiagnosticTests(TestCase):
+    def test_group_send_wizard_is_distinct_from_receipt_wizard(self):
+        from app.integrations.platnik.gui_diagnostic_capture import classify_window
+
+        title = 'Kreator grupowego wysyłania zestawów do ZUS - krok 1 / 10'
+        self.assertEqual(classify_window(title), {
+            'kind': 'group_send_wizard', 'step': {'current': 1, 'total': 10},
+        })
+
     def test_test_walkthrough_reports_each_read_only_stage(self):
         from app.integrations.platnik.gui_agent import diagnose
         config = {'executable': Path('/tmp/Platnik.exe'), 'backend': 'uia', 'confirmation_download': None}

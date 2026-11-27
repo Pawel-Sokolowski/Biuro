@@ -117,13 +117,22 @@ class PlatnikSettings(QWidget):
         self.error_button.hide()
         layout.addWidget(self.error_button)
         # --- Agent Płatnika: kolejka w PostgreSQL i pliki libpq ---
-        agent_note = QLabel('Agent Płatnika działa w tej samej instalacji (Biuro.exe --platnik-agent) i odbiera zlecenia '
-                            'z kolejki PostgreSQL programu Biuro, gdy pulpit serwera jest odblokowany. Baza programu '
-                            'Płatnik nadal działa na SQL Server; PostgreSQL służy wyłącznie do kolejki. Wpisz hasło '
-                            'loginu PostgreSQL agenta — Biuro zapisze pliki libpq w Twoim profilu Windows.')
+        agent_note = QLabel('Skonfiguruj agenta na komputerze kadr. Uruchom go ręcznie pod koniec dnia w '
+                            'Kadry → Sprawdzanie → Składki ZUS (miesięcznie). PostgreSQL obsługuje kolejkę Biuro, '
+                            'a Płatnik korzysta ze swojej bazy SQL Server. Wpisz dane dedykowanego loginu agenta; '
+                            'Biuro zapisze pliki libpq w lokalnym profilu Windows.')
         agent_note.setWordWrap(True)
         layout.addWidget(agent_note)
         agent_form = QFormLayout()
+        self.agent_host = QLineEdit()
+        self.agent_host.setPlaceholderText('Adres PostgreSQL Biuro widoczny z komputera kadr')
+        self.agent_port = QSpinBox()
+        self.agent_port.setRange(1, 65535)
+        self.agent_port.setValue(5432)
+        self.agent_database = QLineEdit()
+        agent_form.addRow('Serwer PostgreSQL agenta', self.agent_host)
+        agent_form.addRow('Port PostgreSQL agenta', self.agent_port)
+        agent_form.addRow('Baza PostgreSQL agenta', self.agent_database)
         self.agent_user = QLineEdit(AGENT_SERVICE)
         self.agent_password = QLineEdit()
         self.agent_password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -170,13 +179,20 @@ class PlatnikSettings(QWidget):
             self.agent_password.clear()
             if not user:
                 raise ValueError('Podaj login agenta w PostgreSQL.')
-            parts = parse_dsn(get_dsn())
+            host = self.agent_host.text().strip()
+            database = self.agent_database.text().strip()
+            if host or database:
+                if not host or not database:
+                    raise ValueError('Podaj serwer i bazę PostgreSQL agenta.')
+                parts = {'host': host, 'port': self.agent_port.value(), 'dbname': database}
+            else:
+                parts = parse_dsn(get_dsn())
             service, pgpass = write_files(parts['host'], parts['port'], parts['dbname'], user, password)
         except (ValueError, OSError) as error:
             QMessageBox.warning(self, 'Agent Płatnika', str(error))
             return
         except Exception:
-            QMessageBox.warning(self, 'Agent Płatnika', 'Nie zapisano plików agenta. Sprawdź adres bazy w konfiguracji workera.')
+            QMessageBox.warning(self, 'Agent Płatnika', 'Nie zapisano plików agenta. Wpisz adres, port i nazwę bazy PostgreSQL Biuro.')
             return
         QMessageBox.information(self, 'Agent Płatnika',
                                 'Zapisano pliki agenta:\n' + str(service) + '\n' + str(pgpass) +

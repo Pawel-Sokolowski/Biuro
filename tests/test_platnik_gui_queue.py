@@ -1,13 +1,15 @@
-from datetime import date
+from datetime import datetime
 from unittest.mock import patch
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from psycopg import sql
 from psycopg.errors import InsufficientPrivilege
 from psycopg.types.json import Jsonb
 
 from app.db.dao_conn import get_conn
-from app.services.platnik_gui import enqueue_daily, read_checks, request_checks
+from app.integrations.platnik.gui_agent import queue_target
+from app.services.platnik_gui import read_checks, request_checks, request_daily_checks
 from tests.base import DbTestCase
 
 NIP = '1234567890'
@@ -23,6 +25,7 @@ class PlatnikGuiQueueTests(DbTestCase):
         super().setUp()
         with get_conn() as conn:
             self.admin = conn.execute('SELECT id FROM pracownicy WHERE is_admin=1').fetchone()[0]
+            self.target = queue_target(conn)
         self.company = self.make_company('Test DRA', nip=NIP)
 
     def request(self):
@@ -42,23 +45,40 @@ class PlatnikGuiQueueTests(DbTestCase):
 
     def test_daily_run_records_both_periods_once_and_respects_open_jobs(self):
         self.request()
-        day = date(2026, 11, 22)
-        self.assertEqual(enqueue_daily(day), {
-            'date': '2026-11-22', 'queued': 1, 'periods': ['2026-10', '2026-11'],
-        })
-        with get_conn() as conn:
-            rows = conn.execute("""
-                SELECT period, actor_id FROM platnik_gui_checks WHERE company_id=%s ORDER BY period
-            """, (self.company,)).fetchall()
-        self.assertEqual(rows, [('2026-10', None), ('2026-11', self.admin)])
-        self.assertEqual(enqueue_daily(day), {'date': '2026-11-22', 'mode': 'checked_today'})
+        self.make_company('Another company', nip='9999999999')
+        day = datetime(2026, 11, 22, 16, tzinfo=ZoneInfo('Europe/Warsaw'))
+        with patch('app.services.platnik_gui.datetime') as clock, \
+             patch('app.services.platnik_gui.assigned_company_ids', return_value={self.company}):
+            clock.now.return_value = day
+            self.assertEqual(request_daily_checks(self.admin, None, self.target), {
+                'queued': 1, 'periods': ['2026-10', '2026-11'], 'skipped': 0,
+            })
+            with get_conn() as conn:
+                rows = conn.execute("""
+                    SELECT company_id, period, actor_id FROM platnik_gui_checks ORDER BY period
+                """).fetchall()
+                self.assertEqual(rows, [
+                    (self.company, '2026-10', self.admin), (self.company, '2026-11', self.admin),
+                ])
+                conn.execute("""
+                    UPDATE platnik_gui_checks
+                    SET state=CASE WHEN period=%s THEN 'completed' ELSE 'failed' END, finished_at=%s
+                """, (MONTH, day))
+            self.assertEqual(request_daily_checks(self.admin, None, self.target)['queued'], 1)
 
     def test_daily_run_can_retry_after_enqueue_failure(self):
-        day = date(2026, 11, 22)
-        with patch('app.services.platnik_gui._enqueue', side_effect=RuntimeError('failed')):
-            with self.assertRaisesRegex(RuntimeError, 'failed'):
-                enqueue_daily(day)
-        self.assertEqual(enqueue_daily(day)['queued'], 2)
+        with patch('app.services.platnik_gui.assigned_company_ids', return_value={self.company}):
+            with patch('app.services.platnik_gui._enqueue', side_effect=RuntimeError('failed')), \
+                 self.assertRaisesRegex(RuntimeError, 'failed'):
+                request_daily_checks(self.admin, None, self.target)
+            self.assertEqual(request_daily_checks(self.admin, None, self.target)['queued'], 2)
+
+    def test_daily_run_refuses_a_queue_in_a_different_database(self):
+        with patch('app.services.platnik_gui.assigned_company_ids', return_value={self.company}), \
+             self.assertRaisesRegex(ValueError, 'inną bazę'):
+            request_daily_checks(self.admin, None, ['other_database', *self.target[1:]])
+        with get_conn() as conn:
+            self.assertIsNone(conn.execute('SELECT id FROM platnik_gui_checks').fetchone())
 
     def test_queue_deduplicates_and_one_agent_finishes_a_lease(self):
         self.assertEqual(self.request(), {'queued': 1, 'existing': 0})

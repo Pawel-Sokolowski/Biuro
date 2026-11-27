@@ -26,6 +26,8 @@ def classify_window(title):
     kind = 'other'
     if 'kreator' in normalized and any(word in normalized for word in ('potwierdz', 'pobier')):
         kind = 'confirmation_wizard'
+    elif 'kreator grupowego wysyłania zestawów' in normalized:
+        kind = 'group_send_wizard'
     elif 'kreator' in normalized and any(word in normalized for word in ('wysył', 'wysyl')):
         kind = 'send_wizard'
     elif 'lista zestaw' in normalized:

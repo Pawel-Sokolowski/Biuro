@@ -11,14 +11,33 @@ Składki ZUS (miesięcznie) → kolejka PostgreSQL → agent Windows → Płatni
                            ↑____________________________________|
 ```
 
-Agent może działać obok PostgreSQL, jeśli VM ma Windows i dostęp do SQL Servera
-Płatnika. Dotychczasowy worker Biuro zachowuje swój harmonogram. Konfiguracja
-agenta używa osobnego zadania `Biuro-Platnik-GUI-Agent` z trybem logowania
-interaktywnego i wyzwalaczem przy zalogowaniu użytkownika. Gdy pulpit wygaśnie
-lub zostanie zablokowany, zadania czekają na sesję. Windows i sposób zdalnego
-dostępu mogą zmieniać zachowanie pulpitu po rozłączeniu RDP.
-[Microsoft Task Scheduler](https://learn.microsoft.com/windows/win32/api/taskschd/ne-taskschd-task_logon_type)
-· [pywinauto Remote Execution Guide](https://pywinauto.readthedocs.io/en/latest/remote_execution.html)
+## Koniec dnia na komputerze kadr
+
+1. Na komputerze kadr otwórz Płatnika i zakończ pracę dla właściwych płatników.
+   Zweryfikuj zestawy i przejdź przez kreator wysyłki na swoim koncie. Dla
+   wielu zestawów możesz użyć **Kreatora grupowego wysyłania zestawów do ZUS**.
+   Certyfikat, podpis, PIN i decyzje w komunikatach obsługuj w Płatniku.
+2. Dla wysłanych zestawów użyj **Narzędzia → Pobierz i rejestruj
+   potwierdzenie**. Sprawdź wynik kreatora w Płatniku. Jeśli chcesz powierzyć
+   ten krok agentowi, skonfiguruj i przetestuj osobny widok zestawów wysłanych.
+3. W Biuro otwórz **Kadry → Sprawdzanie → Składki ZUS (miesięcznie) →
+   Płatnik — koniec dnia…**. Uruchom raz pod koniec dnia. Odczyt obejmuje
+   bieżący i poprzedni miesiąc według czasu polskiego oraz zaznaczone firmy.
+   Przy braku zaznaczenia obejmuje firmy dostępne w Biuro dla użytkownika.
+4. Po ręcznym zarejestrowaniu potwierdzeń wybierz **Pobierz wyniki przez SQL**.
+   Biuro odczyta statusy i UPO z bazy Płatnika używając zapisanego połączenia SQL.
+   Przy sprawdzonym profilu wybierz **Uruchom agenta GUI**, aby wykonać
+   lokalny odczyt na odblokowanym pulpicie. Wyniki GUI są w kolumnie
+   **Agent Płatnika**. Odczyt SQL aktualizuje raport deklaracji.
+
+Agent kończy pracę po opróżnieniu kolejki. Ponowne uruchomienie tego samego
+dnia pozwala dokończyć zaległe lub nieudane odczyty. Wyniki GUI już zapisane
+tego dnia nie są ponownie zlecane.
+
+Przy przejściu ze starej wersji zatrzymaj i wyłącz zadania
+`Biuro-Platnik-Worker` oraz `Biuro-Platnik-GUI-Agent`, jeśli są zarejestrowane
+na serwerze lub komputerze kadr. Zaktualizuj serwer Biuro i komputer kadr.
+Główny `Biuro-Background-Worker` nadal obsługuje zadania serwerowe.
 
 ## Baza i konto
 
@@ -27,7 +46,10 @@ dostępu mogą zmieniać zachowanie pulpitu po rozłączeniu RDP.
 2. Przygotuj osobny login PostgreSQL na potrzeby agenta. Konto właściciela
    schematu nadaje dostęp do dwóch funkcji kolejki. Login agenta powinien mieć
    możliwość połączenia z bazą oraz uprawnienia z poniższego skryptu.
-3. Na koncie Windows agenta skonfiguruj usługę libpq
+3. Na komputerze kadr administrator Biuro może wpisać adres, port, bazę
+   i dedykowany login PostgreSQL w **Ustawienia → Płatnik**. Dane muszą
+   wskazywać tę samą bazę, z której korzysta zalogowane Biuro.
+   Na koncie Windows agenta użyj usługi libpq
    `biuro_platnik_agent` w `%APPDATA%\postgresql\.pg_service.conf`.
    Ustaw `host`, `port`, `dbname` i `user` zgodnie z konfiguracją Biuro.
    Hasło przechowuj w pliku haseł libpq dostępnym dla tego konta Windows.
@@ -88,8 +110,8 @@ spełnia profilu, agent zwraca błąd zamiast przypisywać status.
 
 ## Pobieranie potwierdzeń z ZUS
 
-Aby agent pobierał potwierdzenia automatycznie przy **Sprawdź wysyłkę w
-Płatniku**, dodaj do lokalnego profilu sekcję `confirmation_download`.
+Aby agent pobierał potwierdzenia podczas **Płatnik — koniec dnia…**,
+dodaj do lokalnego profilu sekcję `confirmation_download`.
 Profil bez tej sekcji działa w trybie odczytu. Sekcja opisuje tabelę
 **Zestawy wysłane**. Numer zestawu musi odpowiadać numerowi w tytule okna
 **Zestaw dokumentów nr …**. Jeżeli tabela zawiera identyfikator
@@ -129,48 +151,20 @@ przechwytywanie przez Ctrl+C. Plik zawiera metadane kontrolek i wzorce UIA.
 & $agentPython -m app.integrations.platnik.gui_agent capture-walkthrough
 ```
 
-## Codzienne sprawdzanie wysyłki
+## Test profilu i instalacji
 
-W ustawieniach workera Biuro włącz **Płatnik GUI — codzienne sprawdzanie
-wysyłki**. Domyślna godzina to **16:00 czasu polskiego**. Worker Biuro zleca
-jedną serię dziennie dla płatników z bazy Biuro i dwóch okresów, bieżącego
-oraz poprzedniego miesiąca. Ponowne uruchomienie workera tego samego dnia
-nie dodaje drugiej serii. Jeśli worker uruchomi się po ustawionej godzinie,
-zleci serię przy pierwszej okazji tego dnia.
+Na komputerze kadr wybierz w **Ustawienia → Płatnik** przycisk
+**Test agenta GUI krok po kroku (bez importu)**. Sprawdza profil, dostęp do
+kolejki PostgreSQL, aktywny pulpit, okno Płatnika i widoki. Do sprawdzenia
+dostępu do komórek użyj też **Sprawdź odczyt tabeli** przy otwartym rejestrze.
+Dla `TdxDBGrid` bez obsługi UIA Grid i Table użyj ręcznego kreatora oraz
+przycisku **Pobierz wyniki przez SQL**.
 
-Agent Windows odbiera zlecenia, gdy jego pulpit jest aktywny. Przy
-zablokowanej sesji zlecenia czekają w kolejce. Aby agent pobierał potwierdzenia,
-uzupełnij również `confirmation_download` w jego lokalnym profilu.
+Po pierwszym przebiegu porównaj zestaw i UPO dla jednej firmy z rejestrem
+Płatnika. Plik `agent.log` obok profilu zawiera identyfikator zadania i wynik
+techniczny. Opcjonalnie instalacja źródłowa może przetworzyć już zapisaną
+kolejkę poleceniem:
 
-## Rejestracja i próba
-
-Zainstaluj **Biuro-Background-Worker** z ustawień workera albo uruchom
-`scripts\install_background_worker.cmd`. Ta sama operacja rejestruje
-**Biuro-Platnik-Worker** jako osobne zadanie interaktywne przy logowaniu i
-uruchamia je w bieżącej sesji. Główny worker działa także bez zalogowanego
-użytkownika; agent GUI wymaga aktywnego, odblokowanego pulpitu.
-
-W **Ustawienia → Płatnik** kliknij **Test agenta GUI krok po kroku (bez importu)**.
-Test pokazuje osobno walidację profilu, dostęp do kolejki PostgreSQL, pulpit,
-okno Płatnika i skonfigurowane tabele. Może uruchomić Płatnika, jeśli jest
-zamknięty. Nie pobiera zadań z kolejki, nie odczytuje danych pracowników i nie
-importuje wyników.
-
-Wybierz w **Kadry → Sprawdzanie → Raport → Składki ZUS (miesięcznie)**
-okres z już zaimportowaną deklaracją i kliknij **Sprawdź wysyłkę w Płatniku**.
-Bez zaznaczenia Biuro zleca sprawdzenie wszystkich dostępnych dla użytkownika
-firm z prawidłowym NIP-em płatnika. Zaznaczenie wierszy ogranicza zlecenie do
-tych firm. Do kolejki trafiają wyłącznie płatnicy powiązani z firmami w Biuro.
-Agent porównuje NIP w rejestrze i pobiera szczegóły tylko pasujących wierszy.
-Porównaj zestaw i potwierdzenie z rejestrem
-Płatnika. Sprzeczne wpisy dla tej samej deklaracji kończą odczyt błędem.
-Status potwierdzenia wymaga identyfikatora potwierdzenia. Wynik bez
-wpisu oznacza, że agent w odczytanym widoku nie znalazł zgodnego zestawu.
-Domyślna kolumna raportu zachowuje stan deklaracji z Płatnika.
-
-Plik `agent.log` obok profilu zawiera identyfikator zadania i wynik techniczny.
-Test wdrożeniowy powinien
-objąć zestaw potwierdzony, wysłany i zweryfikowany przypadek bez wpisu, a
-następnie ponowny odczyt po odblokowaniu sesji. Dla profilu z pobieraniem
-użyj zestawu wysłanego z ważnym identyfikatorem. Sprawdź, czy Płatnik
-zarejestrował pobrany dokument i Biuro wyświetliło nowy stan.
+```powershell
+& $agentPython -m app.integrations.platnik.gui_agent daily --config C:\Biuro\platnik-agent.json
+```

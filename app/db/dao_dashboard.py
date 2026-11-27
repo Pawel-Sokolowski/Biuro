@@ -104,7 +104,7 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
             dict(r)
             for r in conn.execute(
                 "SELECT z.id, z.tytul, z.status, z.termin, "
-                "COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma "
+                "COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS firma "
                 "FROM zadania z LEFT JOIN firmy f ON f.id = z.firma_id "
                 f"WHERE z.pracownik_id = %s AND z.status IN ({placeholders}) "
                 "ORDER BY (z.termin IS NULL OR z.termin = ''), z.termin LIMIT 8",
@@ -114,7 +114,7 @@ def get_dashboard_data(pracownik_id: int, today: date | None = None) -> Dict[str
         data["brak_dokumentow"] = [
             dict(r)
             for r in conn.execute(
-                "SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa "
+                "SELECT f.id, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS nazwa "
                 "FROM firmy f LEFT JOIN statusy_miesieczne s "
                 "ON s.firma_id = f.id AND s.miesiac = %s "
                 f"WHERE {ACTIVE_COMPANY_SQL.replace('status', 'f.status')} "

@@ -4,12 +4,14 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QAbstractItemView, QHeaderView,
+    QVBoxLayout, QWidget, QAbstractItemView, QHeaderView,
 )
 
 from app.companies.constants import ROZLICZENIE_ROCZNE, ROZLICZENIE_ROCZNE_OPIS
 from app.db.dao_year_end import list_year_end, save_declaration, set_company_declarations
 from app.utils.background import TaskRunner
+from app.companies.company_names import company_display_name
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 from app.utils.view_state import preserve_view_state
 
 HEADERS = ["Klient", "NIP", "Forma opodatkowania", "Deklaracja", "Stan", "Data złożenia",
@@ -103,6 +105,7 @@ class YearEndPage(QWidget):
         layout.addWidget(self.summary)
 
         self.table = QTableWidget(0, len(HEADERS))
+        enable_header_sort(self.table)
         self.table.setHorizontalHeaderLabels(HEADERS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -146,7 +149,7 @@ class YearEndPage(QWidget):
         rows = []
         missing = []
         for company in self._companies:
-            name = company.get("nazwa_skrocona") or company.get("nazwa") or ""
+            name = company_display_name(company)
             if needle and needle not in f"{name} {company.get('nazwa', '')} {company.get('nip', '')}".lower():
                 continue
             if not company["deklaracje"]:
@@ -171,7 +174,7 @@ class YearEndPage(QWidget):
                 values = [name, company.get("nip") or "", company.get("forma_opodatkowania") or "",
                           "BRAK", "", "", "", "", ""]
                 for c, value in enumerate(values):
-                    item = QTableWidgetItem(value)
+                    item = SortableItem(value)
                     if c == 0:
                         item.setData(Qt.ItemDataRole.UserRole, (company['id'], None, None))
                     if c == 3:
@@ -188,12 +191,13 @@ class YearEndPage(QWidget):
                 decl.get("upo") or "", decl.get("uwagi") or "",
             ]
             for c, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
+                item = SortableItem(str(value))
                 if c == 0:
                     item.setData(Qt.ItemDataRole.UserRole, (company['id'], decl['kod'], decl.get('owner_key', 0)))
                 if c == 4:
                     item.setForeground(Qt.GlobalColor.darkGreen if filed else Qt.GlobalColor.red)
                 self.table.setItem(r, c, item)
+        apply_header_sort(self.table)
         if rows and not self._columns_sized:
             self.table.resizeColumnsToContents()
             self._columns_sized = True
@@ -206,8 +210,16 @@ class YearEndPage(QWidget):
         self.summary.setToolTip('')
 
     def _selected(self):
-        row = self.table.currentRow()
-        return self._rows[row] if 0 <= row < len(self._rows) else None
+        item = self.table.item(self.table.currentRow(), 0)
+        if item is None:
+            return None
+        company_id, code, owner_key = item.data(Qt.ItemDataRole.UserRole)
+        return next((
+            (company, name, decl) for company, name, decl in self._rows
+            if company['id'] == company_id and (
+                (decl['kod'], decl.get('owner_key', 0)) if decl is not None else (None, None)
+            ) == (code, owner_key)
+        ), None)
 
     def _save(self, company, decl, values):
         try:

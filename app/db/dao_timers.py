@@ -29,7 +29,7 @@ def _timer_rows(conn, column, value, month=None):
          "usluga_id": r["usluga_id"], "usluga": r["usluga"] or ""}
         for r in conn.execute(
             "SELECT c.*, u.nazwa AS usluga, p.imie || ' ' || p.nazwisko AS pracownik, "
-            "COALESCE(NULLIF(f.nazwa_skrocona,''),f.nazwa) AS firma "
+            "COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa) AS firma "
             "FROM czasomierze c LEFT JOIN pracownicy p ON p.id=c.pracownik_id "
             "LEFT JOIN firmy f ON f.id=c.firma_id LEFT JOIN uslugi_dodatkowe u ON u.id=c.usluga_id "
             f"WHERE c.{column}=%s" + suffix, params).fetchall()]
@@ -43,7 +43,7 @@ def _timer_rows(conn, column, value, month=None):
          "sekundy": int(r["sekundy"] or 0), "pauza_sekundy": int(r["pauza_sekundy"] or 0),
          "usluga_id": None, "usluga": ""}
         for r in conn.execute(
-            "SELECT c.*, COALESCE(NULLIF(f.nazwa_skrocona,''),f.nazwa) AS firma "
+            "SELECT c.*, COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa) AS firma "
             "FROM import_czas_pracy c LEFT JOIN firmy f ON f.id=c.firma_id "
             f"WHERE c.{column}=%s" + suffix, params).fetchall()]
     rows.sort(key=lambda r: (str(r["start"]).replace('T',' '), r["id"]), reverse=True)

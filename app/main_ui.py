@@ -22,6 +22,7 @@ from app.tasks.tasks_ui import TasksPage
 from app.notifications import NotificationCenter
 from app.kalendarz.calendar_ui import CalendarPage
 from app.dashboard.dashboard_ui import DashboardPage
+from app.widgets.flow_layout import FlowLayout
 
 from PyQt6.QtCore import QTimer, QSize
 from typing import Optional
@@ -422,6 +423,7 @@ class OfficeManagerApp(QMainWindow):
         sidebar_layout = QVBoxLayout(self.sidebar_panel)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         self.sidebar_toggle = QPushButton("☰  Menu")
+        self.sidebar_toggle.setProperty('compact', True)
         self.sidebar_toggle.setToolTip("Zwiń lub rozwiń menu")
         self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
         sidebar_layout.addWidget(self.sidebar_toggle)
@@ -464,23 +466,24 @@ class OfficeManagerApp(QMainWindow):
             label.setStyleSheet("font-size: 12px;")
             live_layout.addWidget(label)
 
-        header_layout.addStretch()
         header_layout.addWidget(live_container)
+        actions = FlowLayout()
+        header_layout.addLayout(actions, 1)
         self.notification_center = NotificationCenter(self.pracownik_id, self._open_assignment_notification, header)
-        header_layout.addWidget(self.notification_center)
+        actions.addWidget(self.notification_center)
         self.btn_general_timer = QPushButton("▶ Start stopera")
         self.btn_general_timer.setToolTip("Uruchom stoper dla zadań ogólnych (bez firmy)")
         self.btn_general_timer.clicked.connect(self._toggle_general_timer)
-        header_layout.addWidget(self.btn_general_timer)
+        actions.addWidget(self.btn_general_timer)
         self.btn_employee_timers = QPushButton("Mój czas")
         self.btn_employee_timers.setToolTip("Przeglądaj i poprawiaj swój czas we wszystkich firmach")
         self.btn_employee_timers.clicked.connect(self._open_employee_timers)
-        header_layout.addWidget(self.btn_employee_timers)
+        actions.addWidget(self.btn_employee_timers)
         from app.remote.state import client
         if client() is not None:
             logout = QPushButton('Wyloguj')
             logout.clicked.connect(self._logout_server)
-            header_layout.addWidget(logout)
+            actions.addWidget(logout)
 
         content_layout.addWidget(header)
 

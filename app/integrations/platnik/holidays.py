@@ -246,7 +246,8 @@ def read_year(actor_id,year):
     value = json.loads(get_setting(f'platnik_holidays_{int(year)}') or '{}')
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        companies = conn.execute('SELECT id,nazwa,nip,forma_dzialalnosci FROM firmy WHERE id=ANY(%s)',(ids,)).fetchall()
+        companies = conn.execute("""SELECT id,COALESCE(NULLIF(TRIM(nazwa_skrocona),''),nazwa) AS nazwa,
+            nazwa AS nazwa_pelna,nip,forma_dzialalnosci FROM firmy WHERE id=ANY(%s)""", (ids,)).fetchall()
     mapping = {}
     for row in companies:
         try:

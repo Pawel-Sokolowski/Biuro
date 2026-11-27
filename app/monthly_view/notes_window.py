@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QHeaderView,
     QAbstractItemView, QMessageBox
 )
 from PyQt6.QtCore import Qt
@@ -10,6 +10,7 @@ from app.db.dao_notes import (
     update_company_note,
     delete_company_note
 )
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 from .note_edit_dialog import NoteEditDialog
 
 
@@ -33,6 +34,7 @@ class NotesWindow(QDialog):
         self.table.setWordWrap(True)
         self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.itemDoubleClicked.connect(self._edit_note)
+        enable_header_sort(self.table)
         layout.addWidget(self.table)
 
         # przyciski
@@ -67,7 +69,7 @@ class NotesWindow(QDialog):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            user_item = QTableWidgetItem(n.get("autor_nazwa", ""))
+            user_item = SortableItem(n.get("autor_nazwa", ""))
             user_item.setData(
                 Qt.ItemDataRole.UserRole,
                 n["id"]
@@ -77,16 +79,17 @@ class NotesWindow(QDialog):
             self.table.setItem(
                 row,
                 1,
-                QTableWidgetItem(n.get("data_utworzenia", ""))
+                SortableItem(n.get("data_utworzenia", ""))
             )
 
-            text_item = QTableWidgetItem(
+            text_item = SortableItem(
                 n.get("tresc", "")[:200]
             )
             text_item.setToolTip(n.get("tresc", ""))
 
             self.table.setItem(row, 2, text_item)
 
+        apply_header_sort(self.table)
         self.table.scrollToTop()
 
     def _add_note(self):

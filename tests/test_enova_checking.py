@@ -154,6 +154,32 @@ class CheckingIntegrationTests(DbTestCase):
         self.assertEqual(page.table.item(0, 0).text(), 'B')
         page.close()
 
+    def test_short_names_remain_searchable_by_legal_name_and_keep_company_ids(self):
+        from PyQt6.QtCore import Qt
+        from app.accounting.accounting_ui import AccountingPage
+
+        other = self.make_company('Druga firma do sprawdzenia')
+        with get_conn() as conn:
+            conn.execute("UPDATE firmy SET nazwa_skrocona='Wspólny skrót' WHERE id = ANY(%s)", ([self.company, other],))
+        rows = list_accounting(self.admin, '2026-11')
+        page = AccountingPage(self.admin)
+        self.addCleanup(page.close)
+        page.render(rows, '2026-11')
+        selector = page.report_selectors['accounting']
+        selector.setCurrentIndex(selector.findData('comparison'))
+        table = page.comparison_tables['accounting']
+        table.frozen_column.horizontalHeader().sectionDoubleClicked.emit(0)
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item.data(Qt.ItemDataRole.UserRole) not in (self.company, other):
+                continue
+            self.assertEqual(item.text(), 'Wspólny skrót')
+            table.selectRow(row)
+            self.assertEqual(page.selected_company_ids(), [item.data(Qt.ItemDataRole.UserRole)])
+        page.search.setText('Druga firma do sprawdzenia')
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.item(0, 0).data(Qt.ItemDataRole.UserRole), other)
+
     def test_payroll_view_shows_employee_declarations_and_hr_without_comparisons(self):
         from app.accounting.accounting_ui import AccountingPage
         entry = {'department': 'payroll', 'form': 'PIT-11', 'status': 'not_sent',

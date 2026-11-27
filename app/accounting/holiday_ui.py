@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QSpinBox,QLineEdit,QComboBox,
-    QCheckBox,QPushButton,QTableWidgetItem,QAbstractItemView,
+    QCheckBox,QPushButton,QAbstractItemView,
     QDialog,QDialogButtonBox,QPlainTextEdit,QMessageBox)
 from app.integrations.platnik.holiday_tracking import read_tracking_year,save_field,WorksheetConflict
 from app.companies.holiday_eligibility import default_relief_month, ELIGIBILITY_LABELS
@@ -20,6 +20,7 @@ WORKSHEET_COLUMNS = (
     ('miesiac', 'Miesiąc zwolnienia'),
     ('decyzja', 'Stan'),
 )
+from app.utils.table_sorting import SortableItem, apply_header_sort
 
 
 def _rws_state(row, imported_at):
@@ -173,9 +174,10 @@ class ContributionHolidays(QWidget):
                          f"kod ulgi: {source.get('kod_ulgi') or '—'}.\nKwoty RWS (nie dowód zapłaty): {amounts}\n")
                 info += '; '.join(source.get('issues',[]))+'\n'
             for column,value in enumerate(values):
-                item = QTableWidgetItem(str(value) if value not in (None,'') else 'Brak danych')
+                item = SortableItem(str(value) if value not in (None,'') else 'Brak danych')
                 if column==0:
                     item.setData(Qt.ItemDataRole.UserRole,row.get('firma_id'))
+                    item.setData(Qt.ItemDataRole.UserRole + 1, index)
                 detail = info
                 if column:
                     field, _ = WORKSHEET_COLUMNS[column-1]
@@ -196,6 +198,7 @@ class ContributionHolidays(QWidget):
                 if column==len(values)-1 and row.get('decyzja') is None and row.get('statuses')==['N']:
                     item.setForeground(QColor('#7c7c7c'))
                 self.table.setItem(index,column,item)
+        apply_header_sort(self.table)
         self.table.resizeColumnsToContents()
         stamp = self.payload.get('imported_at')
         message = f'Rok {self.year.value()}; wierszy: {len(rows)}. Ostatni poprawny odczyt: {stamp or "jeszcze nie wykonano"}.'
@@ -223,7 +226,7 @@ class ContributionHolidays(QWidget):
         for index,row in enumerate(rows):
             for column,field in enumerate(fields):
                 value = display_months(row.get(field)) if field=='miesiac' else row.get(field)
-                item = QTableWidgetItem(str(value or '—'))
+                item = SortableItem(str(value or '—'))
                 item.setToolTip('; '.join(row.get('issues',[])))
                 table.setItem(index,column,item)
         table.resizeColumnsToContents()
@@ -236,7 +239,11 @@ class ContributionHolidays(QWidget):
     def edit_cell(self,index,column):
         if self.saving or not 1<=column<=len(WORKSHEET_COLUMNS) or not 0<=index<len(self.displayed_rows):
             return
-        row = self.displayed_rows[index]
+        item = self.table.item(index, 0)
+        source_index = item.data(Qt.ItemDataRole.UserRole + 1) if item else None
+        if source_index is None:
+            return
+        row = self.displayed_rows[source_index]
         field, label_text = WORKSHEET_COLUMNS[column-1]
         year = self.loaded_year
         if field == 'moze_skorzystac' and self.loaded_month:

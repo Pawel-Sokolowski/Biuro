@@ -2,7 +2,7 @@ from unittest import TestCase
 from PyQt6.QtCore import QPersistentModelIndex, Qt
 from PyQt6.QtWidgets import QTableView
 from app.monthly_view.monthly_view_model import MonthlyViewModel
-from app.monthly_view.monthly_view_ui import MonthlyViewPage
+from app.utils.table_sorting import enable_header_sort
 from tests.base import QT_APP
 
 
@@ -28,10 +28,11 @@ class MonthlyDeliverySortingTests(TestCase):
                 table = QTableView()
                 model = MonthlyViewModel(rows(), mode)
                 table.setModel(model)
+                enable_header_sort(table)
                 try:
-                    MonthlyViewPage._sort_delivery(table, column)
+                    table.horizontalHeader().sectionDoubleClicked.emit(column)
                     self.assertEqual(ids(model), [3, 1, 2, 4, 5])
-                    MonthlyViewPage._sort_delivery(table, column)
+                    table.horizontalHeader().sectionDoubleClicked.emit(column)
                     self.assertEqual(ids(model), [2, 1, 3, 4, 5])
                     self.assertEqual(table.horizontalHeader().sortIndicatorSection(), column)
                     self.assertEqual(table.horizontalHeader().sortIndicatorOrder(), Qt.SortOrder.DescendingOrder)
@@ -46,6 +47,21 @@ class MonthlyDeliverySortingTests(TestCase):
         self.assertEqual(selected.row(), 1)
         model.sort(3, Qt.SortOrder.DescendingOrder)
         self.assertEqual(selected.data(Qt.ItemDataRole.UserRole)['id'], 1)
+
+    def test_payroll_sorts_by_short_name_and_numeric_contract_count(self):
+        table = QTableView()
+        model = MonthlyViewModel([
+            {'id': 1, 'nazwa': 'Alfa Spółka', 'nazwa_skrocona': 'Żak', 'uop': 2},
+            {'id': 2, 'nazwa': 'Beta Spółka', 'nazwa_skrocona': 'Łąka', 'uop': 12},
+        ], 'kadry')
+        table.setModel(model)
+        self.addCleanup(table.close)
+        enable_header_sort(table)
+        table.horizontalHeader().sectionDoubleClicked.emit(0)
+        self.assertEqual(ids(model), [2, 1])
+        self.assertEqual(model.index(0, 0).data(), 'Łąka')
+        table.horizontalHeader().sectionDoubleClicked.emit(3)
+        self.assertEqual(ids(model), [1, 2])
 
     def test_sort_survives_refresh_and_delivery_date_edits(self):
         model = MonthlyViewModel(rows(), 'kadry')

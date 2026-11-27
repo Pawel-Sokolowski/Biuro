@@ -3,12 +3,13 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QTableWidget,
-    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from app.db.dao_address_book import delete_contact, import_contacts, list_contacts, save_contact
 from app.email.address_book import CONTACT_FIELDS, contact_name, normalize_contact, read_contacts_csv
 from app.utils.background import CommandRunner, TaskRunner
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 from app.utils.view_state import preserve_view_state
 
 
@@ -151,6 +152,7 @@ class AddressBookDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        enable_header_sort(self.table)
         self.table.cellDoubleClicked.connect(lambda *_args: self._edit())
         layout.addWidget(self.table)
         self.status = QLabel()
@@ -184,9 +186,10 @@ class AddressBookDialog(QDialog):
                     texts = (contact_name(contact), contact['email'], contact.get('additional_email'),
                              contact.get('company'), contact.get('phone_work') or contact.get('phone_mobile'))
                     for column, text in enumerate(texts):
-                        item = QTableWidgetItem(str(text or ''))
+                        item = SortableItem(str(text or ''))
                         item.setData(Qt.ItemDataRole.UserRole, contact['id'])
                         self.table.setItem(row, column, item)
+                apply_header_sort(self.table)
             total = contacts[0]['total_count'] if contacts else 0
             self.status.setText(f'Kontakty: {total}. Pokazano {len(contacts)}.'
                                 + (' Zawęź wyszukiwanie, aby znaleźć pozostałe.' if total > len(contacts) else ''))

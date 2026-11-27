@@ -3,7 +3,7 @@ from datetime import datetime
 from PyQt6.QtCore import QDateTime, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget, QVBoxLayout, QWidget,
 )
 
 from app.db.dao_timers import (
@@ -13,6 +13,8 @@ from app.db.dao_timers import (
 
 from app.monthly_view.month_picker import MonthPicker
 from app.utils.months import default_month_for_employee
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
+
 _DEPARTMENT_NAMES = dict(DEPARTMENTS)
 
 
@@ -329,6 +331,7 @@ class TimerRecordsDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
+        enable_header_sort(self.table)
         self.table.cellDoubleClicked.connect(lambda *_: self.edit_selected())
         layout.addWidget(self.table)
         self.total = QLabel("")
@@ -356,20 +359,24 @@ class TimerRecordsDialog(QDialog):
                                          self.month.monthText()) if self.employee_view
                       else list_company_timers(self.firma_id))
         self.table.setRowCount(0)
-        for entry in self._rows:
-            row = self.table.rowCount()
+        for row, entry in enumerate(self._rows):
             self.table.insertRow(row)
             values = [entry["miesiac"], entry["start"], entry["koniec"], entry["firma"], entry["pracownik"],
                       " — ".join(filter(None, [_DEPARTMENT_NAMES.get(entry["dzial"], entry["dzial"]),
                                                entry.get("usluga")])), entry["opis"],
                       format_duration(entry["sekundy"])]
             for col, value in enumerate(values):
-                self.table.setItem(row, col, QTableWidgetItem(str(value)))
+                item = SortableItem(str(value))
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row)
+                self.table.setItem(row, col, item)
+        apply_header_sort(self.table)
         total = sum(entry["sekundy"] for entry in self._rows)
         self.total.setText(f"Rekordów: {len(self._rows)}, łączny czas: {format_duration(total)}")
 
     def _selected_rows(self):
-        return sorted({index.row() for index in self.table.selectedIndexes()})
+        return sorted({self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                       for index in self.table.selectionModel().selectedRows()})
 
     def add_manual_time(self):
         if not self.employee_view:

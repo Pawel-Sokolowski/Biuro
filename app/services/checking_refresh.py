@@ -61,7 +61,7 @@ def scope(
     with get_conn() as conn:
         rows = conn.execute(
             '''
-            SELECT id, nazwa, nip
+            SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa, nip
             FROM firmy
             WHERE id = ANY(%s)
             ORDER BY id

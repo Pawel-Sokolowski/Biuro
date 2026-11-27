@@ -9,14 +9,16 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+    QTableWidget, QTextEdit, QVBoxLayout,
 )
 
 from app.db.dao_companies import list_mailing_companies
 from app.email.bulk_mail import BulkMailPlan, BulkMailSender, client_addresses, filter_companies
+from app.companies.company_names import company_display_name
 from app.companies.holiday_eligibility import list_candidates
 from app.utils.background import TaskRunner
 from app.utils.month_names import MONTHS_PL
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 
 STATUS_LABELS = {'sent': 'Wysłano', 'blocked': 'Zablokowano przed wysłaniem',
                  'uncertain': 'Wynik niepotwierdzony', 'not_sent': 'Niewysłano'}
@@ -115,6 +117,7 @@ class BulkMailDialog(QDialog):
         self.search.textChanged.connect(self._render)
         layout.addWidget(self.search)
         self.table = QTableWidget(0, 6)
+        enable_header_sort(self.table)
         self.table.setHorizontalHeaderLabels(['Wyślij', 'Firma', 'Kontaktowy e-mail', 'Działalność', 'Opodatkowanie','Wakacje ZUS — osoby / wynik'])
         self.table.setColumnHidden(5,True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -269,7 +272,7 @@ class BulkMailDialog(QDialog):
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
         for index, row in enumerate(rows):
-            check = QTableWidgetItem()
+            check = SortableItem()
             check.setData(Qt.ItemDataRole.UserRole, row['id'])
             check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
             check.setCheckState(Qt.CheckState.Checked if row['id'] in self._selected else Qt.CheckState.Unchecked)
@@ -277,13 +280,14 @@ class BulkMailDialog(QDialog):
                 check.setFlags(Qt.ItemFlag.NoItemFlags)
                 check.setToolTip(self._errors[row['id']])
             self.table.setItem(index, 0, check)
-            for column, value in enumerate((row.get('nazwa_skrocona') or row['nazwa'], row.get('adres_email') or 'Brak e-maila',
+            for column, value in enumerate((company_display_name(row), row.get('adres_email') or 'Brak e-maila',
                                               row.get('forma_dzialalnosci'), row.get('forma_opodatkowania')), 1):
-                self.table.setItem(index, column, QTableWidgetItem(str(value or '—')))
+                self.table.setItem(index, column, SortableItem(str(value or '—')))
             detail = '\n'.join(p['name']+': '+'; '.join(p['reasons']) for p in row.get('holiday_people',[]))
-            item = QTableWidgetItem(detail)
+            item = SortableItem(detail)
             item.setToolTip(detail)
             self.table.setItem(index,5,item)
+        apply_header_sort(self.table)
         self.table.blockSignals(False)
         self._update_count()
 
@@ -352,7 +356,7 @@ class BulkMailDialog(QDialog):
         )
 
         names = {
-            row['id']: row.get('nazwa_skrocona') or row['nazwa']
+            row['id']: company_display_name(row)
             for row in self.companies
         }
 

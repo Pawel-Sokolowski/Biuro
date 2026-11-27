@@ -190,7 +190,8 @@ def load_reports(actor_id, month):
         # app_settings contains plain text too. Materialize the authorized report
         # subset before JSON casts; a JOIN/WHERE alone does not fix evaluation order.
         rows = conn.execute('''WITH selected_reports AS MATERIALIZED (
-            SELECT f.id,f.nazwa,f.nip,f.forma_dzialalnosci,a.klucz AS report_key,a.wartosc
+            SELECT f.id,COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa) AS nazwa,
+                   f.nip,f.forma_dzialalnosci,a.klucz AS report_key,a.wartosc
             FROM firmy f JOIN app_settings a
               ON a.klucz='ezla_report_' || f.id::text || '_' || right(a.klucz,64)
             WHERE f.id=ANY(%s)

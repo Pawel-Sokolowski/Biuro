@@ -108,7 +108,8 @@ def list_accounting(actor_id, month):
     prior = history_months(month)
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute('''SELECT f.id,f.nazwa,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,f.status_vat,f.vat_czynny,s.ilosc_dok,
+        rows = conn.execute('''SELECT f.id,COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa) AS nazwa,
+            f.nazwa AS nazwa_pelna,f.nip,f.forma_opodatkowania,f.forma_dzialalnosci,f.status_vat,f.vat_czynny,s.ilosc_dok,
             a.payload::text AS snapshot,j.payload::text AS jpk,c.payload::text AS checking,
             h.payload::text AS hr,z.payload::text AS ezla_sync,
             pd.payload AS platnik_declarations,
@@ -125,7 +126,8 @@ def list_accounting(actor_id, month):
             LEFT JOIN company_checking_snapshots z ON z.source='ezla_sync' AND z.company_id=f.id AND z.period=''
             LEFT JOIN company_checking_snapshots pd ON pd.source='platnik_declarations' AND pd.company_id=f.id AND pd.period=%s
             LEFT JOIN company_checking_snapshots co ON co.source='checking_obligations' AND co.company_id=f.id AND co.period=''
-            WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (month, month, month, month, month, ids)).fetchall()
+            WHERE f.id=ANY(%s) ORDER BY lower(COALESCE(NULLIF(TRIM(f.nazwa_skrocona),''),f.nazwa)),f.id''',
+            (month, month, month, month, month, ids)).fetchall()
         history = conn.execute('''SELECT company_id,period,payload-'accounting_details' AS payload
             FROM company_checking_snapshots
             WHERE source='enova_checking' AND company_id=ANY(%s) AND period BETWEEN %s AND %s

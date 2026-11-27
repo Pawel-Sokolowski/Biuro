@@ -37,7 +37,7 @@ def get_all_companies(pracownik_id: int | None = None) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
 
-    sql = "SELECT id, COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa FROM firmy"
+    sql = "SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa FROM firmy"
     params: List[int] = []
     if pracownik_id and not (
         is_administrator(pracownik_id) or can(pracownik_id, "can_view_finances")
@@ -86,7 +86,7 @@ def build_daily_report(employee_ids: List[int], start: str, end: str,
                    COALESCE(NULLIF(TRIM(c.miesiac), ''), substr(c.rozpoczecie, 1, 7)) AS miesiac,
                    c.typ, c.opis, c.sekundy,
                    COALESCE(NULLIF(TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')), ''), '(brak)') AS pracownik,
-                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, '') AS firma, u.nazwa AS usluga
+                   COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa, '') AS firma, u.nazwa AS usluga
             FROM czasomierze c
             LEFT JOIN pracownicy p ON p.id = c.pracownik_id
             LEFT JOIN firmy f ON f.id = c.firma_id

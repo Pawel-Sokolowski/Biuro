@@ -514,7 +514,7 @@ def list_invoice_choices(
             )
             SELECT i.id, i.firma_id, i.kontrahent_id, i.numer, i.miesiac, i.kwota_brutto,
                    CASE WHEN i.korygowana_faktura_id IS NULL THEN i.id ELSE family.ancestor_id END AS root_id,
-                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
+                   COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa, '') AS buyer,
                    i.rodzaj, i.korygowana_faktura_id,
                    COALESCE(NULLIF(i.nabywca_nip, ''), f.nip, k.nip, '') AS nip,
                    COALESCE(f.nazwa, NULLIF(i.nabywca_pelna, ''), k.nazwa) AS buyer_full_name,
@@ -1123,7 +1123,7 @@ def list_company_choices(actor_id: int) -> list[dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT 'firma' AS kind, id, COALESCE(NULLIF(nazwa_skrocona, ''), nazwa, '') AS buyer, nip FROM firmy "
+            "SELECT 'firma' AS kind, id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa, '') AS buyer, nip FROM firmy "
             "UNION ALL SELECT 'kontrahent', id, COALESCE(nazwa, ''), nip FROM kontrahenci "
             "ORDER BY 3"
         ).fetchall()
@@ -1175,7 +1175,7 @@ def list_settlements(actor_id: int, firma_id: int | None = None, search: str = "
             f"""
             SELECT p.id, p.faktura_id, p.data_zaplaty, p.kwota, p.sposob, p.created_at, p.transakcja_id, p.manual_origin,
                    i.numer, i.data_wystawienia, i.firma_id, i.kwota_brutto, correction.numer AS correction_number,
-                   COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
+                   COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa, i.nabywca_pelna, '') AS buyer,
                    b.kontrahent AS bank_sender, b.tytul AS bank_title,
                    TRIM(COALESCE(w.imie, '') || ' ' || COALESCE(w.nazwisko, '')) AS actor_name
             FROM faktury_platnosci p

@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 from PyQt6.QtCore import Qt, QModelIndex, QTimer, QEvent, QDate, QRect
 from PyQt6.QtGui import (
     QAction,
-    QIntValidator,
     QCursor,
     QIcon,
     QColor,
@@ -26,6 +25,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QLineEdit,
+    QDoubleSpinBox,
     QMenu,
     QDialog,
     QTextEdit,
@@ -38,11 +38,13 @@ from PyQt6.QtWidgets import (
 
 from app.monthly_view.monthly_view_logic import MonthlyViewLogic
 from app.admin.global_settings_logic import GlobalSettingsLogic
-from app.db.dao_invoices import add_invoice_item_for_service
-from app.db.dao_services import add_company_extra_service
+from app.db.dao_global_settings import get_extra_services
+from app.db.dao_services import record_monthly_extra_service
 from app.db.dao_tasks import list_tasks_for_timer
 from app.utils.timer import TimerUtils
 from app.utils.view_state import preserve_view_state
+from app.utils.table_sorting import enable_header_sort
+from app.widgets.flow_layout import FlowLayout
 from app.utils.background import TaskRunner
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.monthly_view.month_picker import MonthPicker
@@ -443,10 +445,11 @@ class ActivitySelectionDialog(QDialog):
 
 
 class InlineExtraServiceWindow(QDialog):
-    def __init__(self, firma_id: int, miesiac: str, parent=None):
+    def __init__(self, firma_id: int, miesiac: str, actor_id: int, parent=None):
         super().__init__(parent)
         self.firma_id = firma_id
         self.miesiac = miesiac
+        self.actor_id = actor_id
 
         self.setWindowTitle("Usługi dodatkowe")
         self.resize(500, 250)
@@ -455,23 +458,25 @@ class InlineExtraServiceWindow(QDialog):
         form = QFormLayout()
 
         self.cb_usluga = QComboBox()
-        self._load_extra_services()
+        self._prices = {}
+        for service in get_extra_services():
+            self.cb_usluga.addItem(service["nazwa"], service["id"])
+            self._prices[service["id"]] = float(service["cena_netto"] or 0)
 
         self.cb_jednostka = QComboBox()
         self.cb_jednostka.addItems(["godz.", "szt.", "usługa"])
 
-        self.input_ilosc = QLineEdit("1")
-        self.input_ilosc.setValidator(QIntValidator(0, 9999, self))
+        self.input_ilosc = QDoubleSpinBox()
+        self.input_ilosc.setRange(0.01, 9999)
+        self.input_ilosc.setValue(1)
 
-        self.input_cena = QLineEdit()
-        self.input_cena.setPlaceholderText("Cena netto")
-        self.input_cena.setEnabled(True)
+        self.input_cena = QDoubleSpinBox()
+        self.input_cena.setRange(0, 999999999.99)
 
         self._update_price()
 
         self.chk_fakturowac = QCheckBox("Fakturować?")
 
-        self.logic.set_month(self._months_by_tab[0])
         form.addRow("Usługa:", self.cb_usluga)
         form.addRow("Jednostka:", self.cb_jednostka)
         form.addRow("Ilość:", self.input_ilosc)
@@ -489,72 +494,32 @@ class InlineExtraServiceWindow(QDialog):
         layout.addLayout(btn_layout)
 
         self.btn_add.clicked.connect(self._on_add)
+        self.btn_add.setEnabled(bool(self._prices))
         self.btn_cancel.clicked.connect(self.reject)
 
         self.cb_usluga.currentIndexChanged.connect(self._update_price)
 
     def _update_price(self):
-        logic = GlobalSettingsLogic()
-        rows = logic.get_extra_services()
-        idx = self.cb_usluga.currentIndex()
-        if idx < 0 or idx >= len(rows):
-            self.input_cena.setText("")
-            return
-        cena = rows[idx]["cena_netto"]
-        try:
-            cena = float(cena)
-        except:
-            cena = 0.0
-        self.input_cena.setText(str(cena))
-    def _load_extra_services(self):
-        logic = GlobalSettingsLogic()
-        rows = logic.get_extra_services()
-        self.cb_usluga.clear()
-        for r in rows:
-            self.cb_usluga.addItem(r["nazwa"], r["id"])
+        self.input_cena.setValue(self._prices.get(self.cb_usluga.currentData(), 0))
 
     def _on_add(self):
         usluga_id = self.cb_usluga.currentData()
         if not usluga_id:
             QMessageBox.warning(self, "Błąd", "Wybierz usługę.")
             return
+        billable = self.chk_fakturowac.isChecked()
         try:
-            ilosc = float(self.input_ilosc.text().replace(",", ".") or "0")
-        except Exception:
-            ilosc = 0.0
-        if ilosc <= 0:
-            QMessageBox.warning(self, "Błąd", "Ilość musi być większa od zera.")
+            on_invoice = record_monthly_extra_service(
+                self.firma_id, self.miesiac, usluga_id, self.input_ilosc.value(), self.input_cena.value(),
+                billable, self.cb_jednostka.currentText(), self.actor_id,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Usługi dodatkowe", f"Nie udało się zapisać usługi. {exc}")
             return
-
-        try:
-            cena = float(self.input_cena.text().replace(",", ".") or "0")
-        except ValueError:
-            cena = 0.0
-
-        if self.chk_fakturowac.isChecked():
-            # Jedno źródło danych: ta funkcja zapisuje usługę również w
-            # uslugi_dodatkowe_firma; nie dodajemy jej do ewidencji dwa razy.
-            invoice_id = add_invoice_item_for_service(
-                self.firma_id,
-                usluga_id,
-                ilosc,
-                self.miesiac,
-                cena_netto=cena,
-                jednostka="szt.",
-            )
-            if invoice_id:
-                QMessageBox.information(self, "OK", "Zapisano usługę dodatkową i dodano ją do faktury.")
-            else:
-                QMessageBox.information(self, "OK", "Zapisano usługę dodatkową. Zostanie uwzględniona po ponownym wygenerowaniu faktury.")
-        else:
-            add_company_extra_service(
-                self.firma_id,
-                self.miesiac,
-                usluga_id,
-                ilosc,
-                cena,
-                False,
-            )
+        if on_invoice:
+            QMessageBox.information(self, "Usługi dodatkowe", "Zapisano usługę i dodano ją do faktury roboczej.")
+        elif billable:
+            QMessageBox.information(self, "Usługi dodatkowe", "Zapisano usługę w ewidencji do fakturowania.")
         self.accept()
 
 
@@ -603,7 +568,7 @@ class MonthlyViewPage(QWidget):
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
 
-        filters_layout = QHBoxLayout()
+        filters_layout = FlowLayout()
 
         self.month_combo = MonthPicker(self._months_by_tab[0], allow_year=True)
         filters_layout.addWidget(QLabel("Miesiąc:"))
@@ -617,8 +582,6 @@ class MonthlyViewPage(QWidget):
         self.status_combo.addItems(COMPANY_STATUS_FILTER)
         filters_layout.addWidget(QLabel("Status:"))
         filters_layout.addWidget(self.status_combo)
-
-        filters_layout.addStretch()
 
         self.btn_refresh = QPushButton("Odśwież")
         filters_layout.addWidget(self.btn_refresh)
@@ -634,7 +597,7 @@ class MonthlyViewPage(QWidget):
 
         main_layout.addLayout(filters_layout)
 
-        progress_filters = QHBoxLayout()
+        progress_filters = FlowLayout()
         self.delivery_combo = QComboBox()
         self.delivery_combo.addItems(DELIVERY_FILTER)
         progress_filters.addWidget(QLabel('Dokumenty:'))
@@ -643,7 +606,6 @@ class MonthlyViewPage(QWidget):
         self.stage_combo.addItems(STAGE_FILTER)
         progress_filters.addWidget(QLabel('Etap:'))
         progress_filters.addWidget(self.stage_combo)
-        progress_filters.addStretch()
         main_layout.addLayout(progress_filters)
 
         self.activity_label = QLabel("Aktywność pracownika: 0")
@@ -680,10 +642,8 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.tabs.addTab(self.table_kadry, "Kadry")
         for table in (self.table_ks, self.table_kadry):
-            table.horizontalHeader().setSectionsClickable(True)
-            table.horizontalHeader().setSortIndicatorShown(False)
-            table.horizontalHeader().sectionClicked.connect(
-                lambda column, table=table: self._sort_delivery(table, column))
+            enable_header_sort(table)
+        self.model_ks.layoutChanged.connect(self._resize_accounting_rows)
 
         self.table_ks.setItemDelegateForColumn(7, IconButtonDelegate(self.table_ks, "start.png", "stoper_ks"))
         self.table_ks.setItemDelegateForColumn(9, IconButtonDelegate(self.table_ks, "add.png", "extra_ks"))
@@ -993,9 +953,7 @@ class MonthlyViewPage(QWidget):
         with preserve_view_state(self.table_ks, key), preserve_view_state(self.table_kadry, key):
             self.model_ks.set_rows(ks_rows)
             self.model_kadry.set_rows(kadry_rows)
-            for idx, row in enumerate(ks_rows):
-                lines = max(1, len(row.get("invoice_payments", [])))
-                self.table_ks.setRowHeight(idx, max(32, lines * self.table_ks.fontMetrics().lineSpacing() + 8))
+            self._resize_accounting_rows()
         total = sum(int(r.get("ilosc_dok") or 0) for r in ks_rows)
         self.activity_label.setText(f"Aktywność pracownika: {total}")
 
@@ -1003,18 +961,12 @@ class MonthlyViewPage(QWidget):
         choice = self.stage_combo.currentText()
         return choice == 'Wszystkie' or (row.get(stage_field) or 'Brak') == choice
 
-    @staticmethod
-    def _sort_delivery(table, column):
-        model, header = table.model(), table.horizontalHeader()
-        if column != model._docs_col():
-            if model._delivery_order is not None:
-                header.setSortIndicator(model._docs_col(), model._delivery_order)
-            return
-        order = (Qt.SortOrder.DescendingOrder if model._delivery_order == Qt.SortOrder.AscendingOrder
-                 else Qt.SortOrder.AscendingOrder)
-        model.sort(column, order)
-        header.setSortIndicator(column, order)
-        header.setSortIndicatorShown(True)
+    def _resize_accounting_rows(self):
+        line_height = self.table_ks.fontMetrics().lineSpacing()
+        for index in range(self.model_ks.rowCount()):
+            row = self.model_ks.get_row(index)
+            lines = max(1, len(row.get("invoice_payments", [])))
+            self.table_ks.setRowHeight(index, max(32, lines * line_height + 8))
 
     def _delivery_matches(self, row: Dict[str, Any]) -> bool:
         choice = self.delivery_combo.currentText()
@@ -1171,11 +1123,11 @@ class MonthlyViewPage(QWidget):
         self.table_kadry.viewport().update()
 
     def _on_extra_service(self, firma_id: int):
-        dlg = InlineExtraServiceWindow(
-            firma_id,
-            self._current_month(),
-            parent=self,
-        )
+        try:
+            dlg = InlineExtraServiceWindow(firma_id, self._current_month(), self.pracownik_id, parent=self)
+        except Exception as exc:
+            QMessageBox.warning(self, "Usługi dodatkowe", f"Nie udało się pobrać listy usług. {exc}")
+            return
         dlg.exec()
 
     def _on_edit_company(self, firma_id: int):

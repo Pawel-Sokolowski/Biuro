@@ -3,7 +3,8 @@ from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,  QTableWidgetItem, QAbstractItemView
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QAbstractItemView
+from app.utils.table_sorting import SortableItem, apply_header_sort
 from app.integrations.platnik.declarations import read_year
 from app.accounting.report_types import form_key
 from app.utils.background import TaskRunner
@@ -64,7 +65,7 @@ class AnnualZusPanel(QWidget):
     def render(self):
         records = []
         for company in self.companies():
-            if self.query not in (company['nazwa'] + ' ' + str(company['nip'] or '')).casefold():
+            if self.query not in f"{company['nazwa']} {company.get('nazwa_pelna', '')} {company['nip'] or ''}".casefold():
                 continue
             entries = [entry for entry in company['declarations'] if form_key(entry['form']) == self.form]
             for entry in entries or [{}]:
@@ -76,10 +77,11 @@ class AnnualZusPanel(QWidget):
         self.table.setRowCount(len(records))
         for index, (fid, values) in enumerate(records):
             for column, value in enumerate(values):
-                item = QTableWidgetItem(str(value or '—'))
+                item = SortableItem(str(value or '—'))
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, fid)
                 self.table.setItem(index, column, item)
+        apply_header_sort(self.table)
         self.status.setText(f'Rok {self.year.value()}; ZUS {self.form}; wiersze: {len(records)}.')
 
     def showEvent(self, event):

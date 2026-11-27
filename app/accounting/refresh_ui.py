@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,QDialog,
     QDialogButtonBox,QListWidget,QListWidgetItem,QAbstractItemView,QLineEdit,QMessageBox,QSpinBox)
 from app.utils.background import TaskRunner,CommandRunner
+from app.widgets.flow_layout import FlowLayout
 from app.services.checking_refresh import run_now,latest
 
 LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik', 'platnik_declarations':'Płatnik — formularze ZUS',
@@ -22,7 +23,7 @@ class CheckingRefreshControls(QWidget):
         self.result = None
         self._observed = None
         layout = QVBoxLayout(self)
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         self.buttons = {}
         for kind,label in (('enova','Pobierz z Enovy…'),('ezla','Pobierz e-ZLA z ZUS…'),
                            ('platnik','Pobierz z Płatnika…'),('platnik_declarations','Pobierz formularze ZUS z Płatnika…'),
@@ -38,7 +39,6 @@ class CheckingRefreshControls(QWidget):
         self.details.clicked.connect(self.show_details)
         self.details.setEnabled(False)
         bar.addWidget(self.details)
-        bar.addStretch()
         layout.addLayout(bar)
         annual = QPushButton('Pobierz deklaracje za cały rok — Enova i Płatnik…')
         annual.clicked.connect(lambda:self.choose('declaration_year'))

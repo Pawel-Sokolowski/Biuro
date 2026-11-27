@@ -3,7 +3,8 @@ from app.utils.frozen_table import FrozenFirstColumnTable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                            QFileDialog,  QTableWidgetItem, QAbstractItemView)
+                            QFileDialog, QAbstractItemView)
+from app.utils.table_sorting import SortableItem, apply_header_sort
 from app.utils.background import TaskRunner
 from app.integrations.ezla.preview import preview_reports
 from app.integrations.ezla.report import MAX_DOCUMENTS
@@ -148,7 +149,7 @@ class EzlaPreviewPanel(QWidget):
             else:
                 values = [company['nazwa'], '—', '—', '—', status, '—', '—', '—', review]
             for column, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
+                item = SortableItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setToolTip(info)
                 if column==0:
@@ -157,6 +158,7 @@ class EzlaPreviewPanel(QWidget):
                     item.setBackground(QColor('#fef3c7'))
                     item.setForeground(QColor('#92400e'))
                 self.table.setItem(row, column, item)
+        apply_header_sort(self.table)
         self.table.resizeColumnsToContents()
         message = (f'Firmy: {len(self.companies)}; z wczytanym raportem: {loaded}; bez raportu: {len(self.companies) - loaded}. '
                    'Podgląd raportów ZUS; wynik importu sprawdź w enova lub logu Harmonogramu Zadań.')

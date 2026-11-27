@@ -34,7 +34,8 @@ class MonthPicker(QToolButton):
         self._year_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._year_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         for btn in (self._prev, self._next):
-            btn.setFixedWidth(32)
+            btn.setProperty('compact', True)
+            btn.setMinimumWidth(36)
             btn.setFlat(True)
         nav.addWidget(self._prev)
         nav.addWidget(self._year_label, 1)

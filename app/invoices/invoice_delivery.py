@@ -221,9 +221,11 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
 def review_delivery(parent, invoice_ids, actor_id):
     from PyQt6.QtCore import QSettings
     from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel,
-                                 QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView)
+                                 QMessageBox, QTableWidget,  QVBoxLayout, QHeaderView)
     from app.email.email_storage import get_email_accounts_for_employee
     plans = delivery_plan(invoice_ids,actor_id)
+    from app.utils.table_sorting import SortableItem, enable_header_sort
+
     accounts = get_email_accounts_for_employee(actor_id)
     if not accounts:
         raise ValueError('Nie masz przypisanego konta pocztowego do wysyłki faktur.')
@@ -241,12 +243,13 @@ def review_delivery(parent, invoice_ids, actor_id):
     sender.setCurrentIndex(max(0,sender.findData(settings.value(key,None))))
     form = QFormLayout();form.addRow('Nadawca:',sender);layout.addLayout(form)
     table = QTableWidget(len(plans),2)
+    enable_header_sort(table)
     table.setHorizontalHeaderLabels(['Faktura','Adres e-mail do faktur'])
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     for row,plan in enumerate(plans):
-        table.setItem(row,0,QTableWidgetItem(plan['number']))
-        table.setItem(row,1,QTableWidgetItem(', '.join(plan['recipients'])))
+        table.setItem(row,0,SortableItem(plan['number']))
+        table.setItem(row,1,SortableItem(', '.join(plan['recipients'])))
     layout.addWidget(table)
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
     buttons.button(QDialogButtonBox.StandardButton.Ok).setText('Potwierdź wysyłkę PDF')

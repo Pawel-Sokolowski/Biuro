@@ -15,7 +15,8 @@ def preview_report(actor_id, path):
     report = read_report(path)
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        companies = conn.execute('SELECT id,nazwa,nip,forma_dzialalnosci FROM firmy WHERE id=ANY(%s)', (ids,)).fetchall()
+        companies = conn.execute("SELECT id, COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa, "
+                                 "nip, forma_dzialalnosci FROM firmy WHERE id=ANY(%s)", (ids,)).fetchall()
     matches = []
     for row in companies:
         try:

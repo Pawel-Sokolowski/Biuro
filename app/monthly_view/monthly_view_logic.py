@@ -267,7 +267,7 @@ class MonthlyViewLogic:
         month_start, month_end = month_bounds(selected_month)
 
         sql = """
-            SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
+            SELECT f.id, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS nazwa,
                    f.status, f.uslugi_zawieszone, f.ksiegowa_id, f.kadrowa_id,
                    f.nip AS insurance_company_nip, f.data_koniec_zus_start, f.data_koniec_zus_pref, f.data_koniec_maly_zus,
                    f.vat_status, f.vat_sprawdzono, f.vat_sprawdzil,
@@ -443,7 +443,7 @@ class MonthlyViewLogic:
             if cached is None:
                 with get_conn() as conn:
                     company = conn.execute(
-                        "SELECT COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa FROM firmy WHERE id = %s",
+                        "SELECT COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa FROM firmy WHERE id = %s",
                         (firma_id,),
                     ).fetchone()
                     task_name = activity.get("task_title")

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QComboBox, QTabWidget,  QTableWidgetItem,
+    QPushButton, QLineEdit, QComboBox, QTabWidget,
     QAbstractItemView, QCheckBox, QStackedWidget)
 from app.monthly_view.month_picker import MonthPicker
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
@@ -15,6 +15,7 @@ from app.companies.cennik_keys import company_accounting_type
 from app.companies.identities import is_civil
 from app.integrations.enova.document_counts import normalize_nip
 from app.utils.background import CommandRunner, TaskRunner
+from app.utils.table_sorting import SortableItem, apply_header_sort
 from app.integrations.platnik.gui_evidence import display_check
 from app.accounting.insights import comparison, declaration_issue, hr_status, needs_attention, previous_active_types, HR_LABELS
 from app.preferences.state_colors import paint as paint_state
@@ -50,7 +51,7 @@ from app.accounting.report_types import (DEFAULT_FORMS, NOT_SENT_FORMS, declarat
 
 
 def _item(value, tooltip=''):
-    item = QTableWidgetItem(str(value if value is not None else '—'))
+    item = SortableItem(str(value if value is not None else '—'))
     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
     item.setToolTip(tooltip)
     return item
@@ -99,7 +100,7 @@ def _search_haystack(row):
     Obejmuje też opiekuna zastępowanego, żeby „moje firmy” działało zarówno dla
     osoby na zastępstwie, jak i dla osoby, którą zastępuje.
     """
-    parts = [row.get('nazwa'), row.get('nip'), row.get('ksiegowa'), row.get('kadrowa')]
+    parts = [row.get('nazwa'), row.get('nazwa_pelna'), row.get('nip'), row.get('ksiegowa'), row.get('kadrowa')]
     for department in ('accounting', 'payroll'):
         parts.append((row.get('owner_original') or {}).get(department))
         parts.append((row.get(f'{department}_substitute') or {}).get('zastepowany'))
@@ -495,6 +496,7 @@ class AccountingPage(QWidget):
             rows.append(row)
         if report == 'contributions':
             self._render_contributions(rows if self.period == self.month.monthText() else [])
+            apply_header_sort(self.contribution_table)
             return
         today = datetime.now(ZoneInfo('Europe/Warsaw')).date()
         horizon = self.hr_range.currentData()
@@ -510,10 +512,14 @@ class AccountingPage(QWidget):
             self._render_declarations(visible, department)
         elif report.startswith('hr'):
             self._render_hr(visible, today, horizon)
+            apply_header_sort(self.hr_table)
         elif report == 'ezla':
             if self._remote_ezla_month != self.period:
                 self.ezla_panel.set_remote({'reports': []})
             self.ezla_panel.set_companies(visible, self.period, only_attention)
+        table = self.report_stacks[department].currentWidget()
+        if isinstance(table, FrozenFirstColumnTable):
+            apply_header_sort(table)
         missing_reports = sum(not decoded(row.get('checking')) for row in rows)
         missing_payroll = sum(documents(row, 'payroll') is None for row in rows)
         missing_declarations = sum(decoded(row.get('checking')).get('declarations') is None for row in rows)
@@ -595,6 +601,7 @@ class AccountingPage(QWidget):
             self.platnik_gui_month = month
             self.platnik_gui_checks = {(row['company_id'], row['nip']): row for row in rows}
             self._paint_platnik_gui_checks()
+            apply_header_sort(self.contribution_table)
             if any(row['state'] in ('queued', 'running') for row in rows):
                 if not self.platnik_gui_timer.isActive():
                     self.platnik_gui_timer.start()
@@ -754,14 +761,13 @@ class AccountingPage(QWidget):
                 percent = 'Nowe' if values['new'] else (f"{values['percent']:+.1f}%" if values['percent'] is not None else '—')
                 records.append([row.get('nazwa'), row.get('ksiegowa') or row.get('kadrowa') or '—',
                                 'Razem' if kind is None else TYPE_LABELS.get(kind, kind),
-                                values['current'], values['previous'], values['delta'], percent])
+                                values['current'], values['previous'], values['delta'], percent, row['id']])
         self._fill(table, headers, records)
         # Firma może wystąpić kilka razy (raz na rodzaj dokumentu) — ale opiekun jest ten sam.
-        by_name = {}
-        for row in rows:
-            by_name.setdefault(row.get('nazwa'), row)
+        by_id = {row['id']: row for row in rows}
         for index, record in enumerate(records):
-            source = by_name.get(record[0]) or {}
+            source = by_id[record[-1]]
+            table.item(index, 0).setData(Qt.ItemDataRole.UserRole, source['id'])
             if source.get(f'{department}_substitute'):
                 owner_item = self._owner_item(source, department)
                 cell = table.item(index, 1)
@@ -801,7 +807,7 @@ class AccountingPage(QWidget):
                 empty_name = self._declaration_name(apply_not_sent or {'form': form}, row) if form else '—'
                 records.append([row.get('nazwa'), owner, '—', empty_name,
                                 'Brak danych' if decoded(row.get('checking')).get('declarations') is not None else 'Nie sprawdzono',
-                                '—', '—', '—', '—', 'Brak danych źródłowych', '—', '', False])
+                                '—', '—', '—', '—', 'Brak danych źródłowych', '—', '', False, row['id']])
                 receipts.append('')
             for entry in sorted(entries, key=lambda item: (item['form'], item.get('employee_name', ''))):
                 status = entry.get('status')
@@ -831,20 +837,19 @@ class AccountingPage(QWidget):
                                 (f"{'; ' if entry.get('raw_status') or entry.get('filing_status_raw') else ''}"
                                  f"dokument {entry['source_id']}, identyfikator raportu {entry.get('report_id') or '—'}"
                                  if entry.get('source_system') == 'platnik' and entry.get('source_id') else ''),
-                                form_key(entry['form']) in NOT_SENT_FORMS])
+                                form_key(entry['form']) in NOT_SENT_FORMS, row['id']])
                 receipts.append(_upo_tooltip(entry))
         self._fill(table, ['Firma', 'Opiekun (obecny, z zastępstwami)', 'Pracownik', 'Deklaracja', 'Status',
                            'Data wysyłki', 'UPO', 'Data UPO', 'Nr UPO', 'Do sprawdzenia',
                            'Utworzono'], records)
         table.setToolTip('Kolumna „Deklaracja” to nr formularza. PIT-y nie są wysyłane przez program, '
                          'więc nie są oznaczane jako niewysłane. Źródło odczytu jest w tooltipie kolumny „Do sprawdzenia”.')
-        by_name = {}
-        for row in rows:
-            by_name.setdefault(row.get('nazwa'), row)
+        by_id = {row['id']: row for row in rows}
         for index, record in enumerate(records):
             table.item(index, 6).setToolTip(receipts[index])
             table.item(index, 8).setToolTip(receipts[index])
-            source = by_name.get(record[0]) or {}
+            source = by_id[record[-1]]
+            table.item(index, 0).setData(Qt.ItemDataRole.UserRole, source['id'])
             if source.get(f'{department}_substitute'):
                 owner_item = self._owner_item(source, department)
                 table.item(index, 1).setText(owner_item.text())
@@ -881,19 +886,18 @@ class AccountingPage(QWidget):
                 employee = event['employee_name'] + ' (' + event['employee_id'] + ')'
                 records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', employee,
                                 event.get('document_number') or '—', event.get('detail') or HR_LABELS[event['event_type']],
-                                event.get('due_date') or '—', status, _date(report.get('imported_at'))])
+                                event.get('due_date') or '—', status, _date(report.get('imported_at')), row['id']])
             if len(records) == before:
                 state = 'Brak odczytu' if report.get('events') is None else 'Brak terminów w wybranym zakresie'
                 records.append([row.get('nazwa'), row.get('nip'), row.get('kadrowa') or '—', '—', '—', HR_LABELS.get(kind, '—'), '—',
-                                state, _date(report.get('imported_at'))])
+                                state, _date(report.get('imported_at')), row['id']])
         records.sort(key=lambda record: (0 if record[7] in ('Po terminie', 'Brak terminu') else 1, record[6], record[0]))
         self._fill(self.hr_table, ['Firma', 'NIP', 'Kadrowa (obecna, z zastępstwami)', 'Pracownik', 'Numer dokumentu',
                                   'Rodzaj', 'Data', 'Stan', 'Ostatni odczyt'], records)
-        by_name = {}
-        for row in rows:
-            by_name.setdefault(row.get('nazwa'), row)
+        by_id = {row['id']: row for row in rows}
         for index, record in enumerate(records):
-            source = by_name.get(record[0]) or {}
+            source = by_id[record[-1]]
+            self.hr_table.item(index, 0).setData(Qt.ItemDataRole.UserRole, source['id'])
             if source.get('payroll_substitute'):
                 owner_item = self._owner_item(source, 'payroll')
                 self.hr_table.item(index, 2).setText(owner_item.text())
@@ -911,7 +915,7 @@ class AccountingPage(QWidget):
         table.setHorizontalHeaderLabels(headers)
         table.setRowCount(len(records))
         for row, values in enumerate(records):
-            for column, value in enumerate(values):
+            for column, value in enumerate(values[:len(headers)]):
                 table.setItem(row, column, _item(value))
         table.resizeColumnsToContents()
         if records:

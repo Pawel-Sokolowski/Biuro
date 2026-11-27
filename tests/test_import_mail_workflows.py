@@ -211,6 +211,7 @@ class ImportAndMailTests(DbTestCase):
         smtp.send_message.return_value = {}
         imap = Mock()
         imap.append.return_value = ('OK',[b'APPEND completed'])
+        imap.uid.return_value = ('OK', [b''])
         @contextmanager
         def smtp_session(*args,**kwargs):
             yield smtp
@@ -253,10 +254,49 @@ class ImportAndMailTests(DbTestCase):
         config = {'user':'office@example.com','display_name':'Office','host':'localhost','port':465,'ssl':True,'password':'synthetic'}
         with patch('app.email.email_actions.get_smtp_config_for_account',return_value=config), \
              patch('app.email.email_actions.open_smtp',return_value=smtp), \
-             patch('app.email.email_actions.store_sent_copy',return_value=False), \
+             patch('app.email.email_sync.append_sent_copy',return_value=False), \
              patch('app.email.email_actions.choose_copy_folder',return_value=None), \
              patch('app.email.email_storage.find_special_folder',return_value='INBOX.Sent'):
             ok,info = send_email_smtp(10,['office@example.com'],'Notice','Body',bcc=['client@example.com'],save_copy=True)
         self.assertTrue(ok)
-        self.assertIn('nie potwierdzono',info)
+        self.assertIn('Nie potwierdzono',info)
         smtp.send_message.assert_called_once()
+
+    def test_copy_survives_missing_append_reply_and_retry_checks_message_id(self):
+        from app.email.email_actions import send_email_smtp
+        from app.email.sent_copies import retry_due_copies
+
+        smtp = Mock()
+        smtp.send_message.return_value = {}
+        imap = Mock()
+        imap.uid.side_effect = [('OK', [b'']), ('OK', [b'119'])]
+        imap.append.side_effect = ConnectionError('lost APPEND reply')
+
+        @contextmanager
+        def smtp_session(*args, **kwargs):
+            yield smtp
+
+        @contextmanager
+        def imap_session(*args, **kwargs):
+            yield Mock(conn=imap)
+
+        config = {'user': 'office@example.com', 'display_name': 'Office', 'host': 'localhost',
+                  'port': 465, 'ssl': True, 'password': 'synthetic'}
+        with patch('app.email.email_actions.get_smtp_config_for_account', return_value=config), \
+             patch('app.email.email_actions.open_smtp', side_effect=smtp_session), \
+             patch('app.email.email_sync._shared_session', side_effect=imap_session), \
+             patch('app.email.email_sync.sync_folder') as sync:
+            ok, info = send_email_smtp(10, ['client@example.com'], 'Notice', 'Confidential message', save_copy=True)
+            self.assertTrue(ok, info)
+            with get_conn() as conn:
+                row = conn.execute('SELECT state, payload, message_id FROM email_sent_copies').fetchone()
+                self.assertEqual(row['state'], 'pending')
+                self.assertNotIn(b'Confidential message', row['payload'])
+                conn.execute('UPDATE email_sent_copies SET retry_at = now()')
+            retry_due_copies(10)
+        smtp.send_message.assert_called_once()
+        imap.append.assert_called_once()
+        self.assertIn(row['message_id'], imap.uid.call_args.args[-1])
+        sync.assert_called_once_with(10, 'INBOX.Sent')
+        with get_conn() as conn:
+            self.assertFalse(conn.execute('SELECT 1 FROM email_sent_copies').fetchone())

@@ -163,7 +163,8 @@ class MailActionsMixin:
 
             def finished(result, error):
                 if error is None and result[0]:
-                    QMessageBox.information(self, "Email", "Wiadomość została wysłana.")
+                    message = "Wiadomość została wysłana." if result[1] == "OK" else result[1]
+                    QMessageBox.information(self, "Email", message)
                 else:
                     info = str(error) if error is not None else result[1]
                     QMessageBox.warning(self, "Email", f"Nie udało się potwierdzić wysłania wiadomości:\n{info}")

@@ -47,6 +47,15 @@ def _get_encryption_key() -> bytes:
 def _cipher() -> Fernet:
     return Fernet(_get_encryption_key())
 
+
+def encrypt_bytes(value: bytes) -> bytes:
+    return _cipher().encrypt(value)
+
+
+def decrypt_bytes(value: bytes) -> bytes:
+    return _cipher().decrypt(value)
+
+
 # --- Funkcje szyfrowania haseł email ---
 def encrypt_password(password: str) -> str:
     """

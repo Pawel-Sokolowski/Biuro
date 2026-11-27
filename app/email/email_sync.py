@@ -1008,6 +1008,22 @@ def append_message(konto_id: int, folder: str, raw: bytes, seen: bool = True, ti
         return typ == "OK"
 
 
+def append_sent_copy(konto_id, folder, raw, message_id):
+    """Check by Message-ID before APPEND, including after a lost IMAP response."""
+    with _shared_session(konto_id, timeout=20) as session:
+        if session is None or not session.select(folder, True):
+            return False
+        status, ids = session.conn.uid("SEARCH", None, "UNDELETED", "HEADER", "Message-ID", quote_mailbox(message_id))
+        if status != "OK":
+            return False
+        if any(value and value.strip() for value in ids or ()):
+            return True
+        status, _ = session.conn.append(
+            quote_mailbox(folder), r"(\Seen)", imaplib.Time2Internaldate(time.time()), raw,
+        )
+        return status == "OK"
+
+
 def _assert_selected_rows(konto_id, folder, expected_rows):
     """A stale UI UID must never move/delete/mark a replacement message."""
     if expected_rows is None:
@@ -1844,6 +1860,8 @@ def sync_automatic_accounts(accounts, current_account_id=None, current_folder=No
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Synchronizacja przerwana.")
+            from app.email.sent_copies import retry_due_copies
+            retry_due_copies(konto_id, stop=cancel_event)
             # Lista folderów jest przechowywana w PostgreSQL. Nie wykonuj LIST
             # podczas każdego pollingu. Odśwież ją tylko, gdy baza nie ma folderów.
             folders = selectable_folder_names(konto_id)

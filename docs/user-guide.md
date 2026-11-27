@@ -428,6 +428,14 @@ sam UID nie służy do wyszukania celu. Powiadomienie zbiorcze otwiera zakładk�
 E-mail. Instalator oznacza skrót identyfikatorem `Biuro.OfficeManager`; po
 aktualizacji zależności przebuduj EXE i instalator, aby dołączyć projekcje WinRT XML.
 
+Biuro zapisuje zaszyfrowaną kopię wychodzącego e-maila razem z załącznikami
+przed wysyłką SMTP. Po przyjęciu wiadomości kopia trafia do folderu **Wysłane**
+oraz do wybranego folderu klienta, jeśli skonfigurowano taki folder. Podczas
+synchronizacji poczty Biuro ponawia zapis oczekujących kopii. Sprawdza ich
+`Message-ID` w folderze IMAP, aby nie dodać drugi raz kopii po utracie
+odpowiedzi serwera. Po niejednoznacznym wyniku SMTP kopia pozostaje w bazie
+w oczekiwaniu na potwierdzenie. Zmiana wymaga aktualizacji bazy Biuro.
+
 ### Mail masowy do klientów
 
 W zakładce **E-mail** przyciski **Synchronizacja wiadomości**, **Odśwież widok**

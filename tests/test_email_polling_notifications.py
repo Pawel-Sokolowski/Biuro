@@ -17,6 +17,8 @@ from app.tasks.tasks_ui import TasksPage
 
 class AutomaticSyncTests(unittest.TestCase):
     def setUp(self):
+        patcher=patch('app.email.sent_copies.retry_due_copies')
+        patcher.start();self.addCleanup(patcher.stop)
         patcher=patch.object(email_sync,'account_sync_lock',side_effect=lambda *a, **kw: nullcontext(True))
         patcher.start();self.addCleanup(patcher.stop)
         patcher=patch.object(email_sync,'sync_folder_flags',return_value=0)

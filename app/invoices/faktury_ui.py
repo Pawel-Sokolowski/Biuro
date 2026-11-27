@@ -1353,10 +1353,24 @@ class FakturyPage(QWidget):
                         matching_states.add("unpaid")
                     if selected_state not in matching_states:
                         continue
+                    email_status = inv.get("invoice_email_status")
+                    if inv.get("ksef_status") == "odrzucona" and email_status in (
+                        "queued", "preparing", "failed_before_send",
+                    ):
+                        email_status = "blocked_by_ksef"
+                    email_label = {
+                        "queued": "W kolejce",
+                        "sent": "Wysłano PDF",
+                        "failed_before_send": "Oczekuje na ponowienie PDF",
+                        "blocked_before_send": "Popraw dane wysyłki PDF",
+                        "blocked_by_ksef": "PDF wstrzymany — odrzucono w KSeF",
+                        "sending": "Do sprawdzenia",
+                        "uncertain": "Do sprawdzenia",
+                    }.get(email_status, "—")
                     values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
-                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Oczekuje na ponowienie PDF", "blocked_before_send":"Popraw dane wysyłki PDF", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
+                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), email_label]
                     roles = {c: {Qt.ItemDataRole.TextAlignmentRole: Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter} for c in (6,7,8,9)}
                     def tooltip(column, text):
                         roles.setdefault(column, {})[Qt.ItemDataRole.ToolTipRole] = text

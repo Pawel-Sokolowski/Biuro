@@ -908,6 +908,7 @@ class AccountingPage(QWidget):
                 paint_state(self.hr_table.item(index, 7), 'error')
         self.hr_note.setText(f'Stan terminów na {today.isoformat()}. Brak odczytu dla {missing} firm. '
                              f'Nieudana ostatnia próba dla {failed} firm. '
+                             'Zaległe terminy tylko z bieżącego roku. '
                              'Umowy bezterminowe są widoczne w „Wszystkie pobrane”.')
 
     @staticmethod

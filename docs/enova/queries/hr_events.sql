@@ -21,7 +21,10 @@ WITH Parameters AS (
     WHERE u.Anulowana=0 AND u.OkresFrom > CONVERT(date,'19000101',112)
       AND u.OkresFrom <= p.AsOf AND u.OkresTo >= p.AsOf
 ), Staff AS (
-    SELECT DISTINCT Pracownik FROM Contracts
+    SELECT Pracownik,
+           CASE WHEN COUNT(due_date) = COUNT(*) THEN MAX(due_date) END AS employment_end
+    FROM Contracts
+    GROUP BY Pracownik
 ), Medical AS (
     SELECT m.Pracownik,m.ID,m.Data,m.Termin,m.WazneDo,
            ROW_NUMBER() OVER (PARTITION BY m.Pracownik,m.Definicja ORDER BY m.Data DESC,m.ID DESC) AS rn,
@@ -52,8 +55,8 @@ WITH Parameters AS (
 )
 SELECT CONVERT(nvarchar(10),SESSION_CONTEXT(N'biuro_company_nip')) AS nip,
        e.event_id,e.Pracownik AS employee_id,LTRIM(RTRIM(CONCAT(w.Imie,N' ',w.Nazwisko))) AS employee_name,
-       e.event_type,e.due_date,N'active' AS status,e.detail
-FROM Events e JOIN dbo.Pracownicy w ON w.ID=e.Pracownik
+       e.event_type,e.due_date,N'active' AS status,e.detail,s.employment_end
+FROM Events e JOIN Staff s ON s.Pracownik=e.Pracownik JOIN dbo.Pracownicy w ON w.ID=e.Pracownik
 CROSS JOIN Parameters p
-WHERE e.due_date IS NULL OR e.due_date < p.DateTo
+WHERE e.due_date IS NULL OR (e.due_date >= DATEFROMPARTS(YEAR(p.AsOf),1,1) AND e.due_date < p.DateTo)
 ORDER BY e.Pracownik,e.event_type,e.due_date,e.event_id;

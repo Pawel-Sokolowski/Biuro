@@ -52,13 +52,17 @@ def hr_status(event, today=None, days=30):
     today = today or date.today()
     if event.get('status') != 'active':
         return None
-    if event['event_type'] == 'employee':
+    employment_end = event.get('employment_end')
+    if employment_end and date.fromisoformat(employment_end) < today:
+        return None
+    kind = event['event_type']
+    if kind == 'employee':
         return 'Aktywny'
     if not event.get('due_date'):
-        return 'Bezterminowa' if event['event_type'] == 'contract_end' else 'Brak terminu'
+        return 'Bezterminowa' if kind == 'contract_end' else 'Brak terminu'
     due = date.fromisoformat(event['due_date'])
     if due < today:
-        return 'Po terminie'
+        return 'Po terminie' if kind != 'contract_end' and due.year == today.year else None
     if due == today:
         return 'Dzisiaj'
     if due <= today + timedelta(days=days):

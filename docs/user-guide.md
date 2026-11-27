@@ -432,8 +432,8 @@ jednej partii pojawia się w jednym powiadomieniu. Instalator oznacza skrót
 identyfikatorem `Biuro.OfficeManager`; po
 aktualizacji zależności przebuduj EXE i instalator, aby dołączyć projekcje WinRT XML.
 
-Biuro zapisuje zaszyfrowaną kopię wychodzącego e-maila razem z załącznikami
-przed wysyłką SMTP. Po przyjęciu wiadomości kopia trafia do folderu **Wysłane**
+Biuro zapisuje zaszyfrowane kopie wysyłanej poczty, faktur i przypomnień razem z
+załącznikami przed wysyłką SMTP. Po przyjęciu wiadomości kopia trafia do folderu **Wysłane**
 oraz do wybranego folderu klienta, jeśli skonfigurowano taki folder. Podczas
 synchronizacji poczty Biuro ponawia zapis oczekujących kopii. Sprawdza ich
 `Message-ID` w folderze IMAP, aby nie dodać drugi raz kopii po utracie

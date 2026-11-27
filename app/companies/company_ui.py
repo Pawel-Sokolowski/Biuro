@@ -74,7 +74,7 @@ class _BackupMetadataCache:
 
 
 class CompanyUI(QWidget):
-    def __init__(self, pracownik_id: int, parent=None):
+    def __init__(self, pracownik_id: int, parent=None, *, defer_load=False):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self._reads = TaskRunner(self)
@@ -159,7 +159,8 @@ class CompanyUI(QWidget):
         self.status_filter.currentIndexChanged.connect(self.refresh_async)
         self.search_input.textChanged.connect(self._queue_search)
 
-        QTimer.singleShot(0, self.refresh_async)
+        if not defer_load:
+            QTimer.singleShot(0, self.refresh_async)
 
     # ============================================================
     #  LOAD TABLE

@@ -18,6 +18,7 @@ from app.db import dao_services
 from app.db.dao_tasks import TASK_STATUSES, list_tasks, set_tasks_status
 from app.monthly_view.month_picker import MonthPicker
 from app.security.authorization import is_administrator
+from app.utils.background import TaskRunner
 
 logger = logging.getLogger(__name__)
 STATES = {"pending": "Do wykonania", "done": "Wykonane", "cancelled": "Anulowane", "unlinked": "Bez zadania"}
@@ -142,9 +143,11 @@ class ExtraActivitiesPage(QWidget):
     open_task = pyqtSignal(int)
     activities_changed = pyqtSignal()
 
-    def __init__(self, actor_id, companies, employees, parent=None, *, month=None):
+    def __init__(self, actor_id, companies, employees, parent=None, *, month=None, defer_load=False):
         super().__init__(parent)
         self.actor_id, self.companies, self.employees = actor_id, companies, employees
+        self._reads = TaskRunner(self) if defer_load else None
+        self._scope = None
         self.rows = []
         layout = QVBoxLayout(self)
         filters = QHBoxLayout()
@@ -183,17 +186,40 @@ class ExtraActivitiesPage(QWidget):
         hint = QLabel("Stan czynności wynika ze statusu zadania. Wpisy historyczne bez powiązania mają stan „Bez zadania”.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self._status = QLabel()
+        self._status.hide()
+        layout.addWidget(self._status)
         self.company_filter.currentIndexChanged.connect(self.refresh)
         self.state_filter.currentIndexChanged.connect(self.refresh)
         self.month.monthChanged.connect(self.refresh)
-        self.refresh()
+        if not defer_load:
+            self.refresh()
 
     def refresh(self):
+        scope = self.company_filter.currentData(), self.month.currentText(), self.state_filter.currentData()
+        actor = self.actor_id
+
+        def read():
+            company, month, state = scope
+            return dao_services.list_extra_activities(actor, firma_id=company, miesiac=month, state=state)
+
+        if self._reads is not None:
+            if scope != self._scope:
+                self._scope = scope
+                self.rows = []
+                self.table.setRowCount(0)
+                self._status.setText("Wczytywanie czynności dodatkowych…")
+                self._status.show()
+
+            def failed(exc):
+                logger.warning("Nie można wczytać czynności dodatkowych: %s", exc)
+                self._status.setText("Nie udało się wczytać czynności. Kliknij Odśwież, aby ponowić.")
+                self._status.show()
+
+            self._reads.submit(read, self._render_rows, failed, key=scope)
+            return
         try:
-            self.rows = dao_services.list_extra_activities(
-                self.actor_id, firma_id=self.company_filter.currentData(), miesiac=self.month.currentText(),
-                state=self.state_filter.currentData(),
-            )
+            rows = read()
         except (PermissionError, ValueError) as exc:
             QMessageBox.warning(self, "Czynności dodatkowe", str(exc))
             return
@@ -201,6 +227,11 @@ class ExtraActivitiesPage(QWidget):
             logger.exception("Błąd odczytu czynności dodatkowych")
             QMessageBox.warning(self, "Czynności dodatkowe", "Nie udało się odczytać czynności. Szczegóły w logach.")
             return
+        self._render_rows(rows)
+
+    def _render_rows(self, rows):
+        self._status.hide()
+        self.rows = rows
         self.table.setRowCount(len(self.rows))
         for row_number, row in enumerate(self.rows):
             invoice = (row.get("invoice_number") or "faktura robocza (bez numeru)") if row.get("invoice_id") else "—"

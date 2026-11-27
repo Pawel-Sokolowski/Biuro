@@ -31,6 +31,23 @@ class SendAndExportWorkflowTests(MailboxFixture):
         page.current_account = page.accounts[0]
         return page
 
+    def test_report_filters_are_loaded_once_when_opened_from_navigation(self):
+        with mock.patch.object(reports_ui, 'get_all_companies', return_value=[{'id': 17, 'nazwa': 'Firma'}]) as companies, \
+                mock.patch.object(reports_ui.ReportsPage, '_reportable_employees', return_value=[(1, 'Pracownik')]):
+            page = reports_ui.ReportsPage(1, defer_load=True)
+            self.addCleanup(page.close)
+            with mock.patch.object(page._reference_reads, 'submit') as submit:
+                page.refresh_async()
+                page.refresh_async()
+                submit.assert_called_once()
+                companies.assert_not_called()
+                read, populate, _ = submit.call_args.args
+                populate(read())
+                page.refresh_async()
+                submit.assert_called_once()
+            self.assertEqual(page.company_names, {17: 'Firma'})
+            self.assertEqual(page.employee_list.count(), 1)
+
     def test_send_runs_off_thread_and_captures_the_accepted_draft(self):
         page = self.page()
         entered, release, sent = threading.Event(), threading.Event(), []

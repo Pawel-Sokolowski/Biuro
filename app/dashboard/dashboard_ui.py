@@ -55,7 +55,7 @@ CARD_HINTS = {
 class DashboardPage(QWidget):
     """Strona główna: liczniki, zadania, wydarzenia i postęp bieżącego miesiąca."""
 
-    def __init__(self, pracownik_id: int, parent=None):
+    def __init__(self, pracownik_id: int, parent=None, *, defer_load=False):
         super().__init__(parent)
         self.pracownik_id = pracownik_id
         self.cards: dict[str, QLabel] = {}
@@ -137,7 +137,8 @@ class DashboardPage(QWidget):
         self._mail_timer.timeout.connect(self.refresh_backup_from_mail)
         self._mail_timer.start(BACKUP_MAIL_INTERVAL_MS)
         from app.remote.state import client
-        self.refresh_async() if client() is not None else self.refresh()
+        if not defer_load:
+            self.refresh_async() if client() is not None else self.refresh()
 
     def showEvent(self, event):
         super().showEvent(event)

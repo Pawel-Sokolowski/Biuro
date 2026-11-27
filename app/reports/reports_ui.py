@@ -88,10 +88,13 @@ def fit_table_height(table) -> None:
 
 
 class ReportsPage(QWidget):
-    def __init__(self, pracownik_id):
+    def __init__(self, pracownik_id, *, defer_load=False):
         super().__init__()
         self.pracownik_id = pracownik_id
         self._report_jobs = TaskRunner(self)
+        self._reference_reads = TaskRunner(self)
+        self._references_loaded = False
+        self._references_loading = False
         self._import_jobs = CommandRunner(self)
         self._export_jobs = CommandRunner(self)
         self._import_busy = False
@@ -102,6 +105,46 @@ class ReportsPage(QWidget):
                        self.daily_from.selectionChanged, self.daily_to.selectionChanged,
                        self.chk_whole_month.toggled):
             signal.connect(lambda *_: self._report_jobs.invalidate())
+        if defer_load:
+            for button in self._report_actions:
+                button.setEnabled(False)
+        else:
+            self._populate_report_filters(self._read_report_filters())
+
+    def _read_report_filters(self):
+        return get_all_companies(self.pracownik_id), self._reportable_employees()
+
+    def _populate_report_filters(self, result):
+        companies, employees = result
+        for company in companies:
+            company_id, name = company["id"], company["nazwa"]
+            self.company_names[company_id] = name
+            item = QListWidgetItem(f"{name} (ID {company_id})")
+            item.setData(Qt.ItemDataRole.UserRole, company_id)
+            self.firm_list.addItem(item)
+        for employee_id, label in employees:
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, employee_id)
+            self.employee_list.addItem(item)
+        self._references_loaded = True
+        self._references_loading = False
+        for button in self._report_actions:
+            button.setEnabled(True)
+        if self.report_status.text() == "Wczytywanie firm i pracowników…":
+            self.report_status.setText("Wybierz firmy i zakres, aby wygenerować raport.")
+
+    def refresh_async(self):
+        if self._references_loaded or self._references_loading:
+            return
+        self._references_loading = True
+        self.report_status.setText("Wczytywanie firm i pracowników…")
+
+        def failed(exc):
+            self._references_loading = False
+            self.report_status.setText("Nie udało się wczytać filtrów. Otwórz ponownie zakładkę Raporty.")
+            logging.getLogger(__name__).warning("Nie można wczytać filtrów raportów: %s", exc)
+
+        self._reference_reads.submit(self._read_report_filters, self._populate_report_filters, failed)
 
     def _build_ui(self):
         from PyQt6.QtWidgets import QScrollArea
@@ -130,11 +173,6 @@ class ReportsPage(QWidget):
         self.firm_list = QListWidget()
         self.firm_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.company_names = {}
-        for f in get_all_companies(self.pracownik_id):
-            self.company_names[f["id"]] = f["nazwa"]
-            item = QListWidgetItem(f"{f['nazwa']} (ID {f['id']})")
-            item.setData(Qt.ItemDataRole.UserRole, f["id"])
-            self.firm_list.addItem(item)
         layout.addWidget(self.firm_list)
 
         self.month_start = QComboBox()
@@ -172,10 +210,6 @@ class ReportsPage(QWidget):
         self.employee_list = QListWidget()
         self.employee_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.employee_list.setMaximumHeight(200)
-        for emp_id, label in self._reportable_employees():
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, emp_id)
-            self.employee_list.addItem(item)
         daily_box.addWidget(self.employee_list, 1)
         self.daily_from = QCalendarWidget()
         self.daily_to = QCalendarWidget()
@@ -214,6 +248,7 @@ class ReportsPage(QWidget):
         btn_rates.clicked.connect(self._edit_rates)
         btn_delete = QPushButton("Usuń zaimportowane dane")
         btn_delete.clicked.connect(self._delete_imported)
+        self._report_actions = (btn, btn_export, btn_delete)
         for b in (btn_import_work, btn_import_inv, btn_import_counts, btn_rates, btn_delete):
             import_box.addWidget(b)
         layout.addLayout(import_box)

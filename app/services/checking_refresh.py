@@ -147,38 +147,12 @@ def _request(
 
 
 def _result_state(results):
-    failed = sum(
-        not row.get(
-            'ok',
-            row.get('state') == 'ok',
-        )
-        for row in results
-    )
-
-    partial = any(
-        row.get('monthly_imported')
-        for row in results
-    )
-
-    if (
-        not results
-        or (
-            failed == len(results)
-            and not partial
-        )
-    ):
-        return 'failed'
-
-    # Każda firma bez zapisanych danych to niepowodzenie w całości: użytkownik
-    # nie może zobaczyć „wykonane”, gdy część firm nie została odczytana.
-    if failed:
+    successful = [row for row in results if row.get('ok', row.get('state') == 'ok')]
+    if results and len(successful) == len(results) and not any(row.get('hr_failed') for row in successful):
+        return 'completed'
+    if successful or any(row.get('monthly_imported') for row in results):
         return 'partial'
-
-    return (
-        'partial'
-        if failed
-        else 'completed'
-    )
+    return 'failed'
 
 
 def _needs_retry(state):

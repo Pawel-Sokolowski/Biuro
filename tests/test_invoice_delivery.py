@@ -140,7 +140,7 @@ class InvoiceDeliveryTests(unittest.TestCase):
         conn.execute.return_value.fetchone.return_value = (1,)
         smtp.send_message.return_value = {}
 
-        def save_state(invoice_id, status, *, error, pdf):
+        def save_state(invoice_id, status, *, error, **kwargs):
             self.invoice.update(invoice_email_status=status, invoice_email_error=error)
 
         with patch.object(delivery, 'get_conn', return_value=conn), \
@@ -160,7 +160,7 @@ class InvoiceDeliveryTests(unittest.TestCase):
         conn=Mock();conn.execute.return_value.fetchone.return_value=(1,)
         def update(invoice_id,status,**kwargs):self.invoice['invoice_email_status']=status
         with patch.object(delivery,'get_conn',return_value=conn),patch.object(delivery,'_delivery_state',side_effect=update), \
-             patch('app.email.email_actions._send_smtp_message',return_value=(False,'timeout after DATA')) as smtp:
+             patch('app.email.email_actions._send_smtp_message',return_value=('uncertain','timeout after DATA')) as smtp:
             self.assertEqual(delivery.deliver_if_queued(1,7,str(self.xml_path))['status'],'uncertain')
             delivery.deliver_if_queued(1,7,str(self.xml_path))
         smtp.assert_called_once()

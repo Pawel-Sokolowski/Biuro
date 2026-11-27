@@ -297,6 +297,6 @@ class ImportAndMailTests(DbTestCase):
         smtp.send_message.assert_called_once()
         imap.append.assert_called_once()
         self.assertIn(row['message_id'], imap.uid.call_args.args[-1])
-        sync.assert_called_once_with(10, 'INBOX.Sent')
+        sync.assert_called_once_with(10, 'INBOX.Sent', full_sync=False)
         with get_conn() as conn:
             self.assertFalse(conn.execute('SELECT 1 FROM email_sent_copies').fetchone())

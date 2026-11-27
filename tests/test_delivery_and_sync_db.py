@@ -1,9 +1,10 @@
 """PostgreSQL checks for delivery reservations, notification links and first sync."""
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+from smtplib import SMTPServerDisconnected
 import tempfile
 import threading
 from unittest.mock import Mock, patch
@@ -55,7 +56,7 @@ class DeliveryAndSyncDbTests(DbTestCase):
             return str(self.pdf)
         with patch('app.email.email_actions.get_smtp_config_for_account',return_value={'host':'smtp.invalid','user':'office@example.com'}), \
              patch('app.invoices.invoice_delivery.official_pdf',side_effect=render), \
-             patch('app.email.email_actions._send_smtp_message',return_value=(True,'OK')) as smtp:
+             patch('app.email.email_actions._send_smtp_message',return_value=('sent','OK')) as smtp:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 results=list(pool.map(lambda _:deliver_if_queued(self.invoice,1,'/test/invoice.xml'),range(2)))
         smtp.assert_called_once()
@@ -128,14 +129,41 @@ class DeliveryAndSyncDbTests(DbTestCase):
         self.assertEqual(get_invoice_by_id(correction)['podstawa_zwolnienia'], 'art. 43 ustawy o VAT')
 
     def test_uncertain_delivery_is_persisted_and_not_retried(self):
-        queue_deliveries(delivery_plan([self.invoice],1),1,self.account)
-        with patch('app.email.email_actions.get_smtp_config_for_account',return_value={'host':'smtp.invalid','user':'office@example.com'}), \
-             patch('app.invoices.invoice_delivery.official_pdf',return_value=str(self.pdf)), \
-             patch('app.email.email_actions._send_smtp_message',return_value=(False,'timeout')) as smtp:
-            deliver_if_queued(self.invoice,1,'/test/invoice.xml')
-            deliver_if_queued(self.invoice,1,'/test/invoice.xml')
-        smtp.assert_called_once()
-        self.assertEqual(get_invoice_by_id(self.invoice)['invoice_email_status'],'uncertain')
+        queue_deliveries(delivery_plan([self.invoice], 1), 1, self.account)
+        config = {'host': 'smtp.invalid', 'user': 'office@example.com', 'port': 465, 'ssl': True, 'password': 'test-only'}
+        smtp = Mock()
+        smtp.send_message.side_effect = SMTPServerDisconnected('timeout after DATA')
+        with patch('app.email.email_actions.get_smtp_config_for_account', return_value=config), \
+             patch('app.invoices.invoice_delivery.official_pdf', return_value=str(self.pdf)), \
+             patch('app.email.sent_copies.stage_copy', return_value=1), \
+             patch('app.email.sent_copies.discard_reservation') as discard, \
+             patch('app.email.email_actions.open_smtp', return_value=nullcontext(smtp)):
+            self.assertEqual(deliver_if_queued(self.invoice, 1, '/test/invoice.xml')['status'], 'uncertain')
+            self.assertEqual(deliver_if_queued(self.invoice, 1, '/test/invoice.xml')['status'], 'uncertain')
+        smtp.send_message.assert_called_once()
+        discard.assert_not_called()
+        self.assertEqual(get_invoice_by_id(self.invoice)['invoice_email_status'], 'uncertain')
+
+    def test_inability_to_connect_before_smtp_leaves_invoice_retryable(self):
+        queue_deliveries(delivery_plan([self.invoice], 1), 1, self.account)
+        config = {'host': 'smtp.invalid', 'user': 'office@example.com', 'port': 465, 'ssl': True, 'password': 'test-only'}
+        smtp = Mock()
+        smtp.send_message.return_value = {}
+        with patch('app.email.email_actions.get_smtp_config_for_account', return_value=config), \
+             patch('app.invoices.invoice_delivery.official_pdf', return_value=str(self.pdf)), \
+             patch('app.email.sent_copies.stage_copy', return_value=1), \
+             patch('app.email.sent_copies.discard_reservation') as discard, \
+             patch('app.email.sent_copies.confirm_copy'), \
+             patch('app.email.sent_copies.flush_copy', return_value=True), \
+             patch('app.email.email_actions.open_smtp',
+                   side_effect=[ConnectionRefusedError('SMTP unavailable'), nullcontext(smtp)]):
+            result = deliver_if_queued(self.invoice, 1, '/test/invoice.xml')
+            self.assertEqual(result['status'], 'failed_before_send')
+            self.assertEqual(get_invoice_by_id(self.invoice)['invoice_email_status'], 'failed_before_send')
+            self.assertEqual(deliver_if_queued(self.invoice, 1, '/test/invoice.xml')['status'], 'sent')
+        discard.assert_called_once_with(1)
+        smtp.send_message.assert_called_once()
+        self.assertEqual(get_invoice_by_id(self.invoice)['invoice_email_status'], 'sent')
 
     def test_unread_assignments_are_deduplicated_and_notification_follows_moved_message(self):
         for name in ('INBOX','Clients'):

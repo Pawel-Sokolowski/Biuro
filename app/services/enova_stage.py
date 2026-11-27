@@ -75,7 +75,9 @@ def run(stop=None, *, now=None):
             if (not documents and not checked) or any(not item['ok'] for item in documents):
                 reason = 'EnovaDocumentsFailed'
                 raise ValueError('Nie ukończono odczytu dokumentów lub JPK.')
-            if config.get('checking_enabled', False) and (not checked or any(not item['ok'] for item in checked)):
+            if config.get('checking_enabled', False) and (
+                not checked or any(not item['ok'] or item.get('hr_failed') for item in checked)
+            ):
                 reason = 'EnovaCheckingFailed'
                 raise ValueError('Nie ukończono odczytu do Sprawdzania.')
             consumed.extend(events)

@@ -141,4 +141,4 @@ class SentCopyTests(DbTestCase):
             email_actions.store_sent_copy(1, msg, "INBOX/Klient")
         app.assert_called_once()
         self.assertEqual(app.call_args[0][1], "INBOX/Klient")
-        sync.assert_called_once_with(1, "INBOX/Klient")
+        sync.assert_called_once_with(1, "INBOX/Klient", full_sync=False)

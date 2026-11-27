@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from app.db.company_labels import company_label_sql, short_company_name_sql
 from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
-from app.db.dao_monthly import get_month_status, save_month_status
+from app.db.dao_monthly import get_month_status, save_month_contracts, save_month_status
 from app.db.dao_invoices import add_invoice_item_for_service
 from app.db.dao_companies import get_company, save_company
 from app.db.dao_notes import get_latest_notes_for_firms
@@ -57,7 +57,7 @@ class MonthlyViewLogic:
         self._auto_check_suspension()
 
     def _work_month(self) -> str:
-        """Kadry zapisują czas do bieżącego miesiąca, pozostali do poprzedniego."""
+        """Miesiąc, do którego domyślnie zapisujemy czas pracy."""
         from app.utils.months import default_month_for_employee
         return default_month_for_employee(self.pracownik_id)
 
@@ -472,6 +472,12 @@ class MonthlyViewLogic:
         data_dostarczenia: Optional[str] = None,
         etap_kadry: Optional[str] = None,
     ):
+        has_contract_changes = any(value is not None for value in (uop, uz, uod))
+        if has_contract_changes and all(value is None for value in (
+            etap, ilosc_dok, dokumenty_dostarczone, data_dostarczenia, etap_kadry,
+        )):
+            save_month_contracts(firma_id, self.aktualny_miesiac, uop, uz, uod)
+            return
         row = get_month_status(firma_id, self.aktualny_miesiac)
         payload: Dict[str, Any] = {}
         payload["dokumenty_dostarczone"] = (
@@ -505,15 +511,8 @@ class MonthlyViewLogic:
         payload['_manual_document_count'] = ilosc_dok is not None
         save_month_status(firma_id, self.aktualny_miesiac, payload)
 
-        if uop is not None or uz is not None or uod is not None:
-            from app.db.dao_monthly import get_month_contracts, save_month_contracts
-            current = get_month_contracts(firma_id, self.aktualny_miesiac)
-            save_month_contracts(
-                firma_id, self.aktualny_miesiac,
-                int(uop if uop is not None else current["uop_ilosc"]),
-                int(uz if uz is not None else current["uz_ilosc"]),
-                int(uod if uod is not None else current["uod_ilosc"]),
-            )
+        if has_contract_changes:
+            save_month_contracts(firma_id, self.aktualny_miesiac, uop, uz, uod)
 
     def _ensure_month_status(self, firma_id: int, month: Optional[str] = None):
         month = month or self.aktualny_miesiac

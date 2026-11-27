@@ -111,6 +111,14 @@ class CheckingRefreshTests(DbTestCase):
         self.assertEqual([row['company_id'] for row in result['results']],[self.company,self.other])
         self.assertEqual([row['ok'] for row in result['results']],[False,True])
 
+    def test_successful_documents_with_failed_hr_are_reported_as_partial(self):
+        enqueue(self.admin, 'enova', [self.company], '2026-11')
+        with patch('app.integrations.enova.connection_settings.load_connection', return_value=self.config), \
+             patch('app.integrations.enova.checking.run_checking_import',
+                   return_value=[{'ok': True, 'hr_failed': True}]):
+            self.assertEqual(process_next()['state'], 'partial')
+        self.assertTrue(latest(self.admin)['results'][0]['hr_failed'])
+
     def test_selected_ezla_uses_shared_credentials_and_leaves_other_payers_untouched(self):
         config = {'enabled':False,'companies':[self.company,self.other]}
         enqueue(self.admin,'ezla',[self.company],'2026-11')

@@ -215,12 +215,14 @@ def send_email_smtp(
         + list(cc or [])
         + list(bcc or [])
     )
-    return _send_smtp_message(konto_id, cfg, msg, recipients, subject, timeout=timeout,
-                              bcc=bcc, save_copy=save_copy, copy_folder=copy_folder)
+    status, info = _send_smtp_message(konto_id, cfg, msg, recipients, subject, timeout=timeout,
+                                     bcc=bcc, save_copy=save_copy, copy_folder=copy_folder)
+    return status == 'sent', info
 
 
 def _send_smtp_message(konto_id, cfg, msg, recipients, subject, *, timeout=30,
-                       bcc=None, save_copy=False, copy_folder=None):
+                       bcc=None, save_copy=False, copy_folder=None) -> Tuple[str, str]:
+    """Return the delivery state and diagnostic for the SMTP transaction."""
     import logging
     from app.email.sent_copies import confirm_copy, discard_reservation, flush_copy, stage_copy
 
@@ -257,14 +259,16 @@ def _send_smtp_message(konto_id, cfg, msg, recipients, subject, *, timeout=30,
                     copy_warning = "Zapisana kopia wymaga potwierdzenia przez administratora."
     except Exception as exc:
         if not accepted:
-            if reservation is not None and (not started or isinstance(exc, (SMTPDataError, SMTPRecipientsRefused, SMTPSenderRefused))):
+            failed_before_send = not started or isinstance(exc, (SMTPDataError, SMTPRecipientsRefused, SMTPSenderRefused))
+            if reservation is not None and failed_before_send:
                 try:
                     discard_reservation(reservation)
                 except Exception:
                     log.exception("Nie można wycofać rezerwacji kopii wiadomości")
             elif reservation is not None:
                 log.warning("sent_copy_awaiting_smtp_confirmation copy_id=%s", reservation)
-            return False, f"{describe_error(exc)}\n{traceback.format_exc()}"
+            status = 'failed_before_send' if failed_before_send else 'uncertain'
+            return status, f"{describe_error(exc)}\n{traceback.format_exc()}"
         # SMTP already confirmed DATA. A failed QUIT does not undo that confirmation.
         log.warning("SMTP zakończył połączenie po przyjęciu wiadomości", exc_info=True)
 
@@ -279,10 +283,10 @@ def _send_smtp_message(konto_id, cfg, msg, recipients, subject, *, timeout=30,
             copy_warning = "Nie potwierdzono synchronizacji wszystkich kopii z IMAP. Biuro ponowi zapis kopii z kolejki."
     if rejected:
         result = "SMTP odrzucił część odbiorców: " + ", ".join(refused)
-        return False, result + (" " + copy_warning if copy_warning else "")
+        return 'uncertain', result + (" " + copy_warning if copy_warning else "")
     if copy_warning:
-        return True, f"Wysłano przez SMTP. {copy_warning} Sprawdź Wysłane i foldery klientów. Nie ponawiaj wysyłki."
-    return True, "OK"
+        return 'sent', f"Wysłano przez SMTP. {copy_warning} Sprawdź Wysłane i foldery klientów. Nie ponawiaj wysyłki."
+    return 'sent', "OK"
 
 
 def _archive_message(message, bcc):

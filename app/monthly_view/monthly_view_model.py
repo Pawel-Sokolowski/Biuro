@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 import datetime
 import logging
@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 class MonthlyViewModel(QAbstractTableModel):
+    save_failed = pyqtSignal(str)
+
     def __init__(self, rows: List[Dict[str, Any]], mode: str, parent=None):
         super().__init__(parent)
         self._rows: List[Dict[str, Any]] = rows
@@ -272,15 +274,18 @@ class MonthlyViewModel(QAbstractTableModel):
             flags |= Qt.ItemFlag.ItemIsEditable
         return flags
 
-    def _persist(self, row: Dict[str, Any], **kwargs) -> None:
+    def _persist(self, row: Dict[str, Any], **kwargs) -> bool:
         parent = self.parent()
         logic = getattr(parent, "logic", None) if parent else None
-        if logic is None:
-            return
         try:
-            logic.save_status_for_company(row["id"], **kwargs)
-        except Exception:
-            logger.warning("Zignorowany błąd", exc_info=True)
+            if logic is not None:
+                logic.save_status_for_company(row["id"], **kwargs)
+        except Exception as exc:
+            logger.warning("Nie udało się zapisać zmiany w widoku miesięcznym", exc_info=True)
+            self.save_failed.emit(str(exc))
+            return False
+        row.update(kwargs)
+        return True
 
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
         if not index.isValid():
@@ -291,22 +296,17 @@ class MonthlyViewModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.CheckStateRole and col == self._docs_col():
             checked = value in (Qt.CheckState.Checked, Qt.CheckState.Checked.value, 2, True)
-            row["dokumenty_dostarczone"] = 1 if checked else 0
-            row["data_dostarczenia"] = datetime.date.today().isoformat() if checked else None
+            date = datetime.date.today().isoformat() if checked else None
+            if not self._persist(row, dokumenty_dostarczone=int(checked), data_dostarczenia=date):
+                return False
             self.dataChanged.emit(index, index)
-            self._persist(
-                row,
-                dokumenty_dostarczone=row["dokumenty_dostarczone"],
-                data_dostarczenia=row["data_dostarczenia"],
-            )
             self._sort_after_edit(col)
             return True
 
         if role == self.DATE_ROLE and col == self._docs_col():
-            row["data_dostarczenia"] = str(value)
-            row["dokumenty_dostarczone"] = 1
+            if not self._persist(row, dokumenty_dostarczone=1, data_dostarczenia=str(value)):
+                return False
             self.dataChanged.emit(index, index)
-            self._persist(row, dokumenty_dostarczone=1, data_dostarczenia=str(value))
             self._sort_after_edit(col)
             return True
 
@@ -315,52 +315,29 @@ class MonthlyViewModel(QAbstractTableModel):
 
         if col == self._etap_col():
             key = self._etap_key()
-            row[key] = str(value)
+            if not self._persist(row, **{key: str(value)}):
+                return False
             top = self.index(index.row(), 0)
             bottom = self.index(index.row(), self.columnCount() - 1)
             self.dataChanged.emit(top, bottom)
-            self._persist(row, **{key: row[key]})
             self._sort_after_edit(col)
             return True
-
-        try:
-            ivalue = int(str(value).strip() or "0")
-        except Exception:
-            ivalue = 0
-
-        changed = False
 
         if self._mode == "ksiegowosc" and col == self._ilosc_col():
-            row["ilosc_dok"] = ivalue
-            changed = True
+            key = "ilosc_dok"
         elif self._mode == "kadry" and col in self._uop_cols():
-            row[{3: "uop", 4: "uz", 5: "uod"}[col]] = ivalue
-            changed = True
-
-        if changed:
-            # notify view
-            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole])
-            # persist via logic if available on parent
-            parent = self.parent()
-            if parent and hasattr(parent, "logic"):
-                try:
-                    logic = getattr(parent, "logic")
-                    if self._mode == "ksiegowosc":
-                        logic.save_status_for_company(row["id"], ilosc_dok=row["ilosc_dok"])
-                    elif self._mode == "kadry":
-                        logic.save_status_for_company(
-                            row["id"],
-                            uop=row.get("uop"),
-                            uz=row.get("uz"),
-                            uod=row.get("uod"),
-                        )
-                except Exception:
-                    # swallow persistence errors here; UI already updated
-                    pass
-            self._sort_after_edit(col)
-            return True
-
-        return False
+            key = {3: "uop", 4: "uz", 5: "uod"}[col]
+        else:
+            return False
+        try:
+            ivalue = int(str(value).strip() or "0")
+        except ValueError:
+            return False
+        if ivalue < 0 or not self._persist(row, **{key: ivalue}):
+            return False
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole])
+        self._sort_after_edit(col)
+        return True
 
     def get_row(self, row_idx: int) -> Optional[Dict[str, Any]]:
         if 0 <= row_idx < len(self._rows):

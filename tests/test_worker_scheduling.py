@@ -94,6 +94,20 @@ class WorkerSchedulingTests(DbTestCase):
         with get_conn() as conn:
             self.assertEqual(conn.execute('SELECT attempts FROM enova_stage_requests').fetchone()[0], 0)
 
+    def test_enova_stage_refresh_retries_failed_hr_read(self):
+        now = datetime.now(timezone.utc)
+        save_month_status(self.company, '2026-11', {'etap': 'Zaksięgowane'})
+        with patch('app.integrations.enova.connection_settings.load_connection',
+                   return_value={**self.config, 'checking_enabled': True}), \
+             patch('app.integrations.enova.document_counts.run_import', return_value=[{'ok': True}]), \
+             patch('app.integrations.enova.checking.run_checking_import',
+                   side_effect=[[{'ok': True, 'hr_failed': True}], [{'ok': True, 'hr_failed': False}]]):
+            first = enova_job(now=now)
+            self.assertEqual(first['results'][0]['error_type'], 'EnovaCheckingFailed')
+            self.assertEqual(len(self.pending()), 1)
+            self.assertEqual(enova_job(now=now + timedelta(minutes=1))['mode'], 'applied')
+        self.assertFalse(self.pending())
+
     def test_sent_accounting_stage_refreshes_count_even_if_upo_read_fails(self):
         now = datetime.now(ZoneInfo('Europe/Warsaw'))
         month = now.strftime('%Y-%m')

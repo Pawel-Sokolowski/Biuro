@@ -64,6 +64,7 @@ class PayrollNameTests(unittest.TestCase):
         company = {"fakturowac": 1, "glowny_cennik": "test", "limit_dokumentow": 20,
                    "stala_kwota_kadry": 210}
         with patch.object(logic, "_get_company", return_value=company), \
+             patch.object(logic, "_get_month_status", return_value=None), \
              patch.object(logic, "_get_extra_services", return_value=[]), \
              patch.object(logic, "_get_main_pricing", return_value={"cena_netto_ksiegowosc": 382.5,
                                                                   "cena_za_dokument_ponad_limit": 5.5}), \
@@ -132,6 +133,20 @@ class PayrollInvoiceNamePersistenceTests(DbTestCase):
         saved = get_invoice_by_id(result["id"])
         position, = json.loads(saved["pozycje_json"])
         self.assertEqual((position["ilosc"], saved["kwota_netto"], saved["kwota_brutto"]), (3, 120, 147.6))
+
+    def test_previous_month_manual_count_takes_precedence_including_zero(self):
+        from app.db.dao_monthly import save_month_status
+
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT INTO dokumenty (firma_id, data_wyst) VALUES (%s, '2026-09-10'), (%s, '2026-09-11')",
+                (self.firma, self.firma),
+            )
+        logic = FakturyLogic()
+        self.assertEqual(logic._get_document_count_for_invoice(self.firma, self.MONTH, 0), 2)
+        for count in (1, 0):
+            save_month_status(self.firma, '2026-09', {'ilosc_dok': count, '_manual_document_count': True})
+            self.assertEqual(logic._get_document_count_for_invoice(self.firma, self.MONTH, 0), count)
 
 
 if __name__ == "__main__":

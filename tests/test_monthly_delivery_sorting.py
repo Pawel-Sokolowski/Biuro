@@ -1,6 +1,6 @@
 from unittest import TestCase
 from unittest.mock import Mock
-from PyQt6.QtCore import QPersistentModelIndex, Qt
+from PyQt6.QtCore import QObject, QPersistentModelIndex, Qt
 from PyQt6.QtWidgets import QTableView, QTableWidget
 from app.monthly_view.monthly_view_model import MonthlyViewModel
 from app.utils.table_sorting import SortableItem, enable_header_sort
@@ -22,6 +22,26 @@ def ids(model):
 
 
 class MonthlyDeliverySortingTests(TestCase):
+    def test_failed_contract_edit_keeps_previous_value_and_saves_only_edited_field(self):
+        parent = QObject()
+        parent.logic = Mock()
+        model = MonthlyViewModel([{'id': 12, 'uop': 2, 'uz': 3, 'uod': 4}], 'kadry', parent)
+        failures = []
+        model.save_failed.connect(failures.append)
+        save = parent.logic.save_status_for_company
+        save.side_effect = OSError('Test zapisu')
+        index = model.index(0, 4)
+        self.assertFalse(model.setData(index, 7))
+        save.assert_called_once_with(12, uz=7)
+        self.assertEqual(index.data(), '3')
+        self.assertEqual(failures, ['Test zapisu'])
+
+        save.side_effect = None
+        self.assertTrue(model.setData(index, 7))
+        self.assertEqual(index.data(), '7')
+        self.assertEqual(model.index(0, 3).data(), '2')
+        self.assertEqual(model.index(0, 5).data(), '4')
+
     def test_header_toggles_chronological_order_in_both_departments_and_keeps_undated_last(self):
         self.assertIsNotNone(QT_APP)
         for mode, column in (('ksiegowosc', 3), ('kadry', 1)):

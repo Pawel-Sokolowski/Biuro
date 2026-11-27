@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import re
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 from app.db.dao_monthly import contracts_by_month
 from app.reports.import_parse import (
@@ -451,7 +452,7 @@ def _live_work(conn, firma_ids: List[int], months: List[str], skip: set) -> List
     ph_m = ",".join("%s" for _ in months)
     rows = conn.execute(
         f"""
-        SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac,
+        SELECT c.firma_id, {company_label_sql('f')} AS firma_nazwa, c.miesiac,
                TRIM(COALESCE(p.imie, '') || ' ' || COALESCE(p.nazwisko, '')) AS pracownik_nazwa,
                c.typ, c.usluga_id, c.sekundy, c.pracownik_id, u.kategoria AS service_category
         FROM czasomierze c JOIN firmy f ON f.id = c.firma_id
@@ -481,7 +482,7 @@ def _live_invoices(conn, firma_ids: List[int], months: List[str], skip: set) -> 
     ph_m = ",".join("%s" for _ in months)
     rows = conn.execute(
         f"""
-        SELECT fa.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS kontrahent, fa.miesiac, fa.pozycje_json
+        SELECT fa.firma_id, {company_label_sql('f')} AS kontrahent, fa.miesiac, fa.pozycje_json
         FROM faktury fa JOIN firmy f ON f.id = fa.firma_id
         WHERE fa.firma_id IN ({ph_f}) AND fa.miesiac IN ({ph_m})
           AND fa.rodzaj = 'faktura' AND fa.cancelled_at IS NULL
@@ -528,7 +529,7 @@ def build_profitability_report(
     try:
         work = [dict(r) for r in conn.execute(
             f"""
-            SELECT c.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa, c.miesiac, c.pracownik_nazwa, c.pracownik_id, c.dzial, c.sekundy
+            SELECT c.firma_id, {company_label_sql('f')} AS firma_nazwa, c.miesiac, c.pracownik_nazwa, c.pracownik_id, c.dzial, c.sekundy
             FROM import_czas_pracy c JOIN firmy f ON f.id = c.firma_id
             WHERE c.firma_id IN ({ph_f}) AND c.miesiac IN ({ph_m})
             """,
@@ -538,7 +539,7 @@ def build_profitability_report(
         ph_y = ",".join("%s" for _ in years)
         invoices = [dict(r) for r in conn.execute(
             f"""
-            SELECT i.firma_id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS kontrahent, i.miesiac, i.rodzaj, i.wartosc_netto
+            SELECT i.firma_id, {company_label_sql('f')} AS kontrahent, i.miesiac, i.rodzaj, i.wartosc_netto
             FROM import_faktury_pozycje i JOIN firmy f ON f.id = i.firma_id
             WHERE i.firma_id IN ({ph_f}) AND substr(i.miesiac, 1, 4) IN ({ph_y})
             """,

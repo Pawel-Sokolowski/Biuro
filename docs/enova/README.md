@@ -504,7 +504,9 @@ oraz `SzkoleniaBHP`. Widok BHP korzysta z terminu zaplanowanego szkolenia.
 Puste pole **Umowy, badania i BHP** uruchamia wbudowane zapytanie `hr_events.sql`.
 Pole `hr_events_query` przyjmuje własny plik SQL. Wymagane kolumny:
 `nip`, `event_id`, `employee_id`, `employee_name`, `event_type`, `due_date`, `status`.
-Opcjonalne kolumny to `document_number` i `detail`. Obsługiwane rodzaje to
+Opcjonalne kolumny to `document_number`, `detail` i `employment_end`. `employment_end`
+oznacza datę końca ostatniej aktywnej umowy pracownika. Jeśli co najmniej jedna
+aktywna umowa jest bezterminowa, pole ma wartość NULL. Obsługiwane rodzaje to
 `employee`, `contract_end`, `medical_exam` i `ohs_training`.
 Statusy to `active`, `completed` i `cancelled`. Identyfikator jest
 unikatowy w ramach firmy i rodzaju; jeden pracownik może mieć wiele umów.
@@ -513,10 +515,10 @@ badań/BHP jest sygnałem do sprawdzenia, nie umową bezterminową.
 
 Własne zapytanie otrzymuje początek miesiąca oraz koniec okna obejmującego
 najbliższe 91 dni, zaokrąglony do końca miesiąca. Wbudowany adapter otrzymuje
-dzień odczytu jako pierwszy parametr. Zapytanie ma zwracać
-również nadal aktywne zaległe terminy i umowy bezterminowe — dolna granica
-**nie służy do odfiltrowania zaległości**. Zamknięte/anulowane zdarzenia są
-pomijane w widoku. Pusta poprawna lista oznacza brak zdarzeń, brak konfiguracji
+dzień odczytu jako pierwszy parametr. Zapytanie ma zwracać również aktywne zaległe
+terminy od 1 stycznia bieżącego roku i umowy bezterminowe. Widok pomija zakończone
+umowy oraz zdarzenia pracownika po dacie `employment_end`. Umowa kończąca się
+dzisiaj pozostaje widoczna. Pusta poprawna lista oznacza brak zdarzeń, brak konfiguracji
 pozostaje „brak odczytu”. Terminy odnoszą się do dzisiaj w Europe/Warsaw,
 nie do wybranego miesiąca dokumentów. Dostępne okna 7/30/60/90 dni i wszystkie
 pobrane. Błąd odczytu kadrowego zachowuje ostatni wynik i pojawia się w informacji

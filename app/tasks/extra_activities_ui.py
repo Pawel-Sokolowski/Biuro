@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.companies.company_names import company_display_name
@@ -19,6 +19,8 @@ from app.db.dao_tasks import TASK_STATUSES, list_tasks, set_tasks_status
 from app.monthly_view.month_picker import MonthPicker
 from app.security.authorization import is_administrator
 from app.utils.background import TaskRunner
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
+from app.widgets.flow_layout import FlowLayout
 
 logger = logging.getLogger(__name__)
 STATES = {"pending": "Do wykonania", "done": "Wykonane", "cancelled": "Anulowane", "unlinked": "Bez zadania"}
@@ -166,6 +168,7 @@ class ExtraActivitiesPage(QWidget):
         filters.addStretch()
         layout.addLayout(filters)
         self.table = QTableWidget(0, 12)
+        enable_header_sort(self.table)
         self.table.setHorizontalHeaderLabels(["Klient", "Miesiąc", "Faktura", "Czynność dodatkowa", "Ilość", "Stan", "Zadanie", "Status zadania", "Pracownik", "Fakturować po wykonaniu", "Cena netto", "Wartość netto"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -174,14 +177,13 @@ class ExtraActivitiesPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.cellDoubleClicked.connect(lambda *_: self._open_related_task())
         layout.addWidget(self.table)
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         for label, callback in (("Dodaj czynność i zadanie", self._add), ("Utwórz zadanie", self._create_task),
                                 ("Powiąż z zadaniem", self._link), ("Otwórz zadanie", self._open_related_task),
                                 ("Oznacz jako wykonane", self._complete), ("Odśwież", self.refresh)):
             button = QPushButton(label)
             button.clicked.connect(callback)
             actions.addWidget(button)
-        actions.addStretch()
         layout.addLayout(actions)
         hint = QLabel("Stan czynności wynika ze statusu zadania. Wpisy historyczne bez powiązania mają stan „Bez zadania”.")
         hint.setWordWrap(True)
@@ -242,14 +244,20 @@ class ExtraActivitiesPage(QWidget):
                       row.get("task_employee_name") or "—", "Tak" if row["fakturowac"] else "Nie",
                       f"{row['cena_netto']:.2f} PLN", f"{row['cena_netto'] * row['ilosc']:.2f} PLN"]
             for col, value in enumerate(values):
-                self.table.setItem(row_number, col, QTableWidgetItem(str(value)))
+                item = SortableItem(str(value))
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row['id'])
+                self.table.setItem(row_number, col, item)
+        apply_header_sort(self.table)
 
     def _selected(self):
         row = self.table.currentRow()
         if not 0 <= row < len(self.rows):
             QMessageBox.information(self, "Czynności dodatkowe", "Wybierz czynność na liście.")
             return None
-        return self.rows[row]
+        item = self.table.item(row, 0)
+        activity_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        return next((entry for entry in self.rows if entry['id'] == activity_id), None)
 
     def _changed(self):
         self.refresh()

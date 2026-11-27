@@ -23,6 +23,7 @@ from app.companies.company_names import company_display_name
 from app.config import get_database, get_schema
 from app.utils.background import TaskRunner
 from app.utils.item_table import ItemTable
+from app.widgets.flow_layout import FlowLayout
 from app.utils.table_records import TableRecord
 from app.db.dao_companies import (
     get_companies_filtered,
@@ -126,7 +127,7 @@ class CompanyUI(QWidget):
         # -------------------------
         # PRZYCISKI
         # -------------------------
-        btn_layout = QHBoxLayout()
+        btn_layout = FlowLayout()
 
         self.btn_add = QPushButton("Dodaj firmę")
         self.btn_edit = QPushButton("Edytuj firmę")
@@ -140,7 +141,6 @@ class CompanyUI(QWidget):
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addWidget(self.btn_restore)
         btn_layout.addWidget(self.btn_documents)
-        btn_layout.addStretch()
         btn_layout.addWidget(self.btn_refresh)
 
         layout.addLayout(btn_layout)

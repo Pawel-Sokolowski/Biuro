@@ -64,6 +64,26 @@ class CheckingInsightsTests(TestCase):
                 validate_events([{**base, **change}], source)
         self.assertEqual(event_months(date(2026, 12, 31)), ['2026-12', '2027-01', '2027-02', '2027-03', '2027-04'])
 
+    def test_only_overdue_exams_and_training_from_this_year_require_attention(self):
+        today = date(2026, 1, 5)
+        for kind in ('medical_exam', 'ohs_training'):
+            with self.subTest(kind=kind):
+                event = {'event_type': kind, 'status': 'active', 'due_date': '2025-12-31'}
+                self.assertIsNone(hr_status(event, today))
+                self.assertFalse(needs_attention({'hr': {'events': [event]}}, 'payroll', today))
+                self.assertEqual(hr_status({**event, 'due_date': '2026-01-01'}, today), 'Po terminie')
+                self.assertEqual(hr_status({**event, 'due_date': '2027-01-01'}, date(2026, 12, 31)), 'Zbliża się termin')
+
+    def test_ended_contracts_and_events_for_staff_who_have_left_are_hidden(self):
+        today = date(2026, 11, 27)
+        contract = {'event_type': 'contract_end', 'status': 'active', 'due_date': '2026-11-26'}
+        self.assertIsNone(hr_status(contract, today))
+        self.assertEqual(hr_status({**contract, 'due_date': today.isoformat()}, today), 'Dzisiaj')
+        exam = {'event_type': 'medical_exam', 'status': 'active', 'due_date': '2026-11-20'}
+        self.assertIsNone(hr_status({**exam, 'employment_end': '2026-11-26'}, today))
+        self.assertEqual(hr_status({**exam, 'employment_end': today.isoformat()}, today), 'Po terminie')
+        self.assertEqual(hr_status(exam, today), 'Po terminie')
+
     def test_navigation_defaults_respect_role_and_admin(self):
         cases = [({'admin': 0, 'nazwa': 'kadrowa', 'payroll': False, 'accounting': False}, 'payroll'),
                  ({'admin': 0, 'nazwa': 'księgowa', 'payroll': True, 'accounting': True}, 'accounting'),

@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from psycopg import Error as DatabaseError
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn, get_coordination_conn
 from app.integrations.enova.document_counts import normalize_nip
 from app.integrations.enova.jpk import filing_timestamp
@@ -366,6 +367,7 @@ def import_year(year, *, company_ids=None, actor_id=None):
 
 @office_endpoint('app.integrations.platnik.declarations.read_year')
 def read_year(actor_id, year):
+    from app.companies.company_names import company_display_name
     from app.integrations.enova.accounting import require_access
     from app.security.authorization import assigned_company_ids
     from app.db.dao_year_end import company_declarations
@@ -375,11 +377,12 @@ def read_year(actor_id, year):
         raise ValueError('Nieprawidłowy rok raportów ZUS.')
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        rows = conn.execute('''SELECT f.*, y.company_json, a.payload AS platnik_annual
+        rows = conn.execute(f'''SELECT f.*, {company_label_sql('f')} AS nazwa_wyswietlana, y.company_json, a.payload AS platnik_annual
             FROM firmy f LEFT JOIN year_end_snapshots y ON y.firma_id=f.id AND y.rok=%s
             LEFT JOIN company_checking_snapshots a
                 ON a.source='platnik_declarations' AND a.company_id=f.id AND a.period=%s
-            WHERE f.id=ANY(%s) ORDER BY lower(f.nazwa)''', (year, str(year), ids)).fetchall()
+            WHERE f.id=ANY(%s) ORDER BY nazwa_wyswietlana,f.id''',
+            (year, str(year), ids)).fetchall()
     result = []
     for row in rows:
         company = dict(row)
@@ -391,7 +394,8 @@ def read_year(actor_id, year):
             continue
         snapshot = decoded_snapshot(company.get('platnik_annual'))
         entries = [entry for entry in snapshot.get('declarations', []) if form_key(entry['form']) in applicable]
-        result.append({'id': company['id'], 'nazwa': company['nazwa'], 'nip': company['nip'],
+        result.append({'id': company['id'], 'nazwa': company_display_name(company),
+                       'nazwa_pelna': company['nazwa'], 'nip': company['nip'],
                        'forms': applicable, 'declarations': entries, 'imported_at': snapshot.get('imported_at')})
     return {'year': year, 'companies': result}
 

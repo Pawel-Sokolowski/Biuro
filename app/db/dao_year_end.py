@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 
 # Spółki płacące CIT (gdy forma opodatkowania nie wskazuje deklaracji)
@@ -117,8 +118,10 @@ def list_year_end(year: int) -> List[Dict]:
     """Use durable annual snapshots without per-company queries on every read."""
     with get_conn() as conn:
         _ensure_year_snapshots(conn, year)
-        companies = [json.loads(r[0]) for r in conn.execute(
-            "SELECT company_json FROM year_end_snapshots WHERE rok=%s ORDER BY firma_id", (year,)
+        snapshot_name = "COALESCE(NULLIF(TRIM(s.company_json::jsonb->>'nazwa_skrocona'), ''), TRIM(s.company_json::jsonb->>'nazwa'))"
+        companies = [dict(json.loads(r['company_json']), nazwa_wyswietlana=r['nazwa_wyswietlana']) for r in conn.execute(
+            f"SELECT s.company_json, {company_label_sql('f', snapshot_name)} AS nazwa_wyswietlana "
+            "FROM year_end_snapshots s LEFT JOIN firmy f ON f.id = s.firma_id WHERE s.rok=%s ORDER BY s.firma_id", (year,)
         )]
         owners = {}
         for r in conn.execute("SELECT * FROM owner_year_declarations WHERE rok=%s", (year,)):

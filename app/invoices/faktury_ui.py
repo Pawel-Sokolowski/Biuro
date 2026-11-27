@@ -10,11 +10,12 @@ from PyQt6.QtGui import QColor, QDesktopServices, QFontDatabase, QFontMetrics, Q
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
     QDateEdit, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressDialog, QPushButton,
-    QCheckBox, QDoubleSpinBox, QPlainTextEdit, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QDoubleSpinBox, QPlainTextEdit, QStyledItemDelegate, QTableWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from app.widgets.flow_layout import FlowLayout
 
+from app.companies.company_names import company_display_name
 from app.db.dao_conn import get_conn
 from app.db.dao_invoices import (
     InvoiceLockedError, InvoiceConflictError, can_access_invoice, create_correction, delete_draft_invoice,
@@ -26,6 +27,7 @@ from app.invoices.positions import decode_positions, normalize_position, totals
 from app.remote.view_reads import invoice_selection
 from app.utils.background import TaskRunner, CommandRunner
 from app.utils.table_records import TableRecord
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 from app.invoices.vat_summary import VatSummary
 from app.invoices.table_state import preserve_table_view
 from app.invoices.list_table import InvoiceListTable, PreviewDelegate
@@ -52,10 +54,12 @@ logger = logging.getLogger(__name__)
 KSEF_LINK_COLOR = QColor("#1c70b7")
 
 
-def _make_table(headers, multi=False, virtual=False):
+def _make_table(headers, multi=False, virtual=False, *, sortable=True):
     table = InvoiceListTable(headers) if virtual else QTableWidget(0, len(headers))
     if not virtual:
         table.setHorizontalHeaderLabels(headers)
+        if sortable:
+            enable_header_sort(table)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -67,7 +71,7 @@ def _make_table(headers, multi=False, virtual=False):
 
 
 def _cell(text, align_right=False):
-    item = QTableWidgetItem("" if text is None else str(text))
+    item = SortableItem("" if text is None else str(text))
     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
     if align_right:
         item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -201,7 +205,7 @@ class KsefUnmatchedDialog(QDialog):
         company.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         company.addItem("— Wybierz firmę lub kontrahenta —", None)
         for candidate in self.companies:
-            name = candidate.get("nazwa_skrocona") or candidate["nazwa"]
+            name = company_display_name(candidate)
             label = " (kontrahent)" if candidate["kind"] == "kontrahent" else ""
             company.addItem(f"{name}{label} — NIP {candidate.get('nip') or 'brak'}",
                             (candidate["kind"], candidate["id"]))
@@ -452,7 +456,9 @@ class FakturyPage(QWidget):
         layout.addWidget(self.draft_table)
 
         layout.addWidget(QLabel("Pozycje faktury"))
-        self.positions_table = _make_table(["Nazwa", "Ilość", "Jednostka", "Cena netto", "VAT %", "Netto", "Brutto", "Kategoria"])
+        self.positions_table = _make_table(
+            ["Nazwa", "Ilość", "Jednostka", "Cena netto", "VAT %", "Netto", "Brutto", "Kategoria"], sortable=False,
+        )
         quantity_delegate = QuantityDelegate(self.positions_table)
         quantity_delegate.committed.connect(self._on_draft_position_changed)
         self.positions_table.setItemDelegate(quantity_delegate)
@@ -690,6 +696,7 @@ class FakturyPage(QWidget):
                           source, bank, item.get("actor_name") or ""]
                 for column, value in enumerate(values):
                     self.settlement_table.setItem(row, column, _cell(value, column == 5))
+            apply_header_sort(self.settlement_table)
 
     def _revert_selected_settlements(self):
         if not self._can_manage_payments():
@@ -772,7 +779,7 @@ class FakturyPage(QWidget):
             if len(nip) != 10:
                 QMessageBox.warning(self, "KSeF", "Wybrana firma nie ma poprawnego NIP-u.")
                 return
-            buyer_nip, company_label = nip, f"firmy {row['nazwa']} (NIP {nip})"
+            buyer_nip, company_label = nip, f"firmy {company_display_name(row)} (NIP {nip})"
         answer = QMessageBox.question(
             self, "Pobierz faktury sprzedaży z KSeF",
             f"Pobrać faktury sprzedaży {company_label} za {month}?\n\n"
@@ -813,7 +820,7 @@ class FakturyPage(QWidget):
             return
         number, ok = QInputDialog.getText(
             self, "Pobierz fakturę z KSeF",
-            f"Firma: {row['nazwa']} (NIP {nip}), miesiąc {month}.\n\n"
+            f"Firma: {company_display_name(row)} (NIP {nip}), miesiąc {month}.\n\n"
             "Numer faktury lub numer KSeF (puste = wszystkie faktury tej firmy):",
         )
         if not ok:
@@ -1306,11 +1313,12 @@ class FakturyPage(QWidget):
             self.draft_table.setRowCount(0)
             self.draft_table.setRowCount(len(invoices))
             for row, inv in enumerate(invoices):
-                values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
+                values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), company_display_name(inv) or inv["firma_nazwa"], inv["miesiac"], inv["numer"],
                           f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                           _fmt_date(inv["data_wystawienia"]), _fmt_date(inv["termin_platnosci"])]
                 for column, value in enumerate(values):
                     self.draft_table.setItem(row, column, _cell(value, column in (5, 6)))
+            apply_header_sort(self.draft_table)
         self._draft_rows = deepcopy(invoices)
         if before != after or (shown is not None and self._selected_ids(self.draft_table) != [shown]):
             self._show_draft_positions()
@@ -1370,7 +1378,8 @@ class FakturyPage(QWidget):
                         "sending": "Do sprawdzenia",
                         "uncertain": "Do sprawdzenia",
                     }.get(email_status, "—")
-                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), inv.get("nazwa_skrocona") or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
+                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv),
+                              company_display_name(inv) or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
                               inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), email_label]

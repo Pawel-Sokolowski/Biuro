@@ -6,6 +6,7 @@ import time
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 
 
@@ -55,7 +56,7 @@ def checkpoint(snapshots):
 @office_endpoint('app.db.dao_active_timers.recoverable')
 def recoverable(employee):
     with get_conn() as conn:
-        return [dict(row) for row in conn.execute('''SELECT a.*, COALESCE(NULLIF(f.nazwa_skrocona,''),f.nazwa,'Czynność ogólna') AS company
+        return [dict(row) for row in conn.execute(f'''SELECT a.*, COALESCE({company_label_sql('f')},'Czynność ogólna') AS company
             FROM active_timer_sessions a LEFT JOIN firmy f ON f.id=a.firma_id
             WHERE a.pracownik_id=%s AND a.checkpoint_at < now() - interval '90 seconds'
             ORDER BY a.started_at''', (employee,)).fetchall()]

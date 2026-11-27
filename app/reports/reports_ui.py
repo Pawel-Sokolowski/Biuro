@@ -15,6 +15,7 @@ from app.widgets.flow_layout import FlowLayout
 from app.utils.background import TaskRunner, CommandRunner
 from app.utils.item_table import ItemTable
 from app.utils.table_records import TableRecord
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 
 from app.reports.reports_logic import (
     get_all_companies,
@@ -30,17 +31,17 @@ DAILY_HEADERS = ["Data", "Pracownik", "Firma", "Miesiąc rozliczeniowy", "Zadani
                  "Śr. dokumentów / mies.", "Umowy (miesiąc)", "Czas"]
 
 
-def iter_daily_display_rows(rows):
-    """Data i pracownik tylko przy pierwszym wystąpieniu; pusty wiersz między dniami."""
+def iter_daily_display_rows(rows, *, grouped=True):
+    """W eksporcie grupuj daty i pracowników, a w tabeli podawaj je w każdym wierszu."""
     last_day, last_emp = None, None
     for item in rows:
-        if last_day is not None and item["data"] != last_day:
+        if grouped and last_day is not None and item["data"] != last_day:
             yield [""] * len(DAILY_HEADERS)
             last_emp = None
         new_day = item["data"] != last_day
         yield [
-            datetime.date.fromisoformat(item["data"]).strftime("%d/%m/%Y") if new_day else "",
-            item["pracownik"] if new_day or item["pracownik"] != last_emp else "",
+            datetime.date.fromisoformat(item["data"]).strftime("%d/%m/%Y") if new_day or not grouped else "",
+            item["pracownik"] if new_day or not grouped or item["pracownik"] != last_emp else "",
             item.get("firma") or "", item.get('miesiac') or '', item["czynnosc"],
             (f"{item['dokumenty_srednia']:.2f}" if item.get('dokumenty_srednia') is not None
              else '—' if item.get('firma') else ''),
@@ -314,7 +315,7 @@ class ReportsPage(QWidget):
         self.report_table = QTableWidget(0, len(REPORT_HEADERS))
         self.report_table.setHorizontalHeaderLabels(REPORT_HEADERS)
         self.report_table.setAlternatingRowColors(True)
-        self.report_table.setSortingEnabled(True)
+        enable_header_sort(self.report_table)
         self.report_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.report_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.report_table.horizontalHeader().setStretchLastSection(True)
@@ -334,6 +335,7 @@ class ReportsPage(QWidget):
     @staticmethod
     def _make_table(headers, *, stretch_last=True):
         table = QTableWidget(0, len(headers))
+        enable_header_sort(table)
         table.setHorizontalHeaderLabels(headers)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -451,11 +453,12 @@ class ReportsPage(QWidget):
         return build_daily_report(*request, self.pracownik_id) if request is not None else None
 
     def _render_daily(self, rows):
-        display = daily_display_rows(rows)
+        display = list(iter_daily_display_rows(rows, grouped=False))
         self.daily_table.setRowCount(len(display))
         for r, values in enumerate(display):
             for c, value in enumerate(values):
-                self.daily_table.setItem(r, c, QTableWidgetItem(value))
+                self.daily_table.setItem(r, c, SortableItem(value))
+        apply_header_sort(self.daily_table)
         self.daily_table.setMinimumHeight(min(600, 40 + 26 * len(display)))
         self.report_status.setText("Brak zarejestrowanego czasu pracy w wybranym zakresie." if not rows
                                    else f"Dni: {len({r['data'] for r in rows})}, pozycji: {len(rows)}.")
@@ -540,12 +543,13 @@ class ReportsPage(QWidget):
             row = table.rowCount()
             table.insertRow(row)
             for col, text in enumerate([*labels, f"{cena:.2f} zł", f"{koszt:.2f} zł", f"{zysk:.2f} zł"]):
-                cell = QTableWidgetItem(str(text))
+                cell = SortableItem(str(text))
                 if col >= len(labels):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if col == len(labels) + 2 and zysk < 0:
                     cell.setForeground(QColor("#c62828"))
                 table.setItem(row, col, cell)
+        apply_header_sort(table)
         table.resizeColumnsToContents()
         fit_table_height(table)
 
@@ -919,7 +923,6 @@ class ReportsPage(QWidget):
         return chart
 
     def _render_report_table(self, data, selected, months):
-        self.report_table.setSortingEnabled(False)
         self.report_table.setRowCount(0)
         total_docs = total_contracts = 0
         total_ks_time = total_kadry_time = 0.0
@@ -937,12 +940,12 @@ class ReportsPage(QWidget):
                     format_hours(row_data.get("godziny_kadry", 0)),
                 ]
                 for column, value in enumerate(values):
-                    self.report_table.setItem(row, column, QTableWidgetItem(str(value)))
+                    self.report_table.setItem(row, column, SortableItem(str(value)))
                 total_docs += int(row_data.get("dokumenty", 0) or 0)
                 total_contracts += int(row_data.get("umowy", 0) or 0)
                 total_ks_time += float(row_data.get("godziny_ksiegowosc", 0) or 0)
                 total_kadry_time += float(row_data.get("godziny_kadry", 0) or 0)
-        self.report_table.setSortingEnabled(True)
+        apply_header_sort(self.report_table)
         fit_table_height(self.report_table)
         self.report_status.setText(
             f"Podsumowanie: księgowość {total_docs} dokumentów / {format_hours(total_ks_time)}, "

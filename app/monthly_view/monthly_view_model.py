@@ -6,6 +6,8 @@ from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QVariant
 from PyQt6.QtGui import QColor, QFont
 import datetime
 import logging
+from app.companies.company_names import company_display_name
+from app.utils.table_sorting import DESCENDING, sort_value
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +17,13 @@ class MonthlyViewModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: List[Dict[str, Any]] = rows
         self._mode: str = mode
-        self._delivery_order = None
+        self._sort = None
         self.COL_DOCS = 3 if mode == "ksiegowosc" else 1
         self.COL_ETAP = 4 if mode == "ksiegowosc" else 2
 
     def set_rows(self, rows: List[Dict[str, Any]]):
-        if self._delivery_order is not None:
-            rows = self._delivery_sorted(rows, self._delivery_order)
+        if self._sort is not None:
+            rows = self._sorted_rows(rows, *self._sort)
         if rows == self._rows:
             return
         # szybkie porównanie po id
@@ -58,18 +60,31 @@ class MonthlyViewModel(QAbstractTableModel):
         # Stable ties preserve the existing company ordering. Undated rows stay last in either direction.
         return sorted(dated, key=self._delivery_date, reverse=order == Qt.SortOrder.DescendingOrder) + missing
 
+    def _sorted_rows(self, rows, column, order):
+        if column == self._docs_col():
+            return self._delivery_sorted(rows, order)
+        return sorted(rows, key=lambda row: sort_value(self._display_value(row, column)),
+                      reverse=order == DESCENDING)
+
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
-        if column != self._docs_col():
+        if not 0 <= column < self.columnCount():
             return
-        self._delivery_order = order
+        self._sort = column, order
+        rows = self._sorted_rows(self._rows, column, order)
+        if rows == self._rows:
+            return
         self.layoutAboutToBeChanged.emit()
         persistent = self.persistentIndexList()
         identities = [id(self._rows[index.row()]) for index in persistent]
-        self._rows = self._delivery_sorted(self._rows, order)
+        self._rows = rows
         positions = {id(row): index for index, row in enumerate(self._rows)}
         self.changePersistentIndexList(persistent, [self.index(positions[identity], index.column())
                                                    for identity, index in zip(identities, persistent)])
         self.layoutChanged.emit()
+
+    def _sort_after_edit(self, column):
+        if self._sort is not None and self._sort[0] == column:
+            self.sort(*self._sort)
 
     COL_DOCS = 1
     COL_ETAP = 2
@@ -126,6 +141,27 @@ class MonthlyViewModel(QAbstractTableModel):
             )
         return QVariant()
 
+    def _display_value(self, row, col):
+        if col == 0:
+            if self._mode == 'kadry' and row.get('nazwa_podstawowa'):
+                return row['nazwa_podstawowa']
+            return company_display_name(row)
+        if col == self._docs_col():
+            return self._delivered_text(row)
+        if col in self._vat_cols():
+            key = 'vat_status' if col == self._vat_cols()[0] else 'vat_ue_status'
+            return row.get(key)
+        shared = {7: "▶", 8: row.get("note_full", row.get("note_snippet", "")), 9: "➕", 10: "✏️"}
+        if self._mode == "ksiegowosc":
+            values = {1: row.get("numer_faktury") or "", 2: row.get("faktura_zaplacona") or "",
+                      4: row.get("etap", "Brak"), 5: str(row.get("ilosc_dok", 0)),
+                      6: row.get("czas_ks_str", ""), 11: "⋯"}
+        else:
+            values = {2: row.get("etap_kadry", "Brak"), 3: str(row.get("uop", 0)), 4: str(row.get("uz", 0)),
+                      5: str(row.get("uod", 0)), 6: row.get("czas_kadry_str", ""),
+                      11: row.get('insurance_codes') or '—', 12: row.get('insurance_deadline') or '—'}
+        return shared.get(col, values.get(col, ""))
+
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return QVariant()
@@ -133,12 +169,18 @@ class MonthlyViewModel(QAbstractTableModel):
         row = self._rows[index.row()]
         col = index.column()
 
+        if col == 0 and role == Qt.ItemDataRole.ToolTipRole:
+            details = []
+            if row.get('zastepstwo'):
+                who = row.get('zastepstwo_za')
+                details.append(f'Zastępstwo za: {who}' if who else 'Zastępstwo')
+            if row.get('nip'):
+                details.append(f"NIP: {row['nip']}")
+            return '\n'.join(details)
+
         if col == 0 and row.get("zastepstwo"):
             if role == Qt.ItemDataRole.DisplayRole:
-                return "↪ " + (row.get("nazwa") or "")
-            if role == Qt.ItemDataRole.ToolTipRole:
-                who = row.get("zastepstwo_za")
-                return f"Zastępstwo za: {who}" if who else "Zastępstwo"
+                return "↪ " + self._display_value(row, col)
             if role == Qt.ItemDataRole.ForegroundRole:
                 return QColor("#1a5fb4")
             if role == Qt.ItemDataRole.FontRole:
@@ -163,38 +205,7 @@ class MonthlyViewModel(QAbstractTableModel):
             return self._vat_cell(row, col, role)
 
         if role == Qt.ItemDataRole.DisplayRole:
-            if col == self._docs_col():
-                return self._delivered_text(row)
-            if self._mode == "ksiegowosc":
-                mapping = {
-                    0: row.get("nazwa", ""),
-                    1: row.get("numer_faktury", "") or "",
-                    2: row.get("faktura_zaplacona", "") or "",
-                    4: row.get("etap", "Brak"),
-                    5: str(row.get("ilosc_dok", 0)),
-                    6: row.get("czas_ks_str", ""),
-                    7: "▶",
-                    8: row.get("note_full", row.get("note_snippet", "")),
-                    9: "➕",
-                    10: "✏️",
-                    11: "⋯",
-                }
-                return mapping.get(col, "")
-            mapping = {
-                0: row.get("nazwa", ""),
-                2: row.get("etap_kadry", "Brak"),
-                3: str(row.get("uop", 0)),
-                4: str(row.get("uz", 0)),
-                5: str(row.get("uod", 0)),
-                6: row.get("czas_kadry_str", ""),
-                7: "▶",
-                8: row.get("note_full", row.get("note_snippet", "")),
-                9: "➕",
-                10: "✏️",
-                11: row.get('insurance_codes') or '—',
-                12: row.get('insurance_deadline') or '—',
-            }
-            return mapping.get(col, "")
+            return self._display_value(row, col)
 
         if role == Qt.ItemDataRole.CheckStateRole and col == self._docs_col():
             return (
@@ -236,7 +247,7 @@ class MonthlyViewModel(QAbstractTableModel):
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if orientation == Qt.Orientation.Horizontal and section == self._docs_col() and role == Qt.ItemDataRole.ToolTipRole:
-            return "Kliknij, aby sortować według daty dostarczenia. Ponowne kliknięcie odwraca kolejność."
+            return "Kliknij dwukrotnie, aby sortować według daty dostarczenia."
         if role != Qt.ItemDataRole.DisplayRole:
             return QVariant()
         if orientation == Qt.Orientation.Horizontal:
@@ -288,8 +299,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 dokumenty_dostarczone=row["dokumenty_dostarczone"],
                 data_dostarczenia=row["data_dostarczenia"],
             )
-            if self._delivery_order is not None:
-                self.sort(self._docs_col(), self._delivery_order)
+            self._sort_after_edit(col)
             return True
 
         if role == self.DATE_ROLE and col == self._docs_col():
@@ -297,8 +307,7 @@ class MonthlyViewModel(QAbstractTableModel):
             row["dokumenty_dostarczone"] = 1
             self.dataChanged.emit(index, index)
             self._persist(row, dokumenty_dostarczone=1, data_dostarczenia=str(value))
-            if self._delivery_order is not None:
-                self.sort(self._docs_col(), self._delivery_order)
+            self._sort_after_edit(col)
             return True
 
         if role != Qt.ItemDataRole.EditRole:
@@ -311,6 +320,7 @@ class MonthlyViewModel(QAbstractTableModel):
             bottom = self.index(index.row(), self.columnCount() - 1)
             self.dataChanged.emit(top, bottom)
             self._persist(row, **{key: row[key]})
+            self._sort_after_edit(col)
             return True
 
         try:
@@ -347,6 +357,7 @@ class MonthlyViewModel(QAbstractTableModel):
                 except Exception:
                     # swallow persistence errors here; UI already updated
                     pass
+            self._sort_after_edit(col)
             return True
 
         return False

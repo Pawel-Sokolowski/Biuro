@@ -55,6 +55,7 @@ def apply_appearance(actor_id):
         QPushButton:pressed {{ background: {QColor(accent).darker(130).name()}; }}
         QPushButton:disabled {{ background: {raised}; color: {muted}; border-color: {border}; }}
         QPushButton:focus {{ border: 1px solid {text}; }}
+        QPushButton[compact="true"] {{ padding: 6px 8px; }}
         QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit, QComboBox {{
             background: {surface}; color: {text}; border: 1px solid {border};
             border-radius: 5px; padding: 6px; min-height: 20px; selection-background-color: {accent}; selection-color: white; }}

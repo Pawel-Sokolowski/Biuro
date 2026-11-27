@@ -305,12 +305,14 @@ class ShippedEnovaSqlTests(unittest.TestCase):
             INSERT INTO BadaniaLekarskie VALUES
                 (1,1,1,'2025-01-01','2025-01-01','2026-01-01',0),
                 (2,1,1,'2026-03-15','2026-03-15','2026-10-31',0),
-                (3,3,1,'2026-03-15','2026-03-15','2026-10-31',0);
+                (3,3,1,'2026-03-15','2026-03-15','2026-10-31',0),
+                (4,1,2,'2025-01-15','2025-01-15','2025-12-31',0);
             INSERT INTO SzkoleniaBHP VALUES
                 (1,1,1,'2026-03-15','2026-03-15',0),
                 (2,1,1,NULL,'2026-10-30',0),
                 (3,2,1,NULL,'2026-11-10',1),
-                (4,2,1,NULL,'2027-02-01',0);
+                (4,2,1,NULL,'2027-02-01',0),
+                (5,1,2,NULL,'2025-12-31',0);
         """)
         self.reader.execute("EXEC sys.sp_set_session_context @key=N'biuro_company_nip', @value=?", '1112223344')
         events = validate_events(self.query('hr_events.sql', start=date(2026,11,7)), {'nip': '1112223344'})
@@ -319,3 +321,4 @@ class ShippedEnovaSqlTests(unittest.TestCase):
             'pracownik:1': None, 'pracownik:2': None, 'etat:2': None, 'cywilna:1': '2026-11-18',
             'badanie:2': '2026-10-31', 'bhp:2': '2026-10-30',
         })
+        self.assertEqual({e['employee_id']: e['employment_end'] for e in events}, {'1': None, '2': '2026-11-18'})

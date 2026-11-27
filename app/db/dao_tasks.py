@@ -5,6 +5,7 @@ import datetime
 import psycopg
 from typing import Any, Dict, List, Optional
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 from app.security.authorization import assigned_company_ids, is_administrator
 
@@ -64,8 +65,8 @@ def list_tasks_for_timer(
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
-            SELECT z.*, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS firma_nazwa,
+            f"""
+            SELECT z.*, {company_label_sql('f')} AS firma_nazwa,
                    p.imie || ' ' || p.nazwisko AS pracownik_nazwa
             FROM zadania z
             LEFT JOIN firmy f ON f.id = z.firma_id
@@ -130,7 +131,7 @@ def list_tasks(
         where = f"WHERE {' AND '.join(filters)}" if filters else ""
         rows = conn.execute(
             f"""
-            SELECT z.*, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS firma_nazwa,
+            SELECT z.*, {company_label_sql('f')} AS firma_nazwa,
                    p.imie || ' ' || p.nazwisko AS pracownik_nazwa
             FROM zadania z
             LEFT JOIN firmy f ON f.id = z.firma_id
@@ -235,7 +236,7 @@ def notify_company_event(
     Tytuł dostaje sufiks z nazwą firmy. Zwraca id utworzonych zadań."""
     conn = get_conn()
     try:
-        firma = conn.execute("SELECT COALESCE(NULLIF(TRIM(nazwa_skrocona), ''), nazwa) AS nazwa FROM firmy WHERE id = %s", (firma_id,)).fetchone()
+        firma = conn.execute(f"SELECT {company_label_sql('f')} AS nazwa FROM firmy f WHERE f.id = %s", (firma_id,)).fetchone()
         if not firma:
             return []
         if everyone:

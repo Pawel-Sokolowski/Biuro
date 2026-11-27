@@ -15,6 +15,17 @@ def event_months(day):
     return result
 
 
+def _event_date(value):
+    if value in (None, ''):
+        return None
+    if isinstance(value, datetime):
+        value = value.date()
+    try:
+        return value.isoformat() if isinstance(value, date) else date.fromisoformat(str(value)).isoformat()
+    except ValueError:
+        raise ValueError('Nieprawidłowa data terminu kadrowego.') from None
+
+
 def validate_events(rows, source):
     events, seen = [], set()
     for row in rows:
@@ -30,18 +41,9 @@ def validate_events(rows, source):
         if (kind, identity) in seen:
             raise ValueError('Powtórzony termin kadrowy.')
         seen.add((kind, identity))
-        due = row['due_date']
-        if due not in (None, ''):
-            try:
-                if isinstance(due, datetime):
-                    due = due.date()
-                due = due.isoformat() if isinstance(due, date) else date.fromisoformat(str(due)).isoformat()
-            except ValueError:
-                raise ValueError('Nieprawidłowa data terminu kadrowego.') from None
-        else:
-            due = None
         events.append({'event_id': identity, 'employee_id': employee_id, 'employee_name': employee_name,
-                       'event_type': kind, 'due_date': due, 'status': status,
+                       'event_type': kind, 'due_date': _event_date(row['due_date']), 'status': status,
+                       'employment_end': _event_date(row.get('employment_end')),
                        'document_number': str(row.get('document_number') or '').strip(),
                        'detail': str(row.get('detail') or '').strip()})
     return events

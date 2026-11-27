@@ -1,8 +1,9 @@
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QDialog, QHBoxLayout, QMessageBox, QPushButton, QTableWidget, QVBoxLayout,
 )
 
 from app.db.dao_invoices import list_trashed_invoices, restore_trashed_invoice
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 
 
 class InvoiceTrashDialog(QDialog):
@@ -21,6 +22,7 @@ class InvoiceTrashDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
+        enable_header_sort(self.table)
         layout.addWidget(self.table)
         buttons = QHBoxLayout()
         self.btn_restore = QPushButton("Przywróć zaznaczone")
@@ -41,7 +43,8 @@ class InvoiceTrashDialog(QDialog):
             values = (item["id"], item["firma"] or "", item["miesiac"] or "", item["numer"] or "",
                       item["ksef_numer"] or "", item["deleted_at"] or "")
             for c, value in enumerate(values):
-                self.table.setItem(r, c, QTableWidgetItem(str(value)))
+                self.table.setItem(r, c, SortableItem(str(value)))
+        apply_header_sort(self.table)
 
     def _restore(self):
         rows = sorted({index.row() for index in self.table.selectedIndexes()})

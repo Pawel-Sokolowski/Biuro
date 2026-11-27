@@ -76,6 +76,34 @@ class ExtraActivityUiTests(DbTestCase):
         self.assertEqual(dao_services.list_extra_activities(1, miesiac="2026-09"), [])
         self.assertEqual(len(list_tasks(viewer_id=1)), count_before)
 
+    def test_payroll_monthly_dialog_records_billable_service_without_invoice_access(self):
+        from app.db.dao_global_settings import add_role, assign_role, set_role_tabs
+        from app.monthly_view.monthly_view_ui import InlineExtraServiceWindow
+
+        employee = self.make_employee('kadry@example.test')
+        role = add_role('Kadry bez faktur', can_view_invoices=False)
+        assign_role(employee, role)
+        set_role_tabs(role, ['Widok miesięczny'])
+        dialog = InlineExtraServiceWindow(self.company_id, '2026-09', employee)
+        self.addCleanup(dialog.close)
+        dialog.cb_usluga.setCurrentIndex(dialog.cb_usluga.findData(self.service_id))
+        self.assertEqual(dialog.input_cena.value(), 100)
+        dialog.input_ilosc.setValue(1.5)
+        dialog.cb_jednostka.setCurrentText('usługa')
+        dialog.chk_fakturowac.setChecked(True)
+        with patch.object(QMessageBox, 'information') as saved, patch.object(QMessageBox, 'warning') as warning:
+            dialog._on_add()
+        warning.assert_not_called()
+        saved.assert_called_once()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        with get_conn() as conn:
+            entries = conn.execute(
+                'SELECT miesiac, usluga_id, ilosc, cena_netto, jednostka, fakturowac '
+                'FROM uslugi_dodatkowe_firma WHERE firma_id = %s', (self.company_id,),
+            ).fetchall()
+            self.assertEqual([tuple(entry) for entry in entries], [('2026-09', self.service_id, 1.5, 100, 'usługa', 1)])
+            self.assertIsNone(conn.execute('SELECT id FROM faktury WHERE firma_id = %s', (self.company_id,)).fetchone())
+
     def test_state_and_month_filters_show_only_requested_activities(self):
         self.create_activity("Nowe")
         self.create_activity("Zakończone")
@@ -86,6 +114,19 @@ class ExtraActivityUiTests(DbTestCase):
         page.month.setCurrentText("2026-10")
         page.refresh()
         self.assertEqual(page.table.rowCount(), 0)
+
+    def test_monthly_billable_service_keeps_vat_exemption_in_the_draft(self):
+        import json
+        from app.db.dao_invoices import get_invoice_for_company_month
+
+        with get_conn() as conn:
+            conn.execute("UPDATE uslugi_dodatkowe SET stawka_vat='zw' WHERE id=%s", (self.service_id,))
+        self.assertTrue(dao_services.record_monthly_extra_service(
+            self.company_id, '2026-09', self.service_id, 1.5, 100, True, 'godz.', 1,
+        ))
+        invoice = get_invoice_for_company_month(self.company_id, '2026-09')
+        [position] = json.loads(invoice['pozycje_json'])
+        self.assertEqual((position['vat_code'], position['netto'], position['brutto']), ('zw', 150, 150))
 
     def test_existing_unlinked_activity_offers_only_same_client_tasks(self):
         dao_services.add_company_extra_service(self.company_id, "2026-09", self.service_id, 1, 100, True)

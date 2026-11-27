@@ -247,6 +247,8 @@ def sync_checking(conn, config, source, company, day, *, divisor, apply, months=
                  'accounting_type': report_source['accounting_type'], 'vat_czynny': report_source.get('vat_czynny'),
                  'divisor': divisor,
                  'payroll_query': source.get('payroll_query'), 'declarations_query': source.get('declarations_query'), 'hr_events_query': source.get('hr_events_query')}
+    if source.get('hr_events_query'):
+        signature['hr_adapter_revision'] = 1
     checked = conn.execute('SELECT wartosc FROM app_settings WHERE klucz=%s', (key,)).fetchone()
     if apply and not force and checked and json.loads(checked[0]) == signature:
         return {'mode': 'skipped'}

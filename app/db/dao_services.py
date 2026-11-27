@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 import re
 from typing import Optional
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 from app.db.dao_tasks import BILLED_ACTIVITY_TASK_ERROR, _allowed_task_ids, create_task_in_transaction
 from app.security.authorization import assigned_company_ids, is_administrator
@@ -133,6 +134,34 @@ def create_extra_activity(
         conn.close()
 
 
+@office_endpoint('app.db.dao_services.record_monthly_extra_service')
+def record_monthly_extra_service(
+    firma_id: int, miesiac: str, usluga_id: int, ilosc: float, cena_netto: float,
+    fakturowac: bool, jednostka: str, actor_id: int,
+) -> bool:
+    from app.security.authorization import allowed_tabs
+    from app.db.dao_invoices import add_invoice_item_for_service
+
+    tabs = allowed_tabs(actor_id)
+    if 'Widok miesięczny' not in tabs:
+        raise PermissionError("Brak dostępu do widoku miesięcznego.")
+    _validate_activity(miesiac, ilosc, cena_netto)
+    ilosc = round(float(ilosc), 2)
+    if ilosc <= 0:
+        raise ValueError("Ilość musi wynosić co najmniej 0,01.")
+    with get_conn() as conn:
+        _check_company_access(conn, actor_id, firma_id)
+        if not conn.execute("SELECT id FROM uslugi_dodatkowe WHERE id = %s FOR KEY SHARE", (usluga_id,)).fetchone():
+            raise ValueError("Wybrana usługa jest już niedostępna.")
+        if fakturowac and 'Faktury' in tabs:
+            return bool(add_invoice_item_for_service(
+                firma_id, usluga_id, ilosc, miesiac, pracownik_id=actor_id,
+                cena_netto=cena_netto, jednostka=jednostka, connection=conn,
+            ))
+        _insert_activity(conn, firma_id, miesiac, usluga_id, ilosc, cena_netto, fakturowac, jednostka, None)
+        return False
+
+
 @office_endpoint('app.db.dao_services.link_extra_activity_task')
 def link_extra_activity_task(service_row_id: int, task_id: int, actor_id: int) -> None:
     conn = get_conn()
@@ -197,7 +226,7 @@ def list_extra_activities(
             params.extend([viewer_id, viewer_id, viewer_id])
         where = "WHERE " + " AND ".join(filters) if filters else ""
         rows = conn.execute(f"""
-            SELECT uf.*, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa) AS firma_nazwa, u.nazwa, u.stawka_vat,
+            SELECT uf.*, {company_label_sql('f')} AS firma_nazwa, u.nazwa, u.stawka_vat,
                    invoice.id AS invoice_id, invoice.numer AS invoice_number,
                    invoice.eksportowana AS invoice_issued,
                    z.tytul AS task_title, z.status AS task_status,
@@ -214,7 +243,7 @@ def list_extra_activities(
             LEFT JOIN pracownicy p ON p.id = z.pracownik_id
             LEFT JOIN faktury_uslugi_dodatkowe allocation ON allocation.extra_service_row_id = uf.id
             LEFT JOIN faktury invoice ON invoice.id = allocation.invoice_id
-            {where} ORDER BY uf.miesiac DESC, COALESCE(NULLIF(TRIM(f.nazwa_skrocona), ''), f.nazwa), uf.id DESC
+            {where} ORDER BY uf.miesiac DESC, firma_nazwa, uf.id DESC
         """, params).fetchall()
         return [dict(row) for row in rows if state is None or row["state"] == state]
     finally:

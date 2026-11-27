@@ -34,7 +34,7 @@ class ManualTimeDialog(QDialog):
 
         self.company = QComboBox()
         self.company.addItem('Bez firmy', None)
-        companies = list(company_identities())
+        companies = list(company_identities(short_names=True))
         companies.sort(key=lambda row: (row.get('nazwa') or '').casefold())
         for row in companies:
             self.company.addItem(row.get('nazwa') or str(row['id']), row['id'])

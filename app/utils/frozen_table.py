@@ -1,6 +1,7 @@
 """Item table with a shared-model first column pinned during horizontal scrolling."""
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidget,QTableView,QAbstractItemView,QFrame
+from app.utils.table_sorting import enable_header_sort
 
 
 class FrozenFirstColumnTable(QTableWidget):
@@ -9,6 +10,7 @@ class FrozenFirstColumnTable(QTableWidget):
         self.frozen_column = QTableView(self)
         frozen = self.frozen_column
         frozen.setModel(self.model())
+        enable_header_sort(self, frozen.horizontalHeader())
         frozen.setSelectionModel(self.selectionModel())
         frozen.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         frozen.setFrameShape(QFrame.Shape.NoFrame)

@@ -36,7 +36,8 @@ def filter_companies(rows, *, query='', activity=None, tax=None, active_only=Tru
         for field, expected in (('forma_dzialalnosci', activity), ('forma_opodatkowania', tax)):
             if expected is not None and str(row.get(field) or '').strip() != expected:
                 return False
-        return needle in ' '.join(str(row.get(field) or '') for field in ('nazwa', 'nazwa_skrocona', 'nip', 'adres_email')).casefold()
+        return needle in ' '.join(str(row.get(field) or '')
+                                  for field in ('nazwa', 'nazwa_skrocona', 'nazwa_wyswietlana', 'nip', 'adres_email')).casefold()
     return [row for row in rows if match(row)]
 
 

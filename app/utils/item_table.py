@@ -6,6 +6,7 @@ from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QFont
 from PyQt6.QtWidgets import QTableView, QTableWidgetItem
 from app.utils.table_records import TableRecord
+from app.utils.table_sorting import DESCENDING, enable_header_sort, sort_value
 
 DISPLAY = Qt.ItemDataRole.DisplayRole
 
@@ -67,6 +68,7 @@ class ItemTableModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.rows, self.headers = [], []
+        self._sort = None
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -99,6 +101,8 @@ class ItemTableModel(QAbstractTableModel):
         )
 
     def replace(self, records):
+        if self._sort is not None:
+            records = self._sorted(records, *self._sort)
         old_keys, new_keys = [r.key for r in self.rows], [r.key for r in records]
         if old_keys != new_keys:
             if len(set(new_keys)) != len(new_keys) or len(set(old_keys)) != len(
@@ -139,6 +143,25 @@ class ItemTableModel(QAbstractTableModel):
                     self.index(row, min(changed)), self.index(row, max(changed))
                 )
 
+    @staticmethod
+    def _sorted(records, column, order):
+        return sorted(records, key=lambda row: sort_value(row.values[column]), reverse=order == DESCENDING)
+
+    def sort(self, column, order):
+        if not 0 <= column < len(self.headers):
+            return
+        self._sort = column, order
+        rows = self._sorted(self.rows, column, order)
+        if rows == self.rows:
+            return
+        self.layoutAboutToBeChanged.emit()
+        indexes = self.persistentIndexList()
+        positions = {id(row): index for index, row in enumerate(rows)}
+        moved = [self.index(positions[id(self.rows[index.row()])], index.column()) for index in indexes]
+        self.rows = rows
+        self.changePersistentIndexList(indexes, moved)
+        self.layoutChanged.emit()
+
 
 class ItemTable(QTableView):
     cellClicked = pyqtSignal(int, int)
@@ -149,6 +172,7 @@ class ItemTable(QTableView):
         self._records = ItemTableModel(self)
         self._records.headers = list(headers)
         self.setModel(self._records)
+        enable_header_sort(self)
         self._pending = None
         self.clicked.connect(
             lambda index: self.cellClicked.emit(index.row(), index.column())

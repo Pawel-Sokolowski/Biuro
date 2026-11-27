@@ -24,4 +24,8 @@ def sole_proprietor_short_name(first_name, surname):
 
 def company_display_name(company):
     """Use the stored short name in navigation; keep legal names for documents."""
-    return str(company.get("nazwa_skrocona") or "").strip() or str(company.get("nazwa") or "").strip()
+    for field in ("nazwa_wyswietlana", "nazwa_skrocona", "nazwa"):
+        value = str(company.get(field) or "").strip()
+        if value:
+            return value
+    return ""

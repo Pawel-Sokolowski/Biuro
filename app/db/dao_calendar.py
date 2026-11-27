@@ -4,6 +4,7 @@ from app.remote.boundary import endpoint as office_endpoint
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn
 from app.db import dao_calendar_sync as outbox
 
@@ -35,8 +36,8 @@ def list_events(pracownik_id: int, start: str, end: str) -> List[Dict[str, Any]]
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            SELECT w.*, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS firma_nazwa,
+            f"""
+            SELECT w.*, {company_label_sql('f')} AS firma_nazwa,
                    (w.pracownik_id != %s) AS udostepnione,
                    EXISTS (SELECT 1 FROM wydarzenia_dostep shared_access WHERE shared_access.wydarzenie_id=w.id) AS ma_udostepnienia,
                    (SELECT imie || ' ' || nazwisko FROM pracownicy WHERE id = w.pracownik_id)

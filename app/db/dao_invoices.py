@@ -5,6 +5,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
+from app.db.company_labels import company_label_sql
 from app.db.dao_conn import get_conn, Row
 from app.utils.payment_terms import default_due_date
 from app.invoices.positions import decode_positions, normalize_position, reverse_positions, totals
@@ -438,9 +439,6 @@ def add_invoice_item_for_service(
             return None
 
         invoice_id = _get_or_create_draft_invoice_for_company(firma_id, miesiac, pracownik_id, connection=conn)
-        wartosc_netto = round(cena_netto * ilosc_rounded, 2)
-        vat_percent = float(str(stawka_vat).replace("%", "").strip() or 0)
-        wartosc_brutto = round(wartosc_netto * (1 + vat_percent / 100), 2)
 
         cur.execute("SELECT pozycje_json, eksportowana FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,))
         invoice_row = cur.fetchone()
@@ -451,21 +449,13 @@ def add_invoice_item_for_service(
         except (TypeError, json.JSONDecodeError):
             positions = []
 
-        positions.append(
-            {
-                "nazwa": nazwa,
-                "ilosc": ilosc_rounded,
-                "jednostka": jednostka,
-                "netto": wartosc_netto,
-                "cena_netto": round(cena_netto, 2),
-                "vat": int(vat_percent),
-                "brutto": wartosc_brutto,
-                "kategoria": svc.get("kategoria") or "usługi dodatkowe",
-                "usluga_id": usluga_id,
-                "extra_service_row_id": extra_service_row_id,
-                "generated": False,
-            }
-        )
+        position = normalize_position({
+            "nazwa": nazwa, "ilosc": ilosc_rounded, "jednostka": jednostka,
+            "cena_netto": round(cena_netto, 2), "vat": stawka_vat,
+            "kategoria": svc.get("kategoria") or "usługi dodatkowe", "usluga_id": usluga_id,
+            "extra_service_row_id": extra_service_row_id, "generated": False,
+        })
+        positions.append(position)
 
         cur.execute(
             """
@@ -479,7 +469,7 @@ def add_invoice_item_for_service(
                 nazwa,
                 ilosc_rounded,
                 round(cena_netto, 2),
-                wartosc_netto,
+                position["netto"],
                 str(stawka_vat),
                 _now_datetime(),
             ),
@@ -1093,10 +1083,13 @@ def generate_monthly_invoices_for_month(miesiac: str) -> Dict[str, List[Tuple[in
 # ---------------------------------------------------------------------------
 # Lista, edycja, korekty i KSeF
 # ---------------------------------------------------------------------------
-INVOICE_LIST_SQL = """
+INVOICE_BUYER_NAME_SQL = """COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), NULLIF(TRIM(f.nabywca_skrocona), ''),
+    NULLIF(TRIM(k.nazwa), ''), NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?')"""
+INVOICE_LIST_SQL = f"""
     SELECT f.id, f.firma_id, f.kontrahent_id, f.reczna, f.revision,
            COALESCE(NULLIF(f.nabywca_pelna, ''), c.nazwa, k.nazwa, '?') AS firma_nazwa,
-           COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?') AS nazwa_skrocona,
+           {INVOICE_BUYER_NAME_SQL} AS nazwa_skrocona,
+           {company_label_sql('c', INVOICE_BUYER_NAME_SQL)} AS nazwa_wyswietlana,
            f.miesiac, f.rodzaj, f.numer, f.status,
            f.status, f.cancelled_at, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
            f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer, f.ksef_status, f.ksef_srodowisko_wysylki, f.ksef_nip_wysylki, f.invoice_email_status,
@@ -1141,11 +1134,7 @@ def list_invoices(
     if not can_manage_invoices(pracownik_id):
         return []
     # Sortowanie A-Z po nazwie skróconej w obu zakładkach (robocze i wystawione).
-    order = (
-        "LOWER(COALESCE(NULLIF(TRIM(c.nazwa_skrocona), ''), "
-        "NULLIF(TRIM(f.nabywca_skrocona), ''), NULLIF(TRIM(k.nazwa), ''), "
-        "NULLIF(TRIM(f.nabywca_pelna), ''), c.nazwa, '?')) ASC, f.id ASC"
-    )
+    order = f"LOWER({INVOICE_BUYER_NAME_SQL}) ASC, f.id ASC"
     conn = get_conn()
     try:
         rows = conn.execute(f"{INVOICE_LIST_SQL} WHERE {' AND '.join(where)} ORDER BY {order}", params).fetchall()

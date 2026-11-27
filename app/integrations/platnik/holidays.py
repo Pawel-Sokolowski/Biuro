@@ -239,6 +239,7 @@ def import_year(year, actor_id=None, *, progress=None, company_ids=None):
 def read_year(actor_id,year):
     from app.integrations.enova.accounting import require_access
     from app.security.authorization import assigned_company_ids,is_administrator
+    from app.db.company_labels import company_label_sql
     from app.db.dao_conn import get_conn
     if type(year) is not int or not 2024<=year<=2100:
         raise ValueError('Nieprawidłowy rok zestawienia.')
@@ -246,7 +247,8 @@ def read_year(actor_id,year):
     value = json.loads(get_setting(f'platnik_holidays_{int(year)}') or '{}')
     ids = list(assigned_company_ids(actor_id))
     with get_conn() as conn:
-        companies = conn.execute('SELECT id,nazwa,nip,forma_dzialalnosci FROM firmy WHERE id=ANY(%s)',(ids,)).fetchall()
+        companies = conn.execute(f"""SELECT f.id,{company_label_sql('f')} AS nazwa,
+            f.nazwa AS nazwa_pelna,f.nip,f.forma_dzialalnosci FROM firmy f WHERE f.id=ANY(%s)""", (ids,)).fetchall()
     mapping = {}
     for row in companies:
         try:

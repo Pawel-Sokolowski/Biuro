@@ -7,6 +7,7 @@ import psycopg
 from datetime import date
 from typing import Any, Dict, List, Optional
 
+from app.db.company_labels import company_label_sql, short_company_name_sql
 from app.db.dao_conn import get_conn
 from app.utils.months import month_bounds
 from app.db.dao_monthly import get_month_status, save_month_status
@@ -266,10 +267,11 @@ class MonthlyViewLogic:
         cur = conn.cursor()
         month_start, month_end = month_bounds(selected_month)
 
-        sql = """
-            SELECT f.id, COALESCE(NULLIF(f.nazwa_skrocona, ''), f.nazwa) AS nazwa,
+        sql = f"""
+            SELECT f.id, {company_label_sql('f')} AS nazwa,
+                   {short_company_name_sql('f')} AS nazwa_podstawowa,
                    f.status, f.uslugi_zawieszone, f.ksiegowa_id, f.kadrowa_id,
-                   f.nip AS insurance_company_nip, f.data_koniec_zus_start, f.data_koniec_zus_pref, f.data_koniec_maly_zus,
+                   f.nip, f.data_koniec_zus_start, f.data_koniec_zus_pref, f.data_koniec_maly_zus,
                    f.vat_status, f.vat_sprawdzono, f.vat_sprawdzil,
                    f.vat_ue_status, f.vat_ue_sprawdzono, f.vat_ue_sprawdzil,
                    COALESCE(sm.etap, 'Brak') AS etap,
@@ -318,7 +320,7 @@ class MonthlyViewLogic:
         rows = [dict(r) for r in cur.fetchall()]
         from app.companies.monthly_insurance import read_codes
         company_dates = {row['id']: {
-            'nip': row['insurance_company_nip'],
+            'nip': row['nip'],
             'data_koniec_zus_start': row['data_koniec_zus_start'],
             'data_koniec_zus_pref': row['data_koniec_zus_pref'],
             'data_koniec_maly_zus': row['data_koniec_maly_zus'],
@@ -326,7 +328,6 @@ class MonthlyViewLogic:
         insurance = read_codes(conn, company_dates, selected_month, company_dates)
         for row in rows:
             row.update(insurance.get(row['id'],{}))
-            row.pop('insurance_company_nip', None)
             row.pop('data_koniec_zus_start', None)
             row.pop('data_koniec_zus_pref', None)
             row.pop('data_koniec_maly_zus', None)
@@ -443,7 +444,7 @@ class MonthlyViewLogic:
             if cached is None:
                 with get_conn() as conn:
                     company = conn.execute(
-                        "SELECT COALESCE(NULLIF(nazwa_skrocona, ''), nazwa) AS nazwa FROM firmy WHERE id = %s",
+                        f"SELECT {company_label_sql('f')} AS nazwa FROM firmy f WHERE f.id = %s",
                         (firma_id,),
                     ).fetchone()
                     task_name = activity.get("task_title")

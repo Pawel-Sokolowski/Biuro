@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTableWidget,
-    QTableWidgetItem,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -31,6 +30,7 @@ from app.db.dao_companies import list_companies
 from app.db.dao_employees import list_employees
 from app.db.dao_tasks import TASK_STATUSES, delete_tasks, list_tasks, save_task, set_tasks_status
 from app.utils.background import TaskRunner
+from app.utils.table_sorting import SortableItem, apply_header_sort, enable_header_sort
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,7 @@ class TasksPage(QWidget):
         layout.addLayout(filters)
 
         self.table = QTableWidget(0, 6)
+        enable_header_sort(self.table)
         self.table.setHorizontalHeaderLabels(
             ["Tytuł", "Firma", "Pracownik", "Status", "Termin", "Opis"]
         )
@@ -266,11 +267,12 @@ class TasksPage(QWidget):
                 task.get("opis", ""),
             ]
             for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
+                item = SortableItem(str(value))
                 item.setToolTip(str(value))
                 if col == 0:
                     item.setData(Qt.ItemDataRole.UserRole, task["id"])
                 self.table.setItem(row, col, item)
+        apply_header_sort(self.table)
         self.table.resizeRowsToContents()
 
     def show_assignment_notification(self, task_id):

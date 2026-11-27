@@ -128,10 +128,9 @@ Poniższe instrukcje źródłowe i skryptowe są alternatywą dla administrator�
    ```
 
    Skrypt pyta lokalnie o konto Windows, uruchamia zadanie natychmiast,
-   konfiguruje brak limitu czasu i ponowienie po awarii. Razem z nim rejestruje
-   interaktywne zadanie `Biuro-Platnik-Worker` przy logowaniu i uruchamia agenta
-   w bieżącej sesji. Agent GUI wymaga aktywnego, odblokowanego pulpitu; główny
-   worker działa również bez logowania. Istniejących zadań nie nadpisuje.
+   konfiguruje brak limitu czasu i ponowienie po awarii. Główny worker
+   działa również bez logowania. Agent GUI Płatnika ma osobny
+   [tryb końca dnia na komputerze kadr](platnik/gui-agent.md).
    Alternatywnie uruchom stale `python -m app.worker` przez własny menedżer usług.
    Zaktualizowany plik EXE obsługuje również `Biuro.exe --worker` oraz
    `Biuro.exe --worker --once`; dla EXE skonfiguruj zadanie uruchamiające go

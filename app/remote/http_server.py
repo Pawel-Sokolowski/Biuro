@@ -16,7 +16,7 @@ MAX_BODY = 48*1024*1024
 UI_FEATURES = ('mail_sidebar_snapshot', 'calendar_view_snapshot', 'checking_run_now',
                'invoice_selection', 'bulk_mail_history', 'file_release', 'company_form_snapshot',
                'bank_invoice_paging', 'bank_invoice_account_lookup', 'platnik_link_review',
-               'holiday_worksheet_eligibility', 'platnik_gui_checks')
+               'holiday_worksheet_eligibility', 'platnik_gui_checks', 'platnik_gui_daily')
 logger = logging.getLogger(__name__)
 
 

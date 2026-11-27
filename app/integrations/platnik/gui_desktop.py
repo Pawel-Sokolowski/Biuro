@@ -102,7 +102,16 @@ def main_window(config):
         if process_image(app.process) != executable:
             raise ReadError('AppUnavailable')
         window = app.window(**config['window'])
-        window.wait('exists visible enabled', timeout=12)
+        try:
+            window.wait('exists visible enabled', timeout=12)
+        except Exception:
+            group_wizard = app.window(title_re=GROUP_SEND_WIZARD, class_name='TfKreatorWysylki')
+            if group_wizard.exists(timeout=0) and group_wizard.is_visible():
+                raise ReadError('ScreenUnavailable', detail=(
+                    'Dokończ kreator grupowego wysyłania zestawów do ZUS w Płatniku. '
+                    'Potem uruchom koniec dnia ponownie.'
+                )) from None
+            raise
         return window
     except ReadError:
         raise
@@ -285,6 +294,24 @@ def post_menu(window, heading, action):
 
 SET_WINDOW = r'Zestaw dokumentów nr ([0-9]+)$'
 WIZARD = r'Kreator potwierdzania zestawów\s*[-–—]\s*krok\s*{step}\s*/\s*5$'
+GROUP_SEND_WIZARD = r'Kreator grupowego wysyłania zestawów do ZUS\s*[-–—]\s*krok\s*\d+\s*/\s*\d+$'
+
+
+def accessible_window(wrapper):
+    from pywinauto import Desktop
+
+    return Desktop(backend='uia').window(handle=wrapper.handle).wrapper_object()
+
+
+def dialog_button(wrapper, *captions):
+    wanted = {label(caption) for caption in captions}
+    controls = [control for control in accessible_window(wrapper).descendants(control_type='Button')
+                if control.element_info.class_name in ('TCorelButton', 'TButton', 'Button')
+                and menu_label(control.window_text()) in wanted
+                and control.is_visible() and control.is_enabled()]
+    if len(controls) > 1:
+        raise ReadError('ProfileMismatch')
+    return controls[0] if controls else None
 
 
 def advance_wizard(app, step, button, *, message=None):
@@ -293,12 +320,33 @@ def advance_wizard(app, step, button, *, message=None):
     dialog = app.window(title_re=WIZARD.format(step=step))
     dialog.wait('exists visible enabled', timeout=15)
     wrapper = dialog.wrapper_object()
-    if message and not any(message in label(control.window_text())
-                           for control in wrapper.descendants(class_name='Static')):
-        raise ReadError('ReadFailed')
+    if message:
+        shown = any(message in label(control.window_text())
+                    for control in wrapper.descendants(class_name='Static') if control.is_visible())
+        if not shown:
+            from pywinauto.uia_defines import NoPatternInterfaceError
+
+            accessible = accessible_window(wrapper)
+            shown = any(message in label(control.window_text()) for control in
+                        accessible.descendants(control_type='Text') if control.is_visible())
+            if not shown:
+                for memo in accessible.descendants(control_type='Edit', class_name='TMemo'):
+                    if memo.is_visible():
+                        with suppress(NoPatternInterfaceError):
+                            if message in label(memo.iface_value.CurrentValue):
+                                shown = True
+                                break
+            if not shown:
+                raise ReadError('ReadFailed')
     controls = [control for control in wrapper.descendants(class_name='Button')
                 if menu_label(control.window_text()) == label(button)
                 and control.is_visible() and control.is_enabled()]
+    if not controls:
+        control = dialog_button(wrapper, button)
+        if control is None:
+            raise ReadError('ProfileMismatch')
+        control.invoke()
+        return
     if len(controls) != 1:
         raise ReadError('ProfileMismatch')
     from pywinauto.win32defines import BN_CLICKED, WM_COMMAND

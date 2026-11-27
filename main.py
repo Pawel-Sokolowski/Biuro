@@ -5,7 +5,7 @@ import sys
 from app.utils.env_config import load_environment, ensure_encryption_key
 
 SERVER_FLAGS = ('--worker', '--worker-panel', '--worker-setup', '--worker-install-task',
-                '--saldeo-login', '--worker-migrate', '--api-server', '--direct', '--platnik-agent')
+                '--saldeo-login', '--worker-migrate', '--api-server', '--direct')
 # Client-side switch for a trial connection to an office without a certificate.
 # It is accepted here and consumed by app.remote.client, not by the server.
 CLIENT_FLAGS = ('--allow-plain-http',)

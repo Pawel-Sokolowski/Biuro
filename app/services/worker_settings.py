@@ -11,7 +11,6 @@ DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
             'enova': True, 'enova_weekly': True, 'enova_weekly_time': '20:00', 'ezla': True, 'ksef_import': False, 'mail_interval': 120,
             'reminders_interval': 60, 'invoices_interval': 60,
             'ezla_interval': 3600, 'ksef_import_interval': 3600, 'saldeo': False, 'saldeo_interval': 300, 'platnik': False, 'platnik_interval': 3600,
-            'platnik_gui': False, 'platnik_gui_time': '16:00', 'platnik_gui_interval': 60,
             'checking_refresh': True, 'checking_refresh_interval':30,'enova_time': '02:00','ezla_time':'02:00'}
 
 # Enova is checked on a fixed short cadence: the read only touches the local queue
@@ -19,7 +18,7 @@ DEFAULTS = {'enabled': False, 'mail': True, 'reminders': True, 'invoices': True,
 ENOVA_INTERVAL = 30
 
 # Keys removed from DEFAULTS that may still sit in the stored JSON; dropped on save.
-OBSOLETE = ('enova_interval',)
+OBSOLETE = ('enova_interval', 'platnik_gui', 'platnik_gui_time', 'platnik_gui_interval')
 
 
 @office_endpoint('app.services.worker_settings.load_settings')
@@ -44,13 +43,10 @@ def validate(value):
     weekly_at = time.fromisoformat(value['enova_weekly_time'])
     if weekly_at.isoformat(timespec='minutes') != value['enova_weekly_time'] or weekly_at.tzinfo:
         raise ValueError('Godzina tygodniowego odczytu Enovy musi mieć format GG:MM.')
-    at = time.fromisoformat(value['platnik_gui_time'])
-    if at.isoformat(timespec='minutes') != value['platnik_gui_time'] or at.tzinfo:
-        raise ValueError('Godzina agenta Płatnika musi mieć format GG:MM.')
-    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):
+    for key in ('enabled', 'mail', 'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
         if type(value[key]) is not bool:
             raise ValueError('Nieprawidłowy przełącznik workera.')
-    for key in ('mail', 'reminders', 'invoices', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh'):
+    for key in ('mail', 'reminders', 'invoices', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh'):
         interval = value[key + '_interval']
         if type(interval) is not int or not 30 <= interval <= 86400:
             raise ValueError('Odstęp workera musi wynosić 30–86400 sekund.')

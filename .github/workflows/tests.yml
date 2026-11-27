@@ -31,7 +31,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Inconsistent agent dependencies' }
           python -c "import pywinauto, win32ts; from app.integrations.platnik.gui_desktop import interactive_desktop; print(interactive_desktop())"
           if ($LASTEXITCODE) { throw 'Windows automation runtime failed' }
-          python -m unittest tests.test_platnik_gui_agent
+          python -m unittest tests.test_platnik_gui_agent tests.test_platnik_filing
           if ($LASTEXITCODE) { throw 'Agent contract tests failed' }
           $tokens = $null
           $errors = $null
@@ -45,6 +45,7 @@ jobs:
           path: |
             app/integrations/platnik/__init__.py
             app/integrations/platnik/gui_*.py
+            app/remote/credential_store.py
             app/utils/nip.py
             docs/platnik/gui-agent.*
             scripts/install_platnik_gui_agent.ps1
@@ -99,7 +100,7 @@ jobs:
           python migrate_db.py
           python migrate_db.py
       - name: Verify the Płatnik agent queue and permissions
-        run: python -m unittest tests.test_platnik_gui_agent tests.test_platnik_gui_queue
+        run: python -m unittest tests.test_platnik_gui_agent tests.test_platnik_gui_queue tests.test_platnik_filing
       - name: Check Python correctness
         run: |
           python -m pip install --require-hashes -r requirements-build.lock
@@ -202,6 +203,21 @@ jobs:
           $env:BIO_SMOKE_OUTPUT = "$env:RUNNER_TEMP\packaged-smoke.json"
           Check-Process '.\dist\Biuro\Biuro.exe' '--smoke-test'
           Get-Content $env:BIO_SMOKE_OUTPUT
+          @'
+          import json
+          from pathlib import Path
+          import subprocess
+          from tempfile import TemporaryDirectory
+
+          with TemporaryDirectory() as directory:
+              child = subprocess.run(
+                  [r"dist\Biuro\Biuro.exe", "--platnik-agent", "read-job",
+                   "--config", str(Path(directory) / "missing.json")],
+                  input="{}", text=True, capture_output=True, check=True, timeout=60,
+              )
+          assert json.loads(child.stdout) == {"error": "ReadFailed"}
+          '@ | python -
+          if ($LASTEXITCODE) { throw 'Packaged Płatnik agent pipe failed' }
       - name: Build, install, test and uninstall installer
         shell: pwsh
         run: |

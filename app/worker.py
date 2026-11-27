@@ -24,7 +24,7 @@ from app.db.dao_app_settings import get_setting, set_setting
 from app.services.worker_settings import ENOVA_INTERVAL, load_settings
 
 logger = logging.getLogger(__name__)
-JOBS = ('mail', 'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'platnik_gui', 'checking_refresh')
+JOBS = ('mail', 'reminders', 'invoices', 'enova', 'enova_weekly', 'ezla', 'ksef_import', 'saldeo', 'platnik', 'checking_refresh')
 # Jobs that can wait for a remote system for hours. A wall-clock limit for these
 # would fail healthy runs; other jobs are timed out and kept tracked to avoid
 # resubmitting work that may still be running.
@@ -200,25 +200,6 @@ def platnik_job():
     return results
 
 
-def platnik_gui_schedule(now, at, result):
-    day = now.date()
-    if (result or {}).get('date') == day.isoformat():
-        day += timedelta(days=1)
-    return datetime.combine(day, time.fromisoformat(at), now.tzinfo)
-
-
-def platnik_gui_job():
-    from app.services.platnik_gui import enqueue_daily
-
-    now = datetime.now(ZoneInfo('Europe/Warsaw'))
-    settings = load_settings()
-    if not settings['enabled'] or not settings['platnik_gui']:
-        return {'mode': 'disabled'}
-    if now < platnik_gui_schedule(now, settings['platnik_gui_time'], None):
-        return {'mode': 'waiting'}
-    return enqueue_daily(now.date())
-
-
 def checking_refresh_job(stop=None):
     from app.services.checking_refresh import process_next, purge_finished
     try:
@@ -237,7 +218,7 @@ def run_job(name, stop=None):
         return {'mail': lambda: mail_job(stop), 'reminders': lambda: reminders_job(stop),
                 'invoices': invoices_job, 'enova': lambda: enova_job(stop), 'enova_weekly': lambda: enova_weekly_job(stop),
                 'ezla': lambda: ezla_job(stop), 'ksef_import': ksef_import_job, 'saldeo': lambda: saldeo_job(stop), 'platnik': platnik_job,
-                'platnik_gui': platnik_gui_job, 'checking_refresh': lambda: checking_refresh_job(stop)}[name]()
+                'checking_refresh': lambda: checking_refresh_job(stop)}[name]()
 
 
 @contextmanager
@@ -383,10 +364,6 @@ def serve(*, once=False, stop=None):
                 del running[name]
                 with started_lock:
                     started_monotonic.pop(name, None)
-            gui_scheduled_at = None
-            if settings['enabled'] and settings['platnik_gui']:
-                gui_status = statuses.setdefault('platnik_gui', {'state': 'skipped', 'result': {'mode': 'waiting'}})
-                gui_scheduled_at = platnik_gui_schedule(settings_now, settings['platnik_gui_time'], gui_status.get('result'))
             weekly_scheduled_at = None
             weekly_result = statuses.get('enova_weekly', {}).get('result') or {}
             if weekly_result.get('next_scheduled_at') and weekly_result.get('scheduled_time') == settings.get('enova_weekly_time'):
@@ -394,8 +371,6 @@ def serve(*, once=False, stop=None):
             for name in JOBS:
                 if settings['enabled'] and settings[name] and name not in running:
                     due = name not in last_started or (not once and clock.monotonic() - last_started[name] >= job_interval(name, settings))
-                    if name == 'platnik_gui':
-                        due = due and settings_now >= gui_scheduled_at
                     if name == 'enova_weekly' and weekly_scheduled_at is not None:
                         due = settings_now >= weekly_scheduled_at
                     if due and len(running) < WORKER_THREADS:
@@ -426,8 +401,6 @@ def serve(*, once=False, stop=None):
                     delay = max(0, job_interval(name, settings) - (clock.monotonic() - last_started.get(name, 0)))
                     now = datetime.now(ZoneInfo('Europe/Warsaw'))
                     next_run = now+timedelta(seconds=delay)
-                    if name == 'platnik_gui' and gui_scheduled_at > now:
-                        next_run = gui_scheduled_at
                     if name == 'enova_weekly' and weekly_scheduled_at is not None:
                         next_run = weekly_scheduled_at
                     if name=='ezla' and (status.get('result') or {}).get('mode') in ('waiting','checked_this_week','incomplete_week'):

@@ -20,6 +20,7 @@ OPERATIONS = {
                                        'module': 'app.db.dao_timers'},
  'app.services.checking_refresh.run_now': {'actors':['actor_id'],'arguments':['actor_id','kind','company_ids','period','sources'],'capability':'tab:Sprawdzanie','function':'run_now','module':'app.services.checking_refresh'},
  'app.services.platnik_gui.request_checks': {'actors':['actor_id'],'arguments':['actor_id','company_ids','month'],'capability':'tab:Sprawdzanie','function':'request_checks','module':'app.services.platnik_gui'},
+ 'app.services.platnik_gui.request_daily_checks': {'actors':['actor_id'],'arguments':['actor_id','company_ids','target'],'capability':'tab:Sprawdzanie','function':'request_daily_checks','module':'app.services.platnik_gui'},
  'app.services.platnik_gui.read_checks': {'actors':['actor_id'],'arguments':['actor_id','month'],'capability':'tab:Sprawdzanie','function':'read_checks','module':'app.services.platnik_gui'},
 
  'app.remote.screen_data.mail_sidebar_snapshot': {'actors':['actor_id'],'arguments':['actor_id'],'capability':'tab:E-mail','function':'mail_sidebar_snapshot','module':'app.remote.screen_data'},

@@ -1,4 +1,4 @@
-"""Entry point for the Windows process scheduled in the interactive user session."""
+"""Płatnik GUI agent for a manual run on the HR workstation."""
 import argparse
 import json
 import logging
@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from time import sleep
 
 from app.integrations.platnik.gui_desktop import (describe, download_confirmation, grid_rows,
                                                    interactive_desktop, main_window, register)
@@ -18,7 +17,6 @@ from app.integrations.platnik.gui_evidence import ERRORS, OPTIONAL_COLUMNS, REQU
 MODULE = 'app.integrations.platnik.gui_agent'
 LOGGER = logging.getLogger(__name__)
 JOB_TIMEOUT = 75
-POLL_SECONDS = 5
 
 
 def load_view(config, backend, required, optional):
@@ -156,6 +154,20 @@ def connect(config):
                            options='-c statement_timeout=5000')
 
 
+def queue_target(connection, schema=None):
+    """Identify the active cluster, database and schema across the two connections."""
+    return list(connection.execute("""
+        SELECT current_database(), COALESCE(%s, current_schema()::text),
+               extract(epoch FROM pg_postmaster_start_time())::text
+    """, (schema,)).fetchone())
+
+
+def local_queue_target(path=None):
+    config = load_config(Path(path) if path is not None else default_profile())
+    with connect(config) as connection:
+        return queue_target(connection, config['schema'])
+
+
 def check_queue_access(config):
     from psycopg import sql
     schema = sql.Identifier(config['schema']).as_string()
@@ -222,9 +234,8 @@ def diagnose(path=None, *, progress=None):
     return True
 
 
-def run(config, path, *, once=False):
-    if once and not interactive_desktop():
-        raise ReadError('DesktopUnavailable')
+def run(config, path, *, once=False, target=None):
+    require_interactive_desktop()
 
     from psycopg import Error, sql
     from psycopg.types.json import Jsonb
@@ -232,50 +243,94 @@ def run(config, path, *, once=False):
     schema = sql.Identifier(config['schema'])
     claim_query = sql.SQL('SELECT * FROM {}.platnik_gui_claim()').format(schema)
     finish_query = sql.SQL('SELECT {}.platnik_gui_finish(%s, %s, %s, %s)').format(schema)
-    connection = None
+    result = {'completed': 0, 'failed': 0, 'interrupted': None}
     try:
-        while True:
-            try:
-                if interactive_desktop():
-                    if connection is None or connection.closed:
-                        connection = connect(config)
-                    raw = connection.execute(claim_query).fetchone()
-                    if raw:
-                        job_id, lease, nip, period = raw
-                        outcome = bounded_read(path, {'nip': nip, 'period': period})
-                        error = outcome.get('error')
-                        findings = outcome.get('findings', [])
-                        saved = connection.execute(finish_query, (job_id, lease, Jsonb(findings), error)).fetchone()[0]
-                        LOGGER.info('zadanie=%s zapisano=%s stan=%s', job_id, saved, error or 'completed')
+        with connect(config) as connection:
+            if target is not None and queue_target(connection, config['schema']) != target:
+                raise ValueError('Połączenie agenta zmieniło się podczas uruchamiania. Ponów koniec dnia.')
+            while interactive_desktop():
+                raw = connection.execute(claim_query).fetchone()
+                if not raw:
+                    return result
+                job_id, lease, nip, period = raw
+                outcome = bounded_read(path, {'nip': nip, 'period': period})
+                error = outcome.get('error')
+                findings = outcome.get('findings', [])
+                saved = connection.execute(finish_query, (job_id, lease, Jsonb(findings), error)).fetchone()[0]
+                LOGGER.info('zadanie=%s zapisano=%s stan=%s', job_id, saved, error or 'completed')
+                if not saved or error == 'DesktopUnavailable':
+                    result['interrupted'] = error or 'ReadFailed'
+                    return result
+                result['failed' if error else 'completed'] += 1
+                if error in ('AppUnavailable', 'ScreenUnavailable', 'ProfileMismatch', 'Timeout'):
+                    result['interrupted'] = error
+                    return result
                 if once:
-                    return
-            except Error as exc:
-                if connection is not None:
-                    connection.close()
-                    connection = None
-                LOGGER.warning('Kolejka PostgreSQL niedostępna (%s).', type(exc).__name__)
-                if once:
-                    raise ReadError('ReadFailed') from None
-            sleep(POLL_SECONDS)
+                    return result
+            result['interrupted'] = 'DesktopUnavailable'
+    except Error as exc:
+        LOGGER.warning('Kolejka PostgreSQL niedostępna (%s).', type(exc).__name__)
+        result['interrupted'] = 'ReadFailed'
+    return result
+
+
+def run_pending(path=None, *, once=False, target=None):
+    """Process the existing queue, then exit and release the workstation."""
+    path = (Path(path) if path is not None else default_profile()).resolve()
+    diagnostic = RotatingFileHandler(path.parent / 'agent.log', maxBytes=1024 * 1024, backupCount=3, encoding='utf-8')
+    diagnostic.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    LOGGER.addHandler(diagnostic)
+    LOGGER.setLevel(logging.INFO)
+    try:
+        return run(load_config(path), path, once=once, target=target)
     finally:
-        if connection is not None:
-            connection.close()
+        LOGGER.removeHandler(diagnostic)
+        diagnostic.close()
 
 
 def default_profile():
     """Where the installed application keeps the agent profile.
 
-    Biuro.exe --platnik-agent runs without --config, so the profile sits beside the
-    worker's own data and is edited from the Płatnik settings page.
+    The profile belongs to the Windows user who will operate Płatnik.
     """
     base = Path(os.getenv('LOCALAPPDATA') or Path.home()) / 'Biuro'
     return base / 'platnik-agent.json'
 
 
+def _windows_pipe(standard_handle, mode):
+    """Read redirected handles from a windowed PyInstaller executable."""
+    from ctypes import WinDLL, wintypes
+    import msvcrt
+
+    get_handle = WinDLL('kernel32', use_last_error=True).GetStdHandle
+    get_handle.argtypes = [wintypes.DWORD]
+    get_handle.restype = wintypes.HANDLE
+    handle = get_handle(standard_handle)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise OSError('Brak potoku agenta Płatnika.')
+    flags = os.O_BINARY | (os.O_RDONLY if mode == 'r' else os.O_WRONLY)
+    return os.fdopen(msvcrt.open_osfhandle(handle, flags), mode, encoding='utf-8')
+
+
+def _serve_read_job(path):
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        source = sys.stdin if sys.stdin is not None else stack.enter_context(_windows_pipe(-10, 'r'))
+        destination = sys.stdout if sys.stdout is not None else stack.enter_context(_windows_pipe(-11, 'w'))
+        try:
+            outcome = {'findings': read_job(load_config(path), json.load(source))}
+        except ReadError as exc:
+            outcome = {'error': exc.code}
+        except Exception:
+            outcome = {'error': 'ReadFailed'}
+        print(json.dumps(outcome, ensure_ascii=True), file=destination, flush=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', nargs='?', default='run',
-                        choices=('run', 'once', 'probe', 'describe', 'read-job', 'capture-walkthrough'))
+    parser.add_argument('mode', nargs='?',
+                        choices=('daily', 'run', 'once', 'probe', 'describe', 'read-job', 'capture-walkthrough'))
     parser.add_argument('--config', type=Path, default=None,
                         help='Profil agenta. Domyślnie katalog danych Biuro: platnik-agent.json')
     parser.add_argument('--output', type=Path, default=None,
@@ -285,7 +340,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if sys.platform != 'win32':
         raise SystemExit('Agent Płatnika wymaga Windows.')
+    if args.mode in (None, 'run'):
+        # Old startup tasks passed no mode or the old continuous mode.
+        print('Uruchom zakończenie dnia w Biuro → Kadry → Sprawdzanie z komputera kadr.')
+        return
     path = (args.config or default_profile()).resolve()
+    if args.mode == 'read-job':
+        _serve_read_job(path)
+        return
     try:
         capture_only = args.mode == 'capture-walkthrough'
         if capture_only and args.executable is not None:
@@ -308,21 +370,15 @@ def main(argv=None):
             import pywinauto  # noqa: F401  Loaded on the agent VM to check the Windows runtime.
             check_queue_access(config)
             print('Połączenie z kolejką działa. Pulpit: ' + ('aktywny.' if interactive_desktop() else 'niedostępny.'))
-        elif args.mode == 'read-job':
-            print(json.dumps({'findings': read_job(config, json.load(sys.stdin))}, ensure_ascii=True))
         else:
-            handler = RotatingFileHandler(path.parent / 'agent.log', maxBytes=1024 * 1024, backupCount=3, encoding='utf-8')
-            logging.basicConfig(level=logging.INFO, handlers=[handler], format='%(asctime)s %(levelname)s %(message)s')
-            run(config, path, once=args.mode == 'once')
+            result = run_pending(path, once=args.mode == 'once')
+            print(f"Zakończono: {result['completed']}. Błędy: {result['failed']}.")
+            if result['interrupted']:
+                raise ReadError(result['interrupted'])
     except ReadError as exc:
-        if args.mode == 'read-job':
-            print(json.dumps({'error': exc.code}))
-        else:
-            raise SystemExit(ERRORS[exc.code]) from None
+        raise SystemExit(ERRORS[exc.code]) from None
     except Exception as error:
-        if args.mode == 'read-job':
-            print(json.dumps({'error': 'ReadFailed'}))
-        elif args.mode == 'capture-walkthrough':
+        if args.mode == 'capture-walkthrough':
             raise SystemExit(f'Przechwytywanie nie powiodło się ({type(error).__name__}).') from None
         else:
             # Profile paths and credentials may appear in native error details.

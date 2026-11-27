@@ -1,11 +1,12 @@
 from app.utils.frozen_table import FrozenFirstColumnTable
 from datetime import datetime
+import sys
 from zoneinfo import ZoneInfo
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QComboBox, QTabWidget,
-    QAbstractItemView, QCheckBox, QStackedWidget)
+    QAbstractItemView, QCheckBox, QMessageBox, QStackedWidget)
 from app.monthly_view.month_picker import MonthPicker
 from app.integrations.enova.accounting import (list_accounting, decoded, documents,
                                                 declaration_entries, declarations, simple_accounting,
@@ -143,6 +144,7 @@ class AccountingPage(QWidget):
         from app.remote.state import client
         remote = client()
         self.platnik_gui_supported = remote is None or 'platnik_gui_checks' in remote.server_features
+        self.platnik_daily_supported = remote is None or 'platnik_gui_daily' in remote.server_features
         self._remote_ezla_month = None
         self.rows = []
         from app.utils.months import default_month_for_department
@@ -226,11 +228,10 @@ class AccountingPage(QWidget):
                 self.contribution_scope.addItem('Właściciel lub wspólnik', 'owner')
                 self.contribution_scope.currentIndexChanged.connect(self.filter_rows)
                 filters.addWidget(self.contribution_scope)
-                self.platnik_gui_button = QPushButton('Sprawdź wysyłkę w Płatniku')
+                self.platnik_gui_button = QPushButton('Płatnik — koniec dnia…')
                 self.platnik_gui_button.setToolTip(
-                    'Sprawdź zaznaczone firmy. Bez zaznaczenia sprawdzisz wszystkie dostępne firmy z bazy Biuro.')
-                self.platnik_gui_button.setVisible(self.platnik_gui_supported)
-                self.platnik_gui_button.clicked.connect(self._queue_platnik_gui_checks)
+                    'Uruchom z komputera kadr po zakończeniu pracy w Płatniku.')
+                self.platnik_gui_button.clicked.connect(self._start_platnik_day)
                 filters.addWidget(self.platnik_gui_button)
                 filters.addStretch()
                 panel_layout.addLayout(filters)
@@ -239,6 +240,7 @@ class AccountingPage(QWidget):
                 note.setWordWrap(True)
                 panel_layout.addWidget(note)
                 self.platnik_gui_note = QLabel()
+                self.platnik_gui_note.setTextFormat(Qt.TextFormat.PlainText)
                 self.platnik_gui_note.setWordWrap(True)
                 panel_layout.addWidget(self.platnik_gui_note)
                 self.contribution_table = self._new_table()
@@ -632,31 +634,97 @@ class AccountingPage(QWidget):
 
         self.platnik_gui_reader.submit(lambda: read_checks(self.actor_id, month), loaded, failed, key=month)
 
-    def _queue_platnik_gui_checks(self):
-        from app.services.platnik_gui import request_checks
+    def _start_platnik_day(self):
         company_ids = self.selected_company_ids() or None
-        month = self.month.monthText()
-        self.platnik_gui_button.setEnabled(False)
-        self.platnik_gui_note.setText('Zlecam sprawdzenie w Płatniku…')
+        sql_ids = company_ids or [company['id'] for company in self.rows]
+        if not sql_ids:
+            self.platnik_gui_note.setText('Najpierw odśwież listę firm.')
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle('Płatnik — koniec dnia')
+        box.setText('Sprawdź wysyłki i potwierdzenia za bieżący oraz poprzedni miesiąc.')
+        box.setInformativeText(
+            'Wybierz zestawy w Płatniku, aby obsłużyć wysyłkę i potwierdzenia. '
+            'Jeśli potwierdzenia są już zarejestrowane, pobierz ich wyniki przez SQL. '
+            'Odczyt rejestru przez agenta GUI wymaga sprawdzonego profilu na tym komputerze.'
+        )
+        sql = box.addButton('Pobierz wyniki przez SQL', QMessageBox.ButtonRole.AcceptRole)
+        gui = None
+        filing = None
+        if sys.platform == 'win32':
+            filing = box.addButton('Wyślij i pobierz UPO…', QMessageBox.ButtonRole.AcceptRole)
+        if sys.platform == 'win32' and self.platnik_daily_supported:
+            gui = box.addButton('Uruchom agenta GUI', QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(sql)
+        box.exec()
+        choice = box.clickedButton()
+        if choice is sql or (filing is not None and choice is filing):
+            from app.services.checking_refresh import run_now
+            month = datetime.now(ZoneInfo('Europe/Warsaw')).strftime('%Y-%m')
 
-        def queued(result):
+            def sync_results():
+                return run_now(self.actor_id, 'platnik_declarations', sql_ids, month)
+
+            if choice is sql:
+                self._run_platnik_day(sync_results, self._platnik_day_sql_done)
+            else:
+                from app.accounting.platnik_filing_ui import PlatnikFilingDialog
+                dialog = PlatnikFilingDialog(sync_results, self._platnik_day_sql_done, self)
+                dialog.exec()
+                dialog.deleteLater()
+        elif gui is not None and choice is gui:
+            from app.integrations.platnik.gui_agent import diagnose, local_queue_target, run_pending
+            from app.services.platnik_gui import request_daily_checks
+
+            def process():
+                diagnose()
+                target = local_queue_target()
+                queued = request_daily_checks(self.actor_id, company_ids, target)
+                return {**queued, **run_pending(target=target)}
+
+            self._run_platnik_day(process, self._platnik_day_gui_done)
+
+    def _run_platnik_day(self, work, done):
+        from app.integrations.platnik.gui_evidence import ERRORS, ReadError
+
+        self.platnik_gui_button.setEnabled(False)
+        self.platnik_gui_note.setText('Trwa odczyt z Płatnika…')
+
+        def finished(result):
             self.platnik_gui_button.setEnabled(True)
-            if self.month.monthText() == month:
-                message = f"Zlecono: {result['queued']}. Już w kolejce: {result['existing']}."
-                if result.get('skipped'):
-                    message += f" Pominięto firmy bez poprawnego NIP-u płatnika: {result['skipped']}."
-                self.platnik_gui_note.setText(message)
-                self._read_platnik_gui_checks()
+            done(result)
 
         def failed(error):
             self.platnik_gui_button.setEnabled(True)
-            if self.month.monthText() == month:
-                self.platnik_gui_note.setText(
-                    str(error) if isinstance(error, (ValueError, PermissionError))
-                    else 'Nie udało się zlecić odczytu agentowi Płatnika.'
-                )
+            if isinstance(error, ReadError):
+                message = error.detail or ERRORS[error.code]
+            elif isinstance(error, (ValueError, PermissionError)):
+                message = str(error)
+            else:
+                message = 'Odczyt nie powiódł się. Sprawdź profil Płatnika i połączenie z bazą.'
+            self.platnik_gui_note.setText(message)
 
-        self.platnik_gui_writer.submit(lambda: request_checks(self.actor_id, company_ids, month), queued, failed)
+        self.platnik_gui_writer.submit(work, finished, failed)
+
+    def _platnik_day_sql_done(self, result):
+        from app.accounting.refresh_ui import STATES
+
+        self.platnik_gui_note.setText('Płatnik SQL — ' + STATES[result['state']])
+        self.refresh_controls.loaded(result)
+
+    def _platnik_day_gui_done(self, result):
+        from app.integrations.platnik.gui_evidence import ERRORS
+
+        message = f"Zakończone zadania: {result['completed']}. Błędy: {result['failed']}."
+        if result['skipped']:
+            message += f" Pominięto firmy bez poprawnego NIP-u: {result['skipped']}."
+        if result['interrupted']:
+            message += ' ' + ERRORS[result['interrupted']]
+        elif result['queued'] > result['completed'] + result['failed']:
+            message += ' Część zleceń nadal czeka w kolejce.'
+        self.platnik_gui_note.setText(message)
+        self._read_platnik_gui_checks()
 
     @staticmethod
     def _owner_item(row, department):

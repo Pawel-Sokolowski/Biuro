@@ -43,6 +43,7 @@ class MailToastDetailsTests(unittest.TestCase):
                 (21, [{'nadawca': 'B <b@example.com>', 'temat': 'Second'}])]):
             toaster.check(accounts, {})
         calls = toaster._tray.showMessage.call_args_list
-        self.assertEqual(len(calls), 2)
-        self.assertIn('first@example.com', calls[0].args[0])
-        self.assertIn('second@example.com', calls[1].args[0])
+        self.assertEqual(len(calls), 1)
+        self.assertIn('first@example.com', calls[0].args[1])
+        self.assertIn('second@example.com', calls[0].args[1])
+        self.assertIsNone(toaster._click_target)

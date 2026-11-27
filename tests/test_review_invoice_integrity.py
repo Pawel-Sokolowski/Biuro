@@ -1,4 +1,6 @@
 """Regression checks for accepted PDF values and inherited tax annotations."""
+import base64
+import hashlib
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from decimal import Decimal
@@ -28,8 +30,9 @@ class ReviewInvoiceIntegrityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'accepted.xml'
             path.write_bytes(xml)
+            digest = base64.b64encode(hashlib.sha256(xml).digest()).decode('ascii')
             with patch('app.invoices.invoice_preview.get_setting', return_value=''), patch('app.invoices.invoice_preview.get_setting_first', return_value=''), patch('app.invoices.invoice_preview._qr_data_url', return_value='data:image/png;base64,AA=='), patch('app.invoices.invoice_preview.write_invoice_pdf', side_effect=write):
-                invoice_delivery.official_pdf({**invoice, 'ksef_numer':'accepted'}, path)
+                invoice_delivery.official_pdf({**invoice, 'ksef_numer': 'accepted', 'ksef_hash_faktury': digest}, path)
         return captured[0]
 
     def test_official_pdf_preserves_fractional_quantity_and_accepted_amount(self):

@@ -270,6 +270,15 @@ class MailSnapshotTests(DbTestCase):
         self.assertEqual(result.total, 20)  # badges include visible Sent, unlike toasts
         self.assertEqual(len(result.messages), 4)
         self.assertTrue(all(message["temat"] == "INBOX" for message in result.messages))
+        accounts = [{"id": 71}, {"id": 72}]
+        hidden = {"71": {"Hidden"}, "72": {"Hidden"}}
+        second = storage.mail_notification_snapshot(accounts, hidden, result.last_ids, limit=2)
+        third = storage.mail_notification_snapshot(accounts, hidden, second.last_ids, limit=2)
+        done = storage.mail_notification_snapshot(accounts, hidden, third.last_ids, limit=2)
+        batch = result.messages + second.messages + third.messages
+        self.assertEqual([len(second.messages), len(third.messages), len(done.messages)], [4, 2, 0])
+        self.assertEqual(len({message["id"] for message in batch}), 10)
+        self.assertTrue(all(message["temat"] == "INBOX" for message in batch))
 
 
 class BackgroundViewTests(TestCase):

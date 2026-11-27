@@ -1076,6 +1076,9 @@ class FakturyPage(QWidget):
         emailed = sum(bool(entry.get("delivery")) and entry["delivery"].get("status") == "sent" for entry in result["accepted"])
         if emailed:
             message += f" PDF wysłane e-mailem: {emailed}."
+        copy_warnings = sum(bool((entry.get("delivery") or {}).get("warning")) for entry in result["accepted"])
+        if copy_warnings:
+            message += f" Sprawdź kopie w folderze Wysłane ({copy_warnings})."
         if accepted:
             message += "\nNumery KSeF: " + accepted
         issues = result["rejected"] + result["errors"]
@@ -1379,6 +1382,9 @@ class FakturyPage(QWidget):
                             "Kliknij, aby otworzyć urzędową weryfikację KSeF "
                             "(numer zostanie też skopiowany do schowka)"
                         )
+                    if inv.get("invoice_email_copy_warning"):
+                        values[-1] = "Wysłano PDF · sprawdź kopię"
+                        tooltip(len(values) - 1, "SMTP przyjął wiadomość. Sprawdź zapis kopii w folderze Wysłane.")
                     records.append(TableRecord(str(inv['id']), tuple('' if v is None else str(v) for v in values), roles))
                 self.issued_table.set_records(records)
 

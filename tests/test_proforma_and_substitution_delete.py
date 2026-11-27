@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from app.db.dao_conn import get_conn
-from app.db.dao_invoices import create_manual_invoice, get_exported_invoices, mark_exported
+from app.db.dao_invoices import InvoiceLockedError, create_manual_invoice, get_exported_invoices, mark_exported
 from app.db.dao_monthly import list_active_substitutions, set_substitution
 from app.db.dao_payments import PaymentError, get_invoice_payment_summary, record_cash_payment, revert_settlement
 from tests.base import DbTestCase
@@ -127,9 +127,14 @@ class ProformaAndAdvanceTests(DbTestCase):
         proforma = self._document("proforma")
         record_cash_payment(proforma, "2026-09-05", "123.00", 1)
         payment_id = get_invoice_payment_summary(proforma, 1)["payments"][0]["id"]
+        draft_id = self._children(proforma)[0]["id"]
         revert_settlement(payment_id, 1)
+        with self.assertRaisesRegex(InvoiceLockedError, "Najpierw rozlicz"):
+            mark_exported([draft_id], 1)
         record_cash_payment(proforma, "2026-09-06", "123.00", 1)
-        self.assertEqual(len(self._children(proforma)), 1)
+        mark_exported([draft_id], 1)
+        self.assertEqual([row["id"] for row in self._children(proforma)], [draft_id])
+        self.assertEqual(self._row(draft_id)["status"], "wystawiona")
 
     def test_proforma_is_not_in_exported_set_for_accounting(self):
         proforma = self._document("proforma")

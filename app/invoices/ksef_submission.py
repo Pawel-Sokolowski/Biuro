@@ -212,6 +212,12 @@ def _submit_locked_invoice(invoice_id, invoice, xml, *, client=None):
         updated = conn.execute(
             """
             UPDATE faktury SET ksef_status = 'wysylanie',
+              invoice_email_status = CASE WHEN invoice_email_status = 'blocked_by_ksef'
+                  THEN 'queued' ELSE invoice_email_status END,
+              invoice_email_error = CASE WHEN invoice_email_status = 'blocked_by_ksef'
+                  THEN NULL ELSE invoice_email_error END,
+              invoice_email_next_attempt_at = CASE WHEN invoice_email_status = 'blocked_by_ksef'
+                  THEN NULL ELSE invoice_email_next_attempt_at END,
               ksef_referencja_sesji = NULL, ksef_referencja_faktury = NULL,
               ksef_srodowisko_wysylki = %s, ksef_nip_wysylki = %s, ksef_hash_faktury = %s
             WHERE id = %s
@@ -334,6 +340,13 @@ def refresh_invoice_submission(invoice_id: int, actor_id: int, *, client=None) -
             (status, accepted, result.get("ksefNumber"), accepted, invoice_id, session, ref, environment, nip,
              status, accepted, result.get("ksefNumber")),
         ).fetchone()
+        if updated and status == "odrzucona":
+            conn.execute(
+                """UPDATE faktury SET invoice_email_status = 'blocked_by_ksef',
+                       invoice_email_error = %s, invoice_email_next_attempt_at = NULL
+                   WHERE id = %s AND invoice_email_status IN ('queued', 'preparing', 'failed_before_send')""",
+                ("KSeF odrzucił fakturę. PDF czeka na przyjęcie faktury.", invoice_id),
+            )
         if not updated:
             latest = conn.execute(
                 "SELECT ksef_status, ksef_numer FROM faktury WHERE id = %s "

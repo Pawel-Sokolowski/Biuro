@@ -138,16 +138,17 @@ z numerem i urzędowym QR, wysyłka z zatwierdzonego konta pocztowego. PDF powst
 na podstawie przyjętego XML, a nie późniejszych zmian w kartotece. Adresaci są
 utrwalani w kolejce. Przycisk **Wyślij PDF e-mailem** umożliwia wysyłkę również
 faktur mających już numer KSeF. Stan wysyłki jest widoczny w tabeli faktur.
+Komunikat **Wysłano PDF · sprawdź kopię** oznacza potwierdzony odbiór przez
+SMTP i brak potwierdzenia zapisu lub synchronizacji kopii w folderze Wysłane.
 Niepewny wynik SMTP wymaga sprawdzenia; program nie ponawia automatycznie
 wiadomości, która mogła już dotrzeć. Nowa wersja wymaga jednokrotnego uruchomienia
 **Biuro – aktualizacja bazy** po instalacji.
 
 **Pobierz z KSeF** pobiera sprzedażowe faktury VAT oraz korekty FA(3) z wybranego miesiąca.
 Nabywca jest łączony z firmą po NIP-ie. Dokument o tym samym numerze KSeF lub
-numerze faktury jest aktualizowany, a pojedynczy niezsynchronizowany dokument
-tej firmy i miesiąca może zostać zastąpiony. Gdy dokumentu nie ma, program go
-tworzy. Treść, daty, pozycje i kwoty pochodzą z KSeF; zapisane płatności
-pozostają przy dotychczasowym ID faktury. Niepewny NIP lub kilka pasujących
+numerze faktury otrzymuje dane identyfikacyjne KSeF, a jego treść i płatności
+pozostają przy dotychczasowym ID. Jeśli żaden numer nie pasuje, program tworzy
+osobny dokument z treścią, datami, pozycjami i kwotami z KSeF. Niepewny NIP lub kilka pasujących
 faktur wymaga wyjaśnienia i nie powoduje automatycznego nadpisania. Po
 synchronizacji program pokazuje takie dokumenty w osobnej tabeli. Firmę można
 wyszukać po nazwie lub NIP-ie i przypisać ręcznie bez ponownego pobierania XML-a.
@@ -425,7 +426,9 @@ W Windows każde powiadomienie o pojedynczym nowym mailu ma własny cel, więc
 kliknięcie starszego powiadomienia w trakcie działania aplikacji otwiera właściwą
 wiadomość. Dostęp do konta i tożsamość wiadomości są ponownie sprawdzane;
 sam UID nie służy do wyszukania celu. Powiadomienie zbiorcze otwiera zakładkę
-E-mail. Instalator oznacza skrót identyfikatorem `Biuro.OfficeManager`; po
+E-mail lub Czat. Gdy system korzysta z ikony w zasobniku, kilka wiadomości z
+jednej partii pojawia się w jednym powiadomieniu. Instalator oznacza skrót
+identyfikatorem `Biuro.OfficeManager`; po
 aktualizacji zależności przebuduj EXE i instalator, aby dołączyć projekcje WinRT XML.
 
 ### Mail masowy do klientów

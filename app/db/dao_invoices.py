@@ -628,19 +628,24 @@ _COPIED_COLUMNS = (
 )
 
 
+def _source_is_fully_paid(conn, source) -> bool:
+    if not source or source["rodzaj"] not in PAYMENT_TRIGGER_KINDS or source["cancelled_at"]:
+        return False
+    total = Decimal(str(source["kwota_brutto"]))
+    paid = conn.execute(
+        "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s", (source["id"],)
+    ).fetchone()[0]
+    return total > 0 and paid >= total - Decimal("0.009")
+
+
 def create_draft_after_payment(conn, source_id: int) -> Optional[int]:
     """Po pełnej zapłacie proformy/faktury zaliczkowej tworzy roboczą fakturę zwykłą (raz na dokument)."""
-    source = conn.execute("SELECT * FROM faktury WHERE id = %s", (source_id,)).fetchone()
-    source = dict(source) if source else None
-    if not source or source["rodzaj"] not in PAYMENT_TRIGGER_KINDS or source["cancelled_at"]:
-        return None
-    paid = conn.execute(
-        "SELECT COALESCE(SUM(kwota), 0) FROM faktury_platnosci WHERE faktura_id = %s", (source_id,)
-    ).fetchone()[0]
-    if Decimal(str(source["kwota_brutto"])) <= 0 or paid < Decimal(str(source["kwota_brutto"])) - Decimal("0.009"):
+    source = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (source_id,)).fetchone()
+    if not _source_is_fully_paid(conn, source):
         return None
     if conn.execute("SELECT 1 FROM faktury WHERE dokument_zrodlowy_id = %s", (source_id,)).fetchone():
         return None
+    source = dict(source)
     columns = [c for c in _COPIED_COLUMNS if c in source]
     today = _now_date()
     cur = conn.execute(
@@ -1088,6 +1093,7 @@ INVOICE_LIST_SQL = f"""
            f.miesiac, f.rodzaj, f.numer, f.status,
            f.status, f.cancelled_at, f.kwota_netto, f.kwota_brutto, f.data_wystawienia, f.data_sprzedazy,
            f.termin_platnosci, f.eksportowana, f.data_eksportu, f.ksef_numer, f.ksef_status, f.ksef_srodowisko_wysylki, f.ksef_nip_wysylki, f.invoice_email_status,
+           f.invoice_email_status = 'sent' AND NULLIF(f.invoice_email_error, '') IS NOT NULL AS invoice_email_copy_warning,
            f.korygowana_faktura_id, f.przyczyna_korekty
     FROM faktury f
     LEFT JOIN firmy c ON c.id = f.firma_id
@@ -1349,6 +1355,13 @@ def _assign_invoice_number(conn, invoice_id: int) -> str:
     row = conn.execute("SELECT * FROM faktury WHERE id = %s FOR UPDATE", (invoice_id,)).fetchone()
     if row is None:
         raise ValueError("Nie znaleziono faktury.")
+    if not row["eksportowana"] and row["dokument_zrodlowy_id"] is not None:
+        source = conn.execute(
+            "SELECT id, rodzaj, kwota_brutto, cancelled_at FROM faktury WHERE id = %s FOR UPDATE",
+            (row["dokument_zrodlowy_id"],),
+        ).fetchone()
+        if not _source_is_fully_paid(conn, source):
+            raise InvoiceLockedError("Najpierw rozlicz w całości proformę lub fakturę zaliczkową.")
     numer = (row["numer"] or "").strip()
     if not numer:
         issued = datetime.strptime(str(row["data_wystawienia"] or _now_date())[:10], DATE_FMT)
@@ -1434,6 +1447,11 @@ def trash_invoice(invoice_id: int, actor_id: int) -> None:
             raise ValueError("Nie znaleziono faktury.")
         if conn.execute("SELECT 1 FROM faktury_platnosci WHERE faktura_id = %s OR source_correction_id = %s LIMIT 1", (invoice_id, invoice_id)).fetchone():
             raise InvoiceLockedError("Faktura ma zapisane płatności. Najpierw cofnij rozliczenia.")
+        if conn.execute(
+            "SELECT 1 FROM faktury WHERE dokument_zrodlowy_id = %s AND COALESCE(eksportowana, 0) = 0 LIMIT 1",
+            (invoice_id,),
+        ).fetchone():
+            raise InvoiceLockedError("Najpierw usuń fakturę roboczą utworzoną z tego dokumentu.")
         conn.execute(
             "INSERT INTO faktury_kosz (faktura_id, firma_id, miesiac, numer, ksef_numer, faktura_json, pozycje_json, deleted_by) "
             "SELECT f.id, f.firma_id, f.miesiac, f.numer, f.ksef_numer, to_jsonb(f), "

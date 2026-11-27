@@ -97,22 +97,38 @@ class MailToaster:
             title, body = _notification_text(new)
             self._show(title, body, None)
             return
+        notices = []
         for message in new:
             title, body = _notification_text([message])
             target = {'kind': 'email', 'account_id': message['_account']['id'],
                       'row_id': message.get('id'), 'message_id': message.get('message_id')}
-            self._show(title, body, target)
+            notices.append((title, body, target))
+        self._show_batch(notices, (*_notification_text(new), None))
 
-    def _show(self, title, body, target):
+    def _show_native(self, title, body, target):
         if getattr(self, '_native', None) is not None:
             try:
                 self._native.show(title, body, target)
-                return
+                return True
             except Exception:
                 logger.warning('Nie można wyświetlić powiadomienia Windows', exc_info=True)
+        return False
+
+    def _show_tray(self, title, body, target):
         self._click_target = target
         if self._tray is not None:
             self._tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, SHOW_MS)
+
+    def _show(self, title, body, target):
+        if not self._show_native(title, body, target):
+            self._show_tray(title, body, target)
+
+    def _show_batch(self, notices, summary):
+        # The tray exposes one messageClicked signal without a toast identifier.
+        # Use a single balloon when multiple notices have to use that backend.
+        fallback = [notice for notice in notices if not self._show_native(*notice)]
+        if fallback:
+            self._show_tray(*(summary if len(fallback) > 1 else fallback[0]))
 
     def show_notice(self, title, body):
         self._show(title, body, None)

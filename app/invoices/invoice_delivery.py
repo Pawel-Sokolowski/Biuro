@@ -60,7 +60,7 @@ def queue_deliveries(plans, actor_id, account_id):
             encoded = json.dumps(plan['recipients'], ensure_ascii=False)
             if row[0] in ('queued', 'preparing') and row[1] == encoded and row[2] == account_id:
                 continue
-            if row[0] not in (None, '', 'failed_before_send', 'blocked_before_send'):
+            if row[0] not in (None, '', 'failed_before_send', 'blocked_before_send', 'blocked_by_ksef'):
                 raise ValueError(f"Faktura {plan['number']}: e-mail jest już w kolejce, został wysłany albo wymaga sprawdzenia. Nie wysyłam drugi raz.")
             conn.execute('''UPDATE faktury SET invoice_email_status='queued', invoice_email_recipients=%s,
                             invoice_email_account_id=%s, invoice_email_actor_id=%s, invoice_email_error=NULL,
@@ -78,9 +78,12 @@ def official_pdf(invoice, xml_path):
     from app.invoices.ksef_sync import parse_fa3_invoice
     from app.invoices.invoice_preview import _qr_data_url, invoice_html, write_invoice_pdf
     raw = Path(xml_path).read_bytes()
+    digest = base64.b64encode(hashlib.sha256(raw).digest()).decode('ascii')
+    if digest != invoice.get('ksef_hash_faktury'):
+        raise KsefError('Plik XML różni się od dokumentu zweryfikowanego w KSeF.')
     data = parse_fa3_invoice(raw.decode('utf-8-sig'), allow_buyer_without_nip=True)
     official = {**invoice, '_official':True, 'ksef_nip_wysylki':data['seller_nip'],
-                'ksef_hash_faktury':base64.b64encode(hashlib.sha256(raw).digest()).decode(), 'numer':data['number'], 'data_wystawienia':data['issue_date'],
+                'ksef_hash_faktury':digest, 'numer':data['number'], 'data_wystawienia':data['issue_date'],
                 'data_sprzedazy':data['sale_date'], 'termin_platnosci':data['due_date'],
                 'nabywca_pelna':data['buyer_name'], 'nabywca_nip':data['buyer_nip'],
                 'nabywca_adres':' '.join(filter(None,(data['buyer_address'],data['buyer_address_2']))),
@@ -142,8 +145,8 @@ def _delivery_state(invoice_id, status, *, error=None, pdf=None, expected=None):
         conn.close()
 
 
-@office_endpoint('app.invoices.invoice_delivery.deliver_if_queued')
 def deliver_if_queued(invoice_id, actor_id, xml_path):
+    """Deliver a queued invoice from the server's verified KSeF archive."""
     from app.invoices.ksef_submission import _authorized_invoice
     from app.email.email_storage import get_email_accounts_for_employee
     from app.email.email_actions import _send_smtp_message, get_smtp_config_for_account, prepare_message
@@ -152,10 +155,11 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
     if not status:
         return None
     if status == 'sent':
-        return {'status':'sent','recipients':invoice.get('invoice_email_recipients')}
+        return {'status':'sent','recipients':invoice.get('invoice_email_recipients'),
+                'warning':invoice.get('invoice_email_error')}
     if status in ('sending','uncertain'):
         return {'status':'uncertain','error':'Wynik poprzedniej wysyłki SMTP jest niepewny. Sprawdź folder Wysłane przed ponowieniem.'}
-    if status == 'blocked_before_send':
+    if status in ('blocked_before_send', 'blocked_by_ksef'):
         return {'status':status,'error':invoice.get('invoice_email_error')}
     if invoice.get('ksef_status') != 'przyjeta' or not invoice.get('ksef_numer'):
         raise KsefError('PDF można wysłać dopiero po przyjęciu faktury w KSeF.')
@@ -214,8 +218,9 @@ def deliver_if_queued(invoice_id, actor_id, xml_path):
     if not ok:
         _delivery_state(invoice_id,'uncertain',error=info,pdf=pdf)
         return {'status':'uncertain','error':info}
-    _delivery_state(invoice_id,'sent',pdf=pdf)
-    return {'status':'sent','recipients':recipients,'path':pdf}
+    warning = info if info and info != 'OK' else None
+    _delivery_state(invoice_id,'sent',error=warning,pdf=pdf)
+    return {'status':'sent','recipients':recipients,'path':pdf,'warning':warning}
 
 
 def review_delivery(parent, invoice_ids, actor_id):

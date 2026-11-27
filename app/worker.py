@@ -76,8 +76,8 @@ def mail_job(stop=None):
 
 
 def reminders_job(stop=None):
-    from app.services.email_reminders import run_reminders
-    return {'sent': run_reminders(stop=stop)}
+    from app.services.email_reminders import run_reminder_batch
+    return run_reminder_batch(stop=stop)
 
 
 def invoices_job():

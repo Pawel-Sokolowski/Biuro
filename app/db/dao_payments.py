@@ -1205,11 +1205,14 @@ def revert_settlement(payment_id: int, actor_id: int) -> None:
         raise PermissionError("Brak uprawnień do wycofania rozliczenia.")
     conn = get_conn()
     try:
+        source = conn.execute(
+            """SELECT f.firma_id FROM faktury f JOIN faktury_platnosci p ON p.faktura_id = f.id
+               WHERE p.id = %s FOR UPDATE OF f""", (payment_id,),
+        ).fetchone()
         payment = conn.execute("SELECT * FROM faktury_platnosci WHERE id = %s FOR UPDATE", (payment_id,)).fetchone()
         if not payment:
             raise PaymentError("Rozliczenie już nie istnieje. Odśwież listę.")
-        invoice = conn.execute("SELECT firma_id FROM faktury WHERE id = %s", (payment["faktura_id"],)).fetchone()
-        if not invoice or not can_access_invoice(actor_id, invoice["firma_id"]):
+        if not source or not can_access_invoice(actor_id, source["firma_id"]):
             raise PermissionError("Brak dostępu do wskazanej faktury.")
         if payment['manual_origin'] and payment['transakcja_id'] is not None:
             conn.execute('UPDATE faktury_platnosci SET transakcja_id = NULL, bank_linked_by = NULL, bank_linked_at = NULL WHERE id = %s',

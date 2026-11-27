@@ -725,7 +725,7 @@ def get_new_unread_messages(
     hidden_paths: set[str] | None = None,
     limit: int = 20,
 ) -> Tuple[int, List[Dict[str, Any]]]:
-    """Zwraca (największe id wiadomości konta, nowe nieprzeczytane wiadomości o id > after_id).
+    """Zwraca kursor i partię nowych nieprzeczytanych wiadomości o id > after_id.
 
     Przy after_id=None zwraca tylko największe id (punkt odniesienia, bez powiadomień).
     Pomija foldery ukryte oraz wysłane, robocze, kosz i spam.
@@ -758,7 +758,9 @@ def get_new_unread_messages(
             if folder_role(path, row["attributes"], row["delimiter"]) in _NO_TOAST_ROLES:
                 continue
             found.append({"id": int(row["id"]), "message_id": row["message_id"], "nadawca": row["nadawca"], "temat": row["temat"]})
-        return max_id, found[-limit:]
+        if limit > 0 and len(found) > limit:
+            return found[limit - 1]["id"], found[:limit]
+        return max_id, found
     finally:
         conn.close()
 
@@ -1668,12 +1670,19 @@ def mail_notification_snapshot(accounts, hidden_folders, last_ids, limit=20) -> 
                     SELECT konto_id,folder_id,id,message_id,nadawca,temat FROM wiadomosci_email
                     WHERE konto_id=requested.account_id AND id>requested.after_id AND folder_id=ANY(%s)
                       AND COALESCE(usunieta,0)=0 AND COALESCE(przeczytana,0)=0
-                    ORDER BY id DESC LIMIT %s
+                    ORDER BY id LIMIT %s
                 ) w ORDER BY w.id
             ''', ([a for a, _ in bounds], [b for _, b in bounds], eligible, limit))]
     total = sum(int(row['n']) for row in counts if row['folder_id'] in visible)
-    for row in candidates:
-        row['_account'] = account_map[row.pop('konto_id')]
     updated = dict(last_ids)
     updated.update({account_id: maxima.get(account_id, 0) for account_id in ids})
+    returned_per_account = {}
+    for row in candidates:
+        account_id = row.pop('konto_id')
+        row['_account'] = account_map[account_id]
+        returned_per_account[account_id] = returned_per_account.get(account_id, 0) + 1
+        # A full batch may leave more eligible rows. Continue from the last
+        # reported row on the next poll, even when other folders raised MAX(id).
+        if returned_per_account[account_id] == limit:
+            updated[account_id] = row['id']
     return MailNotificationSnapshot(total, updated, candidates)

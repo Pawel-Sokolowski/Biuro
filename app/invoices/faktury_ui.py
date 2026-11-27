@@ -1083,6 +1083,9 @@ class FakturyPage(QWidget):
         emailed = sum(bool(entry.get("delivery")) and entry["delivery"].get("status") == "sent" for entry in result["accepted"])
         if emailed:
             message += f" PDF wysłane e-mailem: {emailed}."
+        copy_warnings = sum(bool((entry.get("delivery") or {}).get("warning")) for entry in result["accepted"])
+        if copy_warnings:
+            message += f" Sprawdź kopie w folderze Wysłane ({copy_warnings})."
         if accepted:
             message += "\nNumery KSeF: " + accepted
         issues = result["rejected"] + result["errors"]
@@ -1361,10 +1364,25 @@ class FakturyPage(QWidget):
                         matching_states.add("unpaid")
                     if selected_state not in matching_states:
                         continue
-                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv), company_display_name(inv) or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
+                    email_status = inv.get("invoice_email_status")
+                    if inv.get("ksef_status") == "odrzucona" and email_status in (
+                        "queued", "preparing", "failed_before_send",
+                    ):
+                        email_status = "blocked_by_ksef"
+                    email_label = {
+                        "queued": "W kolejce",
+                        "sent": "Wysłano PDF",
+                        "failed_before_send": "Oczekuje na ponowienie PDF",
+                        "blocked_before_send": "Popraw dane wysyłki PDF",
+                        "blocked_by_ksef": "PDF wstrzymany — odrzucono w KSeF",
+                        "sending": "Do sprawdzenia",
+                        "uncertain": "Do sprawdzenia",
+                    }.get(email_status, "—")
+                    values = [inv["id"], "ANULOWANA" if inv.get("cancelled_at") else _kind_label(inv),
+                              company_display_name(inv) or inv["firma_nazwa"], inv["miesiac"], inv["numer"], None,
                               f"{inv['kwota_netto'] or 0:.2f}", f"{inv['kwota_brutto'] or 0:.2f}",
                               f"{paid_sum:.2f}", f"{-remaining if refund else remaining:.2f}", paid_text,
-                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), {"queued":"W kolejce", "sent":"Wysłano PDF", "failed_before_send":"Oczekuje na ponowienie PDF", "blocked_before_send":"Popraw dane wysyłki PDF", "sending":"Do sprawdzenia", "uncertain":"Do sprawdzenia"}.get(inv.get("invoice_email_status"), "—")]
+                              inv["data_eksportu"], inv["ksef_numer"], {"wysylanie":"Wysyłanie", "oczekuje":"Przetwarzanie", "do_sprawdzenia":"Sprawdzanie", "przyjeta":"Przyjęta", "odrzucona":"Odrzucona", "blad_przed_wysylka":"Błąd przed wysyłką"}.get(inv.get("ksef_status") or ("przyjeta" if inv.get("ksef_numer") else None), "—"), email_label]
                     roles = {c: {Qt.ItemDataRole.TextAlignmentRole: Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter} for c in (6,7,8,9)}
                     def tooltip(column, text):
                         roles.setdefault(column, {})[Qt.ItemDataRole.ToolTipRole] = text
@@ -1387,6 +1405,9 @@ class FakturyPage(QWidget):
                             "Kliknij, aby otworzyć urzędową weryfikację KSeF "
                             "(numer zostanie też skopiowany do schowka)"
                         )
+                    if inv.get("invoice_email_copy_warning"):
+                        values[-1] = "Wysłano PDF · sprawdź kopię"
+                        tooltip(len(values) - 1, "SMTP przyjął wiadomość. Sprawdź zapis kopii w folderze Wysłane.")
                     records.append(TableRecord(str(inv['id']), tuple('' if v is None else str(v) for v in values), roles))
                 self.issued_table.set_records(records)
 

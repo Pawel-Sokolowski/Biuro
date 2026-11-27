@@ -648,9 +648,7 @@ class OfficeManagerApp(QMainWindow):
     def _show_saldeo_push_results(self, results):
         done = [(name, month) for name, month, outcome in results if outcome == "ok"]
         for name, month in done:
-            tray = getattr(self._mail_toaster, "_tray", None)
-            if tray is not None:
-                self._mail_toaster.show_notice("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}")
+            self._mail_toaster.show_notice("Saldeo: komplet dokumentów", f"{name} — {month[5:]}/{month[:4]}")
         if done and self.page_monthly.isVisible():
             self.page_monthly.refresh_background()
 
@@ -668,6 +666,8 @@ class OfficeManagerApp(QMainWindow):
         self.activateWindow()
         self.sidebar.setCurrentRow(row)
         self.pages.setCurrentIndex(row)
+        if 'conversation_id' not in target:
+            return True
         return self.page_chat.open_message_notification(target)
 
     def _show_email_tab(self, target=None):

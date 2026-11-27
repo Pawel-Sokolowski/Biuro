@@ -11,6 +11,7 @@ from app.integrations.ezla.report import MAX_DOCUMENTS
 from app.utils.months import month_bounds
 from app.integrations.enova.accounting import decoded
 from app.integrations.ezla.service import ServiceError
+from app.companies.company_names import short_company_display_name
 
 
 class EzlaPreviewPanel(QWidget):
@@ -100,7 +101,8 @@ class EzlaPreviewPanel(QWidget):
     def _render(self):
         records = []
         loaded = 0
-        for company_id, company in sorted(self.companies.items(), key=lambda entry: str(entry[1].get('nazwa') or '').casefold()):
+        for company_id, company in sorted(
+                self.companies.items(), key=lambda entry: short_company_display_name(entry[1]).casefold()):
             reports = list(self.remote_reports.get(company_id, [])) + list(self.reports.get(company_id, {}).values())
             sync = decoded(company.get('ezla_sync'))
             failed = sync.get('state') == 'failed'
@@ -141,13 +143,14 @@ class EzlaPreviewPanel(QWidget):
                 records.append((company, certificate, '', certificate.review + ('; ' + report_notes if report_notes else '') + ('; ' + failure if failed else ''), info))
         self.table.setRowCount(len(records))
         for row, (company, certificate, status, review, info) in enumerate(records):
+            company_name = short_company_display_name(company)
             if certificate:
-                values = [company['nazwa'], certificate.employee_name,
+                values = [company_name, certificate.employee_name,
                           certificate.identifier_type + ': ' + certificate.masked_identifier,
                           certificate.series + ' ' + certificate.number, certificate.status,
                           certificate.issued_at, certificate.start, certificate.end, review]
             else:
-                values = [company['nazwa'], '—', '—', '—', status, '—', '—', '—', review]
+                values = [company_name, '—', '—', '—', status, '—', '—', '—', review]
             for column, value in enumerate(values):
                 item = SortableItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)

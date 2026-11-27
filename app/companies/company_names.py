@@ -22,6 +22,20 @@ def sole_proprietor_short_name(first_name, surname):
     return f"{surname} {first_name}"
 
 
+def short_company_display_name(company):
+    """Prefer the stored short company name in operational application views."""
+    for field in (
+        "nazwa_skrocona",
+        "nazwa_podstawowa",
+        "nazwa",
+        "nazwa_pelna",
+    ):
+        value = str(company.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def company_display_name(company):
     """Use the stored short name in navigation; keep legal names for documents."""
     for field in ("nazwa_wyswietlana", "nazwa_skrocona", "nazwa"):

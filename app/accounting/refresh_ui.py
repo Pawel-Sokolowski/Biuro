@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
 from app.utils.background import TaskRunner,CommandRunner
 from app.widgets.flow_layout import FlowLayout
 from app.services.checking_refresh import run_now,latest
+from app.companies.company_names import short_company_display_name
 
 LABELS = {'enova':'Enova','ezla':'e-ZLA ZUS','platnik':'Płatnik', 'platnik_declarations':'Płatnik — formularze ZUS',
           'platnik_annual': 'Płatnik — IWA/ZSWA','declaration_year':'Deklaracje za cały rok'}
@@ -92,7 +93,8 @@ class CheckingRefreshControls(QWidget):
         listing = QListWidget()
         listing.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         for company in companies:
-            item = QListWidgetItem(f"{company['nazwa']} | {company.get('nip') or 'brak NIP-u'}")
+            company_name = short_company_display_name(company)
+            item = QListWidgetItem(f"{company_name} | {company.get('nip') or 'brak NIP-u'}")
             item.setData(Qt.ItemDataRole.UserRole,company['id'])
             listing.addItem(item)
             item.setSelected(company['id'] in chosen)
@@ -201,7 +203,8 @@ class CheckingRefreshControls(QWidget):
         box.setWindowTitle('Wynik pobierania ze źródła')
         box.setTextFormat(Qt.TextFormat.PlainText)
         box.setText(self.status.text())
-        companies = {row['id']:row['nazwa'] for row in self.companies()}
+        companies = {row['id']: short_company_display_name(row)
+                     for row in self.companies()}
         lines = []
         for result in self.result.get('results',[]):
             company = companies.get(result.get('company_id'),str(result.get('company_id') or '—'))

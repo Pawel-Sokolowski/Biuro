@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
 from app.utils.table_sorting import SortableItem, apply_header_sort
 from app.integrations.platnik.declarations import read_year
 from app.accounting.report_types import form_key
+from app.companies.company_names import short_company_display_name
 from app.utils.background import TaskRunner
 
 
@@ -65,11 +66,13 @@ class AnnualZusPanel(QWidget):
     def render(self):
         records = []
         for company in self.companies():
-            if self.query not in f"{company['nazwa']} {company.get('nazwa_pelna', '')} {company['nip'] or ''}".casefold():
+            company_name = short_company_display_name(company)
+            search_text = f"{company_name} {company.get('nazwa_pelna', '')} {company.get('nip') or ''}".casefold()
+            if self.query not in search_text:
                 continue
             entries = [entry for entry in company['declarations'] if form_key(entry['form']) == self.form]
             for entry in entries or [{}]:
-                values = [company['nazwa'], company['nip'], entry.get('source_id') or '—', entry.get('report_id') or '—',
+                values = [company_name, company['nip'], entry.get('source_id') or '—', entry.get('report_id') or '—',
                           entry.get('employee_name') or '—', entry.get('status_text') or
                           ('Brak dokumentu w odczycie' if company['imported_at'] else 'Nie odczytano roku'),
                           'Nie odczytano' if entry else '—', company['imported_at'] or '—']

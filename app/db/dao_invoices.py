@@ -655,6 +655,7 @@ def create_draft_after_payment(conn, source_id: int) -> Optional[int]:
         return None
     if conn.execute("SELECT 1 FROM faktury WHERE dokument_zrodlowy_id = %s", (source_id,)).fetchone():
         return None
+    source = dict(source)
     columns = [c for c in _COPIED_COLUMNS if c in source]
     today = _now_date()
     cur = conn.execute(
